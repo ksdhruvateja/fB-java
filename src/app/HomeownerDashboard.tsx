@@ -1,12 +1,14 @@
 import { useEffect, useState, useRef } from "react";
 import { motion, useInView } from "motion/react";
+import { format, addDays, nextSaturday, isBefore, startOfDay } from "date-fns";
 import {
   PlusCircle, Briefcase, MessageSquare, Phone,
   Bell, LogOut, Zap, Wrench, Flame, PaintBucket,
   Home, Layers, Hammer, ChevronRight, Star, Clock,
   CheckCircle, AlertCircle, Send, MapPin, DollarSign,
-  Mail, FileText, Sun, Moon, Menu, X,
+  Mail, Sun, Moon, Menu, X, ImagePlus, Loader2, CalendarDays,
 } from "lucide-react";
+import { Calendar } from "./components/ui/calendar";
 import { getStoredUsers, type AuthUser } from "./auth";
 import { addJobMessage, getJobMessages, type JobChatMessage } from "./jobChat";
 import {
@@ -15,6 +17,7 @@ import {
   getJobRequirements,
   type JobCategory,
 } from "./jobBoard";
+import { analyzeWithGemini, getGeminiKeyIssue, isGeminiConfigured, type GeminiAssessment } from "./geminiAssessment";
 
 type DashTab = "post" | "jobs" | "ai" | "contact";
 
@@ -31,7 +34,14 @@ type HomeJob = {
   contractor?: string;
   saved?: string;
   rating?: number;
+  scheduledDate?: string;
+  timeSlot?: string;
+  serviceTiming?: string;
 };
+
+type PostStep = "category" | "describe" | "assessment" | "timing" | "timeslot" | "done";
+type TimingOption = "same-day" | "next-day" | "weekend" | "custom";
+type TimeSlotId = "9-11" | "11-2" | "2-5" | "5-7" | "7-9";
 
 const NAV_ITEMS: { id: DashTab; label: string; icon: React.ElementType }[] = [
   { id: "post", label: "Post a Job", icon: PlusCircle },
@@ -51,11 +61,27 @@ const CATEGORIES = [
   { icon: Home, label: "Others" },
 ];
 
-const URGENCY_OPTS = [
-  { val: "low", label: "Not Urgent", desc: "Within a few weeks", color: "text-green-600" },
-  { val: "medium", label: "This Week", desc: "Within 7 days", color: "text-yellow-600" },
-  { val: "high", label: "Urgent", desc: "Within 48 hours", color: "text-orange-600" },
-  { val: "emergency", label: "Emergency", desc: "Today / ASAP", color: "text-red-600" },
+const POST_STEPS: { id: PostStep; label: string }[] = [
+  { id: "category", label: "Category" },
+  { id: "describe", label: "Problem" },
+  { id: "assessment", label: "AI Review" },
+  { id: "timing", label: "When" },
+  { id: "timeslot", label: "Time Slot" },
+];
+
+const TIMING_OPTIONS: { id: TimingOption; label: string; desc: string }[] = [
+  { id: "same-day", label: "Same Day Service", desc: "Request a professional for today" },
+  { id: "next-day", label: "Next Day Service", desc: "Schedule for tomorrow" },
+  { id: "weekend", label: "Weekend Service", desc: "Saturday or Sunday availability" },
+  { id: "custom", label: "Choose a Date", desc: "Open calendar and pick your day" },
+];
+
+const TIME_SLOTS: { id: TimeSlotId; label: string; surcharge?: boolean }[] = [
+  { id: "9-11", label: "9:00 AM – 11:00 AM" },
+  { id: "11-2", label: "11:00 AM – 2:00 PM" },
+  { id: "2-5", label: "2:00 PM – 5:00 PM" },
+  { id: "5-7", label: "5:00 PM – 7:00 PM" },
+  { id: "7-9", label: "7:00 PM – 9:00 PM (small surcharge may apply)", surcharge: true },
 ];
 
 const INITIAL_JOBS: HomeJob[] = [
@@ -136,6 +162,76 @@ function buildJobTitle(description: string, category: string) {
   return normalized;
 }
 
+function resolveServiceDate(timing: TimingOption | null, customDate: Date | undefined): Date | null {
+  const today = startOfDay(new Date());
+  if (timing === "same-day") return today;
+  if (timing === "next-day") return addDays(today, 1);
+  if (timing === "weekend") {
+    const saturday = startOfDay(nextSaturday(today));
+    return isBefore(saturday, today) ? addDays(saturday, 7) : saturday;
+  }
+  if (timing === "custom" && customDate) return startOfDay(customDate);
+  return null;
+}
+
+function formatServiceDate(date: Date | null) {
+  if (!date) return "Date not set";
+  return format(date, "EEEE, MMM d, yyyy");
+}
+
+function AssessmentSection({
+  title,
+  items,
+  ordered = false,
+}: {
+  title: string;
+  items: string[];
+  ordered?: boolean;
+}) {
+  if (items.length === 0) return null;
+  const ListTag = ordered ? "ol" : "ul";
+  return (
+    <div>
+      <p className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase mb-2">{title}</p>
+      <ListTag className={`space-y-1.5 text-sm text-foreground ${ordered ? "list-decimal list-inside" : ""}`}>
+        {items.map((item) => (
+          <li key={item} className={ordered ? "" : "flex gap-2"}>
+            {!ordered && <span className="text-primary shrink-0">•</span>}
+            <span>{item}</span>
+          </li>
+        ))}
+      </ListTag>
+    </div>
+  );
+}
+
+function StepIndicator({ current }: { current: PostStep }) {
+  const order = POST_STEPS.map((s) => s.id);
+  const currentIndex = order.indexOf(current);
+  return (
+    <div className="flex flex-wrap gap-2 mb-8">
+      {POST_STEPS.map((step, index) => {
+        const active = step.id === current;
+        const complete = index < currentIndex;
+        return (
+          <div
+            key={step.id}
+            className={`font-mono text-[10px] tracking-wider uppercase px-2.5 py-1 border ${
+              active
+                ? "border-primary bg-primary/10 text-primary"
+                : complete
+                  ? "border-green-300 bg-green-50 text-green-700"
+                  : "border-border text-muted-foreground"
+            }`}
+          >
+            {index + 1}. {step.label}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function PostTab({
   onJobPosted,
   onViewJobs,
@@ -145,44 +241,151 @@ function PostTab({
   onViewJobs: () => void;
   user: AuthUser | null;
 }) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [step, setStep] = useState<PostStep>("category");
   const [selectedCat, setSelectedCat] = useState<string | null>(null);
-  const [urgency, setUrgency] = useState<string | null>(null);
   const [description, setDescription] = useState("");
-  const [submitted, setSubmitted] = useState(false);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imageName, setImageName] = useState<string | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [assessment, setAssessment] = useState<GeminiAssessment | null>(null);
+  const [analysisSource, setAnalysisSource] = useState<"gemini" | "fallback" | "error" | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [wantsProfessional, setWantsProfessional] = useState(false);
+  const [timing, setTiming] = useState<TimingOption | null>(null);
+  const [customDate, setCustomDate] = useState<Date | undefined>(undefined);
+  const [timeSlot, setTimeSlot] = useState<TimeSlotId | null>(null);
+  const [bookingSummary, setBookingSummary] = useState<{
+    dateLabel: string;
+    slotLabel: string;
+    surcharge: boolean;
+  } | null>(null);
+
   const contractorUsers = getStoredUsers().filter((account) => account.role === "contractor");
   const recommendedCount = selectedCat
     ? contractorUsers.filter((contractor) =>
         contractorCanDoJob(contractor.trade, selectedCat as JobCategory),
       ).length
     : 0;
+  const serviceDate = resolveServiceDate(timing, customDate);
 
-  if (submitted) {
+  const resetFlow = () => {
+    setStep("category");
+    setSelectedCat(null);
+    setDescription("");
+    setImagePreview(null);
+    setImageName(null);
+    setAnalyzing(false);
+    setAssessment(null);
+    setAnalysisSource(null);
+    setAnalysisError(null);
+    setWantsProfessional(false);
+    setTiming(null);
+    setCustomDate(undefined);
+    setTimeSlot(null);
+    setBookingSummary(null);
+  };
+
+  const handleImageUpload = (file: File | null) => {
+    if (!file) return;
+    setImageName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => setImagePreview(reader.result as string);
+    reader.readAsDataURL(file);
+  };
+
+  const runGeminiAssessment = async () => {
+    if (!selectedCat || !description.trim()) return;
+    setAnalyzing(true);
+    setAnalysisError(null);
+    const result = await analyzeWithGemini({
+      category: selectedCat as JobCategory,
+      description,
+      imageDataUrl: imagePreview,
+    });
+    setAnalysisSource(result.source);
+    setAnalysisError(result.error ?? null);
+    if (result.source === "error" || !result.assessment) {
+      setAssessment(null);
+      setAnalyzing(false);
+      return;
+    }
+    setAssessment(result.assessment);
+    setAnalyzing(false);
+    setStep("assessment");
+  };
+
+  const submitBooking = () => {
+    if (!selectedCat || !description.trim() || !assessment || !timing || !timeSlot || !serviceDate) return;
+    const slot = TIME_SLOTS.find((s) => s.id === timeSlot);
+    const dateLabel = formatServiceDate(serviceDate);
+    const newJob: HomeJob = {
+      id: Date.now(),
+      title: buildJobTitle(description, selectedCat),
+      category: selectedCat,
+      posted: "Just now",
+      bids: 0,
+      status: "open",
+      est: assessment.estimatedCost,
+      topBid: "—",
+      aiAssessed: true,
+      scheduledDate: dateLabel,
+      timeSlot: slot?.label,
+      serviceTiming: TIMING_OPTIONS.find((t) => t.id === timing)?.label,
+    };
+    onJobPosted(newJob);
+    addJobBoardJob({
+      category: selectedCat as JobCategory,
+      title: newJob.title,
+      cityStateZip: "Astoria, NY 11102",
+      fullAddress: "Address shared after contractor acceptance",
+      contactName: user?.name || "Homeowner",
+      contactPhone: "(917) 555-0100",
+      dist: "2.0 mi",
+      est: assessment.estimatedCost,
+      bids: 0,
+      urgent: timing === "same-day",
+      ai: true,
+    });
+    setBookingSummary({
+      dateLabel,
+      slotLabel: slot?.label ?? "",
+      surcharge: Boolean(slot?.surcharge),
+    });
+    setStep("done");
+  };
+
+  if (step === "done") {
     return (
       <motion.div
         initial={{ opacity: 0, scale: 0.96 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="flex flex-col items-center justify-center py-20 text-center"
+        className="flex flex-col items-center justify-center py-20 text-center max-w-lg mx-auto"
       >
         <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
           <CheckCircle size={28} className="text-green-600" />
         </div>
         <h3 className="[font-family:'Barlow_Condensed',sans-serif] font-bold text-3xl uppercase text-foreground mb-2">
-          Job Posted!
+          Booking Requested!
         </h3>
-        <p className="text-muted-foreground text-sm max-w-sm mb-6">
-          Your job has been posted and our AI is generating an assessment. You'll start receiving
-          bids from vetted contractors within 48 hours.
+        <p className="text-muted-foreground text-sm mb-4">
+          A vetted professional will be matched for your repair.
         </p>
-        <button
-          onClick={() => { setSubmitted(false); setSelectedCat(null); setUrgency(null); setDescription(""); }}
-          className="bg-primary text-white px-6 py-2.5 text-sm font-medium hover:bg-primary/90 transition-colors"
-        >
-          Post Another Job
+        {bookingSummary && (
+          <div className="w-full border border-border bg-card p-4 text-left text-sm mb-6 space-y-1">
+            <p><span className="text-muted-foreground">Date:</span> {bookingSummary.dateLabel}</p>
+            <p><span className="text-muted-foreground">Time:</span> {bookingSummary.slotLabel}</p>
+            {bookingSummary.surcharge && (
+              <p className="text-orange-600 text-xs mt-2">
+                Evening slot selected — a small surcharge may apply at checkout.
+              </p>
+            )}
+          </div>
+        )}
+        <button onClick={resetFlow} className="bg-primary text-white px-6 py-2.5 text-sm font-medium hover:bg-primary/90 transition-colors">
+          Post Another Issue
         </button>
-        <button
-          onClick={onViewJobs}
-          className="mt-3 border border-border text-foreground px-6 py-2.5 text-sm font-medium hover:border-foreground/30 transition-colors"
-        >
+        <button onClick={onViewJobs} className="mt-3 border border-border text-foreground px-6 py-2.5 text-sm font-medium hover:border-foreground/30 transition-colors">
           View My Jobs
         </button>
       </motion.div>
@@ -192,149 +395,367 @@ function PostTab({
   return (
     <div className="max-w-3xl">
       <h2 className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase text-3xl text-foreground mb-1">
-        Post a Repair Job
+        Report an Issue
       </h2>
-      <p className="text-sm text-muted-foreground mb-8">
-        Describe your problem — our AI will assess it and vetted contractors will bid.
+      <p className="text-sm text-muted-foreground mb-6">
+        Select a category, describe the problem, get Gemini suggestions, then book a pro if needed.
       </p>
-
-      {/* Step 1: Category */}
-      <div className="mb-8">
-        <p className="font-mono text-[11px] tracking-[0.15em] text-muted-foreground uppercase mb-4">
-          Step 1 — Select Trade Category
+      {!isGeminiConfigured() && (
+        <p className="text-xs text-amber-700 border border-amber-200 bg-amber-50 px-3 py-2 mb-4">
+          {getGeminiKeyIssue()}. Get a key at{" "}
+          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="underline">
+            aistudio.google.com/apikey
+          </a>
+          , paste it in <code className="font-mono">.env</code> as{" "}
+          <code className="font-mono">VITE_GEMINI_API_KEY=your_key</code>, then restart <code className="font-mono">pnpm dev</code>.
         </p>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-          {CATEGORIES.map(({ icon: Icon, label }) => (
-            <button
-              key={label}
-              onClick={() => setSelectedCat(label)}
-              className={`flex flex-col items-center gap-2 py-4 px-2 border transition-all duration-150 ${
-                selectedCat === label
-                  ? "border-primary bg-primary/5 text-primary"
-                  : "border-border text-muted-foreground hover:border-foreground/20 hover:text-foreground"
-              }`}
-            >
-              <Icon size={18} />
-              <span className="font-mono text-[10px] tracking-wider uppercase">{label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Step 2: Description */}
-      <div className="mb-8">
-        <p className="font-mono text-[11px] tracking-[0.15em] text-muted-foreground uppercase mb-4">
-          Step 2 — Describe the Problem
+      )}
+      {isGeminiConfigured() && (
+        <p className="text-xs text-green-700 border border-green-200 bg-green-50 px-3 py-2 mb-4">
+          Gemini API key detected. Upload a photo and click Analyze for live AI repair assessment.
         </p>
-        <textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="e.g. My kitchen sink drain is completely clogged. Water backs up within 30 seconds of running the tap. I've tried drain cleaner — no luck. The smell started yesterday."
-          rows={5}
-          className="w-full border border-border bg-card px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/60 transition-colors resize-none"
-        />
-        <div className="flex items-center justify-between mt-2">
-          <p className="font-mono text-[10px] text-muted-foreground">
-            More detail = better AI assessment + more accurate bids
+      )}
+      <StepIndicator current={step} />
+
+      {step === "category" && (
+        <div>
+          <p className="font-mono text-[11px] tracking-[0.15em] text-muted-foreground uppercase mb-4">
+            Step 1 — What category is this?
           </p>
-          <button className="font-mono text-[10px] text-primary hover:underline flex items-center gap-1">
-            <FileText size={11} />
-            Upload Photo
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 mb-8">
+            {CATEGORIES.map(({ icon: Icon, label }) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => setSelectedCat(label)}
+                className={`flex flex-col items-center gap-2 py-4 px-2 border transition-all duration-150 ${
+                  selectedCat === label
+                    ? "border-primary bg-primary/5 text-primary"
+                    : "border-border text-muted-foreground hover:border-foreground/20 hover:text-foreground"
+                }`}
+              >
+                <Icon size={18} />
+                <span className="font-mono text-[10px] tracking-wider uppercase">{label}</span>
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            disabled={!selectedCat}
+            onClick={() => setStep("describe")}
+            className={`px-6 py-3 text-sm font-medium transition-colors ${
+              selectedCat ? "bg-primary text-white hover:bg-primary/90" : "bg-primary/40 text-white/80 cursor-not-allowed"
+            }`}
+          >
+            Continue
           </button>
         </div>
-      </div>
+      )}
 
-      {selectedCat && (
-        <div className="mb-8 border border-border bg-card p-4">
-          <p className="font-mono text-[11px] tracking-[0.15em] text-muted-foreground uppercase mb-3">
-            Requirements For {selectedCat}
+      {step === "describe" && (
+        <div>
+          <p className="font-mono text-[11px] tracking-[0.15em] text-muted-foreground uppercase mb-4">
+            Step 2 — Explain the problem & upload an image
           </p>
-          <ul className="space-y-1 text-sm text-muted-foreground">
-            {getJobRequirements(selectedCat as JobCategory).map((req) => (
-              <li key={req} className="flex items-start gap-2">
-                <span className="text-primary mt-0.5">•</span>
-                <span>{req}</span>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-4 border-t border-border pt-3">
-            <p className="font-mono text-[11px] tracking-[0.15em] text-primary uppercase">
-              Recommended Contractors: {recommendedCount}
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Describe what happened, when it started, and what you've already tried..."
+            rows={6}
+            className="w-full border border-border bg-card px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/60 transition-colors resize-none"
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => handleImageUpload(e.target.files?.[0] ?? null)}
+          />
+          <div className="mt-3 flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="inline-flex items-center gap-2 border border-primary/40 bg-primary/5 px-4 py-2.5 text-sm hover:border-primary transition-colors"
+            >
+              <ImagePlus size={15} className="text-primary" />
+              {imageName ? "Change Photo" : "Upload Photo (recommended)"}
+            </button>
+            {imageName && <p className="font-mono text-[10px] text-muted-foreground truncate">{imageName}</p>}
+          </div>
+          <p className="font-mono text-[10px] text-muted-foreground mt-2">
+            Gemini uses your photo to identify damage, likely parts, and the professional repair plan.
+          </p>
+          {imagePreview && (
+            <img src={imagePreview} alt="Uploaded issue" className="mt-4 max-h-56 w-full object-cover border border-border" />
+          )}
+          {selectedCat && (
+            <div className="mt-6 border border-border bg-card p-4">
+              <p className="font-mono text-[11px] tracking-[0.15em] text-primary uppercase mb-2">
+                Recommended Contractors: {recommendedCount}
+              </p>
+              <ul className="space-y-1 text-sm text-muted-foreground">
+                {getJobRequirements(selectedCat as JobCategory).map((req) => (
+                  <li key={req} className="flex items-start gap-2">
+                    <span className="text-primary mt-0.5">•</span>
+                    <span>{req}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {analysisError && (
+            <p className="text-xs text-red-700 border border-red-200 bg-red-50 px-3 py-2 mb-4">
+              {analysisError}
             </p>
-            <p className="text-xs text-muted-foreground mt-1">
-              {selectedCat === "Others"
-                ? "Others is broadcast to all contractor trades."
-                : "Contractors with matching trade qualifications can see this job."}
-            </p>
+          )}
+          <div className="mt-8 flex flex-col sm:flex-row gap-3">
+            <button type="button" onClick={() => setStep("category")} className="border border-border px-5 py-3 text-sm">
+              Back
+            </button>
+            <button
+              type="button"
+              disabled={!description.trim() || analyzing}
+              onClick={runGeminiAssessment}
+              className={`flex-1 py-3 text-sm font-medium inline-flex items-center justify-center gap-2 ${
+                description.trim() && !analyzing
+                  ? "bg-primary text-white hover:bg-primary/90"
+                  : "bg-primary/40 text-white/80 cursor-not-allowed"
+              }`}
+            >
+              {analyzing ? (
+                <>
+                  <Loader2 size={15} className="animate-spin" />
+                  {imagePreview ? "Analyzing photo + description..." : "Analyzing description..."}
+                </>
+              ) : (
+                "Analyze with Gemini"
+              )}
+            </button>
           </div>
         </div>
       )}
 
-      {/* Step 3: Urgency */}
-      <div className="mb-10">
-        <p className="font-mono text-[11px] tracking-[0.15em] text-muted-foreground uppercase mb-4">
-          Step 3 — How Urgent Is This?
-        </p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {URGENCY_OPTS.map(({ val, label, desc, color }) => (
+      {step === "assessment" && assessment && (
+        <div>
+          <div className="flex items-center gap-2 mb-4">
+            <p className="font-mono text-[11px] tracking-[0.15em] text-primary uppercase">
+              Gemini Repair Analysis
+            </p>
+            {analysisSource === "gemini" && (
+              <span className="font-mono text-[9px] uppercase tracking-wider bg-green-100 text-green-700 border border-green-200 px-2 py-0.5">
+                Live AI
+              </span>
+            )}
+            {analysisSource === "fallback" && (
+              <span className="font-mono text-[9px] uppercase tracking-wider bg-yellow-100 text-yellow-700 border border-yellow-200 px-2 py-0.5">
+                Offline — no API key
+              </span>
+            )}
+          </div>
+          {analysisError && analysisSource === "fallback" && (
+            <p className="text-xs text-amber-700 border border-amber-200 bg-amber-50 px-3 py-2 mb-4">
+              {analysisError}
+            </p>
+          )}
+
+          {imagePreview && (
+            <img
+              src={imagePreview}
+              alt="Analyzed issue"
+              className="mb-4 max-h-48 w-full object-cover border border-border"
+            />
+          )}
+
+          <div className="border border-primary/30 bg-primary/5 p-5 space-y-5 mb-6">
+            <div>
+              <p className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase mb-1">Overview</p>
+              <p className="text-sm text-foreground leading-relaxed">{assessment.overview}</p>
+            </div>
+
+            <AssessmentSection title="What we see in your image" items={assessment.imageObservations} />
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              <div>
+                <p className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase mb-1">Diagnosis</p>
+                <p className="text-sm text-foreground">{assessment.diagnosis}</p>
+              </div>
+              <div>
+                <p className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase mb-1">Likely Root Cause</p>
+                <p className="text-sm text-foreground">{assessment.likelyRootCause}</p>
+              </div>
+            </div>
+
+            <AssessmentSection title="Professional repair process" items={assessment.professionalSteps} ordered />
+            <AssessmentSection title="Parts & materials needed" items={assessment.partsNeeded} />
+            <AssessmentSection title="Scope of work" items={assessment.workScope} />
+            <AssessmentSection title="Tools a pro would bring" items={assessment.toolsRequired} />
+            <AssessmentSection title="Safe DIY steps (if you want to try)" items={assessment.diySteps} ordered />
+            <AssessmentSection title="Recommendations" items={assessment.suggestions} />
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm border-t border-primary/20 pt-4">
+              <p className="text-muted-foreground">
+                Est. cost<br />
+                <span className="text-foreground font-medium">{assessment.estimatedCost}</span>
+              </p>
+              <p className="text-muted-foreground">
+                Est. duration<br />
+                <span className="text-foreground font-medium">{assessment.estimatedDuration}</span>
+              </p>
+              <p className="text-muted-foreground">
+                Urgency<br />
+                <span className="text-foreground font-medium">{assessment.urgency}</span>
+              </p>
+            </div>
+
+            <p className="text-xs text-orange-700 border border-orange-200 bg-orange-50 px-3 py-2">
+              {assessment.safetyNotes}
+            </p>
+          </div>
+
+          <p className="text-sm text-muted-foreground mb-4">
+            {assessment.professionalRecommended
+              ? "Based on the image and symptoms, a licensed professional is recommended. Review the repair plan above, then book service when ready."
+              : "You can try the DIY steps above, or book a vetted professional with the parts and scope already outlined."}
+          </p>
+
+          <div className="flex flex-col sm:flex-row gap-3">
+            <button type="button" onClick={() => setStep("describe")} className="border border-border px-5 py-3 text-sm">
+              Back
+            </button>
             <button
-              key={val}
-              onClick={() => setUrgency(val)}
-              className={`flex flex-col items-start gap-1 p-4 border text-left transition-all ${
-                urgency === val
-                  ? "border-primary bg-primary/5"
-                  : "border-border hover:border-foreground/20"
+              type="button"
+              onClick={() => {
+                setWantsProfessional(true);
+                setStep("timing");
+              }}
+              className="flex-1 bg-primary text-white py-3 text-sm font-medium hover:bg-primary/90 transition-colors"
+            >
+              Book a Professional
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step === "timing" && (
+        <div>
+          <p className="font-mono text-[11px] tracking-[0.15em] text-muted-foreground uppercase mb-4">
+            Step 4 — When do you need service?
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-6">
+            {TIMING_OPTIONS.map(({ id, label, desc }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => {
+                  setTiming(id);
+                  if (id !== "custom") setCustomDate(undefined);
+                }}
+                className={`flex flex-col items-start gap-1 p-4 border text-left transition-all ${
+                  timing === id ? "border-primary bg-primary/5" : "border-border hover:border-foreground/20"
+                }`}
+              >
+                <span className={`text-sm font-medium ${timing === id ? "text-primary" : "text-foreground"}`}>{label}</span>
+                <span className="font-mono text-[10px] text-muted-foreground">{desc}</span>
+              </button>
+            ))}
+          </div>
+
+          {timing === "custom" && (
+            <div className="border border-border bg-card p-4 mb-6 inline-block">
+              <div className="flex items-center gap-2 mb-3">
+                <CalendarDays size={14} className="text-primary" />
+                <p className="font-mono text-[10px] tracking-wider uppercase text-muted-foreground">Select Date</p>
+              </div>
+              <Calendar
+                mode="single"
+                selected={customDate}
+                onSelect={setCustomDate}
+                disabled={(date) => isBefore(startOfDay(date), startOfDay(new Date()))}
+              />
+            </div>
+          )}
+
+          {serviceDate && (
+            <p className="text-sm text-muted-foreground mb-6">
+              Selected service date: <span className="text-foreground font-medium">{formatServiceDate(serviceDate)}</span>
+            </p>
+          )}
+
+          <div className="flex flex-col sm:flex-row gap-3">
+            <button type="button" onClick={() => setStep("assessment")} className="border border-border px-5 py-3 text-sm">
+              Back
+            </button>
+            <button
+              type="button"
+              disabled={!timing || (timing === "custom" && !customDate)}
+              onClick={() => setStep("timeslot")}
+              className={`flex-1 py-3 text-sm font-medium ${
+                timing && (timing !== "custom" || customDate)
+                  ? "bg-primary text-white hover:bg-primary/90"
+                  : "bg-primary/40 text-white/80 cursor-not-allowed"
               }`}
             >
-              <span className={`text-sm font-medium ${urgency === val ? "text-primary" : "text-foreground"}`}>
-                {label}
-              </span>
-              <span className="font-mono text-[10px] text-muted-foreground">{desc}</span>
+              Continue to Time Slot
             </button>
-          ))}
+          </div>
         </div>
-      </div>
+      )}
 
-      <div className="flex flex-col sm:flex-row gap-3">
-        <button
-          onClick={() => {
-            if (!selectedCat || !description || !urgency) return;
-            const newJob: HomeJob = {
-              id: Date.now(),
-              title: buildJobTitle(description, selectedCat),
-              category: selectedCat,
-              posted: "Just now",
-              bids: 0,
-              status: "open",
-              est: urgency === "emergency" ? "$250–$700" : "Pending AI",
-              topBid: "—",
-              aiAssessed: false,
-            };
-            onJobPosted(newJob);
-            addJobBoardJob({
-              category: selectedCat as JobCategory,
-              title: newJob.title,
-              cityStateZip: "Astoria, NY 11102",
-              fullAddress: "Address shared after contractor acceptance",
-              contactName: user?.name || "Homeowner",
-              contactPhone: "(917) 555-0100",
-              dist: "2.0 mi",
-              est: newJob.est,
-              bids: 0,
-              urgent: urgency === "high" || urgency === "emergency",
-              ai: false,
-            });
-            setSubmitted(true);
-          }}
-          className="flex-1 bg-primary text-white py-3.5 font-medium text-sm hover:bg-primary/90 transition-colors flex items-center justify-center gap-2 group"
-        >
-          Post Job & Get AI Assessment
-          <ChevronRight size={15} className="transition-transform group-hover:translate-x-1" />
-        </button>
-        <button className="border border-border text-muted-foreground px-5 py-3.5 text-sm hover:border-foreground/30 transition-colors sm:w-auto w-full">
-          Save Draft
-        </button>
-      </div>
+      {step === "timeslot" && (
+        <div>
+          <p className="font-mono text-[11px] tracking-[0.15em] text-muted-foreground uppercase mb-2">
+            Step 5 — Choose a time slot
+          </p>
+          <p className="text-sm text-muted-foreground mb-6">
+            Service date: <span className="text-foreground font-medium">{formatServiceDate(serviceDate)}</span>
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-6">
+            {TIME_SLOTS.map((slot) => (
+              <button
+                key={slot.id}
+                type="button"
+                onClick={() => setTimeSlot(slot.id)}
+                className={`p-4 border text-left transition-all ${
+                  timeSlot === slot.id ? "border-primary bg-primary/5" : "border-border hover:border-foreground/20"
+                }`}
+              >
+                <span className={`text-sm font-medium ${timeSlot === slot.id ? "text-primary" : "text-foreground"}`}>
+                  {slot.label}
+                </span>
+                {slot.surcharge && (
+                  <p className="font-mono text-[10px] text-orange-600 mt-1">Small additional fee may apply</p>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {wantsProfessional && assessment && (
+            <div className="border border-border bg-card p-4 mb-6 text-sm space-y-1">
+              <p className="font-mono text-[10px] tracking-wider uppercase text-muted-foreground mb-2">Booking Summary</p>
+              <p><span className="text-muted-foreground">Category:</span> {selectedCat}</p>
+              <p><span className="text-muted-foreground">Estimate:</span> {assessment.estimatedCost}</p>
+              <p><span className="text-muted-foreground">Recommended pros nearby:</span> {recommendedCount}</p>
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row gap-3">
+            <button type="button" onClick={() => setStep("timing")} className="border border-border px-5 py-3 text-sm">
+              Back
+            </button>
+            <button
+              type="button"
+              disabled={!timeSlot}
+              onClick={submitBooking}
+              className={`flex-1 py-3 text-sm font-medium inline-flex items-center justify-center gap-2 ${
+                timeSlot ? "bg-primary text-white hover:bg-primary/90" : "bg-primary/40 text-white/80 cursor-not-allowed"
+              }`}
+            >
+              Request Booking
+              <ChevronRight size={15} />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -390,6 +811,12 @@ function JobCard({ job, index, user }: { job: HomeJob; index: number; user: Auth
             )}
           </div>
           <p className="text-sm font-medium text-foreground mb-1">{job.title}</p>
+          {(job.scheduledDate || job.timeSlot) && (
+            <p className="font-mono text-[11px] text-muted-foreground mb-1">
+              {job.scheduledDate}
+              {job.timeSlot ? ` · ${job.timeSlot}` : ""}
+            </p>
+          )}
           <div className="flex items-center gap-4">
             <span className="font-mono text-[11px] text-muted-foreground">
               <Clock size={10} className="inline mr-1" />
