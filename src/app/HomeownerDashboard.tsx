@@ -349,11 +349,35 @@ function PostTab({
       serviceTiming: TIMING_OPTIONS.find((t) => t.id === timing)?.label,
     };
     onJobPosted(newJob);
+    // Extract neighbourhood from address (everything after first comma)
+    // so the exact street number isn't shown to contractors before acceptance.
+    const fullAddr = address.trim();
+    const cityStateZip = fullAddr.includes(",")
+      ? fullAddr.split(",").slice(1).join(",").trim()
+      : fullAddr || "NYC & Long Island";
+
     addJobBoardJob({
       category: selectedCat as JobCategory,
       title: finalTitle,
-      cityStateZip: address.trim() || "Location provided after acceptance",
-      fullAddress: address.trim() || "Address shared after contractor acceptance",
+      description: description.trim(),
+      // Store image as base64 so contractor can see the damage photo.
+      // Skip video (too large for localStorage — contractor sees description instead).
+      ...(mediaType === "image" && mediaPreview ? { mediaDataUrl: mediaPreview, mediaType: "image" as const } : {}),
+      ...(mediaType === "video" ? { mediaType: "video" as const } : {}),
+      aiAssessment: {
+        overview: assessment.overview,
+        diagnosis: assessment.diagnosis,
+        likelyRootCause: assessment.likelyRootCause,
+        toolsRequired: assessment.toolsRequired,
+        diySteps: assessment.diySteps,
+        safetyNotes: assessment.safetyNotes,
+        estimatedCost: assessment.estimatedCost,
+        estimatedDuration: assessment.estimatedDuration,
+        urgency: assessment.urgency,
+        professionalRecommended: assessment.professionalRecommended,
+      },
+      cityStateZip,
+      fullAddress: fullAddr || "Address shared after contractor acceptance",
       contactName: user?.name || "Homeowner",
       contactPhone: "(917) 555-0100",
       dist: "2.0 mi",

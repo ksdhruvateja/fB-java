@@ -6,6 +6,7 @@ import {
   FileCheck, AlertCircle, Wrench, Zap, Flame, Sun, Moon,
   BarChart2, Shield, Phone, Mail, MessageSquare, Send, Menu, X,
   Truck, Navigation, HardHat, CheckCircle, Receipt, Upload,
+  Brain, FileText, Video, ImagePlus, ChevronDown, ChevronUp,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -170,6 +171,7 @@ function FindJobCard({
   const inView = useInView(ref, { once: true });
   const [showCancelForm, setShowCancelForm] = useState(false);
   const [cancelReasonInput, setCancelReasonInput] = useState("");
+  const [showAiPanel, setShowAiPanel] = useState(true);
   const [lifecycle, setLifecycle] = useState<JobLifecycle>(() => getJobLifecycle(job.id));
   const contractorName = user?.name || "Contractor";
   const contractorEmail = user?.email || "";
@@ -285,6 +287,108 @@ function FindJobCard({
             </span>
             <span className="font-mono text-[11px] text-muted-foreground">{job.dist} away</span>
           </div>
+
+          {/* Homeowner photo + description + AI diagnosis panel */}
+          {(job.description || job.mediaDataUrl || job.mediaType === "video" || job.aiAssessment) && (
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={() => setShowAiPanel((v) => !v)}
+                className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-primary mb-2 hover:opacity-70 transition-opacity"
+              >
+                <Brain size={11} />
+                AI Diagnosis & Photos
+                {showAiPanel ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+              </button>
+
+              {showAiPanel && (
+                <div className="border border-primary/20 bg-primary/5 p-3 space-y-3">
+                  {/* Homeowner-uploaded image */}
+                  {job.mediaDataUrl && job.mediaType === "image" && (
+                    <div>
+                      <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1">
+                        <ImagePlus size={9} /> Homeowner Photo
+                      </p>
+                      <img
+                        src={job.mediaDataUrl}
+                        alt="Issue photo"
+                        className="max-h-40 w-full object-cover border border-border/50 cursor-pointer"
+                        onClick={() => window.open(job.mediaDataUrl, "_blank")}
+                        title="Click to open full size"
+                      />
+                    </div>
+                  )}
+                  {job.mediaType === "video" && !job.mediaDataUrl && (
+                    <p className="font-mono text-[10px] text-muted-foreground flex items-center gap-1.5">
+                      <Video size={11} className="text-primary" />
+                      Homeowner uploaded a video — view after accepting.
+                    </p>
+                  )}
+
+                  {/* Description */}
+                  {job.description && (
+                    <div>
+                      <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1">
+                        <FileText size={9} /> Homeowner's Description
+                      </p>
+                      <p className="text-xs text-foreground leading-relaxed">{job.description}</p>
+                    </div>
+                  )}
+
+                  {/* AI assessment */}
+                  {job.aiAssessment && (
+                    <div className="space-y-2 border-t border-primary/10 pt-2">
+                      {job.aiAssessment.overview && (
+                        <div>
+                          <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground mb-0.5">Overview</p>
+                          <p className="text-xs text-foreground leading-relaxed">{job.aiAssessment.overview}</p>
+                        </div>
+                      )}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {job.aiAssessment.diagnosis && (
+                          <div>
+                            <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground mb-0.5">Diagnosis</p>
+                            <p className="text-xs text-foreground">{job.aiAssessment.diagnosis}</p>
+                          </div>
+                        )}
+                        {job.aiAssessment.likelyRootCause && (
+                          <div>
+                            <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground mb-0.5">Root Cause</p>
+                            <p className="text-xs text-foreground">{job.aiAssessment.likelyRootCause}</p>
+                          </div>
+                        )}
+                      </div>
+                      {job.aiAssessment.toolsRequired?.length > 0 && (
+                        <div>
+                          <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground mb-0.5">Tools Required</p>
+                          <p className="text-xs text-muted-foreground">{job.aiAssessment.toolsRequired.join(" · ")}</p>
+                        </div>
+                      )}
+                      <div className="grid grid-cols-3 gap-2 border-t border-primary/10 pt-2">
+                        <div>
+                          <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Est. Cost</p>
+                          <p className="text-xs font-medium text-foreground">{job.aiAssessment.estimatedCost || "—"}</p>
+                        </div>
+                        <div>
+                          <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Duration</p>
+                          <p className="text-xs font-medium text-foreground">{job.aiAssessment.estimatedDuration || "—"}</p>
+                        </div>
+                        <div>
+                          <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Urgency</p>
+                          <p className="text-xs font-medium text-foreground">{job.aiAssessment.urgency || "—"}</p>
+                        </div>
+                      </div>
+                      {job.aiAssessment.safetyNotes && (
+                        <p className="text-[11px] text-orange-700 border border-orange-200 bg-orange-50/80 px-2 py-1.5">
+                          ⚠ {job.aiAssessment.safetyNotes}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {isAccepted ? (
             <div className="mt-3 border border-blue-200 bg-blue-50/50 px-3 py-2 text-xs space-y-1">

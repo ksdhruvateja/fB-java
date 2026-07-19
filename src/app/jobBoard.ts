@@ -8,13 +8,31 @@ export type JobCategory =
   | "Carpentry"
   | "Others";
 
+/** Subset of GeminiAssessment stored on the job board (avoids circular import). */
+export type StoredAssessment = {
+  overview: string;
+  diagnosis: string;
+  likelyRootCause: string;
+  toolsRequired: string[];
+  diySteps: string[];
+  safetyNotes: string;
+  estimatedCost: string;
+  estimatedDuration: string;
+  urgency: string;
+  professionalRecommended: boolean;
+};
+
 export type JobBoardItem = {
   id: number;
   category: JobCategory;
   tag: string;
   title: string;
-  cityStateZip: string;
-  fullAddress: string;
+  description?: string;          // homeowner's problem description
+  mediaDataUrl?: string;         // uploaded image (base64) — shown to contractor before accepting
+  mediaType?: "image" | "video"; // video is stored as filename only (too large for localStorage)
+  aiAssessment?: StoredAssessment;
+  cityStateZip: string;          // neighbourhood / general area — public before acceptance
+  fullAddress: string;           // exact address — unlocked only after contractor accepts
   contactName: string;
   contactPhone: string;
   dist: string;
