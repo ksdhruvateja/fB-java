@@ -7,6 +7,7 @@ import {
   Home, Layers, Hammer, ChevronRight, Star, Clock,
   CheckCircle, AlertCircle, Send, MapPin, DollarSign,
   Mail, Sun, Moon, Menu, X, ImagePlus, Loader2, CalendarDays,
+  Video, Truck, Navigation, HardHat, Receipt, ThumbsUp,
 } from "lucide-react";
 import { Calendar } from "./components/ui/calendar";
 import { getStoredUsers, type AuthUser } from "./auth";
@@ -17,7 +18,18 @@ import {
   getJobRequirements,
   type JobCategory,
 } from "./jobBoard";
-import { analyzeWithGemini, getGeminiKeyIssue, isGeminiConfigured, type GeminiAssessment } from "./geminiAssessment";
+import {
+  analyzeWithGemini,
+  getGeminiKeyIssue,
+  isGeminiConfigured,
+  type GeminiAssessment,
+} from "./geminiAssessment";
+import {
+  getJobLifecycle,
+  updateJobRating,
+  STATUS_LABELS,
+  type JobStatus,
+} from "./jobLifecycle";
 
 type DashTab = "post" | "jobs" | "ai" | "contact";
 
@@ -65,7 +77,7 @@ const POST_STEPS: { id: PostStep; label: string }[] = [
   { id: "category", label: "Category" },
   { id: "describe", label: "Problem" },
   { id: "assessment", label: "AI Review" },
-  { id: "timing", label: "When" },
+  { id: "timing", label: "When & Where" },
   { id: "timeslot", label: "Time Slot" },
 ];
 
@@ -141,25 +153,23 @@ const CHAT_MESSAGES = [
   { role: "ai", label: "Next Steps", text: "Ready to post this for bids? I'll include the assessment in your job listing so contractors come prepared with the right parts." },
 ];
 
+const JOB_STATUS_UI: Record<JobStatus, { label: string; className: string; icon: React.ElementType }> = {
+  open:           { label: "Open",         className: "bg-green-100 text-green-700 border-green-200",   icon: AlertCircle },
+  accepted:       { label: "Accepted",     className: "bg-blue-100 text-blue-700 border-blue-200",      icon: CheckCircle },
+  "on-the-way":   { label: "On the Way",   className: "bg-sky-100 text-sky-700 border-sky-200",         icon: Truck },
+  arrived:        { label: "Arrived",      className: "bg-violet-100 text-violet-700 border-violet-200", icon: Navigation },
+  "work-started": { label: "Work Started", className: "bg-orange-100 text-orange-700 border-orange-200", icon: HardHat },
+  completed:      { label: "Completed",    className: "bg-muted text-muted-foreground border-border",   icon: CheckCircle },
+};
+
 function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, { label: string; className: string }> = {
-    open: { label: "Open", className: "bg-green-100 text-green-700 border-green-200" },
-    "in-progress": { label: "In Progress", className: "bg-blue-100 text-blue-700 border-blue-200" },
-    completed: { label: "Completed", className: "bg-muted text-muted-foreground border-border" },
-  };
-  const { label, className } = map[status] ?? map.open;
+  const lc = status as JobStatus;
+  const ui = JOB_STATUS_UI[lc] ?? JOB_STATUS_UI.open;
   return (
-    <span className={`font-mono text-[10px] tracking-wider uppercase border px-2 py-0.5 ${className}`}>
-      {label}
+    <span className={`font-mono text-[10px] tracking-wider uppercase border px-2 py-0.5 ${ui.className}`}>
+      {ui.label}
     </span>
   );
-}
-
-function buildJobTitle(description: string, category: string) {
-  const compact = description.trim().replace(/\s+/g, " ");
-  if (!compact) return `${category} repair request`;
-  const normalized = compact.length > 70 ? `${compact.slice(0, 70)}...` : compact;
-  return normalized;
 }
 
 function resolveServiceDate(timing: TimingOption | null, customDate: Date | undefined): Date | null {
@@ -244,16 +254,18 @@ function PostTab({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<PostStep>("category");
   const [selectedCat, setSelectedCat] = useState<string | null>(null);
+  const [titleInput, setTitleInput] = useState("");
   const [description, setDescription] = useState("");
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [imageName, setImageName] = useState<string | null>(null);
+  const [mediaPreview, setMediaPreview] = useState<string | null>(null);
+  const [mediaName, setMediaName] = useState<string | null>(null);
+  const [mediaType, setMediaType] = useState<"image" | "video" | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [assessment, setAssessment] = useState<GeminiAssessment | null>(null);
   const [analysisSource, setAnalysisSource] = useState<"gemini" | "fallback" | "error" | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const [wantsProfessional, setWantsProfessional] = useState(false);
   const [timing, setTiming] = useState<TimingOption | null>(null);
   const [customDate, setCustomDate] = useState<Date | undefined>(undefined);
+  const [address, setAddress] = useState("");
   const [timeSlot, setTimeSlot] = useState<TimeSlotId | null>(null);
   const [bookingSummary, setBookingSummary] = useState<{
     dateLabel: string;
@@ -261,36 +273,38 @@ function PostTab({
     surcharge: boolean;
   } | null>(null);
 
-  const contractorUsers = getStoredUsers().filter((account) => account.role === "contractor");
+  const contractorUsers = getStoredUsers().filter((u) => u.role === "contractor");
   const recommendedCount = selectedCat
-    ? contractorUsers.filter((contractor) =>
-        contractorCanDoJob(contractor.trade, selectedCat as JobCategory),
-      ).length
+    ? contractorUsers.filter((c) => contractorCanDoJob(c.trade, selectedCat as JobCategory)).length
     : 0;
   const serviceDate = resolveServiceDate(timing, customDate);
 
   const resetFlow = () => {
     setStep("category");
     setSelectedCat(null);
+    setTitleInput("");
     setDescription("");
-    setImagePreview(null);
-    setImageName(null);
+    setMediaPreview(null);
+    setMediaName(null);
+    setMediaType(null);
     setAnalyzing(false);
     setAssessment(null);
     setAnalysisSource(null);
     setAnalysisError(null);
-    setWantsProfessional(false);
     setTiming(null);
     setCustomDate(undefined);
+    setAddress("");
     setTimeSlot(null);
     setBookingSummary(null);
   };
 
-  const handleImageUpload = (file: File | null) => {
+  const handleMediaUpload = (file: File | null) => {
     if (!file) return;
-    setImageName(file.name);
+    setMediaName(file.name);
+    const isVideo = file.type.startsWith("video/");
+    setMediaType(isVideo ? "video" : "image");
     const reader = new FileReader();
-    reader.onload = () => setImagePreview(reader.result as string);
+    reader.onload = () => setMediaPreview(reader.result as string);
     reader.readAsDataURL(file);
   };
 
@@ -301,7 +315,7 @@ function PostTab({
     const result = await analyzeWithGemini({
       category: selectedCat as JobCategory,
       description,
-      imageDataUrl: imagePreview,
+      imageDataUrl: mediaType === "image" ? mediaPreview : null,
     });
     setAnalysisSource(result.source);
     setAnalysisError(result.error ?? null);
@@ -319,9 +333,10 @@ function PostTab({
     if (!selectedCat || !description.trim() || !assessment || !timing || !timeSlot || !serviceDate) return;
     const slot = TIME_SLOTS.find((s) => s.id === timeSlot);
     const dateLabel = formatServiceDate(serviceDate);
+    const finalTitle = titleInput.trim() || description.trim().slice(0, 70);
     const newJob: HomeJob = {
       id: Date.now(),
-      title: buildJobTitle(description, selectedCat),
+      title: finalTitle,
       category: selectedCat,
       posted: "Just now",
       bids: 0,
@@ -336,9 +351,9 @@ function PostTab({
     onJobPosted(newJob);
     addJobBoardJob({
       category: selectedCat as JobCategory,
-      title: newJob.title,
-      cityStateZip: "Astoria, NY 11102",
-      fullAddress: "Address shared after contractor acceptance",
+      title: finalTitle,
+      cityStateZip: address.trim() || "Location provided after acceptance",
+      fullAddress: address.trim() || "Address shared after contractor acceptance",
       contactName: user?.name || "Homeowner",
       contactPhone: "(917) 555-0100",
       dist: "2.0 mi",
@@ -369,12 +384,15 @@ function PostTab({
           Booking Requested!
         </h3>
         <p className="text-muted-foreground text-sm mb-4">
-          A vetted professional will be matched for your repair.
+          Matching contractors have been notified and will review your AI assessment.
         </p>
         {bookingSummary && (
           <div className="w-full border border-border bg-card p-4 text-left text-sm mb-6 space-y-1">
             <p><span className="text-muted-foreground">Date:</span> {bookingSummary.dateLabel}</p>
             <p><span className="text-muted-foreground">Time:</span> {bookingSummary.slotLabel}</p>
+            {address.trim() && (
+              <p><span className="text-muted-foreground">Address:</span> {address.trim()}</p>
+            )}
             {bookingSummary.surcharge && (
               <p className="text-orange-600 text-xs mt-2">
                 Evening slot selected — a small surcharge may apply at checkout.
@@ -402,21 +420,21 @@ function PostTab({
       </p>
       {!isGeminiConfigured() && (
         <p className="text-xs text-amber-700 border border-amber-200 bg-amber-50 px-3 py-2 mb-4">
-          {getGeminiKeyIssue()}. Get a key at{" "}
+          {getGeminiKeyIssue()}. Get a free key at{" "}
           <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="underline">
             aistudio.google.com/apikey
           </a>
-          , paste it in <code className="font-mono">.env</code> as{" "}
-          <code className="font-mono">VITE_GEMINI_API_KEY=your_key</code>, then restart <code className="font-mono">pnpm dev</code>.
+          , add it as a Replit Secret named <code className="font-mono">VITE_GEMINI_API_KEY</code>, then restart the app.
         </p>
       )}
       {isGeminiConfigured() && (
         <p className="text-xs text-green-700 border border-green-200 bg-green-50 px-3 py-2 mb-4">
-          Gemini API key detected. Upload a photo and click Analyze for live AI repair assessment.
+          Gemini API connected. Upload a photo and click Analyze for live AI repair assessment.
         </p>
       )}
       <StepIndicator current={step} />
 
+      {/* STEP 1 — Category */}
       {step === "category" && (
         <div>
           <p className="font-mono text-[11px] tracking-[0.15em] text-muted-foreground uppercase mb-4">
@@ -452,24 +470,41 @@ function PostTab({
         </div>
       )}
 
+      {/* STEP 2 — Describe */}
       {step === "describe" && (
         <div>
           <p className="font-mono text-[11px] tracking-[0.15em] text-muted-foreground uppercase mb-4">
-            Step 2 — Explain the problem & upload an image
+            Step 2 — Title, description & media
           </p>
+
+          <div className="mb-4">
+            <label className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase block mb-1.5">
+              Job Title (optional — we'll generate one if left blank)
+            </label>
+            <input
+              type="text"
+              value={titleInput}
+              onChange={(e) => setTitleInput(e.target.value)}
+              placeholder={`e.g. ${selectedCat} issue at my home`}
+              maxLength={100}
+              className="w-full border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/60 transition-colors"
+            />
+          </div>
+
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Describe what happened, when it started, and what you've already tried..."
-            rows={6}
+            rows={5}
             className="w-full border border-border bg-card px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/60 transition-colors resize-none"
           />
+
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept="image/*,video/*"
             className="hidden"
-            onChange={(e) => handleImageUpload(e.target.files?.[0] ?? null)}
+            onChange={(e) => handleMediaUpload(e.target.files?.[0] ?? null)}
           />
           <div className="mt-3 flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
             <button
@@ -477,17 +512,26 @@ function PostTab({
               onClick={() => fileInputRef.current?.click()}
               className="inline-flex items-center gap-2 border border-primary/40 bg-primary/5 px-4 py-2.5 text-sm hover:border-primary transition-colors"
             >
-              <ImagePlus size={15} className="text-primary" />
-              {imageName ? "Change Photo" : "Upload Photo (recommended)"}
+              {mediaType === "video"
+                ? <Video size={15} className="text-primary" />
+                : <ImagePlus size={15} className="text-primary" />
+              }
+              {mediaName ? "Change Photo / Video" : "Upload Photo or Video (recommended)"}
             </button>
-            {imageName && <p className="font-mono text-[10px] text-muted-foreground truncate">{imageName}</p>}
+            {mediaName && <p className="font-mono text-[10px] text-muted-foreground truncate">{mediaName}</p>}
           </div>
           <p className="font-mono text-[10px] text-muted-foreground mt-2">
             Gemini uses your photo to identify damage, likely parts, and the professional repair plan.
+            {mediaType === "video" && " Video uploaded — AI will analyze based on your description."}
           </p>
-          {imagePreview && (
-            <img src={imagePreview} alt="Uploaded issue" className="mt-4 max-h-56 w-full object-cover border border-border" />
+
+          {mediaPreview && mediaType === "image" && (
+            <img src={mediaPreview} alt="Uploaded issue" className="mt-4 max-h-56 w-full object-cover border border-border" />
           )}
+          {mediaPreview && mediaType === "video" && (
+            <video src={mediaPreview} controls className="mt-4 max-h-56 w-full border border-border" />
+          )}
+
           {selectedCat && (
             <div className="mt-6 border border-border bg-card p-4">
               <p className="font-mono text-[11px] tracking-[0.15em] text-primary uppercase mb-2">
@@ -503,11 +547,13 @@ function PostTab({
               </ul>
             </div>
           )}
+
           {analysisError && (
-            <p className="text-xs text-red-700 border border-red-200 bg-red-50 px-3 py-2 mb-4">
+            <p className="mt-4 text-xs text-red-700 border border-red-200 bg-red-50 px-3 py-2">
               {analysisError}
             </p>
           )}
+
           <div className="mt-8 flex flex-col sm:flex-row gap-3">
             <button type="button" onClick={() => setStep("category")} className="border border-border px-5 py-3 text-sm">
               Back
@@ -525,7 +571,7 @@ function PostTab({
               {analyzing ? (
                 <>
                   <Loader2 size={15} className="animate-spin" />
-                  {imagePreview ? "Analyzing photo + description..." : "Analyzing description..."}
+                  {mediaType === "image" ? "Analyzing photo + description..." : "Analyzing description..."}
                 </>
               ) : (
                 "Analyze with Gemini"
@@ -535,6 +581,7 @@ function PostTab({
         </div>
       )}
 
+      {/* STEP 3 — Assessment */}
       {step === "assessment" && assessment && (
         <div>
           <div className="flex items-center gap-2 mb-4">
@@ -558,12 +605,11 @@ function PostTab({
             </p>
           )}
 
-          {imagePreview && (
-            <img
-              src={imagePreview}
-              alt="Analyzed issue"
-              className="mb-4 max-h-48 w-full object-cover border border-border"
-            />
+          {mediaPreview && mediaType === "image" && (
+            <img src={mediaPreview} alt="Analyzed issue" className="mb-4 max-h-48 w-full object-cover border border-border" />
+          )}
+          {mediaPreview && mediaType === "video" && (
+            <video src={mediaPreview} controls className="mb-4 max-h-48 w-full border border-border" />
           )}
 
           <div className="border border-primary/30 bg-primary/5 p-5 space-y-5 mb-6">
@@ -571,9 +617,7 @@ function PostTab({
               <p className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase mb-1">Overview</p>
               <p className="text-sm text-foreground leading-relaxed">{assessment.overview}</p>
             </div>
-
             <AssessmentSection title="What we see in your image" items={assessment.imageObservations} />
-
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
               <div>
                 <p className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase mb-1">Diagnosis</p>
@@ -584,29 +628,16 @@ function PostTab({
                 <p className="text-sm text-foreground">{assessment.likelyRootCause}</p>
               </div>
             </div>
-
             <AssessmentSection title="Professional repair process" items={assessment.professionalSteps} ordered />
             <AssessmentSection title="Parts & materials needed" items={assessment.partsNeeded} />
-            <AssessmentSection title="Scope of work" items={assessment.workScope} />
             <AssessmentSection title="Tools a pro would bring" items={assessment.toolsRequired} />
             <AssessmentSection title="Safe DIY steps (if you want to try)" items={assessment.diySteps} ordered />
-            <AssessmentSection title="Recommendations" items={assessment.suggestions} />
-
+            <AssessmentSection title="Safety tips" items={assessment.safetyNotes ? [assessment.safetyNotes] : []} />
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm border-t border-primary/20 pt-4">
-              <p className="text-muted-foreground">
-                Est. cost<br />
-                <span className="text-foreground font-medium">{assessment.estimatedCost}</span>
-              </p>
-              <p className="text-muted-foreground">
-                Est. duration<br />
-                <span className="text-foreground font-medium">{assessment.estimatedDuration}</span>
-              </p>
-              <p className="text-muted-foreground">
-                Urgency<br />
-                <span className="text-foreground font-medium">{assessment.urgency}</span>
-              </p>
+              <p className="text-muted-foreground">Est. cost<br /><span className="text-foreground font-medium">{assessment.estimatedCost}</span></p>
+              <p className="text-muted-foreground">Est. duration<br /><span className="text-foreground font-medium">{assessment.estimatedDuration}</span></p>
+              <p className="text-muted-foreground">Urgency<br /><span className="text-foreground font-medium">{assessment.urgency}</span></p>
             </div>
-
             <p className="text-xs text-orange-700 border border-orange-200 bg-orange-50 px-3 py-2">
               {assessment.safetyNotes}
             </p>
@@ -614,8 +645,8 @@ function PostTab({
 
           <p className="text-sm text-muted-foreground mb-4">
             {assessment.professionalRecommended
-              ? "Based on the image and symptoms, a licensed professional is recommended. Review the repair plan above, then book service when ready."
-              : "You can try the DIY steps above, or book a vetted professional with the parts and scope already outlined."}
+              ? "Based on the assessment, a licensed professional is recommended."
+              : "You can try the DIY steps above, or book a vetted professional for peace of mind."}
           </p>
 
           <div className="flex flex-col sm:flex-row gap-3">
@@ -624,23 +655,45 @@ function PostTab({
             </button>
             <button
               type="button"
-              onClick={() => {
-                setWantsProfessional(true);
-                setStep("timing");
-              }}
+              onClick={() => setStep("timing")}
               className="flex-1 bg-primary text-white py-3 text-sm font-medium hover:bg-primary/90 transition-colors"
             >
-              Book a Professional
+              Hire a Professional
+            </button>
+            <button
+              type="button"
+              onClick={resetFlow}
+              className="border border-border px-5 py-3 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Fix It Myself
             </button>
           </div>
         </div>
       )}
 
+      {/* STEP 4 — Timing & Address */}
       {step === "timing" && (
         <div>
           <p className="font-mono text-[11px] tracking-[0.15em] text-muted-foreground uppercase mb-4">
-            Step 4 — When do you need service?
+            Step 4 — When & where do you need service?
           </p>
+
+          <div className="mb-6">
+            <label className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase block mb-1.5">
+              Your Address <span className="text-primary">*</span>
+            </label>
+            <input
+              type="text"
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder="e.g. 31-42 30th St, Astoria, NY 11102"
+              className="w-full border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/60 transition-colors"
+            />
+            <p className="font-mono text-[10px] text-muted-foreground mt-1">
+              Shared with the contractor only after they accept your job.
+            </p>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-6">
             {TIMING_OPTIONS.map(({ id, label, desc }) => (
               <button
@@ -687,10 +740,10 @@ function PostTab({
             </button>
             <button
               type="button"
-              disabled={!timing || (timing === "custom" && !customDate)}
+              disabled={!timing || !address.trim() || (timing === "custom" && !customDate)}
               onClick={() => setStep("timeslot")}
               className={`flex-1 py-3 text-sm font-medium ${
-                timing && (timing !== "custom" || customDate)
+                timing && address.trim() && (timing !== "custom" || customDate)
                   ? "bg-primary text-white hover:bg-primary/90"
                   : "bg-primary/40 text-white/80 cursor-not-allowed"
               }`}
@@ -701,6 +754,7 @@ function PostTab({
         </div>
       )}
 
+      {/* STEP 5 — Time Slot */}
       {step === "timeslot" && (
         <div>
           <p className="font-mono text-[11px] tracking-[0.15em] text-muted-foreground uppercase mb-2">
@@ -729,12 +783,14 @@ function PostTab({
             ))}
           </div>
 
-          {wantsProfessional && assessment && (
+          {assessment && (
             <div className="border border-border bg-card p-4 mb-6 text-sm space-y-1">
               <p className="font-mono text-[10px] tracking-wider uppercase text-muted-foreground mb-2">Booking Summary</p>
               <p><span className="text-muted-foreground">Category:</span> {selectedCat}</p>
+              <p><span className="text-muted-foreground">Title:</span> {titleInput.trim() || description.trim().slice(0, 60)}</p>
+              <p><span className="text-muted-foreground">Address:</span> {address}</p>
               <p><span className="text-muted-foreground">Estimate:</span> {assessment.estimatedCost}</p>
-              <p><span className="text-muted-foreground">Recommended pros nearby:</span> {recommendedCount}</p>
+              <p><span className="text-muted-foreground">Contractors available:</span> {recommendedCount}</p>
             </div>
           )}
 
@@ -750,7 +806,7 @@ function PostTab({
                 timeSlot ? "bg-primary text-white hover:bg-primary/90" : "bg-primary/40 text-white/80 cursor-not-allowed"
               }`}
             >
-              Request Booking
+              Post Job & Notify Contractors
               <ChevronRight size={15} />
             </button>
           </div>
@@ -760,34 +816,100 @@ function PostTab({
   );
 }
 
+// ─── Rating Form ────────────────────────────────────────────────────────────
+
+function RatingForm({ jobId, onSubmitted }: { jobId: number; onSubmitted: () => void }) {
+  const [rating, setRating] = useState(0);
+  const [hovered, setHovered] = useState(0);
+  const [review, setReview] = useState("");
+
+  const submit = () => {
+    if (!rating) return;
+    updateJobRating(jobId, rating, review.trim());
+    onSubmitted();
+  };
+
+  return (
+    <div className="mt-4 border border-primary/30 bg-primary/5 p-4 space-y-3">
+      <p className="font-mono text-[10px] tracking-wider uppercase text-primary">Rate this contractor</p>
+      <div className="flex gap-1">
+        {[1, 2, 3, 4, 5].map((s) => (
+          <button
+            key={s}
+            type="button"
+            onClick={() => setRating(s)}
+            onMouseEnter={() => setHovered(s)}
+            onMouseLeave={() => setHovered(0)}
+          >
+            <Star
+              size={22}
+              fill={(hovered || rating) >= s ? "#FF4D1C" : "none"}
+              className={(hovered || rating) >= s ? "text-primary" : "text-muted-foreground"}
+            />
+          </button>
+        ))}
+      </div>
+      <textarea
+        value={review}
+        onChange={(e) => setReview(e.target.value)}
+        placeholder="Leave a review (optional)..."
+        rows={2}
+        className="w-full border border-border bg-background px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/60 resize-none"
+      />
+      <button
+        type="button"
+        disabled={!rating}
+        onClick={submit}
+        className={`px-4 py-2 text-xs font-medium inline-flex items-center gap-1.5 ${
+          rating ? "bg-primary text-white hover:bg-primary/90" : "bg-primary/40 text-white/80 cursor-not-allowed"
+        }`}
+      >
+        <ThumbsUp size={12} />
+        Submit Review
+      </button>
+    </div>
+  );
+}
+
+// ─── Job Card ────────────────────────────────────────────────────────────────
+
 function JobCard({ job, index, user }: { job: HomeJob; index: number; user: AuthUser | null }) {
   const ref = useRef<HTMLDivElement>(null);
   const inView = useInView(ref, { once: true });
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<JobChatMessage[]>(() => getJobMessages(job.id));
+  const [lifecycle, setLifecycle] = useState(() => getJobLifecycle(job.id));
+  const [showRatingForm, setShowRatingForm] = useState(false);
   const homeownerName = user?.name || "Homeowner";
 
-  useEffect(() => {
+  const refreshData = () => {
     setMessages(getJobMessages(job.id));
-  }, [job.id]);
+    setLifecycle(getJobLifecycle(job.id));
+  };
 
   useEffect(() => {
-    const onStorage = () => setMessages(getJobMessages(job.id));
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    refreshData();
+    window.addEventListener("storage", refreshData);
+    window.addEventListener("fixbridge-lifecycle-update", refreshData);
+    return () => {
+      window.removeEventListener("storage", refreshData);
+      window.removeEventListener("fixbridge-lifecycle-update", refreshData);
+    };
   }, [job.id]);
 
   const handleSendMessage = () => {
     const text = message.trim();
     if (!text) return;
-    addJobMessage(job.id, {
-      senderRole: "homeowner",
-      senderName: homeownerName,
-      text,
-    });
+    addJobMessage(job.id, { senderRole: "homeowner", senderName: homeownerName, text });
     setMessages(getJobMessages(job.id));
     setMessage("");
   };
+
+  const liveStatus = lifecycle.status;
+  const isCompleted = liveStatus === "completed";
+  const hasRating = Boolean(lifecycle.rating);
+  const statusUi = JOB_STATUS_UI[liveStatus] ?? JOB_STATUS_UI.open;
+  const StatusIcon = statusUi.icon;
 
   return (
     <motion.div
@@ -800,10 +922,11 @@ function JobCard({ job, index, user }: { job: HomeJob; index: number; user: Auth
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-            <span className="font-mono text-[10px] tracking-wider text-primary uppercase">
-              {job.category}
+            <span className="font-mono text-[10px] tracking-wider text-primary uppercase">{job.category}</span>
+            <span className={`font-mono text-[10px] tracking-wider uppercase border px-2 py-0.5 inline-flex items-center gap-1 ${statusUi.className}`}>
+              <StatusIcon size={9} />
+              {statusUi.label}
             </span>
-            <StatusBadge status={job.status} />
             {!job.aiAssessed && (
               <span className="font-mono text-[10px] bg-yellow-100 text-yellow-700 border border-yellow-200 px-2 py-0.5 uppercase tracking-wider">
                 AI Pending
@@ -813,28 +936,25 @@ function JobCard({ job, index, user }: { job: HomeJob; index: number; user: Auth
           <p className="text-sm font-medium text-foreground mb-1">{job.title}</p>
           {(job.scheduledDate || job.timeSlot) && (
             <p className="font-mono text-[11px] text-muted-foreground mb-1">
-              {job.scheduledDate}
-              {job.timeSlot ? ` · ${job.timeSlot}` : ""}
+              {job.scheduledDate}{job.timeSlot ? ` · ${job.timeSlot}` : ""}
             </p>
           )}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 flex-wrap">
             <span className="font-mono text-[11px] text-muted-foreground">
-              <Clock size={10} className="inline mr-1" />
-              Posted {job.posted}
+              <Clock size={10} className="inline mr-1" />Posted {job.posted}
             </span>
-            {job.contractor && (
-              <span className="font-mono text-[11px] text-blue-600">
-                → {job.contractor}
-              </span>
+            {lifecycle.contractorName && (
+              <span className="font-mono text-[11px] text-blue-600">→ {lifecycle.contractorName}</span>
+            )}
+            {!lifecycle.contractorName && job.contractor && (
+              <span className="font-mono text-[11px] text-blue-600">→ {job.contractor}</span>
             )}
           </div>
         </div>
 
         <div className="flex items-center gap-4 sm:gap-6 shrink-0 w-full sm:w-auto justify-between sm:justify-end">
           <div className="text-center">
-            <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-2xl text-foreground leading-none">
-              {job.bids}
-            </p>
+            <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-2xl text-foreground leading-none">{job.bids}</p>
             <p className="font-mono text-[10px] text-muted-foreground">bids</p>
           </div>
           <div className="text-center">
@@ -847,40 +967,58 @@ function JobCard({ job, index, user }: { job: HomeJob; index: number; user: Auth
               <p className="font-mono text-[10px] text-muted-foreground">saved</p>
             </div>
           )}
-          {job.status === "completed" && job.rating && (
+          {isCompleted && hasRating && (
             <div className="flex gap-0.5">
               {[1, 2, 3, 4, 5].map((s) => (
-                <Star key={s} size={11} fill="#FF4D1C" className="text-primary" />
+                <Star key={s} size={11} fill={s <= (lifecycle.rating ?? 0) ? "#FF4D1C" : "none"} className={s <= (lifecycle.rating ?? 0) ? "text-primary" : "text-muted-foreground"} />
               ))}
             </div>
           )}
-          {job.bids > 0 && job.status !== "completed" && (
-            <button className="font-mono text-[11px] text-primary border border-primary/30 px-3 py-1.5 hover:bg-primary hover:text-white transition-all opacity-0 group-hover:opacity-100">
-              View Bids
-            </button>
-          )}
         </div>
       </div>
+
+      {/* Invoice display */}
+      {lifecycle.invoiceAmount !== undefined && (
+        <div className="mt-3 border border-border bg-background px-3 py-2 text-xs flex items-center gap-2">
+          <Receipt size={13} className="text-primary shrink-0" />
+          <span className="text-muted-foreground">Invoice:</span>
+          <span className="font-medium text-foreground">${lifecycle.invoiceAmount.toLocaleString()}</span>
+          {lifecycle.invoiceFileName && (
+            <span className="font-mono text-[10px] text-muted-foreground truncate">· {lifecycle.invoiceFileName}</span>
+          )}
+        </div>
+      )}
+
+      {/* Rating form */}
+      {isCompleted && !hasRating && !showRatingForm && (
+        <button
+          type="button"
+          onClick={() => setShowRatingForm(true)}
+          className="mt-3 inline-flex items-center gap-1.5 text-xs text-primary border border-primary/30 px-3 py-1.5 hover:bg-primary hover:text-white transition-all"
+        >
+          <Star size={11} />
+          Rate this contractor
+        </button>
+      )}
+      {isCompleted && !hasRating && showRatingForm && (
+        <RatingForm jobId={job.id} onSubmitted={() => { setShowRatingForm(false); setLifecycle(getJobLifecycle(job.id)); }} />
+      )}
+
+      {/* Chat */}
       <div className="mt-4 border-t border-border pt-3">
-        <p className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase mb-2">
-          Job Chat
-        </p>
+        <p className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase mb-2">Job Chat</p>
         <div className="max-h-28 overflow-y-auto border border-border bg-background p-2 space-y-1 mb-2">
           {messages.length === 0 && (
-            <p className="text-xs text-muted-foreground">No messages yet for this job.</p>
+            <p className="text-xs text-muted-foreground">No messages yet. Chat opens once a contractor accepts.</p>
           )}
           {messages.map((msg) => (
             <div
               key={msg.id}
               className={`text-xs px-2 py-1 border ${
-                msg.senderRole === "homeowner"
-                  ? "bg-primary/5 border-primary/20"
-                  : "bg-muted/50 border-border"
+                msg.senderRole === "homeowner" ? "bg-primary/5 border-primary/20" : "bg-muted/50 border-border"
               }`}
             >
-              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                {msg.senderName}
-              </span>
+              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{msg.senderName}</span>
               <p>{msg.text}</p>
             </div>
           ))}
@@ -917,27 +1055,21 @@ function JobsTab({ jobs, user }: { jobs: HomeJob[]; user: AuthUser | null }) {
       <h2 className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase text-3xl text-foreground mb-1">
         My Jobs
       </h2>
-      <p className="text-sm text-muted-foreground mb-8">Track posted jobs, bids received, and repair history.</p>
-
-      {/* Summary */}
+      <p className="text-sm text-muted-foreground mb-8">Track posted jobs, bids received, contractor status, and repair history.</p>
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-8">
         {[
           { label: "Total Posted", val: total, icon: Briefcase },
           { label: "Active Jobs", val: active, icon: AlertCircle },
           { label: "Completed", val: completed, icon: CheckCircle },
-          { label: "Total Bids Received", val: totalBids, icon: Star },
+          { label: "Total Bids", val: totalBids, icon: Star },
         ].map(({ label, val, icon: Icon }) => (
           <div key={label} className="bg-card border border-border p-4">
             <Icon size={14} className="text-primary mb-2" />
-            <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-3xl text-foreground leading-none mb-1">
-              {val}
-            </p>
+            <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-3xl text-foreground leading-none mb-1">{val}</p>
             <p className="font-mono text-[11px] text-muted-foreground uppercase tracking-wider">{label}</p>
           </div>
         ))}
       </div>
-
-      {/* Job cards */}
       <div className="space-y-3">
         {jobs.map((job, i) => (
           <JobCard key={job.id} job={job} index={i} user={user} />
@@ -962,7 +1094,7 @@ function AITab() {
         {
           role: "ai",
           label: "AI Response",
-          text: `I understand your question about "${q}". Let me help you assess this. Based on typical NYC-area jobs with similar descriptions, this sounds like a repair that would cost approximately $150–$400 and require a licensed professional. Shall I post this as a job for contractor bids?`,
+          text: `I understand your question about "${q}". Based on typical NYC-area jobs, this sounds like a repair that would cost approximately $150–$400 and may require a licensed professional. Shall I help you post this as a job for contractor bids?`,
         },
       ]);
     }, 800);
@@ -978,7 +1110,6 @@ function AITab() {
           Describe any repair problem — get an instant assessment, cost estimate, and next steps.
         </p>
       </div>
-
       <div className="flex-1 overflow-y-auto border border-border bg-card p-5 space-y-4 mb-4">
         {messages.map((msg, i) => (
           <motion.div
@@ -988,24 +1119,15 @@ function AITab() {
             transition={{ delay: i * 0.1 }}
             className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
           >
-            <div
-              className={`max-w-[80%] p-4 ${
-                msg.role === "user"
-                  ? "bg-primary/10 border border-primary/20"
-                  : "bg-background border border-border"
-              }`}
-            >
-              {msg.label && (
-                <p className="font-mono text-[10px] tracking-[0.15em] text-primary uppercase mb-1.5">
-                  {msg.label}
-                </p>
+            <div className={`max-w-[80%] p-4 ${msg.role === "user" ? "bg-primary/10 border border-primary/20" : "bg-background border border-border"}`}>
+              {"label" in msg && msg.label && (
+                <p className="font-mono text-[10px] tracking-[0.15em] text-primary uppercase mb-1.5">{msg.label}</p>
               )}
               <p className="text-sm text-foreground leading-relaxed">{msg.text}</p>
             </div>
           </motion.div>
         ))}
       </div>
-
       <div className="flex gap-2">
         <input
           value={input}
@@ -1014,10 +1136,7 @@ function AITab() {
           placeholder="Describe your repair problem…"
           className="flex-1 border border-border bg-card px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/60 transition-colors"
         />
-        <button
-          onClick={handleSend}
-          className="bg-primary text-white px-4 py-3 hover:bg-primary/90 transition-colors"
-        >
+        <button onClick={handleSend} className="bg-primary text-white px-4 py-3 hover:bg-primary/90 transition-colors">
           <Send size={16} />
         </button>
       </div>
@@ -1032,7 +1151,6 @@ function ContactTab() {
         Contact & Support
       </h2>
       <p className="text-sm text-muted-foreground mb-8">We're here to help with anything on the platform.</p>
-
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-10">
         {[
           { icon: MessageSquare, label: "Live Chat", desc: "Usually responds in under 2 min", cta: "Start Chat", primary: true },
@@ -1045,32 +1163,19 @@ function ContactTab() {
               <p className="text-sm font-medium text-foreground mb-0.5">{label}</p>
               <p className="font-mono text-[11px] text-muted-foreground">{desc}</p>
             </div>
-            <button
-              className={`text-sm font-medium px-4 py-2 transition-colors mt-auto ${
-                primary
-                  ? "bg-primary text-white hover:bg-primary/90"
-                  : "border border-border text-foreground hover:border-foreground/30"
-              }`}
-            >
+            <button className={`text-sm font-medium px-4 py-2 transition-colors mt-auto ${primary ? "bg-primary text-white hover:bg-primary/90" : "border border-border text-foreground hover:border-foreground/30"}`}>
               {cta}
             </button>
           </div>
         ))}
       </div>
-
       <div className="border border-border bg-card p-6 mb-6">
-        <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-4">
-          Send a Message
-        </p>
+        <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-4">Send a Message</p>
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase block mb-1.5">Subject</label>
-              <input
-                type="text"
-                placeholder="Issue with bid received"
-                className="w-full border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/60"
-              />
+              <input type="text" placeholder="Issue with bid received" className="w-full border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/60" />
             </div>
             <div>
               <label className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase block mb-1.5">Related Job</label>
@@ -1083,29 +1188,15 @@ function ContactTab() {
           </div>
           <div>
             <label className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase block mb-1.5">Message</label>
-            <textarea
-              rows={4}
-              placeholder="Describe your issue or question…"
-              className="w-full border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/60 resize-none"
-            />
+            <textarea rows={4} placeholder="Describe your issue or question…" className="w-full border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/60 resize-none" />
           </div>
-          <button className="bg-primary text-white px-6 py-2.5 text-sm font-medium hover:bg-primary/90 transition-colors">
-            Send Message
-          </button>
+          <button className="bg-primary text-white px-6 py-2.5 text-sm font-medium hover:bg-primary/90 transition-colors">Send Message</button>
         </div>
       </div>
-
       <div className="bg-muted/50 border border-border p-5">
-        <p className="font-mono text-[11px] tracking-wider text-foreground uppercase mb-3">
-          Quick FAQs
-        </p>
+        <p className="font-mono text-[11px] tracking-wider text-foreground uppercase mb-3">Quick FAQs</p>
         <div className="space-y-2">
-          {[
-            "How long until I get my first bid?",
-            "Can I reject a bid after accepting?",
-            "What does the booking fee cover?",
-            "How are contractors vetted?",
-          ].map((q) => (
+          {["How long until I get my first bid?", "Can I reject a bid after accepting?", "What does the booking fee cover?", "How are contractors vetted?"].map((q) => (
             <button key={q} className="w-full flex items-center justify-between text-sm text-muted-foreground hover:text-foreground py-2 border-b border-border/50 last:border-0 transition-colors text-left">
               {q}
               <ChevronRight size={14} className="shrink-0" />
@@ -1133,102 +1224,55 @@ export default function HomeownerDashboard({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [jobs, setJobs] = useState<HomeJob[]>(INITIAL_JOBS);
   const displayName = user?.name || "Maria Santos";
-  const initials = displayName
-    .split(" ")
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
+  const initials = displayName.split(" ").map((p) => p[0]).join("").slice(0, 2).toUpperCase();
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
       {mobileMenuOpen && (
-        <button
-          type="button"
-          className="fixed inset-0 bg-black/40 z-30 md:hidden"
-          onClick={() => setMobileMenuOpen(false)}
-          aria-label="Close menu overlay"
-        />
+        <button type="button" className="fixed inset-0 bg-black/40 z-30 md:hidden" onClick={() => setMobileMenuOpen(false)} aria-label="Close menu overlay" />
       )}
-      {/* Sidebar */}
-      <aside
-        className={`fixed md:static inset-y-0 left-0 z-40 flex flex-col border-r border-border bg-card transition-all duration-300 ${
-          mobileMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
-        } ${sidebarOpen ? "md:w-56" : "md:w-16"} w-64 shrink-0`}
-      >
-        {/* Logo */}
+      <aside className={`fixed md:static inset-y-0 left-0 z-40 flex flex-col border-r border-border bg-card transition-all duration-300 ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} ${sidebarOpen ? "md:w-56" : "md:w-16"} w-64 shrink-0`}>
         <div className="border-b border-border px-4 py-4 flex items-center gap-2 h-16">
-          <button
-            onClick={() => setSidebarOpen((s) => !s)}
-            className="flex items-center gap-1.5 group"
-          >
+          <button onClick={() => setSidebarOpen((s) => !s)} className="flex items-center gap-1.5 group">
             <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-lg tracking-wider text-foreground">F</span>
             <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-lg tracking-wider text-primary">B</span>
-            {sidebarOpen && (
-              <span className="font-mono text-[9px] bg-primary text-white px-1 py-0.5 ml-0.5">AI</span>
-            )}
+            {sidebarOpen && <span className="font-mono text-[9px] bg-primary text-white px-1 py-0.5 ml-0.5">AI</span>}
           </button>
         </div>
-
-        {/* Nav items */}
         <nav className="flex-1 py-4 px-2 space-y-1">
           {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
-              onClick={() => {
-                setActiveTab(id);
-                setMobileMenuOpen(false);
-              }}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 transition-colors ${
-                activeTab === id
-                  ? "bg-primary/10 text-primary border-r-2 border-primary"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-              }`}
+              onClick={() => { setActiveTab(id); setMobileMenuOpen(false); }}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 transition-colors ${activeTab === id ? "bg-primary/10 text-primary border-r-2 border-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
             >
               <Icon size={17} className="shrink-0" />
-              {sidebarOpen && (
-                <span className="text-sm font-medium truncate">{label}</span>
-              )}
+              {sidebarOpen && <span className="text-sm font-medium truncate">{label}</span>}
             </button>
           ))}
         </nav>
-
-        {/* User + logout */}
         <div className="border-t border-border p-3 space-y-2">
-          <button
-            onClick={onToggleDark}
-            className="w-full flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground transition-colors"
-          >
+          <button onClick={onToggleDark} className="w-full flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground transition-colors">
             {isDark ? <Sun size={15} className="shrink-0" /> : <Moon size={15} className="shrink-0" />}
             {sidebarOpen && <span className="text-xs">{isDark ? "Light mode" : "Dark mode"}</span>}
           </button>
-          <button
-            onClick={onLogout}
-            className="w-full flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground transition-colors"
-          >
+          <button onClick={onLogout} className="w-full flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground transition-colors">
             <LogOut size={15} className="shrink-0" />
             {sidebarOpen && <span className="text-xs">Sign Out</span>}
           </button>
         </div>
       </aside>
 
-      {/* Main */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top bar */}
         <header className="h-16 border-b border-border flex items-center justify-between px-4 md:px-6 bg-card shrink-0">
           <div>
-            <button
-              type="button"
-              className="md:hidden w-8 h-8 mb-1 flex items-center justify-center border border-border text-muted-foreground"
-              onClick={() => setMobileMenuOpen((open) => !open)}
-              aria-label="Toggle menu"
-            >
+            <button type="button" className="md:hidden w-8 h-8 mb-1 flex items-center justify-center border border-border text-muted-foreground" onClick={() => setMobileMenuOpen((o) => !o)} aria-label="Toggle menu">
               {mobileMenuOpen ? <X size={16} /> : <Menu size={16} />}
             </button>
             <p className="text-sm font-medium text-foreground">{displayName}</p>
             <div className="flex items-center gap-1">
               <MapPin size={10} className="text-primary" />
-              <p className="font-mono text-[11px] text-muted-foreground">Astoria, Queens</p>
+              <p className="font-mono text-[11px] text-muted-foreground">Homeowner</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -1242,14 +1286,8 @@ export default function HomeownerDashboard({
           </div>
         </header>
 
-        {/* Content */}
         <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
-          <motion.div
-            key={activeTab}
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3 }}
-          >
+          <motion.div key={activeTab} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
             {activeTab === "post" && (
               <PostTab
                 onJobPosted={(job) => setJobs((prev) => [job, ...prev])}
