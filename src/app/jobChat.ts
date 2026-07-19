@@ -1,12 +1,14 @@
 export type JobChatMessage = {
   id: number;
-  senderRole: "homeowner" | "contractor";
+  senderRole: "homeowner" | "contractor" | "system";
   senderName: string;
   text: string;
+  imageDataUrl?: string;   // base64 data URL for attached image
   createdAt: string;
 };
 
 const STORAGE_KEY = "fixbridge-job-chats";
+const BROADCAST_EVENT = "fixbridge-chat-update";
 
 function canUseStorage() {
   if (typeof window === "undefined") return false;
@@ -38,10 +40,25 @@ function saveAllChats(chats: Record<string, JobChatMessage[]>) {
   }
 }
 
+function broadcast() {
+  try {
+    window.dispatchEvent(new Event(BROADCAST_EVENT));
+  } catch {
+    // ignore
+  }
+}
+
 export function getJobMessages(jobId: number): JobChatMessage[] {
   const chats = getAllChats();
   return chats[String(jobId)] ?? [];
 }
+
+/** Returns all chats keyed by jobId string — used by admin panel. */
+export function getAllJobChats(): Record<string, JobChatMessage[]> {
+  return getAllChats();
+}
+
+export const CHAT_BROADCAST_EVENT = BROADCAST_EVENT;
 
 export function addJobMessage(
   jobId: number,
@@ -57,4 +74,5 @@ export function addJobMessage(
   };
   chats[key] = [...existing, next];
   saveAllChats(chats);
+  broadcast();
 }

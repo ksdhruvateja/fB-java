@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { Calendar } from "./components/ui/calendar";
 import { getStoredUsers, type AuthUser } from "./auth";
-import { addJobMessage, getJobMessages, type JobChatMessage } from "./jobChat";
+import JobChatPanel from "./JobChatPanel";
 import {
   addJobBoardJob,
   contractorCanDoJob,
@@ -876,14 +876,11 @@ function RatingForm({ jobId, onSubmitted }: { jobId: number; onSubmitted: () => 
 function JobCard({ job, index, user }: { job: HomeJob; index: number; user: AuthUser | null }) {
   const ref = useRef<HTMLDivElement>(null);
   const inView = useInView(ref, { once: true });
-  const [message, setMessage] = useState("");
-  const [messages, setMessages] = useState<JobChatMessage[]>(() => getJobMessages(job.id));
   const [lifecycle, setLifecycle] = useState(() => getJobLifecycle(job.id));
   const [showRatingForm, setShowRatingForm] = useState(false);
   const homeownerName = user?.name || "Homeowner";
 
   const refreshData = () => {
-    setMessages(getJobMessages(job.id));
     setLifecycle(getJobLifecycle(job.id));
   };
 
@@ -896,14 +893,6 @@ function JobCard({ job, index, user }: { job: HomeJob; index: number; user: Auth
       window.removeEventListener("fixbridge-lifecycle-update", refreshData);
     };
   }, [job.id]);
-
-  const handleSendMessage = () => {
-    const text = message.trim();
-    if (!text) return;
-    addJobMessage(job.id, { senderRole: "homeowner", senderName: homeownerName, text });
-    setMessages(getJobMessages(job.id));
-    setMessage("");
-  };
 
   const liveStatus = lifecycle.status;
   const isCompleted = liveStatus === "completed";
@@ -1004,42 +993,13 @@ function JobCard({ job, index, user }: { job: HomeJob; index: number; user: Auth
         <RatingForm jobId={job.id} onSubmitted={() => { setShowRatingForm(false); setLifecycle(getJobLifecycle(job.id)); }} />
       )}
 
-      {/* Chat */}
-      <div className="mt-4 border-t border-border pt-3">
-        <p className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase mb-2">Job Chat</p>
-        <div className="max-h-28 overflow-y-auto border border-border bg-background p-2 space-y-1 mb-2">
-          {messages.length === 0 && (
-            <p className="text-xs text-muted-foreground">No messages yet. Chat opens once a contractor accepts.</p>
-          )}
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`text-xs px-2 py-1 border ${
-                msg.senderRole === "homeowner" ? "bg-primary/5 border-primary/20" : "bg-muted/50 border-border"
-              }`}
-            >
-              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{msg.senderName}</span>
-              <p>{msg.text}</p>
-            </div>
-          ))}
-        </div>
-        <div className="flex flex-col sm:flex-row gap-2">
-          <input
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-            placeholder="Type a message to contractor..."
-            className="flex-1 border border-border bg-background px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:border-primary/60 transition-colors"
-          />
-          <button
-            type="button"
-            onClick={handleSendMessage}
-            className="bg-primary text-white px-3 py-2 text-xs hover:bg-primary/90 transition-colors sm:w-auto w-full inline-flex justify-center"
-          >
-            <Send size={12} />
-          </button>
-        </div>
-      </div>
+      <JobChatPanel
+        jobId={job.id}
+        jobTitle={job.title}
+        myRole="homeowner"
+        myName={homeownerName}
+        placeholder="Type a message to your contractor…"
+      />
     </motion.div>
   );
 }

@@ -11,7 +11,8 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
 import type { AuthUser } from "./auth";
-import { addJobMessage, getJobMessages, type JobChatMessage } from "./jobChat";
+import { addJobMessage } from "./jobChat";
+import JobChatPanel from "./JobChatPanel";
 import { contractorCanDoJob, getJobBoardJobs, type JobBoardItem } from "./jobBoard";
 import {
   getJobLifecycle,
@@ -167,16 +168,13 @@ function FindJobCard({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const inView = useInView(ref, { once: true });
-  const [question, setQuestion] = useState("");
   const [showCancelForm, setShowCancelForm] = useState(false);
   const [cancelReasonInput, setCancelReasonInput] = useState("");
-  const [messages, setMessages] = useState<JobChatMessage[]>(() => getJobMessages(job.id));
   const [lifecycle, setLifecycle] = useState<JobLifecycle>(() => getJobLifecycle(job.id));
   const contractorName = user?.name || "Contractor";
   const contractorEmail = user?.email || "";
 
   const refreshAll = () => {
-    setMessages(getJobMessages(job.id));
     setLifecycle(getJobLifecycle(job.id));
   };
 
@@ -190,25 +188,15 @@ function FindJobCard({
     };
   }, [job.id]);
 
-  const handleSendQuestion = () => {
-    const message = question.trim();
-    if (!message) return;
-    addJobMessage(job.id, { senderRole: "contractor", senderName: contractorName, text: message });
-    setMessages(getJobMessages(job.id));
-    setQuestion("");
-  };
-
   const handleAccept = () => {
     updateJobStatus(job.id, "accepted", contractorName, contractorEmail);
     setLifecycle(getJobLifecycle(job.id));
     onStatusChange();
-    // Send system message to chat
     addJobMessage(job.id, {
-      senderRole: "contractor",
-      senderName: contractorName,
-      text: `✅ I've accepted this job! I'll be in touch shortly to confirm arrival time.`,
+      senderRole: "system",
+      senderName: "FixBridge",
+      text: `${contractorName} accepted this job and will be in touch shortly.`,
     });
-    setMessages(getJobMessages(job.id));
   };
 
   const handleAdvanceStatus = () => {
@@ -219,17 +207,16 @@ function FindJobCard({
     setLifecycle(newLifecycle);
     onStatusChange();
     const statusMsg: Record<string, string> = {
-      "on-the-way": "🚗 I'm on my way to your location!",
-      arrived: "📍 I've arrived at your address.",
-      "work-started": "🔧 Work has started.",
-      completed: "✅ Work is complete! I'll upload the invoice shortly.",
+      "on-the-way": `${contractorName} is on the way to your location.`,
+      arrived: `${contractorName} has arrived at your address.`,
+      "work-started": `${contractorName} has started work.`,
+      completed: `${contractorName} has completed the work and will upload an invoice shortly.`,
     };
     addJobMessage(job.id, {
-      senderRole: "contractor",
-      senderName: contractorName,
+      senderRole: "system",
+      senderName: "FixBridge",
       text: statusMsg[next] ?? `Status updated to: ${STATUS_LABELS[next]}`,
     });
-    setMessages(getJobMessages(job.id));
   };
 
   const handleCancel = (reason: string) => {
@@ -237,11 +224,10 @@ function FindJobCard({
     setLifecycle(getJobLifecycle(job.id));
     onStatusChange();
     addJobMessage(job.id, {
-      senderRole: "contractor",
-      senderName: contractorName,
-      text: `❌ I had to cancel this job. Reason: ${reason}`,
+      senderRole: "system",
+      senderName: "FixBridge",
+      text: `Job cancelled by contractor. Reason: ${reason}`,
     });
-    setMessages(getJobMessages(job.id));
   };
 
   const status = lifecycle.status;
@@ -406,45 +392,13 @@ function FindJobCard({
         <InvoiceUpload jobId={job.id} lifecycle={lifecycle} onUpdated={() => setLifecycle(getJobLifecycle(job.id))} />
       )}
 
-      {/* Chat */}
-      <div className="mt-4 border-t border-border pt-3">
-        <p className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase mb-2">
-          {isAccepted ? "Chat with Homeowner" : "Questions? Message before accepting"}
-        </p>
-        <div className="max-h-28 overflow-y-auto border border-border bg-background p-2 space-y-1 mb-2">
-          {messages.length === 0 && (
-            <p className="text-xs text-muted-foreground">No messages yet for this job.</p>
-          )}
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`text-xs px-2 py-1 border ${
-                msg.senderRole === "contractor" ? "bg-primary/5 border-primary/20" : "bg-muted/50 border-border"
-              }`}
-            >
-              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{msg.senderName}</span>
-              <p>{msg.text}</p>
-            </div>
-          ))}
-        </div>
-        <div className="flex flex-col sm:flex-row gap-2">
-          <input
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSendQuestion()}
-            placeholder={isAccepted ? "Message homeowner..." : "Ask about scope, timing, or materials..."}
-            className="flex-1 border border-border bg-background px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:border-primary/60 transition-colors"
-          />
-          <button
-            type="button"
-            onClick={handleSendQuestion}
-            className="inline-flex items-center justify-center gap-1 bg-primary text-white px-3 py-2 text-xs hover:bg-primary/90 transition-colors sm:w-auto w-full"
-          >
-            <Send size={12} />
-            Send
-          </button>
-        </div>
-      </div>
+      <JobChatPanel
+        jobId={job.id}
+        jobTitle={job.title}
+        myRole="contractor"
+        myName={contractorName}
+        placeholder={isAccepted ? "Message homeowner…" : "Ask about scope, timing, or materials…"}
+      />
     </motion.div>
   );
 }

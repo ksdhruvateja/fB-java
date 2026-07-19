@@ -2,13 +2,15 @@ import { useMemo, useState } from "react";
 import {
   ArrowLeft, FileText, LogOut, ShieldCheck, Users, Briefcase,
   Receipt, TrendingUp, CheckCircle, Clock, DollarSign, Star,
-  AlertCircle, BarChart2,
+  AlertCircle, BarChart2, MessageSquare, ImagePlus,
 } from "lucide-react";
 import { getStoredUsers } from "./auth";
 import { getJobBoardJobs } from "./jobBoard";
 import { getAllLifecycles, STATUS_LABELS, type JobStatus } from "./jobLifecycle";
+import { getAllJobChats } from "./jobChat";
+import JobChatPanel from "./JobChatPanel";
 
-type AdminTab = "overview" | "contractors" | "jobs" | "invoices";
+type AdminTab = "overview" | "contractors" | "jobs" | "invoices" | "conversations";
 
 const STATUS_BADGE: Record<JobStatus, string> = {
   open:           "bg-green-100 text-green-700 border-green-200",
@@ -55,11 +57,31 @@ export default function AdminPanel({
     ? totalRatings.reduce((s, l) => s + (l.rating ?? 0), 0) / totalRatings.length
     : 0;
 
-  const TABS: { id: AdminTab; label: string; icon: React.ElementType }[] = [
+  const allChats = useMemo(() => getAllJobChats(), []);
+
+  // Jobs that have at least one non-system message
+  const jobsWithChats = useMemo(() => {
+    return allJobs
+      .map((job) => {
+        const msgs = allChats[String(job.id)] ?? [];
+        const visibleMsgs = msgs.filter((m) => m.senderRole !== "system");
+        const lastMsg = msgs[msgs.length - 1];
+        return { job, msgs, visibleMsgs, lastMsg };
+      })
+      .filter(({ msgs }) => msgs.length > 0)
+      .sort((a, b) => {
+        const aTime = a.lastMsg?.createdAt ?? "";
+        const bTime = b.lastMsg?.createdAt ?? "";
+        return bTime.localeCompare(aTime);
+      });
+  }, [allJobs, allChats]);
+
+  const TABS: { id: AdminTab; label: string; icon: React.ElementType; badge?: number }[] = [
     { id: "overview", label: "Overview", icon: BarChart2 },
     { id: "contractors", label: "Contractors", icon: Users },
     { id: "jobs", label: "All Jobs", icon: Briefcase },
     { id: "invoices", label: "Invoices & Revenue", icon: Receipt },
+    { id: "conversations", label: "Conversations", icon: MessageSquare, badge: jobsWithChats.length },
   ];
 
   return (
@@ -101,11 +123,11 @@ export default function AdminPanel({
 
         {/* Tab nav */}
         <div className="flex gap-1 bg-card border border-border p-1 mb-8 overflow-x-auto">
-          {TABS.map(({ id, label, icon: Icon }) => (
+          {TABS.map(({ id, label, icon: Icon, badge }) => (
             <button
               key={id}
               onClick={() => setActiveTab(id)}
-              className={`flex items-center gap-2 px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+              className={`relative flex items-center gap-2 px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
                 activeTab === id
                   ? "bg-foreground text-background"
                   : "text-muted-foreground hover:text-foreground"
@@ -113,6 +135,13 @@ export default function AdminPanel({
             >
               <Icon size={14} />
               {label}
+              {badge !== undefined && badge > 0 && (
+                <span className={`ml-0.5 min-w-[16px] h-4 px-1 rounded-full text-[10px] font-bold flex items-center justify-center ${
+                  activeTab === id ? "bg-background/20 text-background" : "bg-primary text-white"
+                }`}>
+                  {badge}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -429,6 +458,78 @@ export default function AdminPanel({
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* CONVERSATIONS */}
+        {activeTab === "conversations" && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm text-muted-foreground">
+                {jobsWithChats.length} job conversation{jobsWithChats.length !== 1 ? "s" : ""}
+                {allJobs.length - jobsWithChats.length > 0 && (
+                  <span className="ml-1 text-muted-foreground/60">
+                    · {allJobs.length - jobsWithChats.length} with no messages
+                  </span>
+                )}
+              </p>
+            </div>
+
+            {jobsWithChats.length === 0 && (
+              <div className="border border-border bg-card p-10 text-center">
+                <MessageSquare size={28} className="text-muted-foreground/30 mx-auto mb-3" />
+                <p className="text-sm text-muted-foreground">No conversations yet.</p>
+                <p className="font-mono text-[11px] text-muted-foreground/60 mt-1">
+                  Chats between homeowners and contractors will appear here.
+                </p>
+              </div>
+            )}
+
+            {jobsWithChats.map(({ job, msgs, visibleMsgs, lastMsg }) => {
+              const lc = lifecycles.find((l) => l.jobId === job.id);
+              const hasImages = msgs.some((m) => m.imageDataUrl);
+              return (
+                <div key={job.id} className="bg-card border border-border p-5">
+                  {/* Conversation header */}
+                  <div className="flex items-start justify-between gap-3 flex-wrap mb-1">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-foreground">{job.title}</p>
+                      <div className="flex items-center gap-3 mt-0.5 flex-wrap">
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-primary">{job.category}</span>
+                        {lc?.contractorName && (
+                          <span className="font-mono text-[10px] text-muted-foreground">
+                            Contractor: {lc.contractorName}
+                          </span>
+                        )}
+                        {hasImages && (
+                          <span className="inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground">
+                            <ImagePlus size={10} />
+                            Contains images
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-2xl text-foreground leading-none">
+                        {msgs.length}
+                      </p>
+                      <p className="font-mono text-[10px] text-muted-foreground">
+                        message{msgs.length !== 1 ? "s" : ""}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Chat panel — read-only */}
+                  <JobChatPanel
+                    jobId={job.id}
+                    jobTitle={job.title}
+                    myRole="admin"
+                    myName="Admin"
+                    readOnly
+                  />
+                </div>
+              );
+            })}
           </div>
         )}
       </main>
