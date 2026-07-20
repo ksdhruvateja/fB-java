@@ -17,6 +17,7 @@ import JobChatPanel from "./JobChatPanel";
 import { contractorCanDoJob, getJobBoardJobs, NEW_JOB_EVENT, type JobBoardItem } from "./jobBoard";
 import {
   getJobLifecycle,
+  getAllLifecycles,
   updateJobStatus,
   updateJobInvoice,
   STATUS_NEXT,
@@ -93,10 +94,10 @@ function InvoiceUpload({ jobId, lifecycle, onUpdated }: { jobId: number; lifecyc
     setSaved(false);
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const amt = parseFloat(amount);
     if (!amt || !fileName) return;
-    updateJobInvoice(jobId, amt, fileName);
+    await updateJobInvoice(jobId, amt, fileName);
     setSaved(true);
     onUpdated();
   };
@@ -172,41 +173,41 @@ function FindJobCard({
   const [showCancelForm, setShowCancelForm] = useState(false);
   const [cancelReasonInput, setCancelReasonInput] = useState("");
   const [showAiPanel, setShowAiPanel] = useState(true);
-  const [lifecycle, setLifecycle] = useState<JobLifecycle>(() => getJobLifecycle(job.id));
+  const [lifecycle, setLifecycle] = useState<JobLifecycle>({ jobId: job.id, status: "open" });
   const contractorName = user?.name || "Contractor";
   const contractorEmail = user?.email || "";
 
-  const refreshAll = () => {
-    setLifecycle(getJobLifecycle(job.id));
+  const refreshAll = async () => {
+    const lc = await getJobLifecycle(job.id);
+    setLifecycle(lc);
   };
 
   useEffect(() => {
     refreshAll();
-    window.addEventListener("storage", refreshAll);
     window.addEventListener("fixbridge-lifecycle-update", refreshAll);
     return () => {
-      window.removeEventListener("storage", refreshAll);
       window.removeEventListener("fixbridge-lifecycle-update", refreshAll);
     };
   }, [job.id]);
 
-  const handleAccept = () => {
-    updateJobStatus(job.id, "accepted", contractorName, contractorEmail);
-    setLifecycle(getJobLifecycle(job.id));
+  const handleAccept = async () => {
+    await updateJobStatus(job.id, "accepted", contractorName, contractorEmail);
+    const lc = await getJobLifecycle(job.id);
+    setLifecycle(lc);
     onStatusChange();
-    addJobMessage(job.id, {
+    await addJobMessage(job.id, {
       senderRole: "system",
       senderName: "FixBridge",
       text: `${contractorName} accepted this job and will be in touch shortly.`,
     });
   };
 
-  const handleAdvanceStatus = () => {
+  const handleAdvanceStatus = async () => {
     const next = STATUS_NEXT[lifecycle.status];
     if (!next) return;
-    updateJobStatus(job.id, next, contractorName, contractorEmail);
-    const newLifecycle = getJobLifecycle(job.id);
-    setLifecycle(newLifecycle);
+    await updateJobStatus(job.id, next, contractorName, contractorEmail);
+    const lc = await getJobLifecycle(job.id);
+    setLifecycle(lc);
     onStatusChange();
     const statusMsg: Record<string, string> = {
       "on-the-way": `${contractorName} is on the way to your location.`,
@@ -214,18 +215,19 @@ function FindJobCard({
       "work-started": `${contractorName} has started work.`,
       completed: `${contractorName} has completed the work and will upload an invoice shortly.`,
     };
-    addJobMessage(job.id, {
+    await addJobMessage(job.id, {
       senderRole: "system",
       senderName: "FixBridge",
       text: statusMsg[next] ?? `Status updated to: ${STATUS_LABELS[next]}`,
     });
   };
 
-  const handleCancel = (reason: string) => {
-    updateJobStatus(job.id, "open");
-    setLifecycle(getJobLifecycle(job.id));
+  const handleCancel = async (reason: string) => {
+    await updateJobStatus(job.id, "open");
+    const lc = await getJobLifecycle(job.id);
+    setLifecycle(lc);
     onStatusChange();
-    addJobMessage(job.id, {
+    await addJobMessage(job.id, {
       senderRole: "system",
       senderName: "FixBridge",
       text: `Job cancelled by contractor. Reason: ${reason}`,
@@ -493,7 +495,7 @@ function FindJobCard({
 
       {/* Invoice upload after completion */}
       {isCompleted && (
-        <InvoiceUpload jobId={job.id} lifecycle={lifecycle} onUpdated={() => setLifecycle(getJobLifecycle(job.id))} />
+        <InvoiceUpload jobId={job.id} lifecycle={lifecycle} onUpdated={() => { getJobLifecycle(job.id).then(setLifecycle); }} />
       )}
 
       <JobChatPanel
@@ -512,21 +514,22 @@ function FindJobCard({
 function FindTab({ user }: { user: AuthUser | null }) {
   const [filter, setFilter] = useState("all");
   const filters = ["all", "plumbing", "urgent", "nearby"];
-  const [jobs, setJobs] = useState<JobBoardItem[]>(() => getJobBoardJobs());
-  const [tick, setTick] = useState(0);
+  const [jobs, setJobs] = useState<JobBoardItem[]>([]);
+  const [lifecycleMap, setLifecycleMap] = useState<Record<number, string>>({});
 
-  const refreshJobs = () => {
-    setJobs(getJobBoardJobs());
-    setTick((t) => t + 1);
+  const refreshJobs = async () => {
+    const [allJobs, lcs] = await Promise.all([getJobBoardJobs(), getAllLifecycles()]);
+    setJobs(allJobs);
+    const map: Record<number, string> = {};
+    lcs.forEach((lc) => { map[lc.jobId] = lc.status; });
+    setLifecycleMap(map);
   };
 
   useEffect(() => {
     refreshJobs();
-    window.addEventListener("storage", refreshJobs);
     window.addEventListener("fixbridge-lifecycle-update", refreshJobs);
     window.addEventListener(NEW_JOB_EVENT, refreshJobs);
     return () => {
-      window.removeEventListener("storage", refreshJobs);
       window.removeEventListener("fixbridge-lifecycle-update", refreshJobs);
       window.removeEventListener(NEW_JOB_EVENT, refreshJobs);
     };
@@ -540,7 +543,7 @@ function FindTab({ user }: { user: AuthUser | null }) {
     : filter === "plumbing" ? eligibleJobs.filter((j) => j.category === "Plumbing")
     : eligibleJobs;
 
-  const newJobCount = filtered.filter((j) => getJobLifecycle(j.id).status === "open").length;
+  const newJobCount = filtered.filter((j) => (lifecycleMap[j.id] ?? "open") === "open").length;
 
   return (
     <div>
@@ -681,43 +684,45 @@ function StaticCompletedCard({ job, index }: { job: typeof COMPLETED_JOBS[0]; in
 
 function WorkTab({ user }: { user: AuthUser | null }) {
   const contractorName = user?.name || "James Park";
-  const [allJobs, setAllJobs] = useState<JobBoardItem[]>(() => getJobBoardJobs());
-  const [tick, setTick] = useState(0);
+  const [allJobs, setAllJobs] = useState<JobBoardItem[]>([]);
+  const [allLifecycles, setAllLifecycles] = useState<JobLifecycle[]>([]);
 
-  const refresh = () => {
-    setAllJobs(getJobBoardJobs());
-    setTick((t) => t + 1);
+  const refresh = async () => {
+    const [jobs, lcs] = await Promise.all([getJobBoardJobs(), getAllLifecycles()]);
+    setAllJobs(jobs);
+    setAllLifecycles(lcs);
   };
 
   useEffect(() => {
     refresh();
-    window.addEventListener("storage", refresh);
     window.addEventListener("fixbridge-lifecycle-update", refresh);
     window.addEventListener(NEW_JOB_EVENT, refresh);
     return () => {
-      window.removeEventListener("storage", refresh);
       window.removeEventListener("fixbridge-lifecycle-update", refresh);
       window.removeEventListener(NEW_JOB_EVENT, refresh);
     };
   }, []);
 
+  const getLc = (jobId: number): JobLifecycle =>
+    allLifecycles.find((lc) => lc.jobId === jobId) ?? { jobId, status: "open" };
+
   // Jobs this contractor has touched (accepted or beyond)
   const myLiveJobs = allJobs.filter((job) => {
-    const lc = getJobLifecycle(job.id);
+    const lc = getLc(job.id);
     return lc.contractorName === contractorName && lc.status !== "open";
   });
 
-  const activeJobs = myLiveJobs.filter((j) => getJobLifecycle(j.id).status !== "completed");
-  const completedLiveJobs = myLiveJobs.filter((j) => getJobLifecycle(j.id).status === "completed");
+  const activeJobs = myLiveJobs.filter((j) => getLc(j.id).status !== "completed");
+  const completedLiveJobs = myLiveJobs.filter((j) => getLc(j.id).status === "completed");
 
   // Stats: live + static demo history
   const liveCompletedCount = completedLiveJobs.length;
-  const liveEarned = completedLiveJobs.reduce((s, j) => s + (getJobLifecycle(j.id).invoiceAmount ?? 0), 0);
+  const liveEarned = completedLiveJobs.reduce((s, j) => s + (getLc(j.id).invoiceAmount ?? 0), 0);
   const staticEarned = COMPLETED_JOBS.reduce((s, j) => s + parseFloat(j.payout.replace("$", "")), 0);
   const totalEarned = liveEarned + staticEarned;
   const totalCompleted = liveCompletedCount + COMPLETED_JOBS.length;
   const allRatings = [
-    ...completedLiveJobs.map((j) => getJobLifecycle(j.id).rating).filter((r): r is number => r !== undefined),
+    ...completedLiveJobs.map((j) => getLc(j.id).rating).filter((r): r is number => r !== undefined),
     ...COMPLETED_JOBS.map((j) => j.rating),
   ];
   const avgRating = allRatings.length > 0 ? allRatings.reduce((s, r) => s + r, 0) / allRatings.length : 0;
@@ -753,7 +758,7 @@ function WorkTab({ user }: { user: AuthUser | null }) {
           </p>
           <div className="space-y-3">
             {activeJobs.map((job, i) => (
-              <FindJobCard key={`active-${job.id}-${tick}`} job={job} index={i} user={user} onStatusChange={refresh} />
+              <FindJobCard key={`active-${job.id}`} job={job} index={i} user={user} onStatusChange={refresh} />
             ))}
           </div>
         </div>
@@ -767,7 +772,7 @@ function WorkTab({ user }: { user: AuthUser | null }) {
           </p>
           <div className="space-y-3">
             {completedLiveJobs.map((job, i) => (
-              <FindJobCard key={`done-${job.id}-${tick}`} job={job} index={i} user={user} onStatusChange={refresh} />
+              <FindJobCard key={`done-${job.id}`} job={job} index={i} user={user} onStatusChange={refresh} />
             ))}
           </div>
         </div>
@@ -968,16 +973,15 @@ export default function ContractorDashboard({
   // Count new open jobs for notification badge
   const [newJobCount, setNewJobCount] = useState(0);
   useEffect(() => {
-    const update = () => {
-      const jobs = getJobBoardJobs();
-      const open = jobs.filter((j) => getJobLifecycle(j.id).status === "open").length;
-      setNewJobCount(open);
+    const update = async () => {
+      const [jobs, lcs] = await Promise.all([getJobBoardJobs(), getAllLifecycles()]);
+      const lcMap: Record<number, string> = {};
+      lcs.forEach((lc) => { lcMap[lc.jobId] = lc.status; });
+      setNewJobCount(jobs.filter((j) => (lcMap[j.id] ?? "open") === "open").length);
     };
     update();
-    window.addEventListener("storage", update);
     window.addEventListener("fixbridge-lifecycle-update", update);
     return () => {
-      window.removeEventListener("storage", update);
       window.removeEventListener("fixbridge-lifecycle-update", update);
     };
   }, []);

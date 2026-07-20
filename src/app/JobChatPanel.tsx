@@ -114,9 +114,9 @@ function ChatInput({
     reader.readAsDataURL(file);
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!text.trim() && !imageDataUrl) return;
-    addJobMessage(jobId, {
+    await addJobMessage(jobId, {
       senderRole: myRole,
       senderName: myName,
       text: text.trim(),
@@ -202,17 +202,18 @@ function ConversationModal({
   readOnly: boolean;
   onClose: () => void;
 }) {
-  const [messages, setMessages] = useState<JobChatMessage[]>(() => getJobMessages(jobId));
+  const [messages, setMessages] = useState<JobChatMessage[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const refresh = () => setMessages(getJobMessages(jobId));
+  const refresh = async () => {
+    const msgs = await getJobMessages(jobId);
+    setMessages(msgs);
+  };
 
   useEffect(() => {
     refresh();
-    window.addEventListener("storage", refresh);
     window.addEventListener(CHAT_BROADCAST_EVENT, refresh);
     return () => {
-      window.removeEventListener("storage", refresh);
       window.removeEventListener(CHAT_BROADCAST_EVENT, refresh);
     };
   }, [jobId]);
@@ -308,17 +309,18 @@ export default function JobChatPanel({
   readOnly = false,
   defaultOpen = false,
 }: Props) {
-  const [messages, setMessages] = useState<JobChatMessage[]>(() => getJobMessages(jobId));
+  const [messages, setMessages] = useState<JobChatMessage[]>([]);
   const [modalOpen, setModalOpen] = useState(defaultOpen);
 
-  const refresh = () => setMessages(getJobMessages(jobId));
+  const refresh = async () => {
+    const msgs = await getJobMessages(jobId);
+    setMessages(msgs);
+  };
 
   useEffect(() => {
     refresh();
-    window.addEventListener("storage", refresh);
     window.addEventListener(CHAT_BROADCAST_EVENT, refresh);
     return () => {
-      window.removeEventListener("storage", refresh);
       window.removeEventListener(CHAT_BROADCAST_EVENT, refresh);
     };
   }, [jobId]);

@@ -30,29 +30,28 @@ export default function AdminPanel({
 }) {
   const [activeTab, setActiveTab] = useState<AdminTab>("overview");
 
-  const [liveData, setLiveData] = useState(() => {
-    const allJobs = getJobBoardJobs();
-    const lifecycles = getAllLifecycles();
-    const allChats = getAllJobChats();
-    const contractorUsers = getStoredUsers().filter((u) => u.role === "contractor");
-    return { allJobs, lifecycles, allChats, contractorUsers };
+  const [liveData, setLiveData] = useState({
+    allJobs: [] as import("./jobBoard").JobBoardItem[],
+    lifecycles: [] as import("./jobLifecycle").JobLifecycle[],
+    allChats: {} as Record<string, import("./jobChat").JobChatMessage[]>,
+    contractorUsers: [] as import("./auth").AuthUser[],
   });
 
   useEffect(() => {
-    const refresh = () => {
-      setLiveData({
-        allJobs: getJobBoardJobs(),
-        lifecycles: getAllLifecycles(),
-        allChats: getAllJobChats(),
-        contractorUsers: getStoredUsers().filter((u) => u.role === "contractor"),
-      });
+    const refresh = async () => {
+      const [allJobs, lifecycles, allChats, users] = await Promise.all([
+        getJobBoardJobs(),
+        getAllLifecycles(),
+        getAllJobChats(),
+        getStoredUsers(),
+      ]);
+      setLiveData({ allJobs, lifecycles, allChats, contractorUsers: users.filter((u) => u.role === "contractor") });
     };
-    window.addEventListener("storage", refresh);
+    refresh();
     window.addEventListener("fixbridge-lifecycle-update", refresh);
     window.addEventListener("fixbridge-chat-update", refresh);
     window.addEventListener("fixbridge-new-job", refresh);
     return () => {
-      window.removeEventListener("storage", refresh);
       window.removeEventListener("fixbridge-lifecycle-update", refresh);
       window.removeEventListener("fixbridge-chat-update", refresh);
       window.removeEventListener("fixbridge-new-job", refresh);

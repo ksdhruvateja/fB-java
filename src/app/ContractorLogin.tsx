@@ -26,50 +26,22 @@ export default function ContractorLogin({
   const [email, setEmail] = useState(demoUser.email);
   const [password, setPassword] = useState(demoUser.password);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (loading) return;
     setError("");
     setLoading(true);
-
-    window.setTimeout(() => {
-      try {
-        if (tab === "signup") {
-          const result = signUpUser({
-            role: "contractor",
-            name: fullName,
-            email,
-            password,
-            trade,
-            licenseNumber,
-            licenseDocumentName: licenseDocName,
-            insuranceDocumentName: insuranceDocName,
-            idDocumentName: idDocName,
-          });
-
-          setLoading(false);
-          if (!result.ok) {
-            setError(result.message);
-            return;
-          }
-
-          onLogin(result.user);
-          return;
-        }
-
-        const result = signInUser("contractor", email, password);
-        setLoading(false);
-        if (!result.ok) {
-          setError(result.message);
-          return;
-        }
-
-        onLogin(result.user);
-      } catch {
-        setLoading(false);
-        setError("Something went wrong while signing in. Please try again.");
-      }
-    }, 500);
+    try {
+      const result = tab === "signup"
+        ? await signUpUser({ role: "contractor", name: fullName, email, password, trade, licenseNumber, licenseDocumentName: licenseDocName, insuranceDocumentName: insuranceDocName, idDocumentName: idDocName })
+        : await signInUser("contractor", email, password);
+      setLoading(false);
+      if (!result.ok) { setError(result.message); return; }
+      onLogin(result.user);
+    } catch {
+      setLoading(false);
+      setError("Something went wrong. Please try again.");
+    }
   };
 
   return (

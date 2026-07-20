@@ -26,9 +26,11 @@ import {
 } from "./geminiAssessment";
 import {
   getJobLifecycle,
+  getAllLifecycles,
   updateJobRating,
   STATUS_LABELS,
   type JobStatus,
+  type JobLifecycle,
 } from "./jobLifecycle";
 
 type DashTab = "post" | "jobs" | "ai" | "contact";
@@ -273,7 +275,10 @@ function PostTab({
     surcharge: boolean;
   } | null>(null);
 
-  const contractorUsers = getStoredUsers().filter((u) => u.role === "contractor");
+  const [contractorUsers, setContractorUsers] = useState<AuthUser[]>([]);
+  useEffect(() => {
+    getStoredUsers().then((users) => setContractorUsers(users.filter((u) => u.role === "contractor")));
+  }, []);
   const recommendedCount = selectedCat
     ? contractorUsers.filter((c) => contractorCanDoJob(c.trade, selectedCat as JobCategory)).length
     : 0;
@@ -329,7 +334,7 @@ function PostTab({
     setStep("assessment");
   };
 
-  const submitBooking = () => {
+  const submitBooking = async () => {
     if (!selectedCat || !description.trim() || !assessment || !timing || !timeSlot || !serviceDate) return;
     const slot = TIME_SLOTS.find((s) => s.id === timeSlot);
     const dateLabel = formatServiceDate(serviceDate);
@@ -356,7 +361,7 @@ function PostTab({
       ? fullAddr.split(",").slice(1).join(",").trim()
       : fullAddr || "NYC & Long Island";
 
-    addJobBoardJob({
+    await addJobBoardJob({
       category: selectedCat as JobCategory,
       title: finalTitle,
       description: description.trim(),
@@ -878,9 +883,9 @@ function RatingForm({ jobId, onSubmitted }: { jobId: number; onSubmitted: () => 
   const [hovered, setHovered] = useState(0);
   const [review, setReview] = useState("");
 
-  const submit = () => {
+  const submit = async () => {
     if (!rating) return;
-    updateJobRating(jobId, rating, review.trim());
+    await updateJobRating(jobId, rating, review.trim());
     onSubmitted();
   };
 
@@ -931,20 +936,19 @@ function RatingForm({ jobId, onSubmitted }: { jobId: number; onSubmitted: () => 
 function JobCard({ job, index, user }: { job: HomeJob; index: number; user: AuthUser | null }) {
   const ref = useRef<HTMLDivElement>(null);
   const inView = useInView(ref, { once: true });
-  const [lifecycle, setLifecycle] = useState(() => getJobLifecycle(job.id));
+  const [lifecycle, setLifecycle] = useState<JobLifecycle>({ jobId: job.id, status: "open" });
   const [showRatingForm, setShowRatingForm] = useState(false);
   const homeownerName = user?.name || "Homeowner";
 
-  const refreshData = () => {
-    setLifecycle(getJobLifecycle(job.id));
+  const refreshData = async () => {
+    const lc = await getJobLifecycle(job.id);
+    setLifecycle(lc);
   };
 
   useEffect(() => {
     refreshData();
-    window.addEventListener("storage", refreshData);
     window.addEventListener("fixbridge-lifecycle-update", refreshData);
     return () => {
-      window.removeEventListener("storage", refreshData);
       window.removeEventListener("fixbridge-lifecycle-update", refreshData);
     };
   }, [job.id]);
@@ -1060,24 +1064,29 @@ function JobCard({ job, index, user }: { job: HomeJob; index: number; user: Auth
 }
 
 function JobsTab({ jobs, user }: { jobs: HomeJob[]; user: AuthUser | null }) {
-  const [tick, setTick] = useState(0);
+  const [lifecycleMap, setLifecycleMap] = useState<Record<number, string>>({});
   useEffect(() => {
-    const refresh = () => setTick((t) => t + 1);
-    window.addEventListener("fixbridge-lifecycle-update", refresh);
-    window.addEventListener("fixbridge-chat-update", refresh);
+    const fetchLc = async () => {
+      const lcs = await getAllLifecycles();
+      const map: Record<number, string> = {};
+      lcs.forEach((lc) => { map[lc.jobId] = lc.status; });
+      setLifecycleMap(map);
+    };
+    fetchLc();
+    window.addEventListener("fixbridge-lifecycle-update", fetchLc);
+    window.addEventListener("fixbridge-chat-update", fetchLc);
     return () => {
-      window.removeEventListener("fixbridge-lifecycle-update", refresh);
-      window.removeEventListener("fixbridge-chat-update", refresh);
+      window.removeEventListener("fixbridge-lifecycle-update", fetchLc);
+      window.removeEventListener("fixbridge-chat-update", fetchLc);
     };
   }, []);
 
   const total = jobs.length;
-  // Use live lifecycle status, not static HomeJob.status
   const active = jobs.filter((j) => {
-    const s = getJobLifecycle(j.id).status;
+    const s = lifecycleMap[j.id] ?? "open";
     return s === "open" || s === "accepted" || s === "on-the-way" || s === "arrived" || s === "work-started";
   }).length;
-  const completed = jobs.filter((j) => getJobLifecycle(j.id).status === "completed").length;
+  const completed = jobs.filter((j) => (lifecycleMap[j.id] ?? "open") === "completed").length;
   const totalBids = jobs.reduce((s, j) => s + j.bids, 0);
 
   return (
