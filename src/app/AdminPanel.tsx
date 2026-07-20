@@ -293,7 +293,8 @@ export default function AdminPanel({
                 No jobs posted yet.
               </div>
             )}
-            <div className="bg-card border border-border divide-y divide-border">
+            {/* Desktop table */}
+            <div className="hidden sm:block bg-card border border-border divide-y divide-border">
               <div className="px-4 py-2.5 grid grid-cols-12 gap-3 text-left">
                 <span className="col-span-4 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Job</span>
                 <span className="col-span-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Category</span>
@@ -322,6 +323,35 @@ export default function AdminPanel({
                     </div>
                     <div className="col-span-2 text-right">
                       <p className="text-sm font-medium text-foreground">{job.est}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {/* Mobile cards */}
+            <div className="sm:hidden space-y-2">
+              {enrichedJobs.map((job) => {
+                const status = (job.lifecycle?.status ?? "open") as JobStatus;
+                return (
+                  <div key={job.id} className="bg-card border border-border p-4 space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-foreground leading-snug">{job.title}</p>
+                        <p className="font-mono text-[10px] text-muted-foreground mt-0.5">{job.posted}</p>
+                      </div>
+                      <span className={`font-mono text-[9px] uppercase tracking-wider border px-1.5 py-0.5 shrink-0 ${STATUS_BADGE[status]}`}>
+                        {STATUS_LABELS[status]}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <span className="font-mono text-[10px] uppercase tracking-wider text-primary">{job.category}</span>
+                      {job.lifecycle?.contractorName && (
+                        <span className="font-mono text-[10px] text-muted-foreground">· {job.lifecycle.contractorName}</span>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between border-t border-border pt-2">
+                      <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider">Estimate</span>
+                      <span className="text-sm font-semibold text-foreground">{job.est}</span>
                     </div>
                   </div>
                 );
@@ -380,66 +410,127 @@ export default function AdminPanel({
                 </div>
               )}
               {invoicedJobs.length > 0 && (
-                <div className="bg-card border border-border divide-y divide-border">
-                  <div className="px-4 py-2.5 grid grid-cols-12 gap-3">
-                    <span className="col-span-4 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Job</span>
-                    <span className="col-span-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Contractor</span>
-                    <span className="col-span-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Invoice File</span>
-                    <span className="col-span-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground text-right">Amount</span>
-                    <span className="col-span-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground text-right">Fee (10%)</span>
-                    <span className="col-span-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground text-right">Rating</span>
-                  </div>
-                  {invoicedJobs.map((job) => {
-                    const lc = job.lifecycle!;
-                    const fee = (lc.invoiceAmount ?? 0) * 0.1;
-                    return (
-                      <div key={job.id} className="px-4 py-3.5 grid grid-cols-12 gap-3 items-center hover:bg-muted/30 transition-colors">
-                        <div className="col-span-4 min-w-0">
-                          <p className="text-sm font-medium text-foreground truncate">{job.title}</p>
-                          <p className="font-mono text-[10px] text-muted-foreground">{job.category} · {lc.completedAt ? new Date(lc.completedAt).toLocaleDateString() : "—"}</p>
+                <>
+                  {/* Desktop invoice table */}
+                  <div className="hidden sm:block bg-card border border-border divide-y divide-border">
+                    <div className="px-4 py-2.5 grid grid-cols-12 gap-3">
+                      <span className="col-span-4 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Job</span>
+                      <span className="col-span-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Contractor</span>
+                      <span className="col-span-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Invoice File</span>
+                      <span className="col-span-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground text-right">Amount</span>
+                      <span className="col-span-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground text-right">Fee (10%)</span>
+                      <span className="col-span-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground text-right">Rating</span>
+                    </div>
+                    {invoicedJobs.map((job) => {
+                      const lc = job.lifecycle!;
+                      const fee = (lc.invoiceAmount ?? 0) * 0.1;
+                      return (
+                        <div key={job.id} className="px-4 py-3.5 grid grid-cols-12 gap-3 items-center hover:bg-muted/30 transition-colors">
+                          <div className="col-span-4 min-w-0">
+                            <p className="text-sm font-medium text-foreground truncate">{job.title}</p>
+                            <p className="font-mono text-[10px] text-muted-foreground">{job.category} · {lc.completedAt ? new Date(lc.completedAt).toLocaleDateString() : "—"}</p>
+                          </div>
+                          <div className="col-span-2 min-w-0">
+                            <p className="text-xs text-foreground truncate">{lc.contractorName || "—"}</p>
+                          </div>
+                          <div className="col-span-2 min-w-0">
+                            <p className="font-mono text-[10px] text-muted-foreground truncate inline-flex items-center gap-1">
+                              <FileText size={11} className="text-primary shrink-0" />
+                              {lc.invoiceFileName || "—"}
+                            </p>
+                          </div>
+                          <div className="col-span-2 text-right">
+                            <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-xl text-foreground">
+                              ${(lc.invoiceAmount ?? 0).toLocaleString()}
+                            </p>
+                          </div>
+                          <div className="col-span-1 text-right">
+                            <p className="text-sm font-medium text-green-600">${fee.toFixed(0)}</p>
+                          </div>
+                          <div className="col-span-1 text-right">
+                            {lc.rating ? (
+                              <span className="font-mono text-[11px] text-primary">{lc.rating}★</span>
+                            ) : (
+                              <span className="font-mono text-[10px] text-muted-foreground">—</span>
+                            )}
+                          </div>
                         </div>
-                        <div className="col-span-2 min-w-0">
-                          <p className="text-xs text-foreground truncate">{lc.contractorName || "—"}</p>
-                        </div>
-                        <div className="col-span-2 min-w-0">
-                          <p className="font-mono text-[10px] text-muted-foreground truncate inline-flex items-center gap-1">
-                            <FileText size={11} className="text-primary shrink-0" />
-                            {lc.invoiceFileName || "—"}
-                          </p>
-                        </div>
-                        <div className="col-span-2 text-right">
-                          <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-xl text-foreground">
-                            ${(lc.invoiceAmount ?? 0).toLocaleString()}
-                          </p>
-                        </div>
-                        <div className="col-span-1 text-right">
-                          <p className="text-sm font-medium text-green-600">${fee.toFixed(0)}</p>
-                        </div>
-                        <div className="col-span-1 text-right">
-                          {lc.rating ? (
-                            <span className="font-mono text-[11px] text-primary">{lc.rating}★</span>
-                          ) : (
-                            <span className="font-mono text-[10px] text-muted-foreground">—</span>
-                          )}
-                        </div>
+                      );
+                    })}
+                    <div className="px-4 py-3 grid grid-cols-12 gap-3 bg-muted/30">
+                      <div className="col-span-8">
+                        <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">Totals</p>
                       </div>
-                    );
-                  })}
-                  <div className="px-4 py-3 grid grid-cols-12 gap-3 bg-muted/30">
-                    <div className="col-span-8">
-                      <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">Totals</p>
+                      <div className="col-span-2 text-right">
+                        <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-xl text-foreground">
+                          ${totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                        </p>
+                      </div>
+                      <div className="col-span-1 text-right">
+                        <p className="text-sm font-bold text-green-600">${platformFee.toFixed(0)}</p>
+                      </div>
+                      <div className="col-span-1" />
                     </div>
-                    <div className="col-span-2 text-right">
-                      <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-xl text-foreground">
-                        ${totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                      </p>
-                    </div>
-                    <div className="col-span-1 text-right">
-                      <p className="text-sm font-bold text-green-600">${platformFee.toFixed(0)}</p>
-                    </div>
-                    <div className="col-span-1" />
                   </div>
-                </div>
+
+                  {/* Mobile invoice cards */}
+                  <div className="sm:hidden space-y-2">
+                    {invoicedJobs.map((job) => {
+                      const lc = job.lifecycle!;
+                      const fee = (lc.invoiceAmount ?? 0) * 0.1;
+                      return (
+                        <div key={job.id} className="bg-card border border-border p-4 space-y-2.5">
+                          <div>
+                            <p className="text-sm font-medium text-foreground leading-snug">{job.title}</p>
+                            <p className="font-mono text-[10px] text-muted-foreground mt-0.5">{job.category} · {lc.completedAt ? new Date(lc.completedAt).toLocaleDateString() : "—"}</p>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <span>{lc.contractorName || "No contractor"}</span>
+                            {lc.invoiceFileName && (
+                              <>
+                                <span>·</span>
+                                <span className="inline-flex items-center gap-1 font-mono text-[10px]">
+                                  <FileText size={10} className="text-primary" />
+                                  {lc.invoiceFileName}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                          <div className="flex items-center justify-between border-t border-border pt-2">
+                            <div>
+                              <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Invoice</p>
+                              <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-xl text-foreground leading-tight">
+                                ${(lc.invoiceAmount ?? 0).toLocaleString()}
+                              </p>
+                            </div>
+                            <div className="text-center">
+                              <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Platform fee</p>
+                              <p className="text-sm font-semibold text-green-600">${fee.toFixed(0)}</p>
+                            </div>
+                            <div className="text-right">
+                              <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Rating</p>
+                              {lc.rating ? (
+                                <span className="font-mono text-sm text-primary">{lc.rating}★</span>
+                              ) : (
+                                <span className="font-mono text-xs text-muted-foreground">—</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {/* Mobile totals row */}
+                    <div className="bg-muted/30 border border-border p-4 flex items-center justify-between">
+                      <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">Total Volume</span>
+                      <div className="text-right">
+                        <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-xl text-foreground">
+                          ${totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                        </p>
+                        <p className="font-mono text-[10px] text-green-600">Fee: ${platformFee.toFixed(0)}</p>
+                      </div>
+                    </div>
+                  </div>
+                </>
               )}
             </div>
 

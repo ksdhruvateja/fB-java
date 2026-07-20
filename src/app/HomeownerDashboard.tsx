@@ -1258,66 +1258,90 @@ export default function HomeownerDashboard({
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
+      {/* Sidebar overlay (mobile) */}
       {mobileMenuOpen && (
-        <button type="button" className="fixed inset-0 bg-black/40 z-30 md:hidden" onClick={() => setMobileMenuOpen(false)} aria-label="Close menu overlay" />
+        <button type="button" className="fixed inset-0 bg-black/50 z-30 md:hidden" onClick={() => setMobileMenuOpen(false)} aria-label="Close menu overlay" />
       )}
-      <aside className={`fixed md:static inset-y-0 left-0 z-40 flex flex-col border-r border-border bg-card transition-all duration-300 ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} ${sidebarOpen ? "md:w-56" : "md:w-16"} w-64 shrink-0`}>
-        <div className="border-b border-border px-4 py-4 flex items-center gap-2 h-16">
-          <button onClick={() => setSidebarOpen((s) => !s)} className="flex items-center gap-1.5 group">
-            <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-lg tracking-wider text-foreground">F</span>
-            <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-lg tracking-wider text-primary">B</span>
+
+      {/* Sidebar — desktop always visible, mobile slide-in for secondary actions */}
+      <aside className={`fixed md:static inset-y-0 left-0 z-40 flex flex-col border-r border-border bg-card transition-all duration-300 ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} ${sidebarOpen ? "md:w-56" : "md:w-16"} w-72 shrink-0`}>
+        <div className="border-b border-border px-4 py-4 flex items-center justify-between h-16">
+          <button onClick={() => setSidebarOpen((s) => !s)} className="flex items-center gap-1.5">
+            <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-lg tracking-wider text-foreground">FIX</span>
+            <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-lg tracking-wider text-primary">BRIDGE</span>
             {sidebarOpen && <span className="font-mono text-[9px] bg-primary text-white px-1 py-0.5 ml-0.5">AI</span>}
           </button>
+          <button type="button" onClick={() => setMobileMenuOpen(false)} className="md:hidden p-1 text-muted-foreground hover:text-foreground">
+            <X size={18} />
+          </button>
         </div>
-        <nav className="flex-1 py-4 px-2 space-y-1">
+
+        {/* Mobile-only user info */}
+        <div className="md:hidden px-4 py-3 border-b border-border bg-muted/30">
+          <p className="text-sm font-semibold text-foreground">{displayName}</p>
+          <p className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider">Homeowner</p>
+        </div>
+
+        <nav className="flex-1 py-4 px-2 space-y-0.5 overflow-y-auto">
           {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               onClick={() => { setActiveTab(id); setMobileMenuOpen(false); }}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 transition-colors ${activeTab === id ? "bg-primary/10 text-primary border-r-2 border-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
+              className={`w-full flex items-center gap-3 px-3 py-3 md:py-2.5 transition-colors rounded-sm ${activeTab === id ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
             >
-              <Icon size={17} className="shrink-0" />
-              {sidebarOpen && <span className="text-sm font-medium truncate">{label}</span>}
+              <Icon size={18} className="shrink-0" />
+              <span className={`text-sm font-medium truncate ${!sidebarOpen ? "md:hidden" : ""}`}>{label}</span>
             </button>
           ))}
         </nav>
-        <div className="border-t border-border p-3 space-y-2">
-          <button onClick={onToggleDark} className="w-full flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground transition-colors">
-            {isDark ? <Sun size={15} className="shrink-0" /> : <Moon size={15} className="shrink-0" />}
-            {sidebarOpen && <span className="text-xs">{isDark ? "Light mode" : "Dark mode"}</span>}
+
+        <div className="border-t border-border p-3 space-y-0.5">
+          <button onClick={onToggleDark} className="w-full flex items-center gap-3 px-3 py-2.5 md:py-2 text-muted-foreground hover:text-foreground transition-colors rounded-sm">
+            {isDark ? <Sun size={16} className="shrink-0" /> : <Moon size={16} className="shrink-0" />}
+            <span className={`text-sm ${!sidebarOpen ? "md:hidden" : ""}`}>{isDark ? "Light mode" : "Dark mode"}</span>
           </button>
-          <button onClick={onLogout} className="w-full flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground transition-colors">
-            <LogOut size={15} className="shrink-0" />
-            {sidebarOpen && <span className="text-xs">Sign Out</span>}
+          <button onClick={onLogout} className="w-full flex items-center gap-3 px-3 py-2.5 md:py-2 text-muted-foreground hover:text-foreground transition-colors rounded-sm">
+            <LogOut size={16} className="shrink-0" />
+            <span className={`text-sm ${!sidebarOpen ? "md:hidden" : ""}`}>Sign Out</span>
           </button>
         </div>
       </aside>
 
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="h-16 border-b border-border flex items-center justify-between px-4 md:px-6 bg-card shrink-0">
-          <div>
-            <button type="button" className="md:hidden w-8 h-8 mb-1 flex items-center justify-center border border-border text-muted-foreground" onClick={() => setMobileMenuOpen((o) => !o)} aria-label="Toggle menu">
-              {mobileMenuOpen ? <X size={16} /> : <Menu size={16} />}
+      {/* Main content */}
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        {/* Header */}
+        <header className="h-14 md:h-16 border-b border-border flex items-center justify-between px-4 md:px-6 bg-card shrink-0">
+          <div className="flex items-center gap-3">
+            {/* Desktop sidebar toggle / Mobile logo */}
+            <button type="button" className="md:hidden flex items-center gap-1" onClick={() => setMobileMenuOpen(true)} aria-label="Open menu">
+              <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-base tracking-wider text-foreground">FIX</span>
+              <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-base tracking-wider text-primary">BRIDGE</span>
             </button>
-            <p className="text-sm font-medium text-foreground">{displayName}</p>
-            <div className="flex items-center gap-1">
-              <MapPin size={10} className="text-primary" />
-              <p className="font-mono text-[11px] text-muted-foreground">Homeowner</p>
+            <div className="hidden md:block">
+              <p className="text-sm font-semibold text-foreground leading-tight">{displayName}</p>
+              <div className="flex items-center gap-1">
+                <MapPin size={10} className="text-primary" />
+                <p className="font-mono text-[10px] text-muted-foreground">Homeowner</p>
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
             <button className="relative w-9 h-9 flex items-center justify-center border border-border text-muted-foreground hover:text-foreground transition-colors">
               <Bell size={15} />
               <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-primary rounded-full" />
             </button>
-            <div className="w-8 h-8 bg-orange-400 rounded-full flex items-center justify-center text-white text-xs font-bold">
+            <button type="button" onClick={() => setMobileMenuOpen(true)} className="md:hidden w-8 h-8 bg-orange-400 rounded-full flex items-center justify-center text-white text-xs font-bold">
+              {initials}
+            </button>
+            <div className="hidden md:flex w-8 h-8 bg-orange-400 rounded-full items-center justify-center text-white text-xs font-bold">
               {initials}
             </div>
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
-          <motion.div key={activeTab} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
+        {/* Page content */}
+        <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 pb-20 md:pb-8">
+          <motion.div key={activeTab} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
             {activeTab === "post" && (
               <PostTab
                 onJobPosted={(job) => setJobs((prev) => [job, ...prev])}
@@ -1331,6 +1355,23 @@ export default function HomeownerDashboard({
           </motion.div>
         </main>
       </div>
+
+      {/* Mobile Bottom Navigation */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-20 bg-card border-t border-border flex safe-area-inset-bottom">
+        {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setActiveTab(id)}
+            className={`flex-1 flex flex-col items-center justify-center gap-1 py-2.5 transition-colors min-h-[56px] ${
+              activeTab === id ? "text-primary" : "text-muted-foreground"
+            }`}
+          >
+            <Icon size={20} strokeWidth={activeTab === id ? 2.5 : 1.8} />
+            <span className="font-mono text-[9px] uppercase tracking-wide leading-none">{label}</span>
+          </button>
+        ))}
+      </nav>
     </div>
   );
 }

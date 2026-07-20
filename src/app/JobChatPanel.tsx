@@ -223,17 +223,21 @@ function ConversationModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:bg-black/50 sm:p-4"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 16 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 16 }}
-        transition={{ duration: 0.18 }}
-        className="w-full max-w-lg bg-background border border-border flex flex-col"
-        style={{ height: "min(640px, 90vh)" }}
+        initial={{ opacity: 0, y: 40 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 40 }}
+        transition={{ duration: 0.2 }}
+        className="w-full sm:max-w-lg bg-background border-t sm:border border-border flex flex-col"
+        style={{ height: "92dvh", maxHeight: "92dvh" }}
       >
+        {/* Mobile drag handle */}
+        <div className="sm:hidden flex justify-center pt-2.5 pb-1 shrink-0">
+          <div className="w-10 h-1 bg-border rounded-full" />
+        </div>
         {/* Modal header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-card shrink-0">
           <div className="min-w-0">

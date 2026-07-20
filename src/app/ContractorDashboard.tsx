@@ -998,15 +998,15 @@ export default function ContractorDashboard({
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
-      {/* New-job pop-up toast */}
+      {/* New-job pop-up toast — full-width on mobile, corner on desktop */}
       {newJobToast && (
         <motion.div
-          initial={{ opacity: 0, y: 40, scale: 0.95 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 20 }}
-          className="fixed bottom-6 right-6 z-50 w-80 border border-primary bg-card shadow-xl"
+          initial={{ opacity: 0, y: 50 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 30 }}
+          className="fixed bottom-16 md:bottom-6 left-3 right-3 md:left-auto md:right-6 md:w-80 z-50 border border-primary bg-card shadow-xl"
         >
-          <div className="bg-primary px-4 py-2 flex items-center justify-between">
+          <div className="bg-primary px-4 py-2.5 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Bell size={13} className="text-white" />
               <span className="font-mono text-[10px] tracking-wider text-white uppercase">New Job Posted</span>
@@ -1014,7 +1014,7 @@ export default function ContractorDashboard({
                 <span className="font-mono text-[9px] bg-white text-primary px-1.5 py-0.5">URGENT</span>
               )}
             </div>
-            <button onClick={() => setNewJobToast(null)} className="text-white/80 hover:text-white">
+            <button onClick={() => setNewJobToast(null)} className="text-white/80 hover:text-white p-1">
               <X size={13} />
             </button>
           </div>
@@ -1023,7 +1023,7 @@ export default function ContractorDashboard({
             <p className="font-mono text-[10px] text-muted-foreground uppercase mb-3">{newJobToast.category}</p>
             <button
               onClick={() => { setNewJobToast(null); setActiveTab("find"); }}
-              className="w-full bg-primary text-white text-xs font-medium py-2 hover:bg-primary/90 transition-colors flex items-center justify-center gap-1.5"
+              className="w-full bg-primary text-white text-xs font-medium py-2.5 hover:bg-primary/90 transition-colors flex items-center justify-center gap-1.5"
             >
               View Job <ChevronRight size={12} />
             </button>
@@ -1031,69 +1031,86 @@ export default function ContractorDashboard({
         </motion.div>
       )}
 
+      {/* Sidebar overlay */}
       {mobileMenuOpen && (
-        <button type="button" className="fixed inset-0 bg-black/40 z-30 md:hidden" onClick={() => setMobileMenuOpen(false)} aria-label="Close menu overlay" />
+        <button type="button" className="fixed inset-0 bg-black/50 z-30 md:hidden" onClick={() => setMobileMenuOpen(false)} aria-label="Close menu overlay" />
       )}
-      <aside className={`fixed md:static inset-y-0 left-0 z-40 flex flex-col border-r border-border bg-card transition-all duration-300 ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} ${sidebarOpen ? "md:w-56" : "md:w-16"} w-64 shrink-0`}>
-        <div className="border-b border-border px-4 py-4 flex items-center gap-2 h-16">
+
+      {/* Sidebar */}
+      <aside className={`fixed md:static inset-y-0 left-0 z-40 flex flex-col border-r border-border bg-card transition-all duration-300 ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} ${sidebarOpen ? "md:w-56" : "md:w-16"} w-72 shrink-0`}>
+        <div className="border-b border-border px-4 py-4 flex items-center justify-between h-16">
           <button onClick={() => setSidebarOpen((s) => !s)} className="flex items-center gap-1.5">
-            <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-lg tracking-wider text-foreground">F</span>
-            <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-lg tracking-wider text-primary">B</span>
+            <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-lg tracking-wider text-foreground">FIX</span>
+            <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-lg tracking-wider text-primary">BRIDGE</span>
             {sidebarOpen && <span className="font-mono text-[9px] bg-primary text-white px-1 py-0.5 ml-0.5">PRO</span>}
           </button>
+          <button type="button" onClick={() => setMobileMenuOpen(false)} className="md:hidden p-1 text-muted-foreground hover:text-foreground">
+            <X size={18} />
+          </button>
         </div>
-        <nav className="flex-1 py-4 px-2 space-y-1">
+
+        {/* Mobile user info */}
+        <div className="md:hidden px-4 py-3 border-b border-border bg-muted/30">
+          <p className="text-sm font-semibold text-foreground">{displayName}</p>
+          <div className="flex items-center gap-2 mt-0.5">
+            <span className="font-mono text-[10px] text-primary uppercase tracking-wider">{trade}</span>
+            <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+            <span className="font-mono text-[10px] text-green-600">Active</span>
+          </div>
+        </div>
+
+        <nav className="flex-1 py-4 px-2 space-y-0.5 overflow-y-auto">
           {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               onClick={() => { setActiveTab(id); setMobileMenuOpen(false); }}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 transition-colors relative ${activeTab === id ? "bg-primary/10 text-primary border-r-2 border-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
+              className={`w-full flex items-center gap-3 px-3 py-3 md:py-2.5 transition-colors relative rounded-sm ${activeTab === id ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
             >
-              <Icon size={17} className="shrink-0" />
-              {sidebarOpen && <span className="text-sm font-medium truncate">{label}</span>}
+              <Icon size={18} className="shrink-0" />
+              <span className={`text-sm font-medium truncate ${!sidebarOpen ? "md:hidden" : ""}`}>{label}</span>
               {id === "find" && newJobCount > 0 && (
-                <span className={`${sidebarOpen ? "ml-auto" : "absolute top-1 right-1"} bg-primary text-white font-mono text-[9px] px-1.5 py-0.5 rounded-full leading-none`}>
+                <span className="ml-auto bg-primary text-white font-mono text-[9px] px-1.5 py-0.5 rounded-full leading-none">
                   {newJobCount}
                 </span>
               )}
             </button>
           ))}
         </nav>
-        <div className="border-t border-border p-3 space-y-2">
-          <button onClick={onToggleDark} className="w-full flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground transition-colors">
-            {isDark ? <Sun size={15} className="shrink-0" /> : <Moon size={15} className="shrink-0" />}
-            {sidebarOpen && <span className="text-xs">{isDark ? "Light mode" : "Dark mode"}</span>}
+
+        <div className="border-t border-border p-3 space-y-0.5">
+          <button onClick={onToggleDark} className="w-full flex items-center gap-3 px-3 py-2.5 md:py-2 text-muted-foreground hover:text-foreground transition-colors rounded-sm">
+            {isDark ? <Sun size={16} className="shrink-0" /> : <Moon size={16} className="shrink-0" />}
+            <span className={`text-sm ${!sidebarOpen ? "md:hidden" : ""}`}>{isDark ? "Light mode" : "Dark mode"}</span>
           </button>
-          <button onClick={onLogout} className="w-full flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground transition-colors">
-            <LogOut size={15} className="shrink-0" />
-            {sidebarOpen && <span className="text-xs">Sign Out</span>}
+          <button onClick={onLogout} className="w-full flex items-center gap-3 px-3 py-2.5 md:py-2 text-muted-foreground hover:text-foreground transition-colors rounded-sm">
+            <LogOut size={16} className="shrink-0" />
+            <span className={`text-sm ${!sidebarOpen ? "md:hidden" : ""}`}>Sign Out</span>
           </button>
-          {/* Admin portal access — discreet footer link */}
-          <button
-            onClick={onOpenAdmin}
-            className="w-full flex items-center gap-3 px-3 py-2 text-muted-foreground/50 hover:text-muted-foreground transition-colors"
-            title="Admin Portal"
-          >
-            <Shield size={13} className="shrink-0" />
-            {sidebarOpen && <span className="font-mono text-[10px] tracking-wider">Admin Login</span>}
+          <button onClick={onOpenAdmin} className="w-full flex items-center gap-3 px-3 py-2.5 md:py-2 text-muted-foreground/50 hover:text-muted-foreground transition-colors rounded-sm" title="Admin Portal">
+            <Shield size={14} className="shrink-0" />
+            <span className={`font-mono text-[10px] tracking-wider ${!sidebarOpen ? "md:hidden" : ""}`}>Admin Login</span>
           </button>
         </div>
       </aside>
 
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="h-16 border-b border-border flex items-center justify-between px-4 md:px-6 bg-card shrink-0">
-          <div>
-            <button type="button" className="md:hidden w-8 h-8 mb-1 flex items-center justify-center border border-border text-muted-foreground" onClick={() => setMobileMenuOpen((o) => !o)} aria-label="Toggle menu">
-              {mobileMenuOpen ? <X size={16} /> : <Menu size={16} />}
+      {/* Main content */}
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        <header className="h-14 md:h-16 border-b border-border flex items-center justify-between px-4 md:px-6 bg-card shrink-0">
+          <div className="flex items-center gap-3">
+            <button type="button" className="md:hidden flex items-center gap-1" onClick={() => setMobileMenuOpen(true)} aria-label="Open menu">
+              <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-base tracking-wider text-foreground">FIX</span>
+              <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-base tracking-wider text-primary">BRIDGE</span>
             </button>
-            <p className="text-sm font-medium text-foreground">{displayName}</p>
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-[10px] text-primary uppercase tracking-wider">{trade}</span>
-              <span className="w-1 h-1 rounded-full bg-green-500" />
-              <span className="font-mono text-[10px] text-green-600">Active</span>
+            <div className="hidden md:block">
+              <p className="text-sm font-semibold text-foreground leading-tight">{displayName}</p>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[10px] text-primary uppercase tracking-wider">{trade}</span>
+                <span className="w-1 h-1 rounded-full bg-green-500" />
+                <span className="font-mono text-[10px] text-green-600">Active</span>
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
             <button className="relative w-9 h-9 flex items-center justify-center border border-border text-muted-foreground hover:text-foreground transition-colors">
               <Bell size={15} />
               {newJobCount > 0 && (
@@ -1108,16 +1125,16 @@ export default function ContractorDashboard({
               </button>
               {profileMenuOpen && (
                 <div className="absolute right-0 top-10 w-44 border border-border bg-card shadow-lg z-20">
-                  <button type="button" onClick={() => { setProfileMenuOpen(false); onOpenAdmin(); }} className="w-full text-left px-3 py-2 text-sm hover:bg-muted/50 transition-colors">Admin Panel</button>
-                  <button type="button" onClick={() => { setProfileMenuOpen(false); onLogout(); }} className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors">Sign Out</button>
+                  <button type="button" onClick={() => { setProfileMenuOpen(false); onOpenAdmin(); }} className="w-full text-left px-3 py-2.5 text-sm hover:bg-muted/50 transition-colors">Admin Panel</button>
+                  <button type="button" onClick={() => { setProfileMenuOpen(false); onLogout(); }} className="w-full text-left px-3 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors">Sign Out</button>
                 </div>
               )}
             </div>
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-6 lg:p-8">
-          <motion.div key={activeTab} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
+        <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 pb-20 md:pb-8">
+          <motion.div key={activeTab} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
             {activeTab === "find" && <FindTab user={user} />}
             {activeTab === "work" && <WorkTab user={user} />}
             {activeTab === "earnings" && <EarningsTab />}
@@ -1125,6 +1142,28 @@ export default function ContractorDashboard({
           </motion.div>
         </main>
       </div>
+
+      {/* Mobile Bottom Navigation */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-20 bg-card border-t border-border flex">
+        {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setActiveTab(id)}
+            className={`flex-1 relative flex flex-col items-center justify-center gap-1 py-2.5 min-h-[56px] transition-colors ${
+              activeTab === id ? "text-primary" : "text-muted-foreground"
+            }`}
+          >
+            <Icon size={20} strokeWidth={activeTab === id ? 2.5 : 1.8} />
+            <span className="font-mono text-[9px] uppercase tracking-wide leading-none">{label}</span>
+            {id === "find" && newJobCount > 0 && (
+              <span className="absolute top-1.5 right-[calc(50%-18px)] bg-primary text-white font-mono text-[8px] w-4 h-4 flex items-center justify-center rounded-full leading-none">
+                {newJobCount > 9 ? "9+" : newJobCount}
+              </span>
+            )}
+          </button>
+        ))}
+      </nav>
     </div>
   );
 }

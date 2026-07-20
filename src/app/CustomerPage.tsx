@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, Fragment } from "react";
 import { motion, useScroll, useTransform, useInView } from "motion/react";
 import {
   ArrowRight, Shield, Zap, Clock, MapPin, Star,
@@ -367,7 +367,10 @@ export default function CustomerPage({
                 Describe Your Problem
                 <ArrowRight size={15} className="transition-transform group-hover:translate-x-1" />
               </button>
-              <button className="font-medium border border-border text-foreground px-6 py-3.5 hover:border-foreground/30 transition-colors">
+              <button
+                onClick={() => document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" })}
+                className="font-medium border border-border text-foreground px-6 py-3.5 hover:border-foreground/30 transition-colors"
+              >
                 How It Works
               </button>
             </div>
@@ -426,7 +429,7 @@ export default function CustomerPage({
       </div>
 
       {/* ── How It Works ─────────────────────────────────────────────────── */}
-      <section className="py-28 px-6 max-w-7xl mx-auto">
+      <section id="how-it-works" className="py-28 px-6 max-w-7xl mx-auto">
         <ScrollReveal>
           <SectionLabel left="Process" right="3 Steps" />
         </ScrollReveal>
@@ -442,8 +445,57 @@ export default function CustomerPage({
             </span>
           </h2>
         </ScrollReveal>
+
+        {/* Step flow — desktop arrows */}
+        <div className="hidden md:flex items-center justify-between mb-10 px-4">
+          {STEPS.map((step, i) => (
+            <Fragment key={step.num}>
+              <div className="flex flex-col items-center gap-2 flex-1">
+                <div className="w-12 h-12 rounded-full border-2 border-primary flex items-center justify-center bg-primary/10">
+                  <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-lg text-primary leading-none">{step.num}</span>
+                </div>
+                <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground text-center leading-tight max-w-[100px]">{step.title}</span>
+              </div>
+              {i < STEPS.length - 1 && (
+                <div className="flex items-center gap-1 mb-5 flex-shrink-0 px-2">
+                  <div className="h-px w-16 bg-border" />
+                  <ArrowRight size={14} className="text-primary -ml-1" />
+                </div>
+              )}
+            </Fragment>
+          ))}
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-3 border-l border-border">
           {STEPS.map((step, i) => <StepCard key={i} step={step} index={i} />)}
+        </div>
+
+        {/* Mobile step pills */}
+        <div className="md:hidden mt-10 space-y-3">
+          {STEPS.map((step, i) => {
+            const Icon = step.icon;
+            return (
+              <ScrollReveal key={step.num} delay={i * 0.1}>
+                <div className="flex items-start gap-4 p-4 border border-border bg-card">
+                  <div className="w-10 h-10 rounded-full border-2 border-primary bg-primary/10 flex items-center justify-center shrink-0">
+                    <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-base text-primary leading-none">{step.num}</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Icon size={13} className="text-primary shrink-0" />
+                      <p className="font-semibold text-sm text-foreground">{step.title}</p>
+                    </div>
+                    <p className="text-xs text-muted-foreground leading-relaxed">{step.body}</p>
+                  </div>
+                </div>
+                {i < STEPS.length - 1 && (
+                  <div className="flex justify-center py-1">
+                    <div className="w-px h-4 bg-border" />
+                  </div>
+                )}
+              </ScrollReveal>
+            );
+          })}
         </div>
       </section>
 
@@ -631,7 +683,10 @@ export default function CustomerPage({
                 Post Your Repair — It&apos;s Free
                 <ArrowRight size={16} className="transition-transform group-hover:translate-x-1" />
               </button>
-              <button className="font-medium border-2 border-white/70 text-white px-8 py-4 text-base hover:border-white hover:bg-white/10 transition-colors">
+              <button
+                onClick={() => document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" })}
+                className="font-medium border-2 border-white/70 text-white px-8 py-4 text-base hover:border-white hover:bg-white/10 transition-colors"
+              >
                 Learn How It Works
               </button>
             </div>
