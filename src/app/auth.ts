@@ -44,6 +44,28 @@ export async function getStoredUsers(): Promise<AuthUser[]> {
   return res.json();
 }
 
+export async function signInWithGoogle(
+  credential: string,
+  role: UserRole,
+): Promise<{ ok: true; user: AuthUser } | { ok: false; message: string }> {
+  return post("/api/auth/google", { credential, role });
+}
+
+export async function forgotPassword(
+  email: string,
+  role: UserRole,
+): Promise<{ ok: boolean; message?: string }> {
+  return post("/api/auth/forgot-password", { email, role });
+}
+
+export async function resetPassword(
+  token: string,
+  role: UserRole,
+  password: string,
+): Promise<{ ok: boolean; message?: string }> {
+  return post("/api/auth/reset-password", { token, role, password });
+}
+
 /** Sync helper — returns a plausible demo user object for pre-filling login forms. */
 export function getDemoUser(role: UserRole): AuthUser {
   if (role === "homeowner") {

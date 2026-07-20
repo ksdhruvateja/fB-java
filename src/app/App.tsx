@@ -9,7 +9,8 @@ import ContractorLogin from "./ContractorLogin";
 import HomeownerDashboard from "./HomeownerDashboard";
 import ContractorDashboard from "./ContractorDashboard";
 import AdminPanel from "./AdminPanel";
-import type { AuthUser } from "./auth";
+import ResetPassword from "./ResetPassword";
+import type { AuthUser, UserRole } from "./auth";
 
 type Page =
   | "home"
@@ -370,6 +371,20 @@ export default function App() {
   const [scrolled, setScrolled] = useState(false);
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(initialState.currentUser);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [resetParams, setResetParams] = useState<{ token: string; role: UserRole } | null>(null);
+
+  // Detect password-reset links: /?action=reset-password&token=...&role=...
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("action") === "reset-password") {
+      const token = params.get("token");
+      const role = params.get("role");
+      if (token && (role === "homeowner" || role === "contractor")) {
+        setResetParams({ token, role });
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+    }
+  }, []);
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     setScrolled(e.currentTarget.scrollTop > 48);
@@ -404,6 +419,24 @@ export default function App() {
       setPage("home");
     }
   }, [currentUser, page]);
+
+  // Show reset-password page when the link is clicked
+  if (resetParams) {
+    return (
+      <div className={`${isDark ? "dark" : ""} size-full`} style={{ colorScheme: isDark ? "dark" : "light" }}>
+        <div className="size-full overflow-y-auto bg-background text-foreground [font-family:'DM_Sans',sans-serif]">
+          <ResetPassword
+            token={resetParams.token}
+            role={resetParams.role}
+            onDone={() => {
+              setResetParams(null);
+              navigate(resetParams.role === "homeowner" ? "homeowner-login" : "contractor-login");
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
