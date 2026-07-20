@@ -137,6 +137,8 @@ export function getJobBoardJobs(): JobBoardItem[] {
   }
 }
 
+export const NEW_JOB_EVENT = "fixbridge-new-job";
+
 export function addJobBoardJob(job: Omit<JobBoardItem, "id" | "posted" | "requirements" | "tag">) {
   const jobs = getJobBoardJobs();
   const next: JobBoardItem = {
@@ -147,6 +149,10 @@ export function addJobBoardJob(job: Omit<JobBoardItem, "id" | "posted" | "requir
     requirements: getJobRequirements(job.category),
   };
   writeJobs([next, ...jobs]);
+  // Broadcast so any open contractor portal can show a real-time notification.
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(NEW_JOB_EVENT, { detail: next }));
+  }
 }
 
 export function contractorCanDoJob(contractorTrade: string | undefined, category: JobCategory): boolean {

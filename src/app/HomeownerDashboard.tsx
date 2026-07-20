@@ -753,10 +753,36 @@ function PostTab({
           )}
 
           {serviceDate && (
-            <p className="text-sm text-muted-foreground mb-6">
-              Selected service date: <span className="text-foreground font-medium">{formatServiceDate(serviceDate)}</span>
+            <p className="text-sm text-muted-foreground mb-4">
+              Service date: <span className="text-foreground font-medium">{formatServiceDate(serviceDate)}</span>
             </p>
           )}
+
+          {/* Time slot selection — shown on same screen as date */}
+          <div className="mb-6">
+            <label className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase block mb-3">
+              Your Availability <span className="text-primary">*</span>
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {TIME_SLOTS.map((slot) => (
+                <button
+                  key={slot.id}
+                  type="button"
+                  onClick={() => setTimeSlot(slot.id)}
+                  className={`p-4 border text-left transition-all ${
+                    timeSlot === slot.id ? "border-primary bg-primary/5" : "border-border hover:border-foreground/20"
+                  }`}
+                >
+                  <span className={`text-sm font-medium ${timeSlot === slot.id ? "text-primary" : "text-foreground"}`}>
+                    {slot.label}
+                  </span>
+                  {slot.surcharge && (
+                    <p className="font-mono text-[10px] text-orange-600 mt-1">Small additional fee may apply</p>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <div className="flex flex-col sm:flex-row gap-3">
             <button type="button" onClick={() => setStep("assessment")} className="border border-border px-5 py-3 text-sm">
@@ -764,59 +790,67 @@ function PostTab({
             </button>
             <button
               type="button"
-              disabled={!timing || !address.trim() || (timing === "custom" && !customDate)}
+              disabled={!timing || !address.trim() || (timing === "custom" && !customDate) || !timeSlot}
               onClick={() => setStep("timeslot")}
               className={`flex-1 py-3 text-sm font-medium ${
-                timing && address.trim() && (timing !== "custom" || customDate)
+                timing && address.trim() && (timing !== "custom" || customDate) && timeSlot
                   ? "bg-primary text-white hover:bg-primary/90"
                   : "bg-primary/40 text-white/80 cursor-not-allowed"
               }`}
             >
-              Continue to Time Slot
+              Review & Confirm
             </button>
           </div>
         </div>
       )}
 
-      {/* STEP 5 — Time Slot */}
+      {/* STEP 5 — Booking Summary & Submit */}
       {step === "timeslot" && (
         <div>
-          <p className="font-mono text-[11px] tracking-[0.15em] text-muted-foreground uppercase mb-2">
-            Step 5 — Choose a time slot
+          <p className="font-mono text-[11px] tracking-[0.15em] text-muted-foreground uppercase mb-6">
+            Step 5 — Review your booking
           </p>
-          <p className="text-sm text-muted-foreground mb-6">
-            Service date: <span className="text-foreground font-medium">{formatServiceDate(serviceDate)}</span>
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-6">
-            {TIME_SLOTS.map((slot) => (
-              <button
-                key={slot.id}
-                type="button"
-                onClick={() => setTimeSlot(slot.id)}
-                className={`p-4 border text-left transition-all ${
-                  timeSlot === slot.id ? "border-primary bg-primary/5" : "border-border hover:border-foreground/20"
-                }`}
-              >
-                <span className={`text-sm font-medium ${timeSlot === slot.id ? "text-primary" : "text-foreground"}`}>
-                  {slot.label}
-                </span>
-                {slot.surcharge && (
-                  <p className="font-mono text-[10px] text-orange-600 mt-1">Small additional fee may apply</p>
-                )}
-              </button>
-            ))}
-          </div>
 
-          {assessment && (
-            <div className="border border-border bg-card p-4 mb-6 text-sm space-y-1">
-              <p className="font-mono text-[10px] tracking-wider uppercase text-muted-foreground mb-2">Booking Summary</p>
-              <p><span className="text-muted-foreground">Category:</span> {selectedCat}</p>
-              <p><span className="text-muted-foreground">Title:</span> {titleInput.trim() || description.trim().slice(0, 60)}</p>
-              <p><span className="text-muted-foreground">Address:</span> {address}</p>
-              <p><span className="text-muted-foreground">Estimate:</span> {assessment.estimatedCost}</p>
-              <p><span className="text-muted-foreground">Contractors available:</span> {recommendedCount}</p>
+          <div className="border border-border bg-card p-5 mb-6 space-y-3 text-sm">
+            <p className="font-mono text-[10px] tracking-wider uppercase text-muted-foreground mb-3">Booking Summary</p>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+              <div>
+                <p className="font-mono text-[10px] text-muted-foreground uppercase">Category</p>
+                <p className="text-foreground font-medium">{selectedCat}</p>
+              </div>
+              <div>
+                <p className="font-mono text-[10px] text-muted-foreground uppercase">Estimate</p>
+                <p className="text-foreground font-medium">{assessment?.estimatedCost || "—"}</p>
+              </div>
+              <div className="col-span-2">
+                <p className="font-mono text-[10px] text-muted-foreground uppercase">Job Title</p>
+                <p className="text-foreground">{titleInput.trim() || description.trim().slice(0, 70)}</p>
+              </div>
+              <div>
+                <p className="font-mono text-[10px] text-muted-foreground uppercase">Service Date</p>
+                <p className="text-foreground font-medium">{formatServiceDate(serviceDate)}</p>
+              </div>
+              <div>
+                <p className="font-mono text-[10px] text-muted-foreground uppercase">Time Window</p>
+                <p className="text-foreground font-medium">{TIME_SLOTS.find((s) => s.id === timeSlot)?.label || "—"}</p>
+              </div>
+              <div className="col-span-2">
+                <p className="font-mono text-[10px] text-muted-foreground uppercase">Location</p>
+                <p className="text-foreground">{address}</p>
+                <p className="font-mono text-[10px] text-muted-foreground mt-0.5">Exact address hidden until contractor accepts.</p>
+              </div>
+              <div>
+                <p className="font-mono text-[10px] text-muted-foreground uppercase">Available Contractors</p>
+                <p className="text-foreground font-medium">{recommendedCount} in your area</p>
+              </div>
+              {TIME_SLOTS.find((s) => s.id === timeSlot)?.surcharge && (
+                <div>
+                  <p className="font-mono text-[10px] text-orange-600 uppercase">Evening Surcharge</p>
+                  <p className="text-orange-600 text-xs">May apply for this time window</p>
+                </div>
+              )}
             </div>
-          )}
+          </div>
 
           <div className="flex flex-col sm:flex-row gap-3">
             <button type="button" onClick={() => setStep("timing")} className="border border-border px-5 py-3 text-sm">
@@ -824,11 +858,8 @@ function PostTab({
             </button>
             <button
               type="button"
-              disabled={!timeSlot}
               onClick={submitBooking}
-              className={`flex-1 py-3 text-sm font-medium inline-flex items-center justify-center gap-2 ${
-                timeSlot ? "bg-primary text-white hover:bg-primary/90" : "bg-primary/40 text-white/80 cursor-not-allowed"
-              }`}
+              className="flex-1 py-3 text-sm font-medium bg-primary text-white hover:bg-primary/90 inline-flex items-center justify-center gap-2"
             >
               Post Job & Notify Contractors
               <ChevronRight size={15} />

@@ -14,7 +14,7 @@ import {
 import type { AuthUser } from "./auth";
 import { addJobMessage } from "./jobChat";
 import JobChatPanel from "./JobChatPanel";
-import { contractorCanDoJob, getJobBoardJobs, type JobBoardItem } from "./jobBoard";
+import { contractorCanDoJob, getJobBoardJobs, NEW_JOB_EVENT, type JobBoardItem } from "./jobBoard";
 import {
   getJobLifecycle,
   updateJobStatus,
@@ -895,8 +895,55 @@ export default function ContractorDashboard({
     };
   }, []);
 
+  // Pop-up toast when a new job is posted by a homeowner
+  const [newJobToast, setNewJobToast] = useState<{ title: string; category: string; urgent: boolean } | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const job = (e as CustomEvent).detail as JobBoardItem;
+      setNewJobToast({ title: job.title, category: job.category, urgent: job.urgent });
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setNewJobToast(null), 6000);
+    };
+    window.addEventListener(NEW_JOB_EVENT, handler);
+    return () => window.removeEventListener(NEW_JOB_EVENT, handler);
+  }, []);
+
   return (
     <div className="flex h-screen bg-background overflow-hidden">
+      {/* New-job pop-up toast */}
+      {newJobToast && (
+        <motion.div
+          initial={{ opacity: 0, y: 40, scale: 0.95 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 20 }}
+          className="fixed bottom-6 right-6 z-50 w-80 border border-primary bg-card shadow-xl"
+        >
+          <div className="bg-primary px-4 py-2 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Bell size={13} className="text-white" />
+              <span className="font-mono text-[10px] tracking-wider text-white uppercase">New Job Posted</span>
+              {newJobToast.urgent && (
+                <span className="font-mono text-[9px] bg-white text-primary px-1.5 py-0.5">URGENT</span>
+              )}
+            </div>
+            <button onClick={() => setNewJobToast(null)} className="text-white/80 hover:text-white">
+              <X size={13} />
+            </button>
+          </div>
+          <div className="px-4 py-3">
+            <p className="text-sm font-medium text-foreground mb-1 leading-snug">{newJobToast.title}</p>
+            <p className="font-mono text-[10px] text-muted-foreground uppercase mb-3">{newJobToast.category}</p>
+            <button
+              onClick={() => { setNewJobToast(null); setActiveTab("find"); }}
+              className="w-full bg-primary text-white text-xs font-medium py-2 hover:bg-primary/90 transition-colors flex items-center justify-center gap-1.5"
+            >
+              View Job <ChevronRight size={12} />
+            </button>
+          </div>
+        </motion.div>
+      )}
+
       {mobileMenuOpen && (
         <button type="button" className="fixed inset-0 bg-black/40 z-30 md:hidden" onClick={() => setMobileMenuOpen(false)} aria-label="Close menu overlay" />
       )}
@@ -933,6 +980,15 @@ export default function ContractorDashboard({
           <button onClick={onLogout} className="w-full flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground transition-colors">
             <LogOut size={15} className="shrink-0" />
             {sidebarOpen && <span className="text-xs">Sign Out</span>}
+          </button>
+          {/* Admin portal access — discreet footer link */}
+          <button
+            onClick={onOpenAdmin}
+            className="w-full flex items-center gap-3 px-3 py-2 text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+            title="Admin Portal"
+          >
+            <Shield size={13} className="shrink-0" />
+            {sidebarOpen && <span className="font-mono text-[10px] tracking-wider">Admin Login</span>}
           </button>
         </div>
       </aside>
