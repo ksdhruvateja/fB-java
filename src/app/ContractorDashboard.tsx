@@ -524,9 +524,11 @@ function FindTab({ user }: { user: AuthUser | null }) {
     refreshJobs();
     window.addEventListener("storage", refreshJobs);
     window.addEventListener("fixbridge-lifecycle-update", refreshJobs);
+    window.addEventListener(NEW_JOB_EVENT, refreshJobs);
     return () => {
       window.removeEventListener("storage", refreshJobs);
       window.removeEventListener("fixbridge-lifecycle-update", refreshJobs);
+      window.removeEventListener(NEW_JOB_EVENT, refreshJobs);
     };
   }, []);
 
@@ -632,9 +634,9 @@ function FindTab({ user }: { user: AuthUser | null }) {
   );
 }
 
-// ─── Completed Job Card (extracted to fix hooks-in-map) ──────────────────────
+// ─── Static completed job card (demo history) ────────────────────────────────
 
-function CompletedJobCard({ job, index }: { job: typeof COMPLETED_JOBS[0]; index: number }) {
+function StaticCompletedCard({ job, index }: { job: typeof COMPLETED_JOBS[0]; index: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const inView = useInView(ref, { once: true });
   return (
@@ -675,22 +677,65 @@ function CompletedJobCard({ job, index }: { job: typeof COMPLETED_JOBS[0]; index
   );
 }
 
-function WorkTab() {
-  const total = COMPLETED_JOBS.reduce((s, j) => s + parseFloat(j.payout.replace("$", "")), 0);
-  const avgRating = COMPLETED_JOBS.reduce((s, j) => s + j.rating, 0) / COMPLETED_JOBS.length;
+// ─── Work Tab — live accepted/in-progress/completed jobs ─────────────────────
+
+function WorkTab({ user }: { user: AuthUser | null }) {
+  const contractorName = user?.name || "James Park";
+  const [allJobs, setAllJobs] = useState<JobBoardItem[]>(() => getJobBoardJobs());
+  const [tick, setTick] = useState(0);
+
+  const refresh = () => {
+    setAllJobs(getJobBoardJobs());
+    setTick((t) => t + 1);
+  };
+
+  useEffect(() => {
+    refresh();
+    window.addEventListener("storage", refresh);
+    window.addEventListener("fixbridge-lifecycle-update", refresh);
+    window.addEventListener(NEW_JOB_EVENT, refresh);
+    return () => {
+      window.removeEventListener("storage", refresh);
+      window.removeEventListener("fixbridge-lifecycle-update", refresh);
+      window.removeEventListener(NEW_JOB_EVENT, refresh);
+    };
+  }, []);
+
+  // Jobs this contractor has touched (accepted or beyond)
+  const myLiveJobs = allJobs.filter((job) => {
+    const lc = getJobLifecycle(job.id);
+    return lc.contractorName === contractorName && lc.status !== "open";
+  });
+
+  const activeJobs = myLiveJobs.filter((j) => getJobLifecycle(j.id).status !== "completed");
+  const completedLiveJobs = myLiveJobs.filter((j) => getJobLifecycle(j.id).status === "completed");
+
+  // Stats: live + static demo history
+  const liveCompletedCount = completedLiveJobs.length;
+  const liveEarned = completedLiveJobs.reduce((s, j) => s + (getJobLifecycle(j.id).invoiceAmount ?? 0), 0);
+  const staticEarned = COMPLETED_JOBS.reduce((s, j) => s + parseFloat(j.payout.replace("$", "")), 0);
+  const totalEarned = liveEarned + staticEarned;
+  const totalCompleted = liveCompletedCount + COMPLETED_JOBS.length;
+  const allRatings = [
+    ...completedLiveJobs.map((j) => getJobLifecycle(j.id).rating).filter((r): r is number => r !== undefined),
+    ...COMPLETED_JOBS.map((j) => j.rating),
+  ];
+  const avgRating = allRatings.length > 0 ? allRatings.reduce((s, r) => s + r, 0) / allRatings.length : 0;
 
   return (
     <div>
       <h2 className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase text-3xl text-foreground mb-1">
-        My Work History
+        My Work
       </h2>
-      <p className="text-sm text-muted-foreground mb-8">All completed jobs and homeowner reviews.</p>
+      <p className="text-sm text-muted-foreground mb-8">Active jobs, completed history, and homeowner reviews.</p>
+
+      {/* Stats */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-8">
         {[
-          { label: "Jobs Completed", val: COMPLETED_JOBS.length.toString(), icon: CheckSquare },
-          { label: "Total Earned", val: `$${total.toLocaleString()}`, icon: DollarSign },
-          { label: "Avg. Rating", val: `${avgRating.toFixed(1)}★`, icon: Star },
-          { label: "Repeat Clients", val: "3", icon: TrendingUp },
+          { label: "Jobs Completed", val: totalCompleted.toString(), icon: CheckSquare },
+          { label: "Total Earned", val: `${totalEarned.toLocaleString()}`, icon: DollarSign },
+          { label: "Avg. Rating", val: avgRating > 0 ? `${avgRating.toFixed(1)}★` : "—", icon: Star },
+          { label: "Active Now", val: activeJobs.length.toString(), icon: TrendingUp },
         ].map(({ label, val, icon: Icon }) => (
           <div key={label} className="bg-card border border-border p-4">
             <Icon size={14} className="text-primary mb-2" />
@@ -699,9 +744,51 @@ function WorkTab() {
           </div>
         ))}
       </div>
+
+      {/* Active / in-progress live jobs */}
+      {activeJobs.length > 0 && (
+        <div className="mb-8">
+          <p className="font-mono text-[11px] tracking-wider text-primary uppercase mb-3">
+            Active Jobs ({activeJobs.length})
+          </p>
+          <div className="space-y-3">
+            {activeJobs.map((job, i) => (
+              <FindJobCard key={`active-${job.id}-${tick}`} job={job} index={i} user={user} onStatusChange={refresh} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Completed live jobs */}
+      {completedLiveJobs.length > 0 && (
+        <div className="mb-8">
+          <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-3">
+            Recently Completed
+          </p>
+          <div className="space-y-3">
+            {completedLiveJobs.map((job, i) => (
+              <FindJobCard key={`done-${job.id}-${tick}`} job={job} index={i} user={user} onStatusChange={refresh} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* No live jobs yet — helpful message */}
+      {myLiveJobs.length === 0 && (
+        <div className="border border-border bg-card px-5 py-8 text-center mb-8">
+          <CheckSquare size={28} className="text-muted-foreground mx-auto mb-3" />
+          <p className="text-sm font-medium text-foreground mb-1">No active jobs yet</p>
+          <p className="font-mono text-[11px] text-muted-foreground">Accept a job from the Find Jobs tab to see it here.</p>
+        </div>
+      )}
+
+      {/* Static demo history */}
+      <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-3">
+        Previous History
+      </p>
       <div className="space-y-3">
         {COMPLETED_JOBS.map((job, i) => (
-          <CompletedJobCard key={job.id} job={job} index={i} />
+          <StaticCompletedCard key={job.id} job={job} index={i} />
         ))}
       </div>
     </div>
@@ -1032,7 +1119,7 @@ export default function ContractorDashboard({
         <main className="flex-1 overflow-y-auto p-6 lg:p-8">
           <motion.div key={activeTab} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
             {activeTab === "find" && <FindTab user={user} />}
-            {activeTab === "work" && <WorkTab />}
+            {activeTab === "work" && <WorkTab user={user} />}
             {activeTab === "earnings" && <EarningsTab />}
             {activeTab === "profile" && <ProfileTab user={user} />}
           </motion.div>

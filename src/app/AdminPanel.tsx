@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowLeft, FileText, LogOut, ShieldCheck, Users, Briefcase,
   Receipt, TrendingUp, CheckCircle, Clock, DollarSign, Star,
@@ -30,51 +30,65 @@ export default function AdminPanel({
 }) {
   const [activeTab, setActiveTab] = useState<AdminTab>("overview");
 
-  const contractorUsers = useMemo(
-    () => getStoredUsers().filter((u) => u.role === "contractor"),
-    [],
-  );
+  const [liveData, setLiveData] = useState(() => {
+    const allJobs = getJobBoardJobs();
+    const lifecycles = getAllLifecycles();
+    const allChats = getAllJobChats();
+    const contractorUsers = getStoredUsers().filter((u) => u.role === "contractor");
+    return { allJobs, lifecycles, allChats, contractorUsers };
+  });
 
-  const allJobs = useMemo(() => getJobBoardJobs(), []);
-  const lifecycles = useMemo(() => getAllLifecycles(), []);
+  useEffect(() => {
+    const refresh = () => {
+      setLiveData({
+        allJobs: getJobBoardJobs(),
+        lifecycles: getAllLifecycles(),
+        allChats: getAllJobChats(),
+        contractorUsers: getStoredUsers().filter((u) => u.role === "contractor"),
+      });
+    };
+    window.addEventListener("storage", refresh);
+    window.addEventListener("fixbridge-lifecycle-update", refresh);
+    window.addEventListener("fixbridge-chat-update", refresh);
+    window.addEventListener("fixbridge-new-job", refresh);
+    return () => {
+      window.removeEventListener("storage", refresh);
+      window.removeEventListener("fixbridge-lifecycle-update", refresh);
+      window.removeEventListener("fixbridge-chat-update", refresh);
+      window.removeEventListener("fixbridge-new-job", refresh);
+    };
+  }, []);
 
-  // Enrich jobs with lifecycle
-  const enrichedJobs = useMemo(() =>
-    allJobs.map((job) => {
-      const lc = lifecycles.find((l) => l.jobId === job.id);
-      return { ...job, lifecycle: lc };
-    }),
-    [allJobs, lifecycles],
-  );
+  const { allJobs, lifecycles, allChats, contractorUsers } = liveData;
+
+  const enrichedJobs = allJobs.map((job) => {
+    const lc = lifecycles.find((l) => l.jobId === job.id);
+    return { ...job, lifecycle: lc };
+  });
 
   const completedJobs = enrichedJobs.filter((j) => j.lifecycle?.status === "completed");
   const invoicedJobs = completedJobs.filter((j) => j.lifecycle?.invoiceAmount !== undefined);
   const totalRevenue = invoicedJobs.reduce((sum, j) => sum + (j.lifecycle?.invoiceAmount ?? 0), 0);
-  const platformFee = totalRevenue * 0.1; // 10% platform fee
+  const platformFee = totalRevenue * 0.1;
   const avgJobValue = invoicedJobs.length > 0 ? totalRevenue / invoicedJobs.length : 0;
   const totalRatings = lifecycles.filter((l) => l.rating !== undefined);
   const avgRating = totalRatings.length > 0
     ? totalRatings.reduce((s, l) => s + (l.rating ?? 0), 0) / totalRatings.length
     : 0;
 
-  const allChats = useMemo(() => getAllJobChats(), []);
-
-  // Jobs that have at least one non-system message
-  const jobsWithChats = useMemo(() => {
-    return allJobs
-      .map((job) => {
-        const msgs = allChats[String(job.id)] ?? [];
-        const visibleMsgs = msgs.filter((m) => m.senderRole !== "system");
-        const lastMsg = msgs[msgs.length - 1];
-        return { job, msgs, visibleMsgs, lastMsg };
-      })
-      .filter(({ msgs }) => msgs.length > 0)
-      .sort((a, b) => {
-        const aTime = a.lastMsg?.createdAt ?? "";
-        const bTime = b.lastMsg?.createdAt ?? "";
-        return bTime.localeCompare(aTime);
-      });
-  }, [allJobs, allChats]);
+  const jobsWithChats = allJobs
+    .map((job) => {
+      const msgs = allChats[String(job.id)] ?? [];
+      const visibleMsgs = msgs.filter((m) => m.senderRole !== "system");
+      const lastMsg = msgs[msgs.length - 1];
+      return { job, msgs, visibleMsgs, lastMsg };
+    })
+    .filter(({ msgs }) => msgs.length > 0)
+    .sort((a, b) => {
+      const aTime = a.lastMsg?.createdAt ?? "";
+      const bTime = b.lastMsg?.createdAt ?? "";
+      return bTime.localeCompare(aTime);
+    });
 
   const TABS: { id: AdminTab; label: string; icon: React.ElementType; badge?: number }[] = [
     { id: "overview", label: "Overview", icon: BarChart2 },

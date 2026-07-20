@@ -1060,9 +1060,24 @@ function JobCard({ job, index, user }: { job: HomeJob; index: number; user: Auth
 }
 
 function JobsTab({ jobs, user }: { jobs: HomeJob[]; user: AuthUser | null }) {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const refresh = () => setTick((t) => t + 1);
+    window.addEventListener("fixbridge-lifecycle-update", refresh);
+    window.addEventListener("fixbridge-chat-update", refresh);
+    return () => {
+      window.removeEventListener("fixbridge-lifecycle-update", refresh);
+      window.removeEventListener("fixbridge-chat-update", refresh);
+    };
+  }, []);
+
   const total = jobs.length;
-  const active = jobs.filter((j) => j.status === "open" || j.status === "in-progress").length;
-  const completed = jobs.filter((j) => j.status === "completed").length;
+  // Use live lifecycle status, not static HomeJob.status
+  const active = jobs.filter((j) => {
+    const s = getJobLifecycle(j.id).status;
+    return s === "open" || s === "accepted" || s === "on-the-way" || s === "arrived" || s === "work-started";
+  }).length;
+  const completed = jobs.filter((j) => getJobLifecycle(j.id).status === "completed").length;
   const totalBids = jobs.reduce((s, j) => s + j.bids, 0);
 
   return (
