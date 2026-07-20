@@ -469,7 +469,7 @@ export default function App() {
           transition={{ duration: 0.25 }}
           className={isMarketing ? "pt-2" : ""}
         >
-          {page === "home" && <CustomerPage scrollContainer={scrollRef} />}
+          {page === "home" && <CustomerPage scrollContainer={scrollRef} onGetStarted={() => navigate("homeowner-login")} />}
           {page === "contractors" && (
             <ContractorPage
               scrollContainer={scrollRef}

@@ -298,8 +298,10 @@ function TestimonialCard({ t, index }: { t: (typeof TESTIMONIALS)[0]; index: num
 
 export default function CustomerPage({
   scrollContainer,
+  onGetStarted,
 }: {
   scrollContainer?: React.RefObject<HTMLDivElement | null>;
+  onGetStarted?: () => void;
 }) {
   const heroRef = useRef<HTMLElement>(null);
   const { scrollYProgress } = useScroll({
@@ -363,7 +365,10 @@ export default function CustomerPage({
             </p>
 
             <div className="flex flex-wrap gap-3 mb-10">
-              <button className="font-medium bg-primary text-white px-6 py-3.5 flex items-center gap-2 hover:bg-primary/90 transition-all group">
+              <button
+                onClick={onGetStarted}
+                className="font-medium bg-primary text-white px-6 py-3.5 flex items-center gap-2 hover:bg-primary/90 transition-all group"
+              >
                 Describe Your Problem
                 <ArrowRight size={15} className="transition-transform group-hover:translate-x-1" />
               </button>
