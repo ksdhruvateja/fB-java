@@ -2,10 +2,21 @@ import express from 'express';
 import cors from 'cors';
 import pg from 'pg';
 import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { OAuth2Client } from 'google-auth-library';
 import { Resend } from 'resend';
 import crypto from 'crypto';
+
+// ── Require SESSION_SECRET at startup ─────────────────────────────────────────
+const JWT_SECRET = process.env.SESSION_SECRET;
+if (!JWT_SECRET) {
+  console.error(
+    '[FATAL] SESSION_SECRET environment variable is not set. ' +
+    'Set it in Replit Secrets before starting the server.'
+  );
+  process.exit(1);
+}
 
 const { Pool } = pg;
 
@@ -27,8 +38,8 @@ const REQUIREMENTS_MAP = {
 };
 
 const DEMO_USERS = [
-  { role: 'homeowner',   name: 'Maria Santos', email: 'maria@example.com',     plainPassword: 'demo123', trade: null,             license_number: null },
-  { role: 'contractor',  name: 'James Park',   email: 'james@yourcompany.com', plainPassword: 'demo123', trade: 'Master Plumber', license_number: 'NY-00231847' },
+  { role: 'homeowner',   name: 'Maria Santos', email: 'maria@example.com',     plainPassword: 'demo123', is_admin: false, trade: null,             license_number: null },
+  { role: 'contractor',  name: 'James Park',   email: 'james@yourcompany.com', plainPassword: 'demo123', is_admin: true,  trade: 'Master Plumber', license_number: 'NY-00231847' },
 ];
 
 const SEEDED_JOBS = [
@@ -65,9 +76,14 @@ export async function initDb() {
       license_document_name   TEXT,
       insurance_document_name TEXT,
       id_document_name        TEXT,
+      is_admin                BOOLEAN NOT NULL DEFAULT FALSE,
       created_at              TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE(role, email)
     )
+  `);
+  // Add is_admin column to existing tables that predate this migration
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE
   `);
 
   await pool.query(`
@@ -144,16 +160,20 @@ export async function initDb() {
     if (existing.rows.length === 0) {
       const hashed = await bcrypt.hash(u.plainPassword, 10);
       await pool.query(
-        `INSERT INTO users (role,name,email,password,trade,license_number)
-         VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
-        [u.role, u.name, u.email, hashed, u.trade, u.license_number]
+        `INSERT INTO users (role,name,email,password,trade,license_number,is_admin)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`,
+        [u.role, u.name, u.email, hashed, u.trade, u.license_number, u.is_admin]
       );
     } else {
-      // Migrate plaintext demo passwords if needed
+      // Migrate plaintext demo passwords if needed; also stamp is_admin
       const pw = existing.rows[0].password;
       if (!pw.startsWith('$2') && pw !== 'GOOGLE_OAUTH') {
         const hashed = await bcrypt.hash(pw, 10);
         await pool.query('UPDATE users SET password=$1 WHERE role=$2 AND LOWER(email)=LOWER($3)', [hashed, u.role, u.email]);
+      }
+      // Ensure demo contractor has is_admin set
+      if (u.is_admin) {
+        await pool.query('UPDATE users SET is_admin=true WHERE role=$1 AND LOWER(email)=LOWER($2)', [u.role, u.email]);
       }
     }
   }
@@ -181,8 +201,43 @@ export async function initDb() {
 
 // ── Row mappers ───────────────────────────────────────────────────────────────
 
+// ── JWT helpers ───────────────────────────────────────────────────────────────
+
+function makeToken(user) {
+  return jwt.sign(
+    { id: user.id, role: user.role, email: user.email, isAdmin: user.isAdmin === true },
+    JWT_SECRET,
+    { expiresIn: '7d' }
+  );
+}
+
+/** Reject requests that don't carry a valid JWT. */
+function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ ok: false, message: 'Authentication required.' });
+  }
+  try {
+    req.authUser = jwt.verify(authHeader.slice(7), JWT_SECRET);
+    next();
+  } catch {
+    return res.status(401).json({ ok: false, message: 'Invalid or expired token.' });
+  }
+}
+
+/** Reject requests from non-admin token holders. */
+function requireAdmin(req, res, next) {
+  if (!req.authUser?.isAdmin) {
+    return res.status(403).json({ ok: false, message: 'Admin access required.' });
+  }
+  next();
+}
+
+// ── Row serializers ───────────────────────────────────────────────────────────
+
 function rowToUser(r) {
   return {
+    id: r.id,
     role: r.role, name: r.name, email: r.email,
     // Never send the password hash to the client
     ...(r.trade                    && { trade: r.trade }),
@@ -190,6 +245,7 @@ function rowToUser(r) {
     ...(r.license_document_name    && { licenseDocumentName: r.license_document_name }),
     ...(r.insurance_document_name  && { insuranceDocumentName: r.insurance_document_name }),
     ...(r.id_document_name         && { idDocumentName: r.id_document_name }),
+    isAdmin: r.is_admin === true,
     isGoogleAccount: r.password === 'GOOGLE_OAUTH',
   };
 }
@@ -290,7 +346,8 @@ app.post('/api/auth/signin', signInLimiter, async (req, res) => {
       return res.status(401).json({ ok: false, message: 'Incorrect email or password.' });
     }
 
-    return res.json({ ok: true, user: rowToUser(rows[0]) });
+    const user = rowToUser(rows[0]);
+    return res.json({ ok: true, token: makeToken(user), user });
   } catch (e) {
     console.error('signin:', e);
     return res.status(500).json({ ok: false, message: 'Server error. Please try again.' });
@@ -312,7 +369,8 @@ app.post('/api/auth/signup', async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
       [role, name.trim(), email.trim().toLowerCase(), hashed, trade?.trim()||null, licenseNumber?.trim()||null, licenseDocumentName||null, insuranceDocumentName||null, idDocumentName||null]
     );
-    return res.json({ ok: true, user: rowToUser(rows[0]) });
+    const user = rowToUser(rows[0]);
+    return res.json({ ok: true, token: makeToken(user), user });
   } catch (e) {
     console.error('signup:', e);
     return res.status(500).json({ ok: false, message: 'Server error. Please try again.' });
@@ -350,10 +408,23 @@ app.post('/api/auth/google', async (req, res) => {
       rows = result.rows;
     }
 
-    return res.json({ ok: true, user: rowToUser(rows[0]) });
+    const user = rowToUser(rows[0]);
+    return res.json({ ok: true, token: makeToken(user), user });
   } catch (e) {
     console.error('google auth:', e);
     return res.status(401).json({ ok: false, message: 'Google sign-in failed. Please try again.' });
+  }
+});
+
+// ── GET /api/auth/me ──────────────────────────────────────────────────────────
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id]);
+    if (!rows.length) return res.status(401).json({ ok: false, message: 'User not found.' });
+    return res.json({ ok: true, user: rowToUser(rows[0]) });
+  } catch (e) {
+    console.error('me:', e);
+    return res.status(500).json({ ok: false, message: 'Server error.' });
   }
 });
 
@@ -452,11 +523,21 @@ app.post('/api/auth/reset-password', async (req, res) => {
   }
 });
 
-app.get('/api/users', async (_req, res) => {
+// Requires a valid token. Returns only contractor public info (no passwords, no homeowner data).
+app.get('/api/users', requireAuth, async (_req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM users ORDER BY created_at');
-    return res.json(rows.map(rowToUser));
-  } catch (e) { return res.status(500).json({ error: 'Server error' }); }
+    const { rows } = await pool.query(`SELECT * FROM users WHERE role='contractor' ORDER BY created_at`);
+    return res.json({ ok: true, users: rows.map(rowToUser) });
+  } catch (e) {
+    console.error('users:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+// ── GET /api/admin/verify ──────────────────────────────────────────────────────
+// Confirms the token holder has admin privileges — called by AdminPanel on mount.
+app.get('/api/admin/verify', requireAuth, requireAdmin, (_req, res) => {
+  return res.json({ ok: true });
 });
 
 // ── Jobs ──────────────────────────────────────────────────────────────────────

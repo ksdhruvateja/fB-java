@@ -10,7 +10,7 @@ import HomeownerDashboard from "./HomeownerDashboard";
 import ContractorDashboard from "./ContractorDashboard";
 import AdminPanel from "./AdminPanel";
 import ResetPassword from "./ResetPassword";
-import type { AuthUser, UserRole } from "./auth";
+import { getStoredUser, validateToken, clearSession, loadAllUsers, type AuthUser, type UserRole } from "./auth";
 
 type Page =
   | "home"
@@ -61,18 +61,16 @@ function loadInitialState(): {
 
   try {
     const raw = window.localStorage.getItem(APP_STATE_KEY);
-    if (!raw) return fallback;
-
-    const parsed = JSON.parse(raw) as {
-      page?: unknown;
-      marketingContext?: unknown;
-      currentUser?: AuthUser | null;
-    };
+    const parsed = raw
+      ? (JSON.parse(raw) as { page?: unknown; marketingContext?: unknown })
+      : {};
 
     const page = isValidPage(parsed.page) ? parsed.page : fallback.page;
     const marketingContext =
       parsed.marketingContext === "contractors" ? "contractors" : "home";
-    const currentUser = parsed.currentUser ?? null;
+
+    // Restore session from the secure token cache (no password stored here)
+    const currentUser = getStoredUser();
 
     return { page, marketingContext, currentUser };
   } catch {
@@ -401,22 +399,47 @@ export default function App() {
   const isMarketing = page === "home" || page === "contractors" || page === "about";
   const isDashboard = page === "homeowner-dashboard" || page === "contractor-dashboard";
 
+  // Persist nav state (no user data — that lives in the secure token cache)
   useEffect(() => {
     if (!canUseStorage()) return;
     try {
       window.localStorage.setItem(
         APP_STATE_KEY,
-        JSON.stringify({ page, marketingContext, currentUser }),
+        JSON.stringify({ page, marketingContext }),
       );
     } catch {
       // Ignore storage failures so UI remains functional.
     }
-  }, [page, marketingContext, currentUser]);
+  }, [page, marketingContext]);
+
+  // Validate the stored JWT and populate user list cache on startup
+  useEffect(() => {
+    // Refresh the public user list (for admin panel, contractor display)
+    loadAllUsers();
+
+    // Verify the token and update current user
+    validateToken().then((result) => {
+      if (result.ok) {
+        setCurrentUser(result.user);
+      } else if (!result.ok && currentUser) {
+        // Token invalid — clear the stale session
+        clearSession();
+        setCurrentUser(null);
+        setPage("home");
+      }
+    });
+    // Only run on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
-    // Guard against reloading into protected pages without a session.
+    // Guard against reloading into protected pages without a valid session.
     if (!currentUser && (page === "homeowner-dashboard" || page === "contractor-dashboard" || page === "admin")) {
       setPage("home");
+    }
+    // Admin page requires the isAdmin flag in the user's token.
+    if (currentUser && page === "admin" && !currentUser.isAdmin) {
+      setPage("contractor-dashboard");
     }
   }, [currentUser, page]);
 
@@ -488,6 +511,7 @@ export default function App() {
             <HomeownerLogin
               onLogin={(user) => {
                 setCurrentUser(user);
+                loadAllUsers(); // populate contractor cache after sign-in
                 navigate("homeowner-dashboard");
               }}
               onBack={() => navigate("home")}
@@ -499,6 +523,7 @@ export default function App() {
             <ContractorLogin
               onLogin={(user) => {
                 setCurrentUser(user);
+                loadAllUsers(); // populate contractor cache after sign-in
                 navigate("contractor-dashboard");
               }}
               onBack={() => navigate("contractors")}
@@ -509,6 +534,7 @@ export default function App() {
           {page === "homeowner-dashboard" && (
             <HomeownerDashboard
               onLogout={() => {
+                clearSession();
                 setCurrentUser(null);
                 navigate("home");
               }}
@@ -521,10 +547,14 @@ export default function App() {
           {page === "contractor-dashboard" && (
             <ContractorDashboard
               onLogout={() => {
+                clearSession();
                 setCurrentUser(null);
                 navigate("contractors");
               }}
-              onOpenAdmin={() => navigate("admin")}
+              onOpenAdmin={() => {
+                // Only allow navigation if the server has granted admin access
+                if (currentUser?.isAdmin) navigate("admin");
+              }}
               user={currentUser}
               isDark={isDark}
               onToggleDark={() => setIsDark((d) => !d)}
@@ -534,6 +564,7 @@ export default function App() {
             <AdminPanel
               onBack={() => navigate("contractor-dashboard")}
               onSignOut={() => {
+                clearSession();
                 setCurrentUser(null);
                 navigate("contractors");
               }}

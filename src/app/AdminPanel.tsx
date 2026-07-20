@@ -4,7 +4,7 @@ import {
   Receipt, TrendingUp, CheckCircle, Clock, DollarSign, Star,
   AlertCircle, BarChart2, MessageSquare, ImagePlus,
 } from "lucide-react";
-import { getStoredUsers } from "./auth";
+import { getStoredUsers, getStoredToken } from "./auth";
 import { getJobBoardJobs } from "./jobBoard";
 import { getAllLifecycles, STATUS_LABELS, type JobStatus } from "./jobLifecycle";
 import { getAllJobChats } from "./jobChat";
@@ -29,6 +29,39 @@ export default function AdminPanel({
   onSignOut: () => void;
 }) {
   const [activeTab, setActiveTab] = useState<AdminTab>("overview");
+  // "pending" while the server verifies admin access, "ok" if allowed, "denied" if rejected
+  const [authState, setAuthState] = useState<"pending" | "ok" | "denied">("pending");
+
+  // ── Server-side admin verification ──────────────────────────────────────────
+  // Always verify with the server on mount — client state alone is not trusted.
+  useEffect(() => {
+    const token = getStoredToken();
+    if (!token) {
+      setAuthState("denied");
+      return;
+    }
+    fetch("/api/admin/verify", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => {
+        if (res.ok) {
+          setAuthState("ok");
+        } else {
+          setAuthState("denied");
+        }
+      })
+      .catch(() => {
+        // Network error — deny access rather than silently allow
+        setAuthState("denied");
+      });
+  }, []);
+
+  // Redirect if the server denies access
+  useEffect(() => {
+    if (authState === "denied") {
+      onBack();
+    }
+  }, [authState, onBack]);
 
   const [liveData, setLiveData] = useState({
     allJobs: [] as import("./jobBoard").JobBoardItem[],
@@ -96,6 +129,18 @@ export default function AdminPanel({
     { id: "invoices", label: "Invoices & Revenue", icon: Receipt },
     { id: "conversations", label: "Conversations", icon: MessageSquare, badge: jobsWithChats.length },
   ];
+
+  // Render nothing (or a loading indicator) until the server confirms admin access.
+  // "denied" state is handled by the redirect useEffect above.
+  if (authState !== "ok") {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <span className="font-mono text-sm text-muted-foreground animate-pulse">
+          Verifying access…
+        </span>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background text-foreground">
