@@ -11,8 +11,9 @@
 
 [functions]
   directory = "netlify/functions"
+  # Bundle all deps (including express). Marking express as external under pnpm
+  # caused production 502s: Runtime.ImportModuleError Cannot find module 'express'.
   node_bundler = "esbuild"
-  external_node_modules = ["express"]
 
 # Express API (serverless-http) — keep before the SPA catch-all
 [[redirects]]

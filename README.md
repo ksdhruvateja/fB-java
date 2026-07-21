@@ -33,6 +33,7 @@ Config is in `netlify.toml`:
 | SPA fallback | `/*` → `/index.html` |
 
 The Express app is wrapped with `serverless-http` in `netlify/functions/api.js`.
+Dependencies are bundled with esbuild (do not mark `express` as an external module under pnpm — that caused production `Cannot find module 'express'` 502s).
 
 ### Environment variables (Netlify UI)
 

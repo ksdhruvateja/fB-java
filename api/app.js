@@ -243,30 +243,47 @@ export async function initDb() {
     )
   `);
 
-  // Seed demo users (with hashed passwords)
+  // Seed / repair demo users so UI credentials always work (even if Neon was
+  // created before seeding, or a demo password was changed).
   for (const u of DEMO_USERS) {
+    const hashed = await bcrypt.hash(u.plainPassword, 10);
     const existing = await pool.query(
-      'SELECT password FROM users WHERE role=$1 AND LOWER(email)=LOWER($2)',
+      'SELECT id, password, is_admin FROM users WHERE role=$1 AND LOWER(email)=LOWER($2)',
       [u.role, u.email]
     );
     if (existing.rows.length === 0) {
-      const hashed = await bcrypt.hash(u.plainPassword, 10);
       await pool.query(
         `INSERT INTO users (role,name,email,password,trade,license_number,is_admin)
          VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`,
         [u.role, u.name, u.email, hashed, u.trade, u.license_number, u.is_admin]
       );
-    } else {
-      // Migrate plaintext demo passwords if needed; also stamp is_admin
-      const pw = existing.rows[0].password;
-      if (!pw.startsWith('$2') && pw !== 'GOOGLE_OAUTH') {
-        const hashed = await bcrypt.hash(pw, 10);
-        await pool.query('UPDATE users SET password=$1 WHERE role=$2 AND LOWER(email)=LOWER($3)', [hashed, u.role, u.email]);
+      continue;
+    }
+
+    const row = existing.rows[0];
+    const pw = row.password;
+    let passwordOk = false;
+    if (pw && pw.startsWith('$2')) {
+      try {
+        passwordOk = await bcrypt.compare(u.plainPassword, pw);
+      } catch {
+        passwordOk = false;
       }
-      // Ensure demo contractor has is_admin set
-      if (u.is_admin) {
-        await pool.query('UPDATE users SET is_admin=true WHERE role=$1 AND LOWER(email)=LOWER($2)', [u.role, u.email]);
-      }
+    }
+
+    // Restore known demo password when missing, plaintext, or out of sync.
+    if (!passwordOk && pw !== 'GOOGLE_OAUTH') {
+      await pool.query(
+        'UPDATE users SET password=$1, name=$2, trade=$3, license_number=$4 WHERE role=$5 AND LOWER(email)=LOWER($6)',
+        [hashed, u.name, u.trade, u.license_number, u.role, u.email]
+      );
+    }
+
+    if (u.is_admin && row.is_admin !== true) {
+      await pool.query(
+        'UPDATE users SET is_admin=true WHERE role=$1 AND LOWER(email)=LOWER($2)',
+        [u.role, u.email]
+      );
     }
   }
 
