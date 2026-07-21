@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import pg from 'pg';
+import { newDb } from 'pg-mem';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
@@ -8,23 +9,60 @@ import { OAuth2Client } from 'google-auth-library';
 import { Resend } from 'resend';
 import crypto from 'crypto';
 
+const isProduction = process.env.NODE_ENV === 'production';
+const useInMemoryDb = !process.env.NEON_DATABASE_URL;
+
 // ── Require SESSION_SECRET at startup ─────────────────────────────────────────
-const JWT_SECRET = process.env.SESSION_SECRET;
+const JWT_SECRET = process.env.SESSION_SECRET || (!isProduction ? 'local-dev-secret' : undefined);
 if (!JWT_SECRET) {
-  console.error(
+  // Throw (do not process.exit) so Netlify Functions can report the error cleanly.
+  throw new Error(
     '[FATAL] SESSION_SECRET environment variable is not set. ' +
-    'Set it in Replit Secrets before starting the server.'
+    'Set it in the Netlify UI (Site settings → Environment variables) before deploying.'
   );
-  process.exit(1);
+}
+
+if (!process.env.SESSION_SECRET && !isProduction) {
+  console.warn('[FixBridge API] SESSION_SECRET not set; using local development default.');
 }
 
 const { Pool } = pg;
 
-export const pool = new Pool({
-  connectionString: process.env.NEON_DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
-  max: 10,
-});
+function createPool() {
+  if (!useInMemoryDb) {
+    let host = 'neon';
+    try {
+      host = new URL(process.env.NEON_DATABASE_URL.replace(/^postgresql:/i, 'postgres:')).hostname;
+    } catch {
+      // Keep generic label if URL parsing fails.
+    }
+    console.log(`[FixBridge API] Using Neon Postgres (${host}).`);
+    const connectionString = process.env.NEON_DATABASE_URL.includes('uselibpqcompat=')
+      ? process.env.NEON_DATABASE_URL
+      : `${process.env.NEON_DATABASE_URL}${process.env.NEON_DATABASE_URL.includes('?') ? '&' : '?'}uselibpqcompat=true`;
+    return new Pool({
+      connectionString,
+      ssl: { rejectUnauthorized: false },
+      max: 10,
+    });
+  }
+
+  const db = newDb({ autoCreateForeignKeyIndices: true });
+  const { Pool: MemoryPool } = db.adapters.createPg();
+  console.warn('[FixBridge API] NEON_DATABASE_URL not set; using in-memory local database.');
+  return new MemoryPool();
+}
+
+export const pool = createPool();
+
+function formatBookingId(id, createdAt = new Date()) {
+  const date = createdAt instanceof Date ? createdAt : new Date(createdAt);
+  const stamp = Number.isNaN(date.getTime())
+    ? new Date().toISOString().slice(0, 10).replace(/-/g, '')
+    : date.toISOString().slice(0, 10).replace(/-/g, '');
+  const suffix = String(id).slice(-6).padStart(6, '0');
+  return `FB-${stamp}-${suffix}`;
+}
 
 const REQUIREMENTS_MAP = {
   Plumbing:   ['Licensed plumber', 'Leak diagnosis tools', 'Pipe repair experience'],
@@ -37,28 +75,29 @@ const REQUIREMENTS_MAP = {
   Others:     ['General contractor capability', 'Problem diagnosis ability', 'Willingness to scope unfamiliar jobs'],
 };
 
+const TRADE_MATCH_TERMS = {
+  Plumbing: ['plumbing', 'plumber', 'pipe', 'drain'],
+  Electrical: ['electrical', 'electrician', 'wiring', 'panel'],
+  HVAC: ['hvac', 'heating', 'cooling', 'air conditioning', 'ventilation'],
+  Painting: ['painting', 'painter', 'paint'],
+  Roofing: ['roofing', 'roofer', 'roof'],
+  Flooring: ['flooring', 'floor', 'tile', 'hardwood', 'laminate'],
+  Carpentry: ['carpentry', 'carpenter', 'framing', 'woodwork'],
+  Others: ['contractor', 'handyman', 'general'],
+};
+
+function contractorTradeMatchesCategory(contractorTrade, category) {
+  if (category === 'Others') return true;
+  if (!contractorTrade) return false;
+  const terms = TRADE_MATCH_TERMS[category];
+  if (!terms) return false;
+  const normalizedTrade = String(contractorTrade).toLowerCase();
+  return terms.some((term) => normalizedTrade.includes(term));
+}
+
 const DEMO_USERS = [
   { role: 'homeowner',   name: 'Maria Santos', email: 'maria@example.com',     plainPassword: 'demo123', is_admin: false, trade: null,             license_number: null },
   { role: 'contractor',  name: 'James Park',   email: 'james@yourcompany.com', plainPassword: 'demo123', is_admin: true,  trade: 'Master Plumber', license_number: 'NY-00231847' },
-];
-
-const SEEDED_JOBS = [
-  {
-    id: 1, category: 'Plumbing', tag: 'PLUMBING',
-    title: 'Kitchen sink drain clog - backed up',
-    city_state_zip: 'Brooklyn, NY 11215', full_address: '145 7th Ave, Brooklyn, NY 11215',
-    contact_name: 'Maria Santos', contact_phone: '(917) 555-0121',
-    dist: '2.1 mi', posted: '1h ago', est: '$150-$320', bids: 2, urgent: false, ai: true,
-    requirements: REQUIREMENTS_MAP.Plumbing,
-  },
-  {
-    id: 2, category: 'Plumbing', tag: 'PLUMBING · URGENT',
-    title: 'Pipe burst under bathroom vanity',
-    city_state_zip: 'Astoria, NY 11102', full_address: '31-42 30th St, Astoria, NY 11102',
-    contact_name: 'Kevin Patel', contact_phone: '(646) 555-0194',
-    dist: '0.8 mi', posted: '25m ago', est: '$280-$520', bids: 1, urgent: true, ai: true,
-    requirements: REQUIREMENTS_MAP.Plumbing,
-  },
 ];
 
 // ── Schema init ───────────────────────────────────────────────────────────────
@@ -77,6 +116,7 @@ export async function initDb() {
       insurance_document_name TEXT,
       id_document_name        TEXT,
       is_admin                BOOLEAN NOT NULL DEFAULT FALSE,
+      is_blocked              BOOLEAN NOT NULL DEFAULT FALSE,
       created_at              TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE(role, email)
     )
@@ -85,10 +125,29 @@ export async function initDb() {
   await pool.query(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE
   `);
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN NOT NULL DEFAULT FALSE
+  `);
+  // Profile fields (additive — used by homeowner + contractor My Profile)
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_data_url TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS address TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_email TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS company_name TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS company_details TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS insurance_details TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_emails JSONB`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_phones JSONB`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_addresses JSONB`);
+  // Contractor verification documents (name + file bytes as data URL) — persisted in Neon
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS license_document_data TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS insurance_document_data TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS id_document_data TEXT`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS jobs (
       id             BIGINT PRIMARY KEY,
+      booking_id     TEXT,
       category       TEXT NOT NULL,
       tag            TEXT NOT NULL,
       title          TEXT NOT NULL,
@@ -100,6 +159,10 @@ export async function initDb() {
       full_address   TEXT NOT NULL,
       contact_name   TEXT NOT NULL,
       contact_phone  TEXT NOT NULL,
+      homeowner_email TEXT,
+      scheduled_date TEXT,
+      time_slot      TEXT,
+      service_timing TEXT,
       dist           TEXT,
       posted         TEXT,
       est            TEXT,
@@ -128,6 +191,22 @@ export async function initDb() {
   `);
 
   await pool.query(`
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS homeowner_email TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS booking_id TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS scheduled_date TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS time_slot TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS service_timing TEXT
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS job_chat_messages (
       id             BIGINT PRIMARY KEY,
       job_id         BIGINT NOT NULL,
@@ -147,6 +226,19 @@ export async function initDb() {
       token      TEXT UNIQUE NOT NULL,
       expires_at TIMESTAMPTZ NOT NULL,
       used       BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id         SERIAL PRIMARY KEY,
+      user_id    INT NOT NULL,
+      job_id     BIGINT,
+      type       TEXT NOT NULL,
+      title      TEXT NOT NULL,
+      message    TEXT NOT NULL,
+      read       BOOLEAN DEFAULT FALSE,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
@@ -187,13 +279,27 @@ export async function initDb() {
     await pool.query('UPDATE users SET password=$1 WHERE role=$2 AND LOWER(email)=LOWER($3)', [hashed, u.role, u.email]);
   }
 
-  // Seed demo jobs
-  for (const j of SEEDED_JOBS) {
-    await pool.query(
-      `INSERT INTO jobs (id,category,tag,title,city_state_zip,full_address,contact_name,contact_phone,dist,posted,est,bids,urgent,ai,requirements)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT (id) DO NOTHING`,
-      [j.id,j.category,j.tag,j.title,j.city_state_zip,j.full_address,j.contact_name,j.contact_phone,j.dist,j.posted,j.est,j.bids,j.urgent,j.ai,JSON.stringify(j.requirements)]
-    );
+  // Remove old seeded demo jobs from databases created before live job posting.
+  await pool.query('DELETE FROM job_chat_messages WHERE job_id IN (1, 2)');
+  await pool.query('DELETE FROM job_lifecycle WHERE job_id IN (1, 2)');
+  await pool.query('DELETE FROM jobs WHERE id IN (1, 2)');
+
+  const { rows: jobsMissingBookingId } = await pool.query(
+    'SELECT id, created_at FROM jobs WHERE booking_id IS NULL OR booking_id = \'\''
+  );
+  for (const job of jobsMissingBookingId) {
+    await pool.query('UPDATE jobs SET booking_id=$1 WHERE id=$2', [formatBookingId(job.id, job.created_at), job.id]);
+  }
+
+  // Unique job numbers (booking_id) across homeowner / contractor / admin views.
+  try {
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS jobs_booking_id_uidx
+      ON jobs (booking_id)
+      WHERE booking_id IS NOT NULL AND booking_id <> ''
+    `);
+  } catch (e) {
+    console.warn('[FixBridge API] booking_id unique index skipped:', e.message);
   }
 
   console.log('[FixBridge API] DB ready ✓');
@@ -212,13 +318,25 @@ function makeToken(user) {
 }
 
 /** Reject requests that don't carry a valid JWT. */
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ ok: false, message: 'Authentication required.' });
   }
   try {
-    req.authUser = jwt.verify(authHeader.slice(7), JWT_SECRET);
+    const decoded = jwt.verify(authHeader.slice(7), JWT_SECRET);
+    const { rows } = await pool.query('SELECT * FROM users WHERE id=$1', [decoded.id]);
+    if (!rows.length) {
+      return res.status(401).json({ ok: false, message: 'User not found.' });
+    }
+    if (rows[0].is_blocked === true) {
+      return res.status(403).json({ ok: false, message: 'This account has been blocked. Please contact support.' });
+    }
+    req.authUser = {
+      ...decoded,
+      isAdmin: rows[0].is_admin === true,
+      isBlocked: rows[0].is_blocked === true,
+    };
     next();
   } catch {
     return res.status(401).json({ ok: false, message: 'Invalid or expired token.' });
@@ -235,7 +353,52 @@ function requireAdmin(req, res, next) {
 
 // ── Row serializers ───────────────────────────────────────────────────────────
 
-function rowToUser(r) {
+function asStringArray(val) {
+  if (Array.isArray(val)) return val.map((v) => String(v ?? '').trim()).filter(Boolean);
+  if (typeof val === 'string') {
+    try {
+      const parsed = JSON.parse(val);
+      if (Array.isArray(parsed)) return parsed.map((v) => String(v ?? '').trim()).filter(Boolean);
+    } catch {
+      // ignore
+    }
+  }
+  return [];
+}
+
+const MAX_DOCUMENT_DATA_URL_LENGTH = 5_000_000;
+
+function isAllowedDocumentDataUrl(value) {
+  return (
+    typeof value === 'string' &&
+    (value.startsWith('data:image/') || value.startsWith('data:application/pdf'))
+  );
+}
+
+function parseDocumentField(body, nameKey, dataKey) {
+  const name = typeof body[nameKey] === 'string' ? body[nameKey].trim() : '';
+  const data = typeof body[dataKey] === 'string' ? body[dataKey] : null;
+  const provided = Object.prototype.hasOwnProperty.call(body, dataKey) || Object.prototype.hasOwnProperty.call(body, nameKey);
+  if (!provided) return { provided: false };
+  if (data) {
+    if (!isAllowedDocumentDataUrl(data)) {
+      return { error: 'Documents must be PDF or image files.' };
+    }
+    if (data.length > MAX_DOCUMENT_DATA_URL_LENGTH) {
+      return { error: 'Document is too large. Please upload a file under ~3.5 MB.' };
+    }
+  }
+  return {
+    provided: true,
+    name: name || null,
+    data: data || null,
+    // Clear only when client explicitly sends null data with empty/null name
+    clear: body[dataKey] === null && (body[nameKey] === null || body[nameKey] === ''),
+    set: typeof data === 'string' && data.length > 0,
+  };
+}
+
+function rowToUser(r, { includeDocumentData = true } = {}) {
   return {
     id: r.id,
     role: r.role, name: r.name, email: r.email,
@@ -245,24 +408,90 @@ function rowToUser(r) {
     ...(r.license_document_name    && { licenseDocumentName: r.license_document_name }),
     ...(r.insurance_document_name  && { insuranceDocumentName: r.insurance_document_name }),
     ...(r.id_document_name         && { idDocumentName: r.id_document_name }),
+    ...(includeDocumentData && r.license_document_data   && { licenseDocumentData: r.license_document_data }),
+    ...(includeDocumentData && r.insurance_document_data && { insuranceDocumentData: r.insurance_document_data }),
+    ...(includeDocumentData && r.id_document_data        && { idDocumentData: r.id_document_data }),
+    ...(r.photo_data_url           && { photoDataUrl: r.photo_data_url }),
+    ...(r.phone                    && { phone: r.phone }),
+    ...(r.address                  && { address: r.address }),
+    ...(r.contact_email            && { contactEmail: r.contact_email }),
+    ...(r.company_name             && { companyName: r.company_name }),
+    ...(r.company_details          && { companyDetails: r.company_details }),
+    ...(r.insurance_details        && { insuranceDetails: r.insurance_details }),
+    emails: asStringArray(r.profile_emails),
+    phones: asStringArray(r.profile_phones),
+    addresses: asStringArray(r.profile_addresses),
     isAdmin: r.is_admin === true,
+    isBlocked: r.is_blocked === true,
     isGoogleAccount: r.password === 'GOOGLE_OAUTH',
   };
 }
 
 function rowToJob(r) {
   return {
-    id: Number(r.id), category: r.category, tag: r.tag, title: r.title,
+    id: Number(r.id), bookingId: r.booking_id, category: r.category, tag: r.tag, title: r.title,
     ...(r.description    && { description: r.description }),
     ...(r.media_data_url && { mediaDataUrl: r.media_data_url }),
     ...(r.media_type     && { mediaType: r.media_type }),
     ...(r.ai_assessment  && { aiAssessment: r.ai_assessment }),
     cityStateZip: r.city_state_zip, fullAddress: r.full_address,
     contactName: r.contact_name, contactPhone: r.contact_phone,
+    ...(r.scheduled_date && { scheduledDate: r.scheduled_date }),
+    ...(r.time_slot && { timeSlot: r.time_slot }),
+    ...(r.service_timing && { serviceTiming: r.service_timing }),
     dist: r.dist, posted: r.posted, est: r.est,
     bids: r.bids, urgent: r.urgent, ai: r.ai,
     requirements: r.requirements ?? [],
   };
+}
+
+function rowToNotification(r) {
+  return {
+    id: Number(r.id),
+    userId: Number(r.user_id),
+    jobId: r.job_id != null ? Number(r.job_id) : undefined,
+    type: r.type,
+    title: r.title,
+    message: r.message,
+    read: r.read === true,
+    createdAt: r.created_at,
+  };
+}
+
+async function notifyMatchingContractors(job) {
+  const { rows: contractors } = await pool.query(
+    `SELECT id, trade FROM users WHERE role='contractor' AND is_blocked=false`
+  );
+  const matching = contractors.filter((c) => contractorTradeMatchesCategory(c.trade, job.category));
+  const jobLabel = job.booking_id || job.bookingId || `JOB-${job.id}`;
+  const title = job.urgent ? 'Urgent job in your trade' : 'New job in your trade';
+  const message = `${jobLabel} · ${job.category}: ${job.title}`;
+  for (const contractor of matching) {
+    await pool.query(
+      `INSERT INTO notifications (user_id, job_id, type, title, message)
+       VALUES ($1, $2, 'new_job', $3, $4)`,
+      [contractor.id, job.id, title, message]
+    );
+  }
+  return matching.length;
+}
+
+/** Notify every admin when a contractor uploads or replaces verification documents. */
+async function notifyAdminsOfDocumentChange({ contractorName, contractorEmail, changedLabels }) {
+  if (!changedLabels?.length) return 0;
+  const { rows: admins } = await pool.query(
+    `SELECT id FROM users WHERE is_admin=true AND COALESCE(is_blocked,false)=false`
+  );
+  const title = 'Contractor document updated';
+  const message = `${contractorName} (${contractorEmail}) updated: ${changedLabels.join(', ')}`;
+  for (const admin of admins) {
+    await pool.query(
+      `INSERT INTO notifications (user_id, type, title, message)
+       VALUES ($1, 'document_update', $2, $3)`,
+      [admin.id, title, message]
+    );
+  }
+  return admins.length;
 }
 
 function rowToLifecycle(r) {
@@ -290,6 +519,8 @@ function rowToMessage(r) {
 // ── Express app ───────────────────────────────────────────────────────────────
 
 const app = express();
+// Required behind Netlify / other reverse proxies so express-rate-limit trusts X-Forwarded-For.
+app.set('trust proxy', 1);
 app.use(cors());
 app.use(express.json({ limit: '20mb' }));
 
@@ -336,6 +567,10 @@ app.post('/api/auth/signin', signInLimiter, async (req, res) => {
       return res.status(401).json({ ok: false, message: 'Incorrect email or password. Use the demo login or sign up first.' });
     }
 
+    if (rows[0].is_blocked === true) {
+      return res.status(403).json({ ok: false, message: 'This account has been blocked. Please contact support.' });
+    }
+
     // Block password login for Google-only accounts
     if (rows[0].password === 'GOOGLE_OAUTH') {
       return res.status(401).json({ ok: false, message: 'This account uses Google Sign-In. Please click "Continue with Google".' });
@@ -356,20 +591,63 @@ app.post('/api/auth/signin', signInLimiter, async (req, res) => {
 
 app.post('/api/auth/signup', async (req, res) => {
   try {
-    const { role, name, email, password, trade, licenseNumber, licenseDocumentName, insuranceDocumentName, idDocumentName } = req.body;
+    const {
+      role, name, email, password, trade, licenseNumber,
+      licenseDocumentName, insuranceDocumentName, idDocumentName,
+      licenseDocumentData, insuranceDocumentData, idDocumentData,
+    } = req.body;
     if (!role || !name || !email || !password) return res.status(400).json({ ok: false, message: 'All required fields must be filled.' });
     if (password.length < 6) return res.status(400).json({ ok: false, message: 'Password must be at least 6 characters.' });
+
+    const docs = [
+      { label: 'License', name: licenseDocumentName, data: licenseDocumentData },
+      { label: 'Insurance', name: insuranceDocumentName, data: insuranceDocumentData },
+      { label: 'ID Document', name: idDocumentName, data: idDocumentData },
+    ];
+    for (const doc of docs) {
+      if (doc.data) {
+        if (!isAllowedDocumentDataUrl(doc.data)) {
+          return res.status(400).json({ ok: false, message: `${doc.label} must be a PDF or image file.` });
+        }
+        if (doc.data.length > MAX_DOCUMENT_DATA_URL_LENGTH) {
+          return res.status(400).json({ ok: false, message: `${doc.label} is too large. Please use a file under ~3.5 MB.` });
+        }
+      }
+    }
 
     const existing = await pool.query(`SELECT id FROM users WHERE role=$1 AND LOWER(email)=LOWER($2)`, [role, email.trim()]);
     if (existing.rows.length) return res.status(409).json({ ok: false, message: 'An account with that email already exists.' });
 
     const hashed = await bcrypt.hash(password, 10);
     const { rows } = await pool.query(
-      `INSERT INTO users (role,name,email,password,trade,license_number,license_document_name,insurance_document_name,id_document_name)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [role, name.trim(), email.trim().toLowerCase(), hashed, trade?.trim()||null, licenseNumber?.trim()||null, licenseDocumentName||null, insuranceDocumentName||null, idDocumentName||null]
+      `INSERT INTO users (
+         role,name,email,password,trade,license_number,
+         license_document_name,insurance_document_name,id_document_name,
+         license_document_data,insurance_document_data,id_document_data
+       )
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [
+        role, name.trim(), email.trim().toLowerCase(), hashed,
+        trade?.trim()||null, licenseNumber?.trim()||null,
+        licenseDocumentName||null, insuranceDocumentName||null, idDocumentName||null,
+        licenseDocumentData||null, insuranceDocumentData||null, idDocumentData||null,
+      ]
     );
     const user = rowToUser(rows[0]);
+    if (role === 'contractor') {
+      const uploaded = docs.filter((d) => d.data || d.name).map((d) => d.label);
+      if (uploaded.length) {
+        try {
+          await notifyAdminsOfDocumentChange({
+            contractorName: user.name,
+            contractorEmail: user.email,
+            changedLabels: uploaded,
+          });
+        } catch (notifyErr) {
+          console.error('notify admins on signup docs:', notifyErr);
+        }
+      }
+    }
     return res.json({ ok: true, token: makeToken(user), user });
   } catch (e) {
     console.error('signup:', e);
@@ -377,10 +655,15 @@ app.post('/api/auth/signup', async (req, res) => {
   }
 });
 
-/** Google OAuth — verifies Google ID token, finds or creates user */
+/** Google OAuth — verifies Google ID token, finds or creates user (role from portal). */
 app.post('/api/auth/google', async (req, res) => {
   try {
     const { credential, role } = req.body;
+    if (!credential) return res.status(400).json({ ok: false, message: 'Google credential is required.' });
+    if (role !== 'homeowner' && role !== 'contractor') {
+      return res.status(400).json({ ok: false, message: 'A valid portal role is required.' });
+    }
+
     const clientId = process.env.VITE_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID;
     if (!clientId) return res.status(503).json({ ok: false, message: 'Google Sign-In is not configured on this server.' });
 
@@ -389,23 +672,39 @@ app.post('/api/auth/google', async (req, res) => {
     const payload = ticket.getPayload();
     if (!payload?.email) return res.status(400).json({ ok: false, message: 'Invalid Google token.' });
 
-    const { email, name } = payload;
-    let { rows } = await pool.query('SELECT * FROM users WHERE role=$1 AND LOWER(email)=LOWER($2)', [role, email]);
+    const email = String(payload.email).toLowerCase();
+    const displayName = (payload.name && String(payload.name).trim()) || email.split('@')[0];
+    const picture = typeof payload.picture === 'string' ? payload.picture : null;
+
+    let { rows } = await pool.query(
+      'SELECT * FROM users WHERE role=$1 AND LOWER(email)=LOWER($2)',
+      [role, email]
+    );
 
     if (!rows.length) {
-      if (role === 'contractor') {
-        // Contractors must register manually to provide license docs
-        return res.status(403).json({
-          ok: false,
-          message: 'No contractor account found for this Google email. Please sign up manually with your trade and license information.',
-        });
-      }
-      // Auto-create homeowner account
+      // Auto-create for the portal role that initiated Google auth (homeowner or contractor).
       const result = await pool.query(
-        `INSERT INTO users (role,name,email,password) VALUES ($1,$2,$3,'GOOGLE_OAUTH') RETURNING *`,
-        [role, name || email.split('@')[0], email.toLowerCase()]
+        `INSERT INTO users (role,name,email,password,photo_data_url)
+         VALUES ($1,$2,$3,'GOOGLE_OAUTH',$4) RETURNING *`,
+        [role, displayName, email, picture]
       );
       rows = result.rows;
+    } else {
+      // Refresh profile name / photo from Google when missing or still a Google-managed account.
+      const existing = rows[0];
+      const nextName = existing.name?.trim() ? existing.name : displayName;
+      const nextPhoto = existing.photo_data_url || picture;
+      if (nextName !== existing.name || nextPhoto !== existing.photo_data_url) {
+        const updated = await pool.query(
+          `UPDATE users SET name=$1, photo_data_url=COALESCE(photo_data_url, $2) WHERE id=$3 RETURNING *`,
+          [nextName, picture, existing.id]
+        );
+        rows = updated.rows;
+      }
+    }
+
+    if (rows[0].is_blocked === true) {
+      return res.status(403).json({ ok: false, message: 'This account has been blocked. Please contact support.' });
     }
 
     const user = rowToUser(rows[0]);
@@ -424,6 +723,171 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
     return res.json({ ok: true, user: rowToUser(rows[0]) });
   } catch (e) {
     console.error('me:', e);
+    return res.status(500).json({ ok: false, message: 'Server error.' });
+  }
+});
+
+// ── PUT /api/auth/profile — update signed-in user's My Profile fields ─────────
+app.put('/api/auth/profile', requireAuth, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    if (!name) {
+      return res.status(400).json({ ok: false, message: 'Name is required.' });
+    }
+
+    const photoDataUrl = typeof body.photoDataUrl === 'string' ? body.photoDataUrl : null;
+    if (photoDataUrl && photoDataUrl.length > 2_500_000) {
+      return res.status(400).json({ ok: false, message: 'Photo is too large. Please use a smaller image.' });
+    }
+    if (photoDataUrl && !photoDataUrl.startsWith('data:image/')) {
+      return res.status(400).json({ ok: false, message: 'Photo must be an image data URL.' });
+    }
+
+    const phone = typeof body.phone === 'string' ? body.phone.trim() : '';
+    const address = typeof body.address === 'string' ? body.address.trim() : '';
+    const contactEmail = typeof body.contactEmail === 'string' ? body.contactEmail.trim() : '';
+    const companyName = typeof body.companyName === 'string' ? body.companyName.trim() : '';
+    const companyDetails = typeof body.companyDetails === 'string' ? body.companyDetails.trim() : '';
+    const insuranceDetails = typeof body.insuranceDetails === 'string' ? body.insuranceDetails.trim() : '';
+    const licenseNumber = typeof body.licenseNumber === 'string' ? body.licenseNumber.trim() : undefined;
+    const emails = asStringArray(body.emails);
+    const phones = asStringArray(body.phones);
+    const addresses = asStringArray(body.addresses);
+
+    const licenseDoc = parseDocumentField(body, 'licenseDocumentName', 'licenseDocumentData');
+    const insuranceDoc = parseDocumentField(body, 'insuranceDocumentName', 'insuranceDocumentData');
+    const idDoc = parseDocumentField(body, 'idDocumentName', 'idDocumentData');
+    for (const doc of [licenseDoc, insuranceDoc, idDoc]) {
+      if (doc.error) return res.status(400).json({ ok: false, message: doc.error });
+    }
+
+    // Clear photo when client explicitly sends null; omit field leaves existing value
+    const clearPhoto = body.photoDataUrl === null;
+    const setPhoto = typeof body.photoDataUrl === 'string';
+    const setLicenseNumber = typeof licenseNumber === 'string';
+
+    const { rows: beforeRows } = await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id]);
+    if (!beforeRows.length) {
+      return res.status(404).json({ ok: false, message: 'User not found.' });
+    }
+    const before = beforeRows[0];
+
+    const { rows } = await pool.query(
+      `UPDATE users SET
+         name = $1,
+         phone = $2,
+         address = $3,
+         contact_email = $4,
+         company_name = $5,
+         company_details = $6,
+         insurance_details = $7,
+         profile_emails = $8::jsonb,
+         profile_phones = $9::jsonb,
+         profile_addresses = $10::jsonb,
+         photo_data_url = CASE
+           WHEN $11::boolean THEN NULL
+           WHEN $12::boolean THEN $13
+           ELSE photo_data_url
+         END,
+         license_number = CASE WHEN $14::boolean THEN $15 ELSE license_number END,
+         license_document_name = CASE
+           WHEN $16::boolean AND $17::boolean THEN NULL
+           WHEN $16::boolean AND $18::boolean THEN $19
+           WHEN $16::boolean AND $19::text IS NOT NULL AND NOT $18::boolean THEN $19
+           ELSE license_document_name
+         END,
+         license_document_data = CASE
+           WHEN $16::boolean AND $17::boolean THEN NULL
+           WHEN $16::boolean AND $18::boolean THEN $20
+           ELSE license_document_data
+         END,
+         insurance_document_name = CASE
+           WHEN $21::boolean AND $22::boolean THEN NULL
+           WHEN $21::boolean AND $23::boolean THEN $24
+           WHEN $21::boolean AND $24::text IS NOT NULL AND NOT $23::boolean THEN $24
+           ELSE insurance_document_name
+         END,
+         insurance_document_data = CASE
+           WHEN $21::boolean AND $22::boolean THEN NULL
+           WHEN $21::boolean AND $23::boolean THEN $25
+           ELSE insurance_document_data
+         END,
+         id_document_name = CASE
+           WHEN $26::boolean AND $27::boolean THEN NULL
+           WHEN $26::boolean AND $28::boolean THEN $29
+           WHEN $26::boolean AND $29::text IS NOT NULL AND NOT $28::boolean THEN $29
+           ELSE id_document_name
+         END,
+         id_document_data = CASE
+           WHEN $26::boolean AND $27::boolean THEN NULL
+           WHEN $26::boolean AND $28::boolean THEN $30
+           ELSE id_document_data
+         END
+       WHERE id = $31
+       RETURNING *`,
+      [
+        name,
+        phone || null,
+        address || null,
+        contactEmail || null,
+        companyName || null,
+        companyDetails || null,
+        insuranceDetails || null,
+        JSON.stringify(emails),
+        JSON.stringify(phones),
+        JSON.stringify(addresses),
+        clearPhoto,
+        setPhoto,
+        setPhoto ? photoDataUrl : null,
+        setLicenseNumber,
+        setLicenseNumber ? (licenseNumber || null) : null,
+        // license doc: provided, clear, set, name, data
+        Boolean(licenseDoc.provided),
+        Boolean(licenseDoc.clear),
+        Boolean(licenseDoc.set),
+        licenseDoc.provided ? licenseDoc.name : null,
+        licenseDoc.provided ? licenseDoc.data : null,
+        // insurance doc
+        Boolean(insuranceDoc.provided),
+        Boolean(insuranceDoc.clear),
+        Boolean(insuranceDoc.set),
+        insuranceDoc.provided ? insuranceDoc.name : null,
+        insuranceDoc.provided ? insuranceDoc.data : null,
+        // id doc
+        Boolean(idDoc.provided),
+        Boolean(idDoc.clear),
+        Boolean(idDoc.set),
+        idDoc.provided ? idDoc.name : null,
+        idDoc.provided ? idDoc.data : null,
+        req.authUser.id,
+      ]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ ok: false, message: 'User not found.' });
+    }
+
+    const updated = rows[0];
+    const changedLabels = [];
+    if (licenseDoc.set && licenseDoc.data !== before.license_document_data) changedLabels.push('License');
+    if (insuranceDoc.set && insuranceDoc.data !== before.insurance_document_data) changedLabels.push('Insurance');
+    if (idDoc.set && idDoc.data !== before.id_document_data) changedLabels.push('ID Document');
+    if (before.role === 'contractor' && changedLabels.length) {
+      try {
+        await notifyAdminsOfDocumentChange({
+          contractorName: updated.name,
+          contractorEmail: updated.email,
+          changedLabels,
+        });
+      } catch (notifyErr) {
+        console.error('notify admins on profile docs:', notifyErr);
+      }
+    }
+
+    return res.json({ ok: true, user: rowToUser(updated) });
+  } catch (e) {
+    console.error('profile update:', e);
     return res.status(500).json({ ok: false, message: 'Server error.' });
   }
 });
@@ -523,11 +987,11 @@ app.post('/api/auth/reset-password', async (req, res) => {
   }
 });
 
-// Requires a valid token. Returns only contractor public info (no passwords, no homeowner data).
+// Requires a valid token. Returns only contractor public info (no passwords, no document file bytes).
 app.get('/api/users', requireAuth, async (_req, res) => {
   try {
-    const { rows } = await pool.query(`SELECT * FROM users WHERE role='contractor' ORDER BY created_at`);
-    return res.json({ ok: true, users: rows.map(rowToUser) });
+    const { rows } = await pool.query(`SELECT * FROM users WHERE role='contractor' AND is_blocked=false ORDER BY created_at DESC`);
+    return res.json({ ok: true, users: rows.map((r) => rowToUser(r, { includeDocumentData: false })) });
   } catch (e) {
     console.error('users:', e);
     return res.status(500).json({ ok: false, message: 'Server error' });
@@ -540,6 +1004,110 @@ app.get('/api/admin/verify', requireAuth, requireAdmin, (_req, res) => {
   return res.json({ ok: true });
 });
 
+app.get('/api/admin/users', requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`SELECT * FROM users ORDER BY created_at DESC, role ASC, name ASC`);
+    return res.json({ ok: true, users: rows.map(rowToUser) });
+  } catch (e) {
+    console.error('admin users:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+app.put('/api/admin/users/:userId/block', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { blocked } = req.body;
+    const normalizedBlocked = blocked === true;
+    const { rows } = await pool.query(
+      'UPDATE users SET is_blocked=$1 WHERE id=$2 RETURNING *',
+      [normalizedBlocked, userId]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ ok: false, message: 'User not found.' });
+    }
+    return res.json({ ok: true, user: rowToUser(rows[0]) });
+  } catch (e) {
+    console.error('block user:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+// ── Admin: all jobs / conversations / messages ────────────────────────────────
+
+app.get('/api/admin/jobs', requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM jobs ORDER BY created_at DESC');
+    return res.json({ ok: true, jobs: rows.map(rowToJob) });
+  } catch (e) {
+    console.error('admin jobs:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/admin/lifecycle', requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM job_lifecycle');
+    return res.json({ ok: true, lifecycles: rows.map(rowToLifecycle) });
+  } catch (e) {
+    console.error('admin lifecycle:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/admin/conversations', requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM job_chat_messages ORDER BY created_at ASC');
+    const byJob = {};
+    for (const r of rows) {
+      const k = String(r.job_id);
+      if (!byJob[k]) byJob[k] = [];
+      byJob[k].push(rowToMessage(r));
+    }
+    return res.json({ ok: true, conversations: byJob });
+  } catch (e) {
+    console.error('admin conversations:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/admin/messages', requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT m.*, j.title AS job_title, j.booking_id, j.category AS job_category
+       FROM job_chat_messages m
+       LEFT JOIN jobs j ON j.id = m.job_id
+       ORDER BY m.created_at DESC`
+    );
+    return res.json({
+      ok: true,
+      messages: rows.map((r) => ({
+        ...rowToMessage(r),
+        jobId: Number(r.job_id),
+        jobTitle: r.job_title || null,
+        bookingId: r.booking_id || null,
+        jobCategory: r.job_category || null,
+      })),
+    });
+  } catch (e) {
+    console.error('admin messages:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/admin/chat/:jobId', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT * FROM job_chat_messages WHERE job_id=$1 ORDER BY created_at ASC',
+      [req.params.jobId]
+    );
+    return res.json({ ok: true, messages: rows.map(rowToMessage) });
+  } catch (e) {
+    console.error('admin chat:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
 // ── Jobs ──────────────────────────────────────────────────────────────────────
 
 app.get('/api/jobs', async (_req, res) => {
@@ -549,23 +1117,94 @@ app.get('/api/jobs', async (_req, res) => {
   } catch (e) { return res.status(500).json({ error: 'Server error' }); }
 });
 
-app.post('/api/jobs', async (req, res) => {
+app.get('/api/jobs/my', requireAuth, async (req, res) => {
   try {
+    if (req.authUser.role !== 'homeowner') {
+      return res.status(403).json({ error: 'Homeowner access required' });
+    }
+    const { rows } = await pool.query(
+      'SELECT * FROM jobs WHERE LOWER(homeowner_email)=LOWER($1) ORDER BY created_at DESC',
+      [req.authUser.email]
+    );
+    return res.json(rows.map(rowToJob));
+  } catch (e) {
+    console.error('my jobs:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/jobs', requireAuth, async (req, res) => {
+  try {
+    if (req.authUser.role !== 'homeowner') {
+      return res.status(403).json({ error: 'Homeowner access required' });
+    }
     const { category, tag, title, description, mediaDataUrl, mediaType, aiAssessment,
-            cityStateZip, fullAddress, contactName, contactPhone, dist, est, bids, urgent, ai, requirements } = req.body;
+            cityStateZip, fullAddress, contactName, contactPhone, dist, est, bids, urgent, ai, requirements,
+            scheduledDate, timeSlot, serviceTiming } = req.body;
     const id = Date.now();
+    const bookingId = formatBookingId(id);
     await pool.query(
-      `INSERT INTO jobs (id,category,tag,title,description,media_data_url,media_type,ai_assessment,city_state_zip,full_address,contact_name,contact_phone,dist,posted,est,bids,urgent,ai,requirements)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
-      [id,category,tag,title,description||null,mediaDataUrl||null,mediaType||null,
-       aiAssessment?JSON.stringify(aiAssessment):null,
-       cityStateZip,fullAddress,contactName,contactPhone,dist||null,
-       'Just now',est||'',bids||0,urgent||false,ai||false,JSON.stringify(requirements||[])]
+      `INSERT INTO jobs (id,booking_id,category,tag,title,description,media_data_url,media_type,ai_assessment,city_state_zip,full_address,contact_name,contact_phone,homeowner_email,scheduled_date,time_slot,service_timing,dist,posted,est,bids,urgent,ai,requirements)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
+      [id, bookingId, category, tag, title, description || null, mediaDataUrl || null, mediaType || null,
+       aiAssessment ? JSON.stringify(aiAssessment) : null,
+       cityStateZip, fullAddress, contactName, contactPhone, req.authUser.email,
+       scheduledDate || null, timeSlot || null, serviceTiming || null, dist || null,
+       'Just now', est || '', bids || 0, urgent || false, ai || false, JSON.stringify(requirements || [])]
     );
     const { rows } = await pool.query('SELECT * FROM jobs WHERE id=$1', [id]);
-    return res.json(rowToJob(rows[0]));
+    const job = rows[0];
+    try {
+      await notifyMatchingContractors(job);
+    } catch (notifyErr) {
+      console.error('notify contractors:', notifyErr);
+    }
+    return res.json(rowToJob(job));
   } catch (e) {
     console.error('add job:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Notifications ─────────────────────────────────────────────────────────────
+
+app.get('/api/notifications', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT * FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50',
+      [req.authUser.id]
+    );
+    return res.json(rows.map(rowToNotification));
+  } catch (e) {
+    console.error('list notifications:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/notifications/read', requireAuth, async (req, res) => {
+  try {
+    const { ids } = req.body || {};
+    if (Array.isArray(ids) && ids.length > 0) {
+      const normalizedIds = ids.map(Number).filter((n) => Number.isFinite(n));
+      for (const id of normalizedIds) {
+        await pool.query(
+          'UPDATE notifications SET read=true WHERE user_id=$1 AND id=$2',
+          [req.authUser.id, id]
+        );
+      }
+    } else {
+      await pool.query(
+        'UPDATE notifications SET read=true WHERE user_id=$1 AND read=false',
+        [req.authUser.id]
+      );
+    }
+    const { rows } = await pool.query(
+      'SELECT * FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50',
+      [req.authUser.id]
+    );
+    return res.json(rows.map(rowToNotification));
+  } catch (e) {
+    console.error('mark notifications read:', e);
     return res.status(500).json({ error: 'Server error' });
   }
 });

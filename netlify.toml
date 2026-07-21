@@ -1,16 +1,27 @@
 [build]
   command = "pnpm build"
   publish = "dist"
+  functions = "netlify/functions"
 
 [build.environment]
   NODE_VERSION = "20"
+  # Vite embeds these at build time — also set them in the Netlify UI.
+  # VITE_GOOGLE_CLIENT_ID =
+  # VITE_GEMINI_API_KEY =
 
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+  external_node_modules = ["express"]
+
+# Express API (serverless-http) — keep before the SPA catch-all
 [[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/api/:splat"
   status = 200
   force = true
 
+# SPA fallback for React Router
 [[redirects]]
   from = "/*"
   to = "/index.html"

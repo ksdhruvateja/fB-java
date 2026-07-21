@@ -1,11 +1,12 @@
 {
-  "name": "@figma/my-make-file",
+  "name": "fixbridge",
   "private": true,
   "version": "0.0.1",
   "type": "module",
+  "packageManager": "pnpm@9.15.9",
   "scripts": {
-    "dev": "concurrently -k -p \"[{name}]\" -n \"API,VITE\" -c \"cyan.bold,green.bold\" \"node server.js\" \"vite\"",
-    "dev:api": "node server.js",
+    "dev": "concurrently -k -p \"[{name}]\" -n \"API,VITE\" -c \"cyan.bold,green.bold\" \"node --env-file=.env server.js\" \"vite\"",
+    "dev:api": "node --env-file=.env server.js",
     "dev:client": "vite",
     "build": "vite build",
     "preview": "vite preview"
@@ -63,6 +64,7 @@
     "motion": "12.23.24",
     "next-themes": "0.4.6",
     "pg": "^8.22.0",
+    "pg-mem": "^3.0.14",
     "react": "18.3.1",
     "react-day-picker": "8.10.1",
     "react-dnd": "16.0.1",
