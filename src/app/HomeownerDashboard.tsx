@@ -476,20 +476,36 @@ function PostTab({
       <p className="text-sm text-muted-foreground mb-6">
         Select a category, describe the problem, get Gemini suggestions, then book a pro if needed.
       </p>
-      {!isGeminiConfigured() && (
-        <p className="text-xs text-amber-700 border border-amber-200 bg-amber-50 px-3 py-2 mb-4">
-          {getGeminiKeyIssue()}. Get a free key at{" "}
-          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="underline">
-            aistudio.google.com/apikey
-          </a>
-          , add it as a Replit Secret named <code className="font-mono">VITE_GEMINI_API_KEY</code>, then restart the app.
+      <div
+        className={`flex items-start justify-between gap-3 text-xs border px-3 py-2 mb-4 ${
+          isGeminiConfigured()
+            ? "text-green-700 border-green-200 bg-green-50"
+            : "text-amber-700 border-amber-200 bg-amber-50"
+        }`}
+      >
+        <p className="min-w-0">
+          Upload a photo and click Analyze for live AI repair assessment.
+          {!isGeminiConfigured() && (
+            <>
+              {" "}
+              {getGeminiKeyIssue()}. Get a free key at{" "}
+              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="underline">
+                aistudio.google.com/apikey
+              </a>
+              , add it as a Replit Secret named <code className="font-mono">VITE_GEMINI_API_KEY</code>, then restart the app.
+            </>
+          )}
         </p>
-      )}
-      {isGeminiConfigured() && (
-        <p className="text-xs text-green-700 border border-green-200 bg-green-50 px-3 py-2 mb-4">
-          Gemini API connected. Upload a photo and click Analyze for live AI repair assessment.
-        </p>
-      )}
+        <span
+          className={`shrink-0 font-mono text-[10px] uppercase tracking-wider px-2 py-0.5 border ${
+            isGeminiConfigured()
+              ? "bg-green-100 text-green-800 border-green-300"
+              : "bg-amber-100 text-amber-800 border-amber-300"
+          }`}
+        >
+          {isGeminiConfigured() ? "Connected" : "Not connected"}
+        </span>
+      </div>
       <StepIndicator current={step} />
 
       {/* STEP 1 — Category */}
