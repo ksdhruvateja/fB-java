@@ -55,13 +55,28 @@ function broadcast() {
 // ── Async API ─────────────────────────────────────────────────────────────────
 
 export async function getJobLifecycle(jobId: number): Promise<JobLifecycle> {
-  const res = await fetch(`/api/lifecycle/${jobId}`);
-  return res.json();
+  try {
+    const res = await fetch(`/api/lifecycle/${jobId}`);
+    if (!res.ok) return { jobId, status: "open" };
+    const data = await res.json();
+    if (!data || typeof data !== "object" || !data.status) {
+      return { jobId, status: "open" };
+    }
+    return data as JobLifecycle;
+  } catch {
+    return { jobId, status: "open" };
+  }
 }
 
 export async function getAllLifecycles(): Promise<JobLifecycle[]> {
-  const res = await fetch("/api/lifecycle");
-  return res.json();
+  try {
+    const res = await fetch("/api/lifecycle");
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? (data as JobLifecycle[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 export async function updateJobStatus(

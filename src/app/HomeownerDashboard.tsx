@@ -10,7 +10,7 @@ import {
   Video, Truck, Navigation, HardHat, Receipt, ThumbsUp,
 } from "lucide-react";
 import { Calendar } from "./components/ui/calendar";
-import { getStoredUsers, type AuthUser } from "./auth";
+import { getStoredUsers, loadAllUsers, type AuthUser } from "./auth";
 import JobChatPanel from "./JobChatPanel";
 import {
   addJobBoardJob,
@@ -277,7 +277,13 @@ function PostTab({
 
   const [contractorUsers, setContractorUsers] = useState<AuthUser[]>([]);
   useEffect(() => {
-    getStoredUsers().then((users) => setContractorUsers(users.filter((u) => u.role === "contractor")));
+    // getStoredUsers is synchronous (localStorage cache). Calling .then on it
+    // threw TypeError and white-screened the entire homeowner dashboard.
+    const apply = () => {
+      setContractorUsers(getStoredUsers().filter((u) => u.role === "contractor"));
+    };
+    apply();
+    void loadAllUsers().then(apply);
   }, []);
   const recommendedCount = selectedCat
     ? contractorUsers.filter((c) => contractorCanDoJob(c.trade, selectedCat as JobCategory)).length
@@ -1049,7 +1055,13 @@ function JobCard({ job, index, user }: { job: HomeJob; index: number; user: Auth
         </button>
       )}
       {isCompleted && !hasRating && showRatingForm && (
-        <RatingForm jobId={job.id} onSubmitted={() => { setShowRatingForm(false); setLifecycle(getJobLifecycle(job.id)); }} />
+        <RatingForm
+          jobId={job.id}
+          onSubmitted={() => {
+            setShowRatingForm(false);
+            void getJobLifecycle(job.id).then(setLifecycle);
+          }}
+        />
       )}
 
       <JobChatPanel

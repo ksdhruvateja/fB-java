@@ -421,8 +421,8 @@ export default function App() {
     validateToken().then((result) => {
       if (result.ok) {
         setCurrentUser(result.user);
-      } else if (!result.ok && currentUser) {
-        // Token invalid — clear the stale session
+      } else if (result.reason === "invalid") {
+        // Server rejected the JWT — clear the stale session
         clearSession();
         setCurrentUser(null);
         setPage("home");
@@ -531,7 +531,7 @@ export default function App() {
             />
           )}
 
-          {page === "homeowner-dashboard" && (
+          {page === "homeowner-dashboard" && currentUser && (
             <HomeownerDashboard
               onLogout={() => {
                 clearSession();
@@ -544,7 +544,7 @@ export default function App() {
             />
           )}
 
-          {page === "contractor-dashboard" && (
+          {page === "contractor-dashboard" && currentUser && (
             <ContractorDashboard
               onLogout={() => {
                 clearSession();

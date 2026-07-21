@@ -174,10 +174,10 @@ export async function resetPassword(
 // ── Validate existing token (called on app startup) ──────────────────────────
 
 export async function validateToken(): Promise<
-  { ok: true; user: AuthUser } | { ok: false }
+  { ok: true; user: AuthUser } | { ok: false; reason?: "no-token" | "invalid" | "network" }
 > {
   const token = getStoredToken();
-  if (!token) return { ok: false };
+  if (!token) return { ok: false, reason: "no-token" };
   try {
     const res = await fetch("/api/auth/me", {
       headers: { Authorization: `Bearer ${token}` },
@@ -185,13 +185,16 @@ export async function validateToken(): Promise<
     const data = await res.json();
     if (!data.ok) {
       clearSession();
-      return { ok: false };
+      return { ok: false, reason: "invalid" };
     }
     storeSession(token, data.user);
     return { ok: true, user: data.user };
   } catch {
-    // Network error — keep cached user, don't force logout
-    return { ok: false };
+    // Network / transient API failure — keep the cached session so a blip
+    // does not wipe auth and bounce the user to the marketing home page.
+    const cached = getStoredUser();
+    if (cached) return { ok: true, user: cached };
+    return { ok: false, reason: "network" };
   }
 }
 
