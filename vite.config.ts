@@ -1,7 +1,19 @@
 import { defineConfig, type Plugin } from 'vite'
 import path from 'path'
+import { execSync } from 'child_process'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
+
+function resolveBuildStamp(): string {
+  try {
+    const sha = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim()
+    return sha || `t${Date.now()}`
+  } catch {
+    return `t${Date.now()}`
+  }
+}
+
+const BUILD_STAMP = resolveBuildStamp()
 
 /** Strip version suffixes like `@1.2.3` from Figma Make imports. */
 function removeVersionSpecifiers(): Plugin {
@@ -35,6 +47,9 @@ function figmaAssetsResolver(): Plugin {
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), figmaAssetsResolver(), removeVersionSpecifiers()],
+  define: {
+    __FIXBRIDGE_BUILD__: JSON.stringify(BUILD_STAMP),
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

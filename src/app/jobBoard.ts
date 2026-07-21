@@ -23,6 +23,8 @@ export type StoredAssessment = {
 
 export type JobBoardItem = {
   id: number;
+  /** Public job/booking number, e.g. FB-20260721-A1B2 */
+  bookingId?: string | null;
   category: JobCategory;
   tag: string;
   title: string;
@@ -41,7 +43,16 @@ export type JobBoardItem = {
   urgent: boolean;
   ai: boolean;
   requirements: string[];
+  scheduledDate?: string;
+  timeSlot?: string;
+  serviceTiming?: string;
+  homeownerEmail?: string;
 };
+
+/** Display helper — always prefer the server booking id when present. */
+export function formatJobNumber(job: { bookingId?: string | null; id: number }): string {
+  return job.bookingId?.trim() || `JOB-${job.id}`;
+}
 
 // ── Sync pure helpers (no DB needed) ─────────────────────────────────────────
 
@@ -72,13 +83,31 @@ export const NEW_JOB_EVENT = "fixbridge-new-job";
 
 // ── Async API ─────────────────────────────────────────────────────────────────
 
+function authHeaders(): HeadersInit {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  try {
+    const token = window.localStorage.getItem("fixbridge-auth-token");
+    if (token) headers.Authorization = `Bearer ${token}`;
+  } catch {
+    // ignore storage errors
+  }
+  return headers;
+}
+
 export async function getJobBoardJobs(): Promise<JobBoardItem[]> {
   const res = await fetch("/api/jobs");
   return res.json();
 }
 
+/** Homeowner-only: jobs posted by the signed-in user. */
+export async function getMyJobs(): Promise<JobBoardItem[]> {
+  const res = await fetch("/api/jobs/my", { headers: authHeaders() });
+  if (!res.ok) return [];
+  return res.json();
+}
+
 export async function addJobBoardJob(
-  job: Omit<JobBoardItem, "id" | "posted" | "requirements" | "tag">,
+  job: Omit<JobBoardItem, "id" | "posted" | "requirements" | "tag" | "bookingId">,
 ): Promise<JobBoardItem> {
   const tag = job.urgent
     ? `${job.category.toUpperCase()} · URGENT`
@@ -87,9 +116,13 @@ export async function addJobBoardJob(
 
   const res = await fetch("/api/jobs", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders(),
     body: JSON.stringify({ ...job, tag, requirements }),
   });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string; message?: string }).message || (err as { error?: string }).error || "Failed to post job");
+  }
   const created: JobBoardItem = await res.json();
 
   // Broadcast to any open contractor portal for the real-time toast

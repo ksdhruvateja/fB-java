@@ -1,8 +1,11 @@
 import { useState } from "react";
 import { motion } from "motion/react";
 import { Eye, EyeOff, ArrowLeft, ArrowRight, HardHat, Loader2 } from "lucide-react";
-import { getDemoUser, signInUser, signUpUser, type AuthUser } from "./auth";
+import { GoogleLogin, type CredentialResponse } from "@react-oauth/google";
+import { getDemoUser, signInUser, signUpUser, signInWithGoogle, type AuthUser } from "./auth";
 import ForgotPasswordModal from "./ForgotPasswordModal";
+
+const GOOGLE_ENABLED = Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID);
 
 export default function ContractorLogin({
   onLogin,
@@ -27,6 +30,24 @@ export default function ContractorLogin({
   const [email, setEmail] = useState(demoUser.email);
   const [password, setPassword] = useState(demoUser.password);
   const [showForgot, setShowForgot] = useState(false);
+
+  const handleGoogleSuccess = async (response: CredentialResponse) => {
+    if (!response.credential) {
+      setError("Google sign-in failed. Please try again.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const result = await signInWithGoogle(response.credential, "contractor");
+      setLoading(false);
+      if (!result.ok) { setError(result.message); return; }
+      onLogin(result.user);
+    } catch {
+      setLoading(false);
+      setError("Google sign-in failed. Please try again.");
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -144,6 +165,37 @@ export default function ContractorLogin({
                 <p className="font-mono text-[10px] tracking-[0.18em] text-primary uppercase mb-1">Demo Login</p>
                 <p className="text-sm text-foreground">Email: {demoUser.email}</p>
                 <p className="text-sm text-foreground">Password: {demoUser.password}</p>
+              </div>
+            )}
+
+            {/* Google Sign-In */}
+            {tab === "login" && (
+              <div className="mb-6">
+                {GOOGLE_ENABLED ? (
+                  <div className="flex justify-center">
+                    <GoogleLogin
+                      onSuccess={handleGoogleSuccess}
+                      onError={() => setError("Google sign-in failed. Please try again.")}
+                      text="continue_with"
+                      shape="rectangular"
+                      theme="outline"
+                      size="large"
+                      width="380"
+                    />
+                  </div>
+                ) : (
+                  <div className="border border-dashed border-border px-4 py-3 text-center">
+                    <p className="text-sm font-medium text-foreground">Continue with Google</p>
+                    <p className="font-mono text-[10px] text-muted-foreground mt-1">
+                      Set VITE_GOOGLE_CLIENT_ID in Netlify build env, then redeploy
+                    </p>
+                  </div>
+                )}
+                <div className="flex items-center gap-3 mt-5">
+                  <div className="flex-1 h-px bg-border" />
+                  <span className="font-mono text-[11px] text-muted-foreground">or sign in with email</span>
+                  <div className="flex-1 h-px bg-border" />
+                </div>
               </div>
             )}
 

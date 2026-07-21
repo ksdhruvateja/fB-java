@@ -352,6 +352,9 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
                 {item}
               </a>
             ))}
+            <span className="font-mono text-[10px] text-primary/80 tracking-wider" title="Deploy build stamp — hard-refresh if this does not match the latest release">
+              Build {typeof __FIXBRIDGE_BUILD__ !== "undefined" ? __FIXBRIDGE_BUILD__ : "dev"} · v0.0.2
+            </span>
           </div>
         </div>
       </div>
@@ -541,6 +544,7 @@ export default function App() {
               user={currentUser}
               isDark={isDark}
               onToggleDark={() => setIsDark((d) => !d)}
+              onUserUpdated={(u) => setCurrentUser(u)}
             />
           )}
 
@@ -558,6 +562,7 @@ export default function App() {
               user={currentUser}
               isDark={isDark}
               onToggleDark={() => setIsDark((d) => !d)}
+              onUserUpdated={(u) => setCurrentUser(u)}
             />
           )}
           {page === "admin" && (

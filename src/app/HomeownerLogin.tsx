@@ -150,20 +150,29 @@ export default function HomeownerLogin({
               </div>
             )}
 
-            {/* Google Sign-In */}
-            {GOOGLE_ENABLED && tab === "login" && (
+            {/* Google Sign-In — always visible; live button needs VITE_GOOGLE_CLIENT_ID at build time */}
+            {tab === "login" && (
               <div className="mb-6">
-                <div className="flex justify-center">
-                  <GoogleLogin
-                    onSuccess={handleGoogleSuccess}
-                    onError={() => setError("Google sign-in failed. Please try again.")}
-                    text="continue_with"
-                    shape="rectangular"
-                    theme="outline"
-                    size="large"
-                    width="380"
-                  />
-                </div>
+                {GOOGLE_ENABLED ? (
+                  <div className="flex justify-center">
+                    <GoogleLogin
+                      onSuccess={handleGoogleSuccess}
+                      onError={() => setError("Google sign-in failed. Please try again.")}
+                      text="continue_with"
+                      shape="rectangular"
+                      theme="outline"
+                      size="large"
+                      width="380"
+                    />
+                  </div>
+                ) : (
+                  <div className="border border-dashed border-border px-4 py-3 text-center">
+                    <p className="text-sm font-medium text-foreground">Continue with Google</p>
+                    <p className="font-mono text-[10px] text-muted-foreground mt-1">
+                      Set VITE_GOOGLE_CLIENT_ID in Netlify build env, then redeploy
+                    </p>
+                  </div>
+                )}
                 <div className="flex items-center gap-3 mt-5">
                   <div className="flex-1 h-px bg-border" />
                   <span className="font-mono text-[11px] text-muted-foreground">or sign in with email</span>

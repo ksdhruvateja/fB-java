@@ -11,10 +11,11 @@ import {
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
+import { contractorCanDoJob, getJobBoardJobs, NEW_JOB_EVENT, formatJobNumber, type JobBoardItem } from "./jobBoard";
 import type { AuthUser } from "./auth";
+import { updateUserProfile } from "./auth";
 import { addJobMessage } from "./jobChat";
 import JobChatPanel from "./JobChatPanel";
-import { contractorCanDoJob, getJobBoardJobs, NEW_JOB_EVENT, type JobBoardItem } from "./jobBoard";
 import {
   getJobLifecycle,
   getAllLifecycles,
@@ -260,7 +261,10 @@ function FindJobCard({
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-            <span className="font-mono text-[10px] tracking-wider uppercase text-primary">{job.tag}</span>
+            <span className="font-mono text-[11px] tracking-wider text-primary font-semibold border border-primary/30 bg-primary/5 px-2 py-0.5">
+              {formatJobNumber(job)}
+            </span>
+            <span className="font-mono text-[10px] tracking-wider uppercase text-muted-foreground">{job.tag}</span>
             {job.urgent && (
               <span className="font-mono text-[9px] border px-1.5 py-0.5 uppercase tracking-wider bg-red-100 text-red-600 border-red-200">Urgent</span>
             )}
@@ -856,11 +860,56 @@ function EarningsTab() {
   );
 }
 
-function ProfileTab({ user }: { user: AuthUser | null }) {
+function ProfileTab({
+  user,
+  onUserUpdated,
+}: {
+  user: AuthUser | null;
+  onUserUpdated?: (u: AuthUser) => void;
+}) {
   const displayName = user?.name || "James Park";
   const trade = user?.trade || "Master Plumber";
   const license = user?.licenseNumber || "NY-00231847";
   const initials = displayName.split(" ").map((p) => p[0]).join("").slice(0, 2).toUpperCase();
+  const [licenseDocName, setLicenseDocName] = useState(user?.licenseDocumentName ?? "");
+  const [insuranceDocName, setInsuranceDocName] = useState(user?.insuranceDocumentName ?? "");
+  const [idDocName, setIdDocName] = useState(user?.idDocumentName ?? "");
+  const [licenseDocData, setLicenseDocData] = useState<string | undefined>();
+  const [insuranceDocData, setInsuranceDocData] = useState<string | undefined>();
+  const [idDocData, setIdDocData] = useState<string | undefined>();
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const readFile = (file: File | undefined, onName: (n: string) => void, onData: (d: string) => void) => {
+    if (!file) return;
+    onName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") onData(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveDocs = async () => {
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    const result = await updateUserProfile({
+      name: displayName,
+      licenseNumber: license,
+      ...(licenseDocName ? { licenseDocumentName: licenseDocName, licenseDocumentData: licenseDocData } : {}),
+      ...(insuranceDocName ? { insuranceDocumentName: insuranceDocName, insuranceDocumentData: insuranceDocData } : {}),
+      ...(idDocName ? { idDocumentName: idDocName, idDocumentData: idDocData } : {}),
+    });
+    setSaving(false);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    onUserUpdated?.(result.user);
+    setMessage("Documents saved to your profile.");
+  };
 
   return (
     <div>
@@ -884,7 +933,7 @@ function ProfileTab({ user }: { user: AuthUser | null }) {
               {[
                 { label: "Service Area", value: "Queens, Brooklyn, Nassau County (Long Island)" },
                 { label: "Years in Trade", value: "12 years" },
-                { label: "Company", value: "Park Plumbing & Mechanical LLC" },
+                { label: "Company", value: user?.companyName || "Park Plumbing & Mechanical LLC" },
                 { label: "Response Time", value: "Avg. 18 minutes" },
               ].map(({ label, value }) => (
                 <div key={label} className="flex gap-4 py-2.5 border-b border-border/50 last:border-0">
@@ -893,7 +942,38 @@ function ProfileTab({ user }: { user: AuthUser | null }) {
                 </div>
               ))}
             </div>
-            <button className="mt-5 border border-border text-foreground px-4 py-2 text-sm hover:border-foreground/30 transition-colors">Edit Profile</button>
+          </div>
+          <div className="bg-card border border-border p-6">
+            <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-4">Attach License / Insurance / ID</p>
+            <div className="space-y-3">
+              {[
+                { label: "License Document", name: licenseDocName, setName: setLicenseDocName, setData: setLicenseDocData },
+                { label: "Insurance Document", name: insuranceDocName, setName: setInsuranceDocName, setData: setInsuranceDocData },
+                { label: "Government ID", name: idDocName, setName: setIdDocName, setData: setIdDocData },
+              ].map(({ label, name, setName, setData }) => (
+                <div key={label}>
+                  <label className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase block mb-1.5">{label}</label>
+                  <input
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    onChange={(e) => readFile(e.target.files?.[0], setName, setData)}
+                    className="w-full text-xs text-foreground file:mr-3 file:border file:border-border file:bg-background file:px-3 file:py-1.5 file:text-xs"
+                  />
+                  {name && <p className="font-mono text-[10px] text-green-700 mt-1">Attached: {name}</p>}
+                </div>
+              ))}
+            </div>
+            {error && <p className="mt-3 text-sm text-red-700 border border-red-200 bg-red-50 px-3 py-2">{error}</p>}
+            {message && <p className="mt-3 text-sm text-green-700 border border-green-200 bg-green-50 px-3 py-2">{message}</p>}
+            <button
+              type="button"
+              onClick={handleSaveDocs}
+              disabled={saving}
+              className="mt-4 bg-primary text-white px-4 py-2 text-sm hover:bg-primary/90 disabled:opacity-60 inline-flex items-center gap-2"
+            >
+              {saving && <Upload size={14} className="animate-pulse" />}
+              Save Documents
+            </button>
           </div>
           <div className="bg-card border border-border p-6">
             <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-3">Bio</p>
@@ -907,10 +987,10 @@ function ProfileTab({ user }: { user: AuthUser | null }) {
             <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-4">Verification Status</p>
             <div className="space-y-3">
               {[
-                { icon: FileCheck, label: "License Verified", status: true, detail: "NY Master Plumber" },
-                { icon: Shield, label: "Insurance Active", status: true, detail: "General Liability $2M" },
+                { icon: FileCheck, label: "License Verified", status: Boolean(licenseDocName || user?.licenseDocumentName), detail: "NY Master Plumber" },
+                { icon: Shield, label: "Insurance Active", status: Boolean(insuranceDocName || user?.insuranceDocumentName), detail: "General Liability $2M" },
                 { icon: CheckSquare, label: "Background Check", status: true, detail: "Cleared Jun 2024" },
-                { icon: AlertCircle, label: "Workers' Comp", status: false, detail: "Upload required" },
+                { icon: AlertCircle, label: "Government ID", status: Boolean(idDocName || user?.idDocumentName), detail: "Upload required" },
               ].map(({ icon: Icon, label, status, detail }) => (
                 <div key={label} className="flex items-center gap-3 py-2 border-b border-border/50 last:border-0">
                   <Icon size={14} className={status ? "text-green-600" : "text-yellow-500"} />
@@ -955,12 +1035,14 @@ export default function ContractorDashboard({
   user,
   isDark,
   onToggleDark,
+  onUserUpdated,
 }: {
   onLogout: () => void;
   onOpenAdmin: () => void;
   user: AuthUser | null;
   isDark: boolean;
   onToggleDark: () => void;
+  onUserUpdated?: (u: AuthUser) => void;
 }) {
   const [activeTab, setActiveTab] = useState<DashTab>("find");
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -1079,6 +1161,16 @@ export default function ContractorDashboard({
               )}
             </button>
           ))}
+          {user?.isAdmin && (
+            <button
+              type="button"
+              onClick={() => { onOpenAdmin(); setMobileMenuOpen(false); }}
+              className="w-full flex items-center gap-3 px-3 py-3 md:py-2.5 transition-colors rounded-sm bg-primary text-white hover:bg-primary/90 mt-2"
+            >
+              <Shield size={18} className="shrink-0" />
+              <span className={`text-sm font-semibold truncate ${!sidebarOpen ? "md:hidden" : ""}`}>Admin Panel</span>
+            </button>
+          )}
         </nav>
 
         <div className="border-t border-border p-3 space-y-0.5">
@@ -1089,10 +1181,6 @@ export default function ContractorDashboard({
           <button onClick={onLogout} className="w-full flex items-center gap-3 px-3 py-2.5 md:py-2 text-muted-foreground hover:text-foreground transition-colors rounded-sm">
             <LogOut size={16} className="shrink-0" />
             <span className={`text-sm ${!sidebarOpen ? "md:hidden" : ""}`}>Sign Out</span>
-          </button>
-          <button onClick={onOpenAdmin} className="w-full flex items-center gap-3 px-3 py-2.5 md:py-2 text-muted-foreground/50 hover:text-muted-foreground transition-colors rounded-sm" title="Admin Portal">
-            <Shield size={14} className="shrink-0" />
-            <span className={`font-mono text-[10px] tracking-wider ${!sidebarOpen ? "md:hidden" : ""}`}>Admin Login</span>
           </button>
         </div>
       </aside>
@@ -1129,11 +1217,17 @@ export default function ContractorDashboard({
               </button>
               {profileMenuOpen && (
                 <div className="absolute right-0 top-10 w-44 border border-border bg-card shadow-lg z-20">
-                  <button type="button" onClick={() => { setProfileMenuOpen(false); onOpenAdmin(); }} className="w-full text-left px-3 py-2.5 text-sm hover:bg-muted/50 transition-colors">Admin Panel</button>
+                  {user?.isAdmin && (
+                    <button type="button" onClick={() => { setProfileMenuOpen(false); onOpenAdmin(); }} className="w-full text-left px-3 py-2.5 text-sm hover:bg-muted/50 transition-colors text-primary font-medium">Admin Panel</button>
+                  )}
+                  <button type="button" onClick={() => { setProfileMenuOpen(false); setActiveTab("profile"); }} className="w-full text-left px-3 py-2.5 text-sm hover:bg-muted/50 transition-colors">My Profile</button>
                   <button type="button" onClick={() => { setProfileMenuOpen(false); onLogout(); }} className="w-full text-left px-3 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors">Sign Out</button>
                 </div>
               )}
             </div>
+            <span className="hidden lg:inline font-mono text-[9px] text-muted-foreground tracking-wider" title="Deploy build stamp">
+              {typeof __FIXBRIDGE_BUILD__ !== "undefined" ? __FIXBRIDGE_BUILD__ : "dev"}
+            </span>
           </div>
         </header>
 
@@ -1142,7 +1236,7 @@ export default function ContractorDashboard({
             {activeTab === "find" && <FindTab user={user} />}
             {activeTab === "work" && <WorkTab user={user} />}
             {activeTab === "earnings" && <EarningsTab />}
-            {activeTab === "profile" && <ProfileTab user={user} />}
+            {activeTab === "profile" && <ProfileTab user={user} onUserUpdated={onUserUpdated} />}
           </motion.div>
         </main>
       </div>

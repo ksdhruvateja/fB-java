@@ -7,15 +7,17 @@ import {
   Home, Layers, Hammer, ChevronRight, Star, Clock,
   CheckCircle, AlertCircle, Send, MapPin, DollarSign,
   Mail, Sun, Moon, Menu, X, ImagePlus, Loader2, CalendarDays,
-  Video, Truck, Navigation, HardHat, Receipt, ThumbsUp,
+  Video, Truck, Navigation, HardHat, Receipt, ThumbsUp, User,
 } from "lucide-react";
 import { Calendar } from "./components/ui/calendar";
-import { getStoredUsers, loadAllUsers, type AuthUser } from "./auth";
+import { getStoredUsers, loadAllUsers, updateUserProfile, type AuthUser } from "./auth";
 import JobChatPanel from "./JobChatPanel";
 import {
   addJobBoardJob,
   contractorCanDoJob,
   getJobRequirements,
+  getMyJobs,
+  formatJobNumber,
   type JobCategory,
 } from "./jobBoard";
 import {
@@ -33,10 +35,11 @@ import {
   type JobLifecycle,
 } from "./jobLifecycle";
 
-type DashTab = "post" | "jobs" | "ai" | "contact";
+type DashTab = "post" | "jobs" | "ai" | "profile" | "contact";
 
 type HomeJob = {
   id: number;
+  bookingId?: string | null;
   title: string;
   category: string;
   posted: string;
@@ -61,6 +64,7 @@ const NAV_ITEMS: { id: DashTab; label: string; icon: React.ElementType }[] = [
   { id: "post", label: "Post a Job", icon: PlusCircle },
   { id: "jobs", label: "My Jobs", icon: Briefcase },
   { id: "ai", label: "AI Assistance", icon: MessageSquare },
+  { id: "profile", label: "My Profile", icon: User },
   { id: "contact", label: "Contact Us", icon: Phone },
 ];
 
@@ -101,6 +105,7 @@ const TIME_SLOTS: { id: TimeSlotId; label: string; surcharge?: boolean }[] = [
 const INITIAL_JOBS: HomeJob[] = [
   {
     id: 1,
+    bookingId: "FB-DEMO-0001",
     title: "Kitchen sink drain clog",
     category: "Plumbing",
     posted: "Jun 22, 2024",
@@ -112,6 +117,7 @@ const INITIAL_JOBS: HomeJob[] = [
   },
   {
     id: 2,
+    bookingId: "FB-DEMO-0002",
     title: "Furnace not heating evenly — 2nd floor",
     category: "HVAC",
     posted: "Jun 18, 2024",
@@ -124,6 +130,7 @@ const INITIAL_JOBS: HomeJob[] = [
   },
   {
     id: 3,
+    bookingId: "FB-DEMO-0003",
     title: "Bathroom tile re-grouting",
     category: "General",
     posted: "May 30, 2024",
@@ -137,6 +144,7 @@ const INITIAL_JOBS: HomeJob[] = [
   },
   {
     id: 4,
+    bookingId: "FB-DEMO-0004",
     title: "Outdoor deck board replacement",
     category: "Carpentry",
     posted: "Jun 24, 2024",
@@ -273,6 +281,7 @@ function PostTab({
     dateLabel: string;
     slotLabel: string;
     surcharge: boolean;
+    bookingId?: string;
   } | null>(null);
 
   const [contractorUsers, setContractorUsers] = useState<AuthUser[]>([]);
@@ -345,21 +354,6 @@ function PostTab({
     const slot = TIME_SLOTS.find((s) => s.id === timeSlot);
     const dateLabel = formatServiceDate(serviceDate);
     const finalTitle = titleInput.trim() || description.trim().slice(0, 70);
-    const newJob: HomeJob = {
-      id: Date.now(),
-      title: finalTitle,
-      category: selectedCat,
-      posted: "Just now",
-      bids: 0,
-      status: "open",
-      est: assessment.estimatedCost,
-      topBid: "—",
-      aiAssessed: true,
-      scheduledDate: dateLabel,
-      timeSlot: slot?.label,
-      serviceTiming: TIMING_OPTIONS.find((t) => t.id === timing)?.label,
-    };
-    onJobPosted(newJob);
     // Extract neighbourhood from address (everything after first comma)
     // so the exact street number isn't shown to contractors before acceptance.
     const fullAddr = address.trim();
@@ -367,42 +361,65 @@ function PostTab({
       ? fullAddr.split(",").slice(1).join(",").trim()
       : fullAddr || "NYC & Long Island";
 
-    await addJobBoardJob({
-      category: selectedCat as JobCategory,
-      title: finalTitle,
-      description: description.trim(),
-      // Store image as base64 so contractor can see the damage photo.
-      // Skip video (too large for localStorage — contractor sees description instead).
-      ...(mediaType === "image" && mediaPreview ? { mediaDataUrl: mediaPreview, mediaType: "image" as const } : {}),
-      ...(mediaType === "video" ? { mediaType: "video" as const } : {}),
-      aiAssessment: {
-        overview: assessment.overview,
-        diagnosis: assessment.diagnosis,
-        likelyRootCause: assessment.likelyRootCause,
-        toolsRequired: assessment.toolsRequired,
-        diySteps: assessment.diySteps,
-        safetyNotes: assessment.safetyNotes,
-        estimatedCost: assessment.estimatedCost,
-        estimatedDuration: assessment.estimatedDuration,
-        urgency: assessment.urgency,
-        professionalRecommended: assessment.professionalRecommended,
-      },
-      cityStateZip,
-      fullAddress: fullAddr || "Address shared after contractor acceptance",
-      contactName: user?.name || "Homeowner",
-      contactPhone: "(917) 555-0100",
-      dist: "2.0 mi",
-      est: assessment.estimatedCost,
-      bids: 0,
-      urgent: timing === "same-day",
-      ai: true,
-    });
-    setBookingSummary({
-      dateLabel,
-      slotLabel: slot?.label ?? "",
-      surcharge: Boolean(slot?.surcharge),
-    });
-    setStep("done");
+    try {
+      const created = await addJobBoardJob({
+        category: selectedCat as JobCategory,
+        title: finalTitle,
+        description: description.trim(),
+        ...(mediaType === "image" && mediaPreview ? { mediaDataUrl: mediaPreview, mediaType: "image" as const } : {}),
+        ...(mediaType === "video" ? { mediaType: "video" as const } : {}),
+        aiAssessment: {
+          overview: assessment.overview,
+          diagnosis: assessment.diagnosis,
+          likelyRootCause: assessment.likelyRootCause,
+          toolsRequired: assessment.toolsRequired,
+          diySteps: assessment.diySteps,
+          safetyNotes: assessment.safetyNotes,
+          estimatedCost: assessment.estimatedCost,
+          estimatedDuration: assessment.estimatedDuration,
+          urgency: assessment.urgency,
+          professionalRecommended: assessment.professionalRecommended,
+        },
+        cityStateZip,
+        fullAddress: fullAddr || "Address shared after contractor acceptance",
+        contactName: user?.name || "Homeowner",
+        contactPhone: "(917) 555-0100",
+        dist: "2.0 mi",
+        est: assessment.estimatedCost,
+        bids: 0,
+        urgent: timing === "same-day",
+        ai: true,
+        scheduledDate: dateLabel,
+        timeSlot: slot?.label,
+        serviceTiming: TIMING_OPTIONS.find((t) => t.id === timing)?.label,
+      });
+
+      const newJob: HomeJob = {
+        id: created.id,
+        bookingId: created.bookingId,
+        title: finalTitle,
+        category: selectedCat,
+        posted: created.posted || "Just now",
+        bids: 0,
+        status: "open",
+        est: assessment.estimatedCost,
+        topBid: "—",
+        aiAssessed: true,
+        scheduledDate: dateLabel,
+        timeSlot: slot?.label,
+        serviceTiming: TIMING_OPTIONS.find((t) => t.id === timing)?.label,
+      };
+      onJobPosted(newJob);
+      setBookingSummary({
+        dateLabel,
+        slotLabel: slot?.label ?? "",
+        surcharge: Boolean(slot?.surcharge),
+        bookingId: created.bookingId ?? undefined,
+      });
+      setStep("done");
+    } catch (err) {
+      setAnalysisError(err instanceof Error ? err.message : "Failed to post job. Please try again.");
+    }
   };
 
   if (step === "done") {
@@ -423,6 +440,12 @@ function PostTab({
         </p>
         {bookingSummary && (
           <div className="w-full border border-border bg-card p-4 text-left text-sm mb-6 space-y-1">
+            {bookingSummary.bookingId && (
+              <p>
+                <span className="text-muted-foreground">Job #:</span>{" "}
+                <span className="font-mono font-semibold text-primary tracking-wider">{bookingSummary.bookingId}</span>
+              </p>
+            )}
             <p><span className="text-muted-foreground">Date:</span> {bookingSummary.dateLabel}</p>
             <p><span className="text-muted-foreground">Time:</span> {bookingSummary.slotLabel}</p>
             {address.trim() && (
@@ -976,7 +999,10 @@ function JobCard({ job, index, user }: { job: HomeJob; index: number; user: Auth
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-            <span className="font-mono text-[10px] tracking-wider text-primary uppercase">{job.category}</span>
+            <span className="font-mono text-[11px] tracking-wider text-primary font-semibold border border-primary/30 bg-primary/5 px-2 py-0.5">
+              {formatJobNumber(job)}
+            </span>
+            <span className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase">{job.category}</span>
             <span className={`font-mono text-[10px] tracking-wider uppercase border px-2 py-0.5 inline-flex items-center gap-1 ${statusUi.className}`}>
               <StatusIcon size={9} />
               {statusUi.label}
@@ -1259,23 +1285,145 @@ function ContactTab() {
   );
 }
 
+function HomeownerProfileTab({
+  user,
+  onUserUpdated,
+}: {
+  user: AuthUser | null;
+  onUserUpdated: (u: AuthUser) => void;
+}) {
+  const [name, setName] = useState(user?.name ?? "");
+  const [phone, setPhone] = useState(user?.phone ?? "");
+  const [address, setAddress] = useState(user?.address ?? "");
+  const [contactEmail, setContactEmail] = useState(user?.contactEmail ?? user?.email ?? "");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    if (!name.trim()) {
+      setError("Name is required.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    const result = await updateUserProfile({
+      name: name.trim(),
+      phone: phone.trim(),
+      address: address.trim(),
+      contactEmail: contactEmail.trim(),
+      emails: contactEmail.trim() ? [contactEmail.trim()] : [],
+      phones: phone.trim() ? [phone.trim()] : [],
+      addresses: address.trim() ? [address.trim()] : [],
+    });
+    setSaving(false);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    onUserUpdated(result.user);
+    setMessage("Profile saved.");
+  };
+
+  return (
+    <div className="max-w-2xl">
+      <h2 className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase text-3xl text-foreground mb-1">My Profile</h2>
+      <p className="text-sm text-muted-foreground mb-8">Contact details shared with contractors after they accept your job.</p>
+      <div className="bg-card border border-border p-6 space-y-4">
+        <div>
+          <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">Full Name</label>
+          <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border border-border bg-background px-4 py-2.5 text-sm focus:outline-none focus:border-primary/60" />
+        </div>
+        <div>
+          <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">Account Email</label>
+          <input value={user?.email ?? ""} disabled className="w-full border border-border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground" />
+        </div>
+        <div>
+          <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">Contact Email</label>
+          <input value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} className="w-full border border-border bg-background px-4 py-2.5 text-sm focus:outline-none focus:border-primary/60" />
+        </div>
+        <div>
+          <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">Phone</label>
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(917) 555-0100" className="w-full border border-border bg-background px-4 py-2.5 text-sm focus:outline-none focus:border-primary/60" />
+        </div>
+        <div>
+          <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">Service Address</label>
+          <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="123 Main St, Brooklyn, NY 11201" className="w-full border border-border bg-background px-4 py-2.5 text-sm focus:outline-none focus:border-primary/60" />
+        </div>
+        {error && <p className="text-sm text-red-700 border border-red-200 bg-red-50 px-3 py-2">{error}</p>}
+        {message && <p className="text-sm text-green-700 border border-green-200 bg-green-50 px-3 py-2">{message}</p>}
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving}
+          className="bg-primary text-white px-5 py-2.5 text-sm font-medium hover:bg-primary/90 disabled:opacity-60 inline-flex items-center gap-2"
+        >
+          {saving && <Loader2 size={14} className="animate-spin" />}
+          Save Profile
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function HomeownerDashboard({
   onLogout,
   user,
   isDark,
   onToggleDark,
+  onUserUpdated,
 }: {
   onLogout: () => void;
   user: AuthUser | null;
   isDark: boolean;
   onToggleDark: () => void;
+  onUserUpdated?: (u: AuthUser) => void;
 }) {
   const [activeTab, setActiveTab] = useState<DashTab>("post");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [jobs, setJobs] = useState<HomeJob[]>(INITIAL_JOBS);
-  const displayName = user?.name || "Maria Santos";
+  const [profileUser, setProfileUser] = useState<AuthUser | null>(user);
+  const displayName = profileUser?.name || user?.name || "Maria Santos";
   const initials = displayName.split(" ").map((p) => p[0]).join("").slice(0, 2).toUpperCase();
+
+  useEffect(() => {
+    setProfileUser(user);
+  }, [user]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const mine = await getMyJobs();
+      if (cancelled || !mine.length) return;
+      setJobs(
+        mine.map((j) => ({
+          id: j.id,
+          bookingId: j.bookingId,
+          title: j.title,
+          category: j.category,
+          posted: j.posted,
+          bids: j.bids,
+          status: "open" as const,
+          est: j.est,
+          topBid: "—",
+          aiAssessed: Boolean(j.ai),
+          scheduledDate: j.scheduledDate,
+          timeSlot: j.timeSlot,
+          serviceTiming: j.serviceTiming,
+        })),
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleProfileUpdated = (u: AuthUser) => {
+    setProfileUser(u);
+    onUserUpdated?.(u);
+  };
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
@@ -1357,6 +1505,9 @@ export default function HomeownerDashboard({
             <div className="hidden md:flex w-8 h-8 bg-orange-400 rounded-full items-center justify-center text-white text-xs font-bold">
               {initials}
             </div>
+            <span className="hidden lg:inline font-mono text-[9px] text-muted-foreground tracking-wider" title="Deploy build stamp">
+              {typeof __FIXBRIDGE_BUILD__ !== "undefined" ? __FIXBRIDGE_BUILD__ : "dev"}
+            </span>
           </div>
         </header>
 
@@ -1365,13 +1516,16 @@ export default function HomeownerDashboard({
           <motion.div key={activeTab} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
             {activeTab === "post" && (
               <PostTab
-                onJobPosted={(job) => setJobs((prev) => [job, ...prev])}
+                onJobPosted={(job) => setJobs((prev) => [job, ...prev.filter((j) => j.id !== job.id)])}
                 onViewJobs={() => setActiveTab("jobs")}
-                user={user}
+                user={profileUser}
               />
             )}
-            {activeTab === "jobs" && <JobsTab jobs={jobs} user={user} />}
+            {activeTab === "jobs" && <JobsTab jobs={jobs} user={profileUser} />}
             {activeTab === "ai" && <AITab />}
+            {activeTab === "profile" && (
+              <HomeownerProfileTab user={profileUser} onUserUpdated={handleProfileUpdated} />
+            )}
             {activeTab === "contact" && <ContactTab />}
           </motion.div>
         </main>

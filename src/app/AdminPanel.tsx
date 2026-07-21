@@ -351,6 +351,7 @@ export default function AdminPanel({
                 return (
                   <div key={job.id} className="px-4 py-3 grid grid-cols-12 gap-3 items-center hover:bg-muted/30 transition-colors">
                     <div className="col-span-4 min-w-0">
+                      <p className="font-mono text-[10px] text-primary tracking-wider mb-0.5">{job.bookingId || `JOB-${job.id}`}</p>
                       <p className="text-sm font-medium text-foreground truncate">{job.title}</p>
                       <p className="font-mono text-[10px] text-muted-foreground">{job.posted}</p>
                     </div>
@@ -380,6 +381,7 @@ export default function AdminPanel({
                   <div key={job.id} className="bg-card border border-border p-4 space-y-2">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
+                        <p className="font-mono text-[10px] text-primary tracking-wider">{job.bookingId || `JOB-${job.id}`}</p>
                         <p className="text-sm font-medium text-foreground leading-snug">{job.title}</p>
                         <p className="font-mono text-[10px] text-muted-foreground mt-0.5">{job.posted}</p>
                       </div>

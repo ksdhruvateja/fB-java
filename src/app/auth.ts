@@ -14,6 +14,21 @@ export type AuthUser = {
   licenseDocumentName?: string;
   insuranceDocumentName?: string;
   idDocumentName?: string;
+  licenseDocumentData?: string;
+  insuranceDocumentData?: string;
+  idDocumentData?: string;
+  photoDataUrl?: string;
+  phone?: string;
+  address?: string;
+  contactEmail?: string;
+  companyName?: string;
+  companyDetails?: string;
+  insuranceDetails?: string;
+  emails?: string[];
+  phones?: string[];
+  addresses?: string[];
+  isBlocked?: boolean;
+  isGoogleAccount?: boolean;
 };
 
 // ── Session storage keys ──────────────────────────────────────────────────────
@@ -150,7 +165,32 @@ export async function signInWithGoogle(
     storeSession(data.token, data.user);
     return { ok: true, user: data.user };
   } catch {
-    return { ok: false, message: "Network error. Please check your connection and try again." };
+    return { ok: false, message: "Network error. Please try again." };
+  }
+}
+
+// ── Update My Profile ─────────────────────────────────────────────────────────
+
+export async function updateUserProfile(
+  fields: Record<string, unknown>,
+): Promise<{ ok: true; user: AuthUser } | { ok: false; message: string }> {
+  const token = getStoredToken();
+  if (!token) return { ok: false, message: "Not signed in." };
+  try {
+    const res = await fetch("/api/auth/profile", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(fields),
+    });
+    const data = await res.json();
+    if (!data.ok) return { ok: false, message: data.message ?? "Could not save profile." };
+    storeSession(token, data.user);
+    return { ok: true, user: data.user };
+  } catch {
+    return { ok: false, message: "Network error. Please try again." };
   }
 }
 
