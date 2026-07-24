@@ -7,6 +7,9 @@ import ForgotPasswordModal from "./ForgotPasswordModal";
 
 const GOOGLE_ENABLED = Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID);
 
+const inputClass =
+  "w-full rounded-2xl border border-border/70 bg-secondary/50 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/50 transition-colors";
+
 export default function HomeownerLogin({
   onLogin,
   onBack,
@@ -66,227 +69,205 @@ export default function HomeownerLogin({
         <ForgotPasswordModal role="homeowner" onClose={() => setShowForgot(false)} />
       )}
 
-      <div className="min-h-screen bg-background flex">
-        {/* Left panel — decorative */}
-        <div className="hidden lg:flex flex-col justify-between w-[45%] bg-foreground text-background p-12 relative overflow-hidden">
-          <div
-            className="absolute inset-0 opacity-[0.06]"
-            style={{
-              backgroundImage:
-                "linear-gradient(var(--background) 1px, transparent 1px), linear-gradient(90deg, var(--background) 1px, transparent 1px)",
-              backgroundSize: "56px 56px",
-            }}
-          />
-          <div
-            className="absolute bottom-0 left-0 w-80 h-80 rounded-full blur-3xl pointer-events-none"
-            style={{ background: "radial-gradient(circle, rgba(255,77,28,0.25) 0%, transparent 70%)" }}
-          />
-          <div className="relative">
-            <button onClick={onBack} className="flex items-center gap-2 text-sm opacity-60 hover:opacity-100 transition-opacity mb-16">
+      <div className="relative min-h-screen overflow-hidden bg-[#F3F0EA] text-foreground">
+        <div className="pointer-events-none absolute -left-24 top-10 h-72 w-72 rounded-full bg-primary/15 blur-3xl" />
+        <div className="pointer-events-none absolute -right-16 bottom-10 h-80 w-80 rounded-full bg-foreground/10 blur-3xl" />
+
+        <div className="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-6 sm:px-6 lg:px-8">
+          <div className="mb-6 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-card/80 px-4 py-2 text-sm text-muted-foreground shadow-sm backdrop-blur transition-colors hover:text-foreground"
+            >
               <ArrowLeft size={14} /> Back to site
             </button>
-            <div className="flex items-center gap-1 mb-3">
-              <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-2xl tracking-wider">FIX</span>
-              <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-2xl tracking-wider text-primary">BRIDGE</span>
-              <span className="font-mono text-[9px] bg-primary text-white px-1.5 py-0.5 ml-1">AI</span>
+            <div className="flex items-center gap-1">
+              <span className="[font-family:'Barlow_Condensed',sans-serif] text-xl font-black tracking-wider">FIX</span>
+              <span className="[font-family:'Barlow_Condensed',sans-serif] text-xl font-black tracking-wider text-primary">BRIDGE</span>
             </div>
-            <h2
-              className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.9] mt-8"
-              style={{ fontSize: "clamp(3rem,4vw,4.5rem)" }}
-            >
-              YOUR HOME.
-              <br />
-              <span style={{ WebkitTextStroke: "2px #FF4D1C", WebkitTextFillColor: "transparent" }}>
-                OUR NETWORK.
-              </span>
-              <br />
-              FIXED.
-            </h2>
           </div>
-          <div className="relative space-y-4">
-            {[
-              { num: "2,847+", label: "jobs completed in NYC & LI" },
-              { num: "Free",   label: "to post — always" },
-              { num: "48h",    label: "average first bid received" },
-            ].map(({ num, label }) => (
-              <div key={label} className="flex items-center gap-4 border-t border-background/10 pt-4">
-                <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-3xl text-primary">{num}</span>
-                <span className="text-sm opacity-60">{label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
 
-        {/* Right panel — form */}
-        <div className="flex-1 flex flex-col justify-center px-4 sm:px-8 md:px-12 lg:px-20 py-8 sm:py-12">
-          <button onClick={onBack} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-6 sm:mb-10 lg:hidden">
-            <ArrowLeft size={14} /> Back
-          </button>
-
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5 }}
-            className="max-w-md w-full mx-auto lg:mx-0"
-          >
-            <div className="flex items-center gap-2 mb-2">
-              <Home size={16} className="text-primary" />
-              <span className="font-mono text-[11px] tracking-[0.2em] text-primary uppercase">Homeowner Portal</span>
-            </div>
-            <h1 className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase text-3xl sm:text-4xl text-foreground mb-1">
-              {tab === "login" ? "Welcome Back" : "Create Account"}
-            </h1>
-            <p className="text-sm text-muted-foreground mb-6 sm:mb-8">
-              {tab === "login"
-                ? "Sign in to view bids, post jobs, and get AI assessments."
-                : "Join free — describe a problem and get real bids from vetted pros."}
-            </p>
-
-            {tab === "login" && (
-              <div className="mb-6 border border-primary/20 bg-primary/5 px-4 py-3">
-                <p className="font-mono text-[10px] tracking-[0.18em] text-primary uppercase mb-1">Demo Login</p>
-                <p className="text-sm text-foreground">Email: {demoUser.email}</p>
-                <p className="text-sm text-foreground">Password: {demoUser.password}</p>
-              </div>
-            )}
-
-            {/* Google Sign-In — always visible; live button needs VITE_GOOGLE_CLIENT_ID at build time */}
-            {tab === "login" && (
-              <div className="mb-6">
-                {GOOGLE_ENABLED ? (
-                  <div className="flex justify-center">
-                    <GoogleLogin
-                      onSuccess={handleGoogleSuccess}
-                      onError={() => setError("Google sign-in failed. Please try again.")}
-                      text="continue_with"
-                      shape="rectangular"
-                      theme="outline"
-                      size="large"
-                      width="380"
-                    />
-                  </div>
-                ) : (
-                  <div className="border border-dashed border-border px-4 py-3 text-center">
-                    <p className="text-sm font-medium text-foreground">Continue with Google</p>
-                    <p className="font-mono text-[10px] text-muted-foreground mt-1">
-                      Set VITE_GOOGLE_CLIENT_ID in Netlify build env, then redeploy
-                    </p>
-                  </div>
-                )}
-                <div className="flex items-center gap-3 mt-5">
-                  <div className="flex-1 h-px bg-border" />
-                  <span className="font-mono text-[11px] text-muted-foreground">or sign in with email</span>
-                  <div className="flex-1 h-px bg-border" />
+          <div className="grid flex-1 items-center gap-6 pb-8 lg:grid-cols-12">
+            {/* Brand / stats bento */}
+            <div className="grid gap-4 lg:col-span-5">
+              <motion.div
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="rounded-[2rem] bg-foreground p-7 text-background shadow-[0_24px_60px_rgba(10,10,10,0.18)]"
+              >
+                <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-primary/20 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-primary">
+                  <Home size={12} /> Homeowner portal
                 </div>
-              </div>
-            )}
+                <h2 className="[font-family:'Barlow_Condensed',sans-serif] text-4xl font-black uppercase leading-[0.92] sm:text-5xl">
+                  Your home.
+                  <br />
+                  <span className="text-primary">Our network.</span>
+                  <br />
+                  Fixed.
+                </h2>
+                <p className="mt-4 max-w-sm text-sm text-background/65">
+                  Post a repair, get an AI assessment, and receive bids from vetted NYC & Long Island pros.
+                </p>
+              </motion.div>
 
-            {/* Tab toggle */}
-            <div className="flex border border-border mb-6">
-              {(["login", "signup"] as const).map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => { setTab(t); setError(""); }}
-                  className={`flex-1 py-2.5 text-sm font-medium transition-colors ${
-                    tab === t ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {t === "login" ? "Sign In" : "Sign Up"}
-                </button>
-              ))}
-            </div>
-
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {tab === "signup" && (
-                <div>
-                  <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">Full Name</label>
-                  <input
-                    type="text"
-                    placeholder="Maria Santos"
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    required
-                    className="w-full border border-border bg-card px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/60 transition-colors"
-                  />
-                </div>
-              )}
-              <div>
-                <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">Email Address</label>
-                <input
-                  type="email"
-                  placeholder="maria@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  className="w-full border border-border bg-card px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/60 transition-colors"
-                />
-              </div>
-              <div>
-                <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">Password</label>
-                <div className="relative">
-                  <input
-                    type={showPass ? "text" : "password"}
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                    className="w-full border border-border bg-card px-4 py-3 pr-10 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/60 transition-colors"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPass((s) => !s)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { num: "2,847+", label: "Jobs done", tone: "bg-primary text-white" },
+                  { num: "Free", label: "To post", tone: "bg-card text-foreground" },
+                  { num: "48h", label: "First bid", tone: "bg-[#1F1A17] text-white" },
+                ].map(({ num, label, tone }, i) => (
+                  <motion.div
+                    key={label}
+                    initial={{ opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.08 * (i + 1) }}
+                    className={`rounded-[1.5rem] p-4 shadow-[0_14px_30px_rgba(10,10,10,0.08)] ${tone}`}
                   >
-                    {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
+                    <p className="[font-family:'Barlow_Condensed',sans-serif] text-2xl font-black leading-none">{num}</p>
+                    <p className="mt-2 text-[11px] opacity-70">{label}</p>
+                  </motion.div>
+                ))}
+              </div>
+            </div>
+
+            {/* Auth card */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.45 }}
+              className="rounded-[2rem] border border-border/60 bg-card/95 p-6 shadow-[0_24px_60px_rgba(10,10,10,0.08)] backdrop-blur sm:p-8 lg:col-span-7"
+            >
+              <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase text-foreground sm:text-4xl">
+                {tab === "login" ? "Welcome Back" : "Create Account"}
+              </h1>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {tab === "login"
+                  ? "Sign in to view bids, post jobs, and get AI assessments."
+                  : "Join free — describe a problem and get real bids from vetted pros."}
+              </p>
+
+              <div className="mt-5 flex rounded-full border border-border/70 bg-secondary/60 p-1">
+                {(["login", "signup"] as const).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => { setTab(t); setError(""); }}
+                    className={`flex-1 rounded-full py-2.5 text-sm font-semibold transition-all ${
+                      tab === t ? "bg-foreground text-background shadow-sm" : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {t === "login" ? "Sign In" : "Sign Up"}
                   </button>
-                </div>
+                ))}
               </div>
 
               {tab === "login" && (
-                <div className="text-right">
-                  <button
-                    type="button"
-                    onClick={() => setShowForgot(true)}
-                    className="font-mono text-[11px] text-primary hover:underline"
-                  >
-                    Forgot password?
-                  </button>
+                <div className="mt-5 rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3">
+                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-primary">Demo Login</p>
+                  <p className="text-sm text-foreground">Email: {demoUser.email}</p>
+                  <p className="text-sm text-foreground">Password: {demoUser.password}</p>
                 </div>
               )}
 
-              {error && (
-                <div className="border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                  {error}
+              {tab === "login" && (
+                <div className="mt-5">
+                  {GOOGLE_ENABLED ? (
+                    <div className="flex justify-center">
+                      <GoogleLogin
+                        onSuccess={handleGoogleSuccess}
+                        onError={() => setError("Google sign-in failed. Please try again.")}
+                        text="continue_with"
+                        shape="pill"
+                        theme="outline"
+                        size="large"
+                        width="380"
+                      />
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-border px-4 py-3 text-center">
+                      <p className="text-sm font-medium text-foreground">Continue with Google</p>
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        Set VITE_GOOGLE_CLIENT_ID in Netlify build env, then redeploy
+                      </p>
+                    </div>
+                  )}
+                  <div className="mt-5 flex items-center gap-3">
+                    <div className="h-px flex-1 bg-border" />
+                    <span className="text-[11px] text-muted-foreground">or email</span>
+                    <div className="h-px flex-1 bg-border" />
+                  </div>
                 </div>
               )}
 
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full bg-primary text-white py-3 font-medium flex items-center justify-center gap-2 hover:bg-primary/90 transition-colors disabled:opacity-60 group mt-2"
-              >
-                {loading ? (
-                  <Loader2 size={15} className="animate-spin" />
-                ) : (
-                  <>
-                    {tab === "login" ? "Sign In to Dashboard" : "Create My Account"}
-                    <ArrowRight size={15} className="transition-transform group-hover:translate-x-1" />
-                  </>
+              <form onSubmit={handleSubmit} className="mt-5 space-y-4">
+                {tab === "signup" && (
+                  <div>
+                    <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Full Name</label>
+                    <input type="text" placeholder="Maria Santos" value={fullName} onChange={(e) => setFullName(e.target.value)} required className={inputClass} />
+                  </div>
                 )}
-              </button>
-            </form>
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Email Address</label>
+                  <input type="email" placeholder="maria@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required className={inputClass} />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Password</label>
+                  <div className="relative">
+                    <input
+                      type={showPass ? "text" : "password"}
+                      placeholder="••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                      className={`${inputClass} pr-10`}
+                    />
+                    <button type="button" onClick={() => setShowPass((s) => !s)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                      {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
+                    </button>
+                  </div>
+                </div>
 
-            <div className="mt-8 pt-6 border-t border-border">
-              <p className="text-sm text-muted-foreground text-center mb-3">Are you a licensed contractor?</p>
-              <button
-                onClick={onGoContractor}
-                className="w-full border border-border text-foreground py-2.5 text-sm hover:border-foreground/30 transition-colors font-medium"
-              >
-                Sign In as a Contractor →
-              </button>
-            </div>
-          </motion.div>
+                {tab === "login" && (
+                  <div className="text-right">
+                    <button type="button" onClick={() => setShowForgot(true)} className="text-[11px] font-semibold text-primary hover:underline">
+                      Forgot password?
+                    </button>
+                  </div>
+                )}
+
+                {error && (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="group mt-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-primary py-3.5 font-semibold text-white shadow-[0_14px_30px_rgba(255,77,28,0.28)] transition-all hover:bg-primary/90 disabled:opacity-60"
+                >
+                  {loading ? (
+                    <Loader2 size={15} className="animate-spin" />
+                  ) : (
+                    <>
+                      {tab === "login" ? "Sign In to Dashboard" : "Create My Account"}
+                      <ArrowRight size={15} className="transition-transform group-hover:translate-x-1" />
+                    </>
+                  )}
+                </button>
+              </form>
+
+              <div className="mt-6 rounded-2xl border border-border/60 bg-secondary/40 p-4 text-center">
+                <p className="mb-3 text-sm text-muted-foreground">Are you a licensed contractor?</p>
+                <button
+                  type="button"
+                  onClick={onGoContractor}
+                  className="w-full rounded-2xl border border-border bg-card py-2.5 text-sm font-semibold text-foreground transition-colors hover:border-foreground/20"
+                >
+                  Sign In as a Contractor →
+                </button>
+              </div>
+            </motion.div>
+          </div>
         </div>
       </div>
     </>

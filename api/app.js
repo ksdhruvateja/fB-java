@@ -190,6 +190,21 @@ export async function initDb() {
       updated_at        TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE job_lifecycle ADD COLUMN IF NOT EXISTS invoice_file_data TEXT`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS support_messages (
+      id           BIGSERIAL PRIMARY KEY,
+      user_id      TEXT,
+      user_role    TEXT,
+      user_name    TEXT,
+      user_email   TEXT,
+      subject      TEXT NOT NULL,
+      related_job  TEXT,
+      message      TEXT NOT NULL,
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
 
   await pool.query(`
     ALTER TABLE jobs ADD COLUMN IF NOT EXISTS homeowner_email TEXT
@@ -519,6 +534,7 @@ function rowToLifecycle(r) {
     ...(r.contractor_email  && { contractorEmail: r.contractor_email }),
     ...(r.invoice_amount != null && { invoiceAmount: Number(r.invoice_amount) }),
     ...(r.invoice_file_name && { invoiceFileName: r.invoice_file_name }),
+    ...(r.invoice_file_data && { invoiceFileData: r.invoice_file_data }),
     ...(r.rating != null    && { rating: Number(r.rating) }),
     ...(r.review            && { review: r.review }),
     ...(r.accepted_at       && { acceptedAt: r.accepted_at instanceof Date ? r.accepted_at.toISOString() : r.accepted_at }),
@@ -769,6 +785,7 @@ app.put('/api/auth/profile', requireAuth, async (req, res) => {
     const companyDetails = typeof body.companyDetails === 'string' ? body.companyDetails.trim() : '';
     const insuranceDetails = typeof body.insuranceDetails === 'string' ? body.insuranceDetails.trim() : '';
     const licenseNumber = typeof body.licenseNumber === 'string' ? body.licenseNumber.trim() : undefined;
+    const trade = typeof body.trade === 'string' ? body.trade.trim() : undefined;
     const emails = asStringArray(body.emails);
     const phones = asStringArray(body.phones);
     const addresses = asStringArray(body.addresses);
@@ -784,6 +801,7 @@ app.put('/api/auth/profile', requireAuth, async (req, res) => {
     const clearPhoto = body.photoDataUrl === null;
     const setPhoto = typeof body.photoDataUrl === 'string';
     const setLicenseNumber = typeof licenseNumber === 'string';
+    const setTrade = typeof trade === 'string';
 
     const { rows: beforeRows } = await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id]);
     if (!beforeRows.length) {
@@ -809,6 +827,7 @@ app.put('/api/auth/profile', requireAuth, async (req, res) => {
            ELSE photo_data_url
          END,
          license_number = CASE WHEN $14::boolean THEN $15 ELSE license_number END,
+         trade = CASE WHEN $32::boolean THEN $33 ELSE trade END,
          license_document_name = CASE
            WHEN $16::boolean AND $17::boolean THEN NULL
            WHEN $16::boolean AND $18::boolean THEN $19
@@ -879,6 +898,8 @@ app.put('/api/auth/profile', requireAuth, async (req, res) => {
         idDoc.provided ? idDoc.name : null,
         idDoc.provided ? idDoc.data : null,
         req.authUser.id,
+        setTrade,
+        setTrade ? (trade || null) : null,
       ]
     );
 
@@ -1274,16 +1295,62 @@ app.put('/api/lifecycle/:jobId/status', async (req, res) => {
 app.put('/api/lifecycle/:jobId/invoice', async (req, res) => {
   try {
     const { jobId } = req.params;
-    const { amount, fileName } = req.body;
+    const { amount, fileName, fileData } = req.body;
+    if (fileData && typeof fileData === 'string' && fileData.length > 8_000_000) {
+      return res.status(400).json({ error: 'Invoice file is too large.' });
+    }
     await pool.query(
-      `INSERT INTO job_lifecycle (job_id,status,invoice_amount,invoice_file_name,updated_at)
-       VALUES ($1,'completed',$2,$3,NOW())
-       ON CONFLICT (job_id) DO UPDATE SET invoice_amount=$2, invoice_file_name=$3, updated_at=NOW()`,
-      [jobId,amount,fileName]
+      `INSERT INTO job_lifecycle (job_id,status,invoice_amount,invoice_file_name,invoice_file_data,updated_at)
+       VALUES ($1,'completed',$2,$3,$4,NOW())
+       ON CONFLICT (job_id) DO UPDATE SET
+         invoice_amount=$2,
+         invoice_file_name=$3,
+         invoice_file_data=COALESCE($4, job_lifecycle.invoice_file_data),
+         updated_at=NOW()`,
+      [jobId, amount, fileName || null, typeof fileData === 'string' ? fileData : null]
     );
     const { rows } = await pool.query('SELECT * FROM job_lifecycle WHERE job_id=$1', [jobId]);
     return res.json(rowToLifecycle(rows[0]));
-  } catch (e) { return res.status(500).json({ error: 'Server error' }); }
+  } catch (e) {
+    console.error('update invoice:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/support/messages', requireAuth, async (req, res) => {
+  try {
+    const subject = typeof req.body?.subject === 'string' ? req.body.subject.trim() : '';
+    const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+    const relatedJob = typeof req.body?.relatedJob === 'string' ? req.body.relatedJob.trim() : '';
+    if (!subject || !message) {
+      return res.status(400).json({ ok: false, message: 'Subject and message are required.' });
+    }
+    const { rows: userRows } = await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id]);
+    const u = userRows[0];
+    const { rows } = await pool.query(
+      `INSERT INTO support_messages (user_id, user_role, user_name, user_email, subject, related_job, message)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING id, created_at`,
+      [
+        String(req.authUser.id),
+        req.authUser.role || null,
+        u?.name || req.authUser.email || null,
+        u?.email || req.authUser.email || null,
+        subject,
+        relatedJob || null,
+        message,
+      ]
+    );
+    return res.json({
+      ok: true,
+      id: Number(rows[0].id),
+      createdAt: rows[0].created_at instanceof Date ? rows[0].created_at.toISOString() : rows[0].created_at,
+      supportEmail: 'Services@omnipronetwork.com',
+    });
+  } catch (e) {
+    console.error('support message:', e);
+    return res.status(500).json({ ok: false, message: 'Could not save support message.' });
+  }
 });
 
 app.put('/api/lifecycle/:jobId/rating', async (req, res) => {

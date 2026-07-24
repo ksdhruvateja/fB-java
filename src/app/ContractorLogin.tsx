@@ -7,6 +7,9 @@ import ForgotPasswordModal from "./ForgotPasswordModal";
 
 const GOOGLE_ENABLED = Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID);
 
+const inputClass =
+  "w-full rounded-2xl border border-border/70 bg-secondary/50 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/50 transition-colors";
+
 export default function ContractorLogin({
   onLogin,
   onBack,
@@ -84,232 +87,233 @@ export default function ContractorLogin({
         <ForgotPasswordModal role="contractor" onClose={() => setShowForgot(false)} />
       )}
 
-      <div className="min-h-screen bg-background flex flex-row-reverse">
-        {/* Right decorative panel */}
-        <div className="hidden lg:flex flex-col justify-between w-[45%] bg-primary text-white p-12 relative overflow-hidden">
-          <div
-            className="absolute inset-0 opacity-[0.08]"
-            style={{
-              backgroundImage:
-                "linear-gradient(white 1px, transparent 1px), linear-gradient(90deg, white 1px, transparent 1px)",
-              backgroundSize: "56px 56px",
-            }}
-          />
-          <div
-            className="absolute top-0 right-0 w-80 h-80 rounded-full blur-3xl pointer-events-none"
-            style={{ background: "radial-gradient(circle, rgba(255,255,255,0.15) 0%, transparent 70%)" }}
-          />
-          <div className="relative">
-            <button onClick={onBack} className="flex items-center gap-2 text-sm text-white/60 hover:text-white transition-colors mb-16">
+      <div className="relative min-h-screen overflow-hidden bg-[#F3F0EA] text-foreground">
+        <div className="pointer-events-none absolute -right-20 top-8 h-72 w-72 rounded-full bg-primary/20 blur-3xl" />
+        <div className="pointer-events-none absolute -left-16 bottom-8 h-80 w-80 rounded-full bg-foreground/10 blur-3xl" />
+
+        <div className="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-6 sm:px-6 lg:px-8">
+          <div className="mb-6 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-card/80 px-4 py-2 text-sm text-muted-foreground shadow-sm backdrop-blur transition-colors hover:text-foreground"
+            >
               <ArrowLeft size={14} /> Back to site
             </button>
-            <div className="flex items-center gap-1 mb-3">
-              <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-2xl tracking-wider text-white">FIX</span>
-              <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-2xl tracking-wider text-white/80">BRIDGE</span>
-              <span className="font-mono text-[9px] bg-white text-primary px-1.5 py-0.5 ml-1">AI</span>
+            <div className="flex items-center gap-1">
+              <span className="[font-family:'Barlow_Condensed',sans-serif] text-xl font-black tracking-wider">FIX</span>
+              <span className="[font-family:'Barlow_Condensed',sans-serif] text-xl font-black tracking-wider text-primary">BRIDGE</span>
             </div>
-            <h2
-              className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.9] text-white mt-8"
-              style={{ fontSize: "clamp(3rem,4vw,4.5rem)" }}
+          </div>
+
+          <div className="grid flex-1 items-start gap-6 pb-8 lg:grid-cols-12 lg:items-center">
+            <div className="grid gap-4 lg:col-span-5">
+              <motion.div
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="rounded-[2rem] bg-primary p-7 text-white shadow-[0_24px_60px_rgba(255,77,28,0.28)]"
+              >
+                <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider">
+                  <HardHat size={12} /> Contractor portal
+                </div>
+                <h2 className="[font-family:'Barlow_Condensed',sans-serif] text-4xl font-black uppercase leading-[0.92] sm:text-5xl">
+                  Real jobs.
+                  <br />
+                  Your terms.
+                  <br />
+                  Zero fees.
+                </h2>
+                <p className="mt-4 max-w-sm text-sm text-white/75">
+                  Get matched with homeowners, bid on scoped work, and grow your book — no monthly platform fee.
+                </p>
+              </motion.div>
+
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { num: "60%", label: "Close rate", tone: "bg-[#1F1A17] text-white" },
+                  { num: "312+", label: "Pros active", tone: "bg-card text-foreground" },
+                  { num: "$0", label: "Monthly fee", tone: "bg-foreground text-background" },
+                ].map(({ num, label, tone }, i) => (
+                  <motion.div
+                    key={label}
+                    initial={{ opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.08 * (i + 1) }}
+                    className={`rounded-[1.5rem] p-4 shadow-[0_14px_30px_rgba(10,10,10,0.08)] ${tone}`}
+                  >
+                    <p className="[font-family:'Barlow_Condensed',sans-serif] text-2xl font-black leading-none">{num}</p>
+                    <p className="mt-2 text-[11px] opacity-70">{label}</p>
+                  </motion.div>
+                ))}
+              </div>
+            </div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.45 }}
+              className="rounded-[2rem] border border-border/60 bg-card/95 p-6 shadow-[0_24px_60px_rgba(10,10,10,0.08)] backdrop-blur sm:p-8 lg:col-span-7"
             >
-              REAL JOBS.
-              <br />
-              <span style={{ WebkitTextStroke: "2px white", WebkitTextFillColor: "transparent" }}>
-                YOUR TERMS.
-              </span>
-              <br />
-              ZERO FEES.
-            </h2>
-          </div>
-          <div className="relative space-y-4">
-            {[
-              { num: "60%",  label: "average bid close rate" },
-              { num: "312+", label: "active vetted contractors" },
-              { num: "$0",   label: "monthly fee — ever" },
-            ].map(({ num, label }) => (
-              <div key={label} className="flex items-center gap-4 border-t border-white/15 pt-4">
-                <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-3xl text-white">{num}</span>
-                <span className="text-sm text-white/60">{label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+              <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase text-foreground sm:text-4xl">
+                {tab === "login" ? "Welcome Back" : "Join the Network"}
+              </h1>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {tab === "login"
+                  ? "Sign in to view job matches, submit bids, and track your earnings."
+                  : "Apply free — get matched with real jobs in your trade and territory."}
+              </p>
 
-        {/* Left form panel */}
-        <div className="flex-1 flex flex-col justify-center px-4 sm:px-8 md:px-12 lg:px-20 py-8 sm:py-12">
-          <button onClick={onBack} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-6 sm:mb-10 lg:hidden">
-            <ArrowLeft size={14} /> Back
-          </button>
-
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5 }}
-            className="max-w-md w-full mx-auto lg:mx-0"
-          >
-            <div className="flex items-center gap-2 mb-2">
-              <HardHat size={16} className="text-primary" />
-              <span className="font-mono text-[11px] tracking-[0.2em] text-primary uppercase">Contractor Portal</span>
-            </div>
-            <h1 className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase text-3xl sm:text-4xl text-foreground mb-1">
-              {tab === "login" ? "Welcome Back" : "Join the Network"}
-            </h1>
-            <p className="text-sm text-muted-foreground mb-6 sm:mb-8">
-              {tab === "login"
-                ? "Sign in to view job matches, submit bids, and track your earnings."
-                : "Apply free — get matched with real jobs in your trade and territory."}
-            </p>
-
-            {tab === "login" && (
-              <div className="mb-6 border border-primary/20 bg-primary/5 px-4 py-3">
-                <p className="font-mono text-[10px] tracking-[0.18em] text-primary uppercase mb-1">Demo Login</p>
-                <p className="text-sm text-foreground">Email: {demoUser.email}</p>
-                <p className="text-sm text-foreground">Password: {demoUser.password}</p>
-              </div>
-            )}
-
-            {/* Google Sign-In */}
-            {tab === "login" && (
-              <div className="mb-6">
-                {GOOGLE_ENABLED ? (
-                  <div className="flex justify-center">
-                    <GoogleLogin
-                      onSuccess={handleGoogleSuccess}
-                      onError={() => setError("Google sign-in failed. Please try again.")}
-                      text="continue_with"
-                      shape="rectangular"
-                      theme="outline"
-                      size="large"
-                      width="380"
-                    />
-                  </div>
-                ) : (
-                  <div className="border border-dashed border-border px-4 py-3 text-center">
-                    <p className="text-sm font-medium text-foreground">Continue with Google</p>
-                    <p className="font-mono text-[10px] text-muted-foreground mt-1">
-                      Set VITE_GOOGLE_CLIENT_ID in Netlify build env, then redeploy
-                    </p>
-                  </div>
-                )}
-                <div className="flex items-center gap-3 mt-5">
-                  <div className="flex-1 h-px bg-border" />
-                  <span className="font-mono text-[11px] text-muted-foreground">or sign in with email</span>
-                  <div className="flex-1 h-px bg-border" />
-                </div>
-              </div>
-            )}
-
-            {/* Tab toggle */}
-            <div className="flex border border-border mb-6">
-              {(["login", "signup"] as const).map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => { setTab(t); setError(""); }}
-                  className={`flex-1 py-2.5 text-sm font-medium transition-colors ${
-                    tab === t ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {t === "login" ? "Sign In" : "Apply"}
-                </button>
-              ))}
-            </div>
-
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {tab === "signup" && (
-                <>
-                  <div>
-                    <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">Full Name</label>
-                    <input type="text" placeholder="James Park" value={fullName} onChange={(e) => setFullName(e.target.value)} required
-                      className="w-full border border-border bg-card px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/60 transition-colors" />
-                  </div>
-                  <div>
-                    <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">Primary Trade</label>
-                    <input type="text" placeholder="Plumbing, HVAC, Electrical…" value={trade} onChange={(e) => setTrade(e.target.value)} required
-                      className="w-full border border-border bg-card px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/60 transition-colors" />
-                  </div>
-                  <div>
-                    <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">License Number</label>
-                    <input type="text" placeholder="NY-12345678" value={licenseNumber} onChange={(e) => setLicenseNumber(e.target.value)} required
-                      className="w-full border border-border bg-card px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/60 transition-colors" />
-                  </div>
-                  <div className="space-y-3 border border-border bg-card/30 p-3 sm:p-4">
-                    <p className="font-mono text-[11px] tracking-[0.16em] text-muted-foreground uppercase">Attach Documents</p>
-                    {[
-                      { label: "License Document",    setter: setLicenseDocName },
-                      { label: "Insurance Document",  setter: setInsuranceDocName },
-                      { label: "Government ID",       setter: setIdDocName },
-                    ].map(({ label, setter }) => (
-                      <div key={label}>
-                        <label className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase block mb-1.5">{label}</label>
-                        <input type="file" required accept=".pdf,.jpg,.jpeg,.png"
-                          onChange={(e) => setter(e.target.files?.[0]?.name ?? "")}
-                          className="w-full text-xs text-foreground file:mr-3 file:border file:border-border file:bg-background file:px-3 file:py-1.5 file:text-xs" />
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
-
-              <div>
-                <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">Email Address</label>
-                <input type="email" placeholder="james@yourcompany.com" value={email} onChange={(e) => setEmail(e.target.value)} required
-                  className="w-full border border-border bg-card px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/60 transition-colors" />
-              </div>
-              <div>
-                <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">Password</label>
-                <div className="relative">
-                  <input type={showPass ? "text" : "password"} placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} required
-                    className="w-full border border-border bg-card px-4 py-3 pr-10 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/60 transition-colors" />
-                  <button type="button" onClick={() => setShowPass((s) => !s)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                    {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
+              <div className="mt-5 flex rounded-full border border-border/70 bg-secondary/60 p-1">
+                {(["login", "signup"] as const).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => { setTab(t); setError(""); }}
+                    className={`flex-1 rounded-full py-2.5 text-sm font-semibold transition-all ${
+                      tab === t ? "bg-foreground text-background shadow-sm" : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {t === "login" ? "Sign In" : "Apply"}
                   </button>
-                </div>
+                ))}
               </div>
 
               {tab === "login" && (
-                <div className="text-right">
-                  <button
-                    type="button"
-                    onClick={() => setShowForgot(true)}
-                    className="font-mono text-[11px] text-primary hover:underline"
-                  >
-                    Forgot password?
-                  </button>
+                <div className="mt-5 rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3">
+                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-primary">Demo Login</p>
+                  <p className="text-sm text-foreground">Email: {demoUser.email}</p>
+                  <p className="text-sm text-foreground">Password: {demoUser.password}</p>
                 </div>
               )}
 
-              {error && (
-                <div className="border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+              {tab === "login" && (
+                <div className="mt-5">
+                  {GOOGLE_ENABLED ? (
+                    <div className="flex justify-center">
+                      <GoogleLogin
+                        onSuccess={handleGoogleSuccess}
+                        onError={() => setError("Google sign-in failed. Please try again.")}
+                        text="continue_with"
+                        shape="pill"
+                        theme="outline"
+                        size="large"
+                        width="380"
+                      />
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-border px-4 py-3 text-center">
+                      <p className="text-sm font-medium text-foreground">Continue with Google</p>
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        Set VITE_GOOGLE_CLIENT_ID in Netlify build env, then redeploy
+                      </p>
+                    </div>
+                  )}
+                  <div className="mt-5 flex items-center gap-3">
+                    <div className="h-px flex-1 bg-border" />
+                    <span className="text-[11px] text-muted-foreground">or email</span>
+                    <div className="h-px flex-1 bg-border" />
+                  </div>
+                </div>
               )}
 
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full bg-primary text-white py-3 font-medium flex items-center justify-center gap-2 hover:bg-primary/90 transition-colors disabled:opacity-60 group mt-2"
-              >
-                {loading ? (
-                  <Loader2 size={15} className="animate-spin" />
-                ) : (
+              <form onSubmit={handleSubmit} className="mt-5 space-y-4">
+                {tab === "signup" && (
                   <>
-                    {tab === "login" ? "Access Contractor Dashboard" : "Submit Application"}
-                    <ArrowRight size={15} className="transition-transform group-hover:translate-x-1" />
+                    <div>
+                      <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Full Name</label>
+                      <input type="text" placeholder="James Park" value={fullName} onChange={(e) => setFullName(e.target.value)} required className={inputClass} />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Primary Trade</label>
+                      <input type="text" placeholder="Plumbing, HVAC, Electrical…" value={trade} onChange={(e) => setTrade(e.target.value)} required className={inputClass} />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">License Number</label>
+                      <input type="text" placeholder="NY-12345678" value={licenseNumber} onChange={(e) => setLicenseNumber(e.target.value)} required className={inputClass} />
+                    </div>
+                    <div className="space-y-3 rounded-2xl border border-border/70 bg-secondary/40 p-4">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Attach Documents</p>
+                      {[
+                        { label: "License Document", setter: setLicenseDocName },
+                        { label: "Insurance Document", setter: setInsuranceDocName },
+                        { label: "Government ID", setter: setIdDocName },
+                      ].map(({ label, setter }) => (
+                        <div key={label}>
+                          <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</label>
+                          <input
+                            type="file"
+                            required
+                            accept=".pdf,.jpg,.jpeg,.png"
+                            onChange={(e) => setter(e.target.files?.[0]?.name ?? "")}
+                            className="w-full text-xs text-foreground file:mr-3 file:rounded-full file:border file:border-border file:bg-card file:px-3 file:py-1.5 file:text-xs"
+                          />
+                        </div>
+                      ))}
+                    </div>
                   </>
                 )}
-              </button>
-            </form>
 
-            <div className="mt-8 pt-6 border-t border-border">
-              <p className="text-sm text-muted-foreground text-center mb-3">Looking to hire a contractor instead?</p>
-              <button
-                onClick={onGoHomeowner}
-                className="w-full border border-border text-foreground py-2.5 text-sm hover:border-foreground/30 transition-colors font-medium"
-              >
-                Sign In as a Homeowner →
-              </button>
-            </div>
-          </motion.div>
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Email Address</label>
+                  <input type="email" placeholder="james@yourcompany.com" value={email} onChange={(e) => setEmail(e.target.value)} required className={inputClass} />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Password</label>
+                  <div className="relative">
+                    <input
+                      type={showPass ? "text" : "password"}
+                      placeholder="••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                      className={`${inputClass} pr-10`}
+                    />
+                    <button type="button" onClick={() => setShowPass((s) => !s)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                      {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
+                    </button>
+                  </div>
+                </div>
+
+                {tab === "login" && (
+                  <div className="text-right">
+                    <button type="button" onClick={() => setShowForgot(true)} className="text-[11px] font-semibold text-primary hover:underline">
+                      Forgot password?
+                    </button>
+                  </div>
+                )}
+
+                {error && (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="group mt-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-primary py-3.5 font-semibold text-white shadow-[0_14px_30px_rgba(255,77,28,0.28)] transition-all hover:bg-primary/90 disabled:opacity-60"
+                >
+                  {loading ? (
+                    <Loader2 size={15} className="animate-spin" />
+                  ) : (
+                    <>
+                      {tab === "login" ? "Access Contractor Dashboard" : "Submit Application"}
+                      <ArrowRight size={15} className="transition-transform group-hover:translate-x-1" />
+                    </>
+                  )}
+                </button>
+              </form>
+
+              <div className="mt-6 rounded-2xl border border-border/60 bg-secondary/40 p-4 text-center">
+                <p className="mb-3 text-sm text-muted-foreground">Looking to hire a contractor instead?</p>
+                <button
+                  type="button"
+                  onClick={onGoHomeowner}
+                  className="w-full rounded-2xl border border-border bg-card py-2.5 text-sm font-semibold text-foreground transition-colors hover:border-foreground/20"
+                >
+                  Sign In as a Homeowner →
+                </button>
+              </div>
+            </motion.div>
+          </div>
         </div>
       </div>
     </>

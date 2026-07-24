@@ -143,23 +143,24 @@ export default function AdminPanel({
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      {/* Header */}
-      <header className="min-h-16 border-b border-border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 px-4 sm:px-6 py-3 sm:py-0 bg-card">
+    <div className="min-h-screen bg-[#F3F0EA] text-foreground">
+      <header className="mx-auto flex min-h-16 w-full max-w-6xl flex-col items-start justify-between gap-3 px-4 py-4 sm:flex-row sm:items-center sm:px-6">
         <button
+          type="button"
           onClick={onBack}
-          className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-card px-4 py-2 text-sm text-muted-foreground shadow-sm transition-colors hover:text-foreground"
         >
           <ArrowLeft size={14} />
           Back to Dashboard
         </button>
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[10px] uppercase tracking-widest text-primary border border-primary/30 bg-primary/5 px-2 py-1">
+          <span className="rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-primary">
             Admin
           </span>
           <button
+            type="button"
             onClick={onSignOut}
-            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-card px-4 py-2 text-sm text-muted-foreground shadow-sm transition-colors hover:text-foreground"
           >
             <LogOut size={14} />
             Sign Out
@@ -167,11 +168,10 @@ export default function AdminPanel({
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
-        {/* Title */}
-        <div className="mb-8">
-          <p className="font-mono text-[11px] tracking-[0.2em] text-primary uppercase mb-2">Admin Panel</p>
-          <h1 className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase text-3xl sm:text-4xl lg:text-5xl leading-[0.9] mb-3">
+      <main className="mx-auto max-w-6xl px-4 pb-10 sm:px-6">
+        <div className="mb-8 rounded-[2rem] border border-border/60 bg-card p-6 shadow-[0_18px_40px_rgba(10,10,10,0.06)] sm:p-8">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">Admin Panel</p>
+          <h1 className="[font-family:'Barlow_Condensed',sans-serif] mb-3 text-3xl font-black uppercase leading-[0.9] sm:text-4xl lg:text-5xl">
             Transaction Portal
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -179,13 +179,13 @@ export default function AdminPanel({
           </p>
         </div>
 
-        {/* Tab nav */}
-        <div className="flex gap-1 bg-card border border-border p-1 mb-8 overflow-x-auto">
+        <div className="mb-8 flex gap-1 overflow-x-auto rounded-full border border-border/70 bg-card p-1.5 shadow-[0_10px_24px_rgba(10,10,10,0.04)]">
           {TABS.map(({ id, label, icon: Icon, badge }) => (
             <button
               key={id}
+              type="button"
               onClick={() => setActiveTab(id)}
-              className={`relative flex items-center gap-2 px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+              className={`relative flex items-center gap-2 whitespace-nowrap rounded-full px-4 py-2.5 text-sm font-semibold transition-colors ${
                 activeTab === id
                   ? "bg-foreground text-background"
                   : "text-muted-foreground hover:text-foreground"
@@ -194,7 +194,7 @@ export default function AdminPanel({
               <Icon size={14} />
               {label}
               {badge !== undefined && badge > 0 && (
-                <span className={`ml-0.5 min-w-[16px] h-4 px-1 rounded-full text-[10px] font-bold flex items-center justify-center ${
+                <span className={`ml-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] font-bold ${
                   activeTab === id ? "bg-background/20 text-background" : "bg-primary text-white"
                 }`}>
                   {badge}
@@ -207,51 +207,51 @@ export default function AdminPanel({
         {/* OVERVIEW */}
         {activeTab === "overview" && (
           <div className="space-y-6">
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
               {[
                 { label: "Total Jobs Posted", val: allJobs.length, icon: Briefcase, color: "text-primary" },
                 { label: "Jobs Completed", val: completedJobs.length, icon: CheckCircle, color: "text-green-600" },
                 { label: "Active Contractors", val: contractorUsers.length, icon: Users, color: "text-blue-600" },
                 { label: "Invoices Submitted", val: invoicedJobs.length, icon: Receipt, color: "text-violet-600" },
               ].map(({ label, val, icon: Icon, color }) => (
-                <div key={label} className="bg-card border border-border p-5">
+                <div key={label} className="rounded-[1.5rem] border border-border/60 bg-card p-5 shadow-[0_14px_32px_rgba(10,10,10,0.05)]">
                   <Icon size={16} className={`${color} mb-3`} />
-                  <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-4xl text-foreground leading-none mb-1">
+                  <p className="[font-family:'Barlow_Condensed',sans-serif] mb-1 text-4xl font-black leading-none text-foreground">
                     {val}
                   </p>
-                  <p className="font-mono text-[11px] text-muted-foreground uppercase tracking-wider">{label}</p>
+                  <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</p>
                 </div>
               ))}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="bg-card border border-border p-5">
-                <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-2">Total Transaction Volume</p>
-                <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-4xl text-foreground leading-none">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div className="rounded-[1.5rem] border border-border/60 bg-card p-5 shadow-[0_14px_32px_rgba(10,10,10,0.05)]">
+                <p className="mb-2 text-[11px] uppercase tracking-wider text-muted-foreground">Total Transaction Volume</p>
+                <p className="[font-family:'Barlow_Condensed',sans-serif] text-4xl font-black leading-none text-foreground">
                   ${totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                 </p>
-                <p className="font-mono text-[11px] text-muted-foreground mt-1">From {invoicedJobs.length} invoiced jobs</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">From {invoicedJobs.length} invoiced jobs</p>
               </div>
-              <div className="bg-card border border-border p-5">
-                <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-2">Platform Revenue (10%)</p>
-                <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-4xl text-green-600 leading-none">
+              <div className="rounded-[1.5rem] border border-border/60 bg-card p-5 shadow-[0_14px_32px_rgba(10,10,10,0.05)]">
+                <p className="mb-2 text-[11px] uppercase tracking-wider text-muted-foreground">Platform Revenue (10%)</p>
+                <p className="[font-family:'Barlow_Condensed',sans-serif] text-4xl font-black leading-none text-green-600">
                   ${platformFee.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                 </p>
-                <p className="font-mono text-[11px] text-muted-foreground mt-1">10% platform fee applied</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">10% platform fee applied</p>
               </div>
-              <div className="bg-card border border-border p-5">
-                <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-2">Avg. Job Value</p>
-                <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-4xl text-foreground leading-none">
+              <div className="rounded-[1.5rem] border border-border/60 bg-card p-5 shadow-[0_14px_32px_rgba(10,10,10,0.05)]">
+                <p className="mb-2 text-[11px] uppercase tracking-wider text-muted-foreground">Avg. Job Value</p>
+                <p className="[font-family:'Barlow_Condensed',sans-serif] text-4xl font-black leading-none text-foreground">
                   ${avgJobValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                 </p>
-                <p className="font-mono text-[11px] text-muted-foreground mt-1">
+                <p className="mt-1 text-[11px] text-muted-foreground">
                   {avgRating > 0 ? `Avg rating: ${avgRating.toFixed(1)}★` : "No ratings yet"}
                 </p>
               </div>
             </div>
 
             {/* Job status breakdown */}
-            <div className="bg-card border border-border p-5">
+            <div className="rounded-[1.5rem] border border-border/60 bg-card p-5 shadow-[0_14px_32px_rgba(10,10,10,0.05)]">
               <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-4">Job Status Breakdown</p>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                 {(["open","accepted","on-the-way","arrived","work-started","completed"] as JobStatus[]).map((status) => {
@@ -338,7 +338,7 @@ export default function AdminPanel({
               </div>
             )}
             {/* Desktop table */}
-            <div className="hidden sm:block bg-card border border-border divide-y divide-border">
+            <div className="hidden sm:block overflow-hidden rounded-[1.5rem] border border-border/60 bg-card divide-y divide-border shadow-[0_14px_32px_rgba(10,10,10,0.05)]">
               <div className="px-4 py-2.5 grid grid-cols-12 gap-3 text-left">
                 <span className="col-span-4 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Job</span>
                 <span className="col-span-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Category</span>
@@ -378,7 +378,7 @@ export default function AdminPanel({
               {enrichedJobs.map((job) => {
                 const status = (job.lifecycle?.status ?? "open") as JobStatus;
                 return (
-                  <div key={job.id} className="bg-card border border-border p-4 space-y-2">
+                  <div key={job.id} className="rounded-[1.25rem] border border-border/60 bg-card p-4 space-y-2 shadow-[0_10px_24px_rgba(10,10,10,0.04)]">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <p className="font-mono text-[10px] text-primary tracking-wider">{job.bookingId || `JOB-${job.id}`}</p>
@@ -411,7 +411,7 @@ export default function AdminPanel({
           <div className="space-y-6">
             {/* Revenue summary */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="bg-card border border-primary/30 bg-primary/5 p-5">
+              <div className="rounded-[1.5rem] border border-primary/30 bg-primary/5 p-5 shadow-[0_14px_32px_rgba(10,10,10,0.05)]">
                 <div className="flex items-center gap-2 mb-3">
                   <DollarSign size={16} className="text-primary" />
                   <p className="font-mono text-[11px] tracking-wider text-primary uppercase">Total Transaction Volume</p>
@@ -421,7 +421,7 @@ export default function AdminPanel({
                 </p>
                 <p className="font-mono text-[11px] text-muted-foreground mt-1">{invoicedJobs.length} invoices submitted</p>
               </div>
-              <div className="bg-card border border-green-200 bg-green-50/50 p-5">
+              <div className="rounded-[1.5rem] border border-green-200 bg-green-50/50 p-5 shadow-[0_14px_32px_rgba(10,10,10,0.05)]">
                 <div className="flex items-center gap-2 mb-3">
                   <TrendingUp size={16} className="text-green-600" />
                   <p className="font-mono text-[11px] tracking-wider text-green-700 uppercase">Platform Revenue</p>
@@ -431,7 +431,7 @@ export default function AdminPanel({
                 </p>
                 <p className="font-mono text-[11px] text-green-600 mt-1">10% platform fee</p>
               </div>
-              <div className="bg-card border border-border p-5">
+              <div className="rounded-[1.5rem] border border-border/60 bg-card p-5 shadow-[0_14px_32px_rgba(10,10,10,0.05)]">
                 <div className="flex items-center gap-2 mb-3">
                   <Star size={16} className="text-primary" />
                   <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase">Avg. Rating</p>
@@ -458,7 +458,7 @@ export default function AdminPanel({
               {invoicedJobs.length > 0 && (
                 <>
                   {/* Desktop invoice table */}
-                  <div className="hidden sm:block bg-card border border-border divide-y divide-border">
+                  <div className="hidden sm:block overflow-hidden rounded-[1.5rem] border border-border/60 bg-card divide-y divide-border shadow-[0_14px_32px_rgba(10,10,10,0.05)]">
                     <div className="px-4 py-2.5 grid grid-cols-12 gap-3">
                       <span className="col-span-4 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Job</span>
                       <span className="col-span-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Contractor</span>
@@ -525,7 +525,7 @@ export default function AdminPanel({
                       const lc = job.lifecycle!;
                       const fee = (lc.invoiceAmount ?? 0) * 0.1;
                       return (
-                        <div key={job.id} className="bg-card border border-border p-4 space-y-2.5">
+                        <div key={job.id} className="rounded-[1.25rem] border border-border/60 bg-card p-4 space-y-2.5 shadow-[0_10px_24px_rgba(10,10,10,0.04)]">
                           <div>
                             <p className="text-sm font-medium text-foreground leading-snug">{job.title}</p>
                             <p className="font-mono text-[10px] text-muted-foreground mt-0.5">{job.category} · {lc.completedAt ? new Date(lc.completedAt).toLocaleDateString() : "—"}</p>
@@ -588,7 +588,7 @@ export default function AdminPanel({
                   {lifecycles.filter((l) => l.rating !== undefined && l.review).map((lc) => {
                     const job = allJobs.find((j) => j.id === lc.jobId);
                     return (
-                      <div key={lc.jobId} className="bg-card border border-border p-4">
+                      <div key={lc.jobId} className="rounded-[1.25rem] border border-border/60 bg-card p-4 shadow-[0_10px_24px_rgba(10,10,10,0.04)]">
                         <div className="flex items-start justify-between gap-3 mb-2">
                           <div>
                             <p className="text-sm font-medium text-foreground">{job?.title ?? `Job #${lc.jobId}`}</p>
@@ -640,7 +640,7 @@ export default function AdminPanel({
               const lc = lifecycles.find((l) => l.jobId === job.id);
               const hasImages = msgs.some((m) => m.imageDataUrl);
               return (
-                <div key={job.id} className="bg-card border border-border p-5">
+                <div key={job.id} className="rounded-[1.5rem] border border-border/60 bg-card p-5 shadow-[0_14px_32px_rgba(10,10,10,0.05)]">
                   {/* Conversation header */}
                   <div className="flex items-start justify-between gap-3 flex-wrap mb-1">
                     <div className="min-w-0">

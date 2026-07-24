@@ -13,6 +13,7 @@ export type JobLifecycle = {
   contractorEmail?: string;
   invoiceAmount?: number;
   invoiceFileName?: string;
+  invoiceFileData?: string;
   rating?: number;
   review?: string;
   acceptedAt?: string;
@@ -99,12 +100,16 @@ export async function updateJobInvoice(
   jobId: number,
   amount: number,
   fileName: string,
+  fileData?: string,
 ): Promise<JobLifecycle> {
   const res = await fetch(`/api/lifecycle/${jobId}/invoice`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ amount, fileName }),
+    body: JSON.stringify({ amount, fileName, ...(fileData ? { fileData } : {}) }),
   });
+  if (!res.ok) {
+    throw new Error("Could not save invoice to the database.");
+  }
   const updated: JobLifecycle = await res.json();
   broadcast();
   return updated;

@@ -311,7 +311,15 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
                 {links.map(({ label, page }) => (
                   <li key={label}>
                     <button
-                      onClick={() => onNavigate(page)}
+                      onClick={() => {
+                        onNavigate(page);
+                        if (label === "Contact") {
+                          requestAnimationFrame(() => {
+                            document.querySelector<HTMLElement>("[data-scroll-root]")?.scrollTo({ top: 0, behavior: "smooth" });
+                            window.scrollTo({ top: 0, behavior: "smooth" });
+                          });
+                        }
+                      }}
                       className="text-sm text-muted-foreground hover:text-foreground transition-colors"
                     >
                       {label}

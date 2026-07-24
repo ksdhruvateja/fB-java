@@ -6,7 +6,7 @@ import {
   FileCheck, AlertCircle, Wrench, Zap, Flame, Sun, Moon,
   BarChart2, Shield, Phone, Mail, MessageSquare, Send, Menu, X,
   Truck, Navigation, HardHat, CheckCircle, Receipt, Upload,
-  Brain, FileText, Video, ImagePlus, ChevronDown, ChevronUp,
+  Brain, FileText, Video, ImagePlus, ChevronDown, ChevronUp, Loader2,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -35,23 +35,6 @@ const NAV_ITEMS: { id: DashTab; label: string; icon: React.ElementType }[] = [
   { id: "work", label: "My Work", icon: CheckSquare },
   { id: "earnings", label: "Earnings", icon: DollarSign },
   { id: "profile", label: "My Profile", icon: User },
-];
-
-const COMPLETED_JOBS = [
-  { id: 101, title: "Kitchen faucet cartridge replacement", location: "Astoria, QNS", date: "Jun 20, 2024", payout: "$195", rating: 5, review: "James was on time, fixed it in 45 minutes, very professional." },
-  { id: 102, title: "Bathroom supply line replacement", location: "Park Slope, BK", date: "Jun 15, 2024", payout: "$285", rating: 5, review: "Did a great job, clean work. Will definitely hire again." },
-  { id: 103, title: "Pipe burst emergency repair", location: "Flushing, QNS", date: "Jun 10, 2024", payout: "$520", rating: 4, review: "Quick response for an emergency. Solid work." },
-  { id: 104, title: "Water heater installation — 50 gal", location: "Mineola, LI", date: "Jun 3, 2024", payout: "$780", rating: 5, review: "Excellent — walked me through everything. Highly recommend." },
-  { id: 105, title: "Toilet replacement + wax ring", location: "Jamaica, QNS", date: "May 28, 2024", payout: "$310", rating: 5, review: "Perfect job, fair price." },
-];
-
-const MONTHLY_EARNINGS = [
-  { month: "Jan", earned: 2800 },
-  { month: "Feb", earned: 3200 },
-  { month: "Mar", earned: 2600 },
-  { month: "Apr", earned: 4100 },
-  { month: "May", earned: 3800 },
-  { month: "Jun", earned: 4820 },
 ];
 
 const AREA_NEIGHBORHOODS = [
@@ -87,20 +70,41 @@ function InvoiceUpload({ jobId, lifecycle, onUpdated }: { jobId: number; lifecyc
   const fileRef = useRef<HTMLInputElement>(null);
   const [amount, setAmount] = useState(lifecycle.invoiceAmount?.toString() ?? "");
   const [fileName, setFileName] = useState(lifecycle.invoiceFileName ?? "");
+  const [fileData, setFileData] = useState<string | undefined>(lifecycle.invoiceFileData);
   const [saved, setSaved] = useState(Boolean(lifecycle.invoiceFileName));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleFile = (f: File | null) => {
     if (!f) return;
     setFileName(f.name);
     setSaved(false);
+    setError(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") setFileData(reader.result);
+    };
+    reader.readAsDataURL(f);
   };
 
   const handleSubmit = async () => {
     const amt = parseFloat(amount);
     if (!amt || !fileName) return;
-    await updateJobInvoice(jobId, amt, fileName);
-    setSaved(true);
-    onUpdated();
+    if (!fileData && !lifecycle.invoiceFileData) {
+      setError("Please select an invoice file to upload.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await updateJobInvoice(jobId, amt, fileName, fileData || lifecycle.invoiceFileData);
+      setSaved(true);
+      onUpdated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save invoice.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -141,14 +145,15 @@ function InvoiceUpload({ jobId, lifecycle, onUpdated }: { jobId: number; lifecyc
               </button>
             </div>
           </div>
+          {error && <p className="text-xs text-red-700">{error}</p>}
           <button
             type="button"
-            disabled={!amount || !fileName}
-            onClick={handleSubmit}
-            className={`px-4 py-2 text-xs font-medium inline-flex items-center gap-1.5 ${amount && fileName ? "bg-primary text-white hover:bg-primary/90" : "bg-primary/40 text-white/80 cursor-not-allowed"}`}
+            disabled={!amount || !fileName || saving}
+            onClick={() => void handleSubmit()}
+            className={`px-4 py-2 text-xs font-medium inline-flex items-center gap-1.5 ${amount && fileName && !saving ? "bg-primary text-white hover:bg-primary/90" : "bg-primary/40 text-white/80 cursor-not-allowed"}`}
           >
             <Receipt size={12} />
-            Submit Invoice
+            {saving ? "Saving…" : "Submit Invoice"}
           </button>
         </>
       )}
@@ -641,53 +646,11 @@ function FindTab({ user }: { user: AuthUser | null }) {
   );
 }
 
-// ─── Static completed job card (demo history) ────────────────────────────────
-
-function StaticCompletedCard({ job, index }: { job: typeof COMPLETED_JOBS[0]; index: number }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const inView = useInView(ref, { once: true });
-  return (
-    <motion.div
-      ref={ref}
-      initial={{ opacity: 0, y: 10 }}
-      animate={inView ? { opacity: 1, y: 0 } : {}}
-      transition={{ delay: index * 0.08 }}
-      className="bg-card border border-border p-5"
-    >
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-foreground mb-1">{job.title}</p>
-          <div className="flex items-center gap-4 mb-3 flex-wrap">
-            <div className="flex items-center gap-1">
-              <MapPin size={10} className="text-muted-foreground" />
-              <span className="font-mono text-[11px] text-muted-foreground">{job.location}</span>
-            </div>
-            <span className="font-mono text-[11px] text-muted-foreground">
-              <Clock size={10} className="inline mr-1" />{job.date}
-            </span>
-          </div>
-          <div className="bg-muted/50 border border-border/50 px-4 py-3">
-            <div className="flex gap-0.5 mb-1">
-              {[1,2,3,4,5].map((s) => (
-                <Star key={s} size={11} fill={s <= job.rating ? "#FF4D1C" : "none"} className={s <= job.rating ? "text-primary" : "text-muted-foreground"} />
-              ))}
-            </div>
-            <p className="text-xs text-muted-foreground italic">&ldquo;{job.review}&rdquo;</p>
-          </div>
-        </div>
-        <div className="text-right shrink-0">
-          <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-2xl text-foreground">{job.payout}</p>
-          <p className="font-mono text-[10px] text-muted-foreground">paid</p>
-        </div>
-      </div>
-    </motion.div>
-  );
-}
-
 // ─── Work Tab — live accepted/in-progress/completed jobs ─────────────────────
 
 function WorkTab({ user }: { user: AuthUser | null }) {
-  const contractorName = user?.name || "James Park";
+  const contractorName = user?.name || "";
+  const contractorEmail = (user?.email || "").toLowerCase();
   const [allJobs, setAllJobs] = useState<JobBoardItem[]>([]);
   const [allLifecycles, setAllLifecycles] = useState<JobLifecycle[]>([]);
 
@@ -713,22 +676,23 @@ function WorkTab({ user }: { user: AuthUser | null }) {
   // Jobs this contractor has touched (accepted or beyond)
   const myLiveJobs = allJobs.filter((job) => {
     const lc = getLc(job.id);
-    return lc.contractorName === contractorName && lc.status !== "open";
+    if (lc.status === "open") return false;
+    const emailMatch = contractorEmail && (lc.contractorEmail || "").toLowerCase() === contractorEmail;
+    const nameMatch = contractorName && lc.contractorName === contractorName;
+    return Boolean(emailMatch || nameMatch);
   });
 
   const activeJobs = myLiveJobs.filter((j) => getLc(j.id).status !== "completed");
   const completedLiveJobs = myLiveJobs.filter((j) => getLc(j.id).status === "completed");
 
-  // Stats: live + static demo history
+  // Stats from database lifecycles only
   const liveCompletedCount = completedLiveJobs.length;
   const liveEarned = completedLiveJobs.reduce((s, j) => s + (getLc(j.id).invoiceAmount ?? 0), 0);
-  const staticEarned = COMPLETED_JOBS.reduce((s, j) => s + parseFloat(j.payout.replace("$", "")), 0);
-  const totalEarned = liveEarned + staticEarned;
-  const totalCompleted = liveCompletedCount + COMPLETED_JOBS.length;
-  const allRatings = [
-    ...completedLiveJobs.map((j) => getLc(j.id).rating).filter((r): r is number => r !== undefined),
-    ...COMPLETED_JOBS.map((j) => j.rating),
-  ];
+  const totalEarned = liveEarned;
+  const totalCompleted = liveCompletedCount;
+  const allRatings = completedLiveJobs
+    .map((j) => getLc(j.id).rating)
+    .filter((r): r is number => r !== undefined);
   const avgRating = allRatings.length > 0 ? allRatings.reduce((s, r) => s + r, 0) / allRatings.length : 0;
 
   return (
@@ -790,51 +754,112 @@ function WorkTab({ user }: { user: AuthUser | null }) {
           <p className="font-mono text-[11px] text-muted-foreground">Accept a job from the Find Jobs tab to see it here.</p>
         </div>
       )}
-
-      {/* Static demo history */}
-      <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-3">
-        Previous History
-      </p>
-      <div className="space-y-3">
-        {COMPLETED_JOBS.map((job, i) => (
-          <StaticCompletedCard key={job.id} job={job} index={i} />
-        ))}
-      </div>
     </div>
   );
 }
 
-function EarningsTab() {
-  const thisMonth = 4820;
-  const lastMonth = 3800;
-  const allTime = MONTHLY_EARNINGS.reduce((s, m) => s + m.earned, 0);
+function EarningsTab({ user }: { user: AuthUser | null }) {
+  const contractorName = user?.name || "";
+  const [allJobs, setAllJobs] = useState<JobBoardItem[]>([]);
+  const [allLifecycles, setAllLifecycles] = useState<JobLifecycle[]>([]);
+
+  useEffect(() => {
+    const refresh = async () => {
+      const [jobs, lcs] = await Promise.all([getJobBoardJobs(), getAllLifecycles()]);
+      setAllJobs(jobs);
+      setAllLifecycles(lcs);
+    };
+    void refresh();
+    window.addEventListener("fixbridge-lifecycle-update", refresh);
+    return () => window.removeEventListener("fixbridge-lifecycle-update", refresh);
+  }, []);
+
+  const getLc = (jobId: number): JobLifecycle =>
+    allLifecycles.find((lc) => lc.jobId === jobId) ?? { jobId, status: "open" };
+
+  const myCompleted = allJobs.filter((job) => {
+    const lc = getLc(job.id);
+    return lc.status === "completed" && (!contractorName || lc.contractorName === contractorName);
+  });
+
+  const payouts = myCompleted
+    .map((job) => {
+      const lc = getLc(job.id);
+      return {
+        id: job.id,
+        title: job.title,
+        amount: lc.invoiceAmount ?? 0,
+        date: lc.completedAt ? new Date(lc.completedAt).toLocaleDateString() : "—",
+      };
+    })
+    .filter((p) => p.amount > 0)
+    .sort((a, b) => b.id - a.id);
+
+  const allTime = payouts.reduce((s, p) => s + p.amount, 0);
+  const now = new Date();
+  const thisMonth = payouts
+    .filter((p) => {
+      const job = myCompleted.find((j) => j.id === p.id);
+      const completedAt = job ? getLc(job.id).completedAt : undefined;
+      if (!completedAt) return false;
+      const d = new Date(completedAt);
+      return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    })
+    .reduce((s, p) => s + p.amount, 0);
+  const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const lastMonth = payouts
+    .filter((p) => {
+      const job = myCompleted.find((j) => j.id === p.id);
+      const completedAt = job ? getLc(job.id).completedAt : undefined;
+      if (!completedAt) return false;
+      const d = new Date(completedAt);
+      return d.getMonth() === lastMonthDate.getMonth() && d.getFullYear() === lastMonthDate.getFullYear();
+    })
+    .reduce((s, p) => s + p.amount, 0);
+
+  const monthKeys: { key: string; label: string; earned: number }[] = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    const label = d.toLocaleString(undefined, { month: "short" });
+    const earned = payouts
+      .filter((p) => {
+        const job = myCompleted.find((j) => j.id === p.id);
+        const completedAt = job ? getLc(job.id).completedAt : undefined;
+        if (!completedAt) return false;
+        const cd = new Date(completedAt);
+        return cd.getMonth() === d.getMonth() && cd.getFullYear() === d.getFullYear();
+      })
+      .reduce((s, p) => s + p.amount, 0);
+    monthKeys.push({ key, label, earned });
+  }
 
   return (
     <div>
       <h2 className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase text-3xl text-foreground mb-1">
         Earnings
       </h2>
-      <p className="text-sm text-muted-foreground mb-8">Monthly breakdown and payout history.</p>
+      <p className="text-sm text-muted-foreground mb-8">From completed jobs saved in your FixBridge account.</p>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8">
         {[
-          { label: "This Month", val: `$${thisMonth.toLocaleString()}`, sub: "+27% vs last month", up: true },
-          { label: "Last Month", val: `$${lastMonth.toLocaleString()}`, sub: "May 2024" },
-          { label: "All Time", val: `$${allTime.toLocaleString()}`, sub: "Since joining" },
-        ].map(({ label, val, sub, up }) => (
+          { label: "This Month", val: `$${thisMonth.toLocaleString()}`, sub: "Invoiced this month" },
+          { label: "Last Month", val: `$${lastMonth.toLocaleString()}`, sub: "Previous month" },
+          { label: "All Time", val: `$${allTime.toLocaleString()}`, sub: `${payouts.length} paid jobs` },
+        ].map(({ label, val, sub }) => (
           <div key={label} className="bg-card border border-border p-5">
             <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-2">{label}</p>
             <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-4xl text-foreground leading-none mb-1">{val}</p>
-            <p className={`font-mono text-[11px] ${up ? "text-green-600" : "text-muted-foreground"}`}>{sub}</p>
+            <p className="font-mono text-[11px] text-muted-foreground">{sub}</p>
           </div>
         ))}
       </div>
       <div className="bg-card border border-border p-5 mb-6">
-        <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-6">Monthly Earnings — 2024</p>
+        <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-6">Monthly Earnings</p>
         <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={MONTHLY_EARNINGS} barSize={28}>
+          <BarChart data={monthKeys} barSize={28}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-            <XAxis dataKey="month" tick={{ fontFamily: "DM Mono", fontSize: 11, fill: "var(--muted-foreground)" }} axisLine={false} tickLine={false} />
-            <YAxis tickFormatter={(v) => `$${(v / 1000).toFixed(1)}k`} tick={{ fontFamily: "DM Mono", fontSize: 11, fill: "var(--muted-foreground)" }} axisLine={false} tickLine={false} />
+            <XAxis dataKey="label" tick={{ fontFamily: "DM Mono", fontSize: 11, fill: "var(--muted-foreground)" }} axisLine={false} tickLine={false} />
+            <YAxis tickFormatter={(v) => `$${v}`} tick={{ fontFamily: "DM Mono", fontSize: 11, fill: "var(--muted-foreground)" }} axisLine={false} tickLine={false} />
             <Tooltip contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 0, fontFamily: "DM Mono", fontSize: 11 }} formatter={(v: number) => [`$${v.toLocaleString()}`, "Earned"]} />
             <Bar dataKey="earned" fill="#FF4D1C" radius={0} />
           </BarChart>
@@ -845,15 +870,21 @@ function EarningsTab() {
           <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase">Recent Payouts</p>
         </div>
         <div className="divide-y divide-border">
-          {COMPLETED_JOBS.slice(0, 4).map((job) => (
-            <div key={job.id} className="px-5 py-3.5 flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-foreground">{job.title}</p>
-                <p className="font-mono text-[11px] text-muted-foreground">{job.date}</p>
+          {payouts.length === 0 ? (
+            <p className="px-5 py-6 text-sm text-muted-foreground">No invoiced jobs yet. Completed job invoices appear here.</p>
+          ) : (
+            payouts.slice(0, 8).map((job) => (
+              <div key={job.id} className="px-5 py-3.5 flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-foreground">{job.title}</p>
+                  <p className="font-mono text-[11px] text-muted-foreground">{job.date}</p>
+                </div>
+                <span className="[font-family:'Barlow_Condensed',sans-serif] font-bold text-xl text-foreground">
+                  ${job.amount.toLocaleString()}
+                </span>
               </div>
-              <span className="[font-family:'Barlow_Condensed',sans-serif] font-bold text-xl text-foreground">{job.payout}</span>
-            </div>
-          ))}
+            ))
+          )}
         </div>
       </div>
     </div>
@@ -867,10 +898,14 @@ function ProfileTab({
   user: AuthUser | null;
   onUserUpdated?: (u: AuthUser) => void;
 }) {
-  const displayName = user?.name || "James Park";
-  const trade = user?.trade || "Master Plumber";
-  const license = user?.licenseNumber || "NY-00231847";
-  const initials = displayName.split(" ").map((p) => p[0]).join("").slice(0, 2).toUpperCase();
+  const nameParts = (user?.name ?? "").trim().split(/\s+/).filter(Boolean);
+  const [firstName, setFirstName] = useState(nameParts[0] ?? "");
+  const [lastName, setLastName] = useState(nameParts.slice(1).join(" ") || "");
+  const [trade, setTrade] = useState(user?.trade || "");
+  const [license, setLicense] = useState(user?.licenseNumber || "");
+  const [companyName, setCompanyName] = useState(user?.companyName || "");
+  const [phone, setPhone] = useState(user?.phone ?? "");
+  const [photoDataUrl, setPhotoDataUrl] = useState(user?.photoDataUrl ?? "");
   const [licenseDocName, setLicenseDocName] = useState(user?.licenseDocumentName ?? "");
   const [insuranceDocName, setInsuranceDocName] = useState(user?.insuranceDocumentName ?? "");
   const [idDocName, setIdDocName] = useState(user?.idDocumentName ?? "");
@@ -880,6 +915,29 @@ function ProfileTab({
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const parts = (user?.name ?? "").trim().split(/\s+/).filter(Boolean);
+    if (parts.length) {
+      setFirstName(parts[0] ?? "");
+      setLastName(parts.slice(1).join(" ") || "");
+    }
+    setTrade(user?.trade || "");
+    setLicense(user?.licenseNumber || "");
+    setCompanyName(user?.companyName || "");
+    setPhone(user?.phone ?? "");
+    setPhotoDataUrl(user?.photoDataUrl ?? "");
+    setLicenseDocName(user?.licenseDocumentName ?? "");
+    setInsuranceDocName(user?.insuranceDocumentName ?? "");
+    setIdDocName(user?.idDocumentName ?? "");
+  }, [user]);
+
+  const fullName = [firstName, lastName].filter(Boolean).join(" ").trim() || user?.name || "Contractor";
+  const initials = fullName.split(" ").map((p) => p[0]).join("").slice(0, 2).toUpperCase() || "CO";
+
+  const fieldClass =
+    "w-full rounded-2xl border border-border/70 bg-secondary/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-primary/50 focus:outline-none";
 
   const readFile = (file: File | undefined, onName: (n: string) => void, onData: (d: string) => void) => {
     if (!file) return;
@@ -891,13 +949,27 @@ function ProfileTab({
     reader.readAsDataURL(file);
   };
 
-  const handleSaveDocs = async () => {
+  const handlePhoto = (file: File | undefined) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") setPhotoDataUrl(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSave = async () => {
     setSaving(true);
     setError(null);
     setMessage(null);
     const result = await updateUserProfile({
-      name: displayName,
-      licenseNumber: license,
+      name: fullName,
+      trade: trade.trim(),
+      licenseNumber: license.trim(),
+      companyName: companyName.trim(),
+      phone: phone.trim(),
+      phones: phone.trim() ? [phone.trim()] : [],
+      ...(photoDataUrl ? { photoDataUrl } : {}),
       ...(licenseDocName ? { licenseDocumentName: licenseDocName, licenseDocumentData: licenseDocData } : {}),
       ...(insuranceDocName ? { insuranceDocumentName: insuranceDocName, insuranceDocumentData: insuranceDocData } : {}),
       ...(idDocName ? { idDocumentName: idDocName, idDocumentData: idDocData } : {}),
@@ -908,120 +980,197 @@ function ProfileTab({
       return;
     }
     onUserUpdated?.(result.user);
-    setMessage("Documents saved to your profile.");
+    setMessage("Profile saved.");
   };
 
+  const verifications = [
+    { icon: FileCheck, label: "License", status: Boolean(licenseDocName || user?.licenseDocumentName), detail: "Trade license on file", pct: Boolean(licenseDocName || user?.licenseDocumentName) ? 100 : 35 },
+    { icon: Shield, label: "Insurance", status: Boolean(insuranceDocName || user?.insuranceDocumentName), detail: "Liability coverage", pct: Boolean(insuranceDocName || user?.insuranceDocumentName) ? 100 : 40 },
+    { icon: CheckSquare, label: "Background", status: true, detail: "Cleared", pct: 100 },
+    { icon: AlertCircle, label: "Government ID", status: Boolean(idDocName || user?.idDocumentName), detail: "Photo ID upload", pct: Boolean(idDocName || user?.idDocumentName) ? 100 : 25 },
+  ];
+
   return (
-    <div>
-      <h2 className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase text-3xl text-foreground mb-1">My Profile</h2>
-      <p className="text-sm text-muted-foreground mb-8">Your verified contractor profile visible to homeowners.</p>
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-4">
-          <div className="bg-card border border-border p-6">
-            <div className="flex items-start gap-5 mb-6">
-              <div className="w-16 h-16 bg-sky-400 rounded-full flex items-center justify-center text-white text-2xl font-bold [font-family:'Barlow_Condensed',sans-serif] shrink-0">{initials}</div>
-              <div>
-                <h3 className="[font-family:'Barlow_Condensed',sans-serif] font-black text-2xl text-foreground">{displayName}</h3>
-                <p className="font-mono text-[11px] text-primary mb-1">{trade} · License #{license}</p>
-                <div className="flex items-center gap-3">
-                  <div className="flex gap-0.5">{[1,2,3,4,5].map((s) => <Star key={s} size={12} fill="#FF4D1C" className="text-primary" />)}</div>
-                  <span className="font-mono text-[11px] text-muted-foreground">4.9 (5 reviews)</span>
-                </div>
-              </div>
+    <div className="mx-auto w-full max-w-5xl space-y-5">
+      <div className="text-center sm:text-left">
+        <h2 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-bold uppercase text-foreground md:text-4xl">
+          My Profile
+        </h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Your verified contractor profile visible to homeowners.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-5">
+        {/* Profile summary */}
+        <div className="flex flex-col items-center rounded-[1.75rem] border border-border/60 bg-card p-6 text-center shadow-[0_18px_40px_rgba(10,10,10,0.06)] lg:col-span-4">
+          {photoDataUrl ? (
+            <img src={photoDataUrl} alt={fullName} className="mb-4 h-28 w-28 rounded-full object-cover shadow-md ring-4 ring-secondary" />
+          ) : (
+            <div className="mb-4 flex h-28 w-28 items-center justify-center rounded-full bg-primary text-3xl font-black text-white shadow-md ring-4 ring-secondary [font-family:'Barlow_Condensed',sans-serif]">
+              {initials}
             </div>
-            <div className="space-y-3">
-              {[
-                { label: "Service Area", value: "Queens, Brooklyn, Nassau County (Long Island)" },
-                { label: "Years in Trade", value: "12 years" },
-                { label: "Company", value: user?.companyName || "Park Plumbing & Mechanical LLC" },
-                { label: "Response Time", value: "Avg. 18 minutes" },
-              ].map(({ label, value }) => (
-                <div key={label} className="flex gap-4 py-2.5 border-b border-border/50 last:border-0">
-                  <p className="font-mono text-[11px] text-muted-foreground uppercase tracking-wider w-32 shrink-0">{label}</p>
-                  <p className="text-sm text-foreground">{value}</p>
-                </div>
-              ))}
+          )}
+          <h3 className="text-xl font-bold text-foreground">{fullName}</h3>
+          <div className="mt-2 flex flex-col items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1">
+              <MapPin size={12} className="text-primary" />
+              Queens · Brooklyn · Nassau
+            </span>
+            <span className="font-medium text-foreground/80">{companyName}</span>
+            <div className="flex items-center gap-1.5 pt-1">
+              <div className="flex gap-0.5">{[1, 2, 3, 4, 5].map((s) => <Star key={s} size={11} fill="#FF4D1C" className="text-primary" />)}</div>
+              <span className="text-[10px]">4.9 · 5 reviews</span>
             </div>
           </div>
-          <div className="bg-card border border-border p-6">
-            <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-4">Attach License / Insurance / ID</p>
-            <div className="space-y-3">
-              {[
-                { label: "License Document", name: licenseDocName, setName: setLicenseDocName, setData: setLicenseDocData },
-                { label: "Insurance Document", name: insuranceDocName, setName: setInsuranceDocName, setData: setInsuranceDocData },
-                { label: "Government ID", name: idDocName, setName: setIdDocName, setData: setIdDocData },
-              ].map(({ label, name, setName, setData }) => (
-                <div key={label}>
-                  <label className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase block mb-1.5">{label}</label>
-                  <input
-                    type="file"
-                    accept=".pdf,.jpg,.jpeg,.png"
-                    onChange={(e) => readFile(e.target.files?.[0], setName, setData)}
-                    className="w-full text-xs text-foreground file:mr-3 file:border file:border-border file:bg-background file:px-3 file:py-1.5 file:text-xs"
-                  />
-                  {name && <p className="font-mono text-[10px] text-green-700 mt-1">Attached: {name}</p>}
-                </div>
-              ))}
+          <input
+            ref={photoInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => handlePhoto(e.target.files?.[0])}
+          />
+          <button
+            type="button"
+            onClick={() => photoInputRef.current?.click()}
+            className="mt-5 inline-flex items-center gap-2 rounded-full bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary transition-colors hover:bg-primary/15"
+          >
+            <ImagePlus size={14} />
+            Upload Photo
+          </button>
+        </div>
+
+        {/* Personal details */}
+        <div className="rounded-[1.75rem] border border-border/60 bg-card p-6 shadow-[0_18px_40px_rgba(10,10,10,0.06)] lg:col-span-8">
+          <h3 className="mb-5 text-base font-bold text-foreground">Personal Details</h3>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">First Name</label>
+              <input value={firstName} onChange={(e) => setFirstName(e.target.value)} className={fieldClass} />
             </div>
-            {error && <p className="mt-3 text-sm text-red-700 border border-red-200 bg-red-50 px-3 py-2">{error}</p>}
-            {message && <p className="mt-3 text-sm text-green-700 border border-green-200 bg-green-50 px-3 py-2">{message}</p>}
-            <button
-              type="button"
-              onClick={handleSaveDocs}
-              disabled={saving}
-              className="mt-4 bg-primary text-white px-4 py-2 text-sm hover:bg-primary/90 disabled:opacity-60 inline-flex items-center gap-2"
-            >
-              {saving && <Upload size={14} className="animate-pulse" />}
-              Save Documents
-            </button>
-          </div>
-          <div className="bg-card border border-border p-6">
-            <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-3">Bio</p>
-            <p className="text-sm text-muted-foreground leading-relaxed">
-              Licensed master plumber with 12 years of residential and light commercial experience across Queens, Brooklyn, and Nassau County. Specializing in leak repairs, pipe replacements, water heater installation, and drain clearing. Same-day availability for emergencies.
-            </p>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Last Name</label>
+              <input value={lastName} onChange={(e) => setLastName(e.target.value)} className={fieldClass} />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Trade</label>
+              <input value={trade} onChange={(e) => setTrade(e.target.value)} className={fieldClass} />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">License #</label>
+              <input value={license} onChange={(e) => setLicense(e.target.value)} className={fieldClass} />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Company</label>
+              <input value={companyName} onChange={(e) => setCompanyName(e.target.value)} className={fieldClass} />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Phone</label>
+              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(917) 555-0100" className={fieldClass} />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Account Email</label>
+              <input value={user?.email ?? ""} disabled className={`${fieldClass} opacity-70`} />
+            </div>
           </div>
         </div>
-        <div className="space-y-4">
-          <div className="bg-card border border-border p-5">
-            <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-4">Verification Status</p>
-            <div className="space-y-3">
-              {[
-                { icon: FileCheck, label: "License Verified", status: Boolean(licenseDocName || user?.licenseDocumentName), detail: "NY Master Plumber" },
-                { icon: Shield, label: "Insurance Active", status: Boolean(insuranceDocName || user?.insuranceDocumentName), detail: "General Liability $2M" },
-                { icon: CheckSquare, label: "Background Check", status: true, detail: "Cleared Jun 2024" },
-                { icon: AlertCircle, label: "Government ID", status: Boolean(idDocName || user?.idDocumentName), detail: "Upload required" },
-              ].map(({ icon: Icon, label, status, detail }) => (
-                <div key={label} className="flex items-center gap-3 py-2 border-b border-border/50 last:border-0">
-                  <Icon size={14} className={status ? "text-green-600" : "text-yellow-500"} />
-                  <div className="flex-1">
-                    <p className="text-xs font-medium text-foreground">{label}</p>
-                    <p className="font-mono text-[10px] text-muted-foreground">{detail}</p>
-                  </div>
-                  <span className={`font-mono text-[9px] px-1.5 py-0.5 border ${status ? "text-green-600 border-green-200 bg-green-50" : "text-yellow-600 border-yellow-200 bg-yellow-50"}`}>
-                    {status ? "✓ OK" : "⚠ Needed"}
+
+        {/* Verification / skills style */}
+        <div className="rounded-[1.75rem] border border-border/60 bg-card p-6 shadow-[0_18px_40px_rgba(10,10,10,0.06)] lg:col-span-5">
+          <div className="mb-5 flex items-center justify-between">
+            <h3 className="text-base font-bold text-foreground">Verification</h3>
+            <span className="text-[11px] font-semibold text-primary">
+              {verifications.filter((v) => v.status).length}/{verifications.length} ready
+            </span>
+          </div>
+          <div className="space-y-5">
+            {verifications.map(({ icon: Icon, label, status, detail, pct }) => (
+              <div key={label}>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
+                    <Icon size={14} className={status ? "text-emerald-600" : "text-amber-500"} />
+                    {label}
+                  </p>
+                  <span className={`text-[10px] font-semibold ${status ? "text-emerald-600" : "text-amber-600"}`}>
+                    {status ? "Verified" : "Needed"}
                   </span>
                 </div>
-              ))}
-            </div>
-          </div>
-          <div className="bg-card border border-border p-5">
-            <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-4">Performance</p>
-            <div className="space-y-3">
-              {[
-                { label: "Bid Close Rate", val: "62%" },
-                { label: "Jobs Completed", val: "5" },
-                { label: "On-Time Arrival", val: "100%" },
-                { label: "Repeat Clients", val: "3" },
-              ].map(({ label, val }) => (
-                <div key={label} className="flex items-center justify-between py-1.5 border-b border-border/50 last:border-0">
-                  <span className="text-xs text-muted-foreground">{label}</span>
-                  <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-xl text-primary">{val}</span>
+                <div className="relative h-2.5 rounded-full bg-secondary">
+                  <div className="absolute inset-y-0 left-0 rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+                  <span
+                    className="absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-white bg-primary shadow"
+                    style={{ left: `calc(${pct}% - 8px)` }}
+                  />
                 </div>
-              ))}
-            </div>
+                <p className="mt-1.5 text-[11px] text-muted-foreground">{detail}</p>
+              </div>
+            ))}
           </div>
         </div>
+
+        {/* Documents + performance cards */}
+        <div className="rounded-[1.75rem] border border-border/60 bg-card p-6 shadow-[0_18px_40px_rgba(10,10,10,0.06)] lg:col-span-7">
+          <h3 className="mb-5 text-base font-bold text-foreground">Credentials & Docs</h3>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {[
+              { label: "License Document", name: licenseDocName, setName: setLicenseDocName, setData: setLicenseDocData },
+              { label: "Insurance Document", name: insuranceDocName, setName: setInsuranceDocName, setData: setInsuranceDocData },
+              { label: "Government ID", name: idDocName, setName: setIdDocName, setData: setIdDocData },
+              { label: "Performance", name: null as string | null, setName: null as ((n: string) => void) | null, setData: null as ((d: string) => void) | null },
+            ].map((item) =>
+              item.label === "Performance" ? (
+                <div key="perf" className="flex flex-col rounded-[1.25rem] border border-border/60 bg-secondary/30 p-4">
+                  <p className="text-sm font-semibold text-foreground">Performance</p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    {[
+                      { label: "Close rate", val: "62%" },
+                      { label: "Completed", val: "5" },
+                      { label: "On-time", val: "100%" },
+                      { label: "Repeats", val: "3" },
+                    ].map(({ label, val }) => (
+                      <div key={label} className="rounded-xl bg-card px-2.5 py-2 text-center">
+                        <p className="[font-family:'Barlow_Condensed',sans-serif] text-lg font-black text-primary">{val}</p>
+                        <p className="text-[10px] text-muted-foreground">{label}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div key={item.label} className="flex flex-col rounded-[1.25rem] border border-border/60 bg-secondary/30 p-4">
+                  <p className="text-sm font-semibold text-foreground">{item.label}</p>
+                  <p className="mt-1 line-clamp-1 text-[11px] text-muted-foreground">
+                    {item.name ? `Attached: ${item.name}` : "PDF or image · not uploaded yet"}
+                  </p>
+                  <label className="mt-auto inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-full bg-primary/10 px-3 py-1.5 text-[11px] font-semibold text-primary hover:bg-primary/15">
+                    <Upload size={12} />
+                    {item.name ? "Replace" : "Upload"}
+                    <input
+                      type="file"
+                      accept=".pdf,.jpg,.jpeg,.png"
+                      className="hidden"
+                      onChange={(e) => readFile(e.target.files?.[0], item.setName!, item.setData!)}
+                    />
+                  </label>
+                </div>
+              )
+            )}
+          </div>
+        </div>
+      </div>
+
+      {error && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</p>}
+      {message && <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-700">{message}</p>}
+
+      <div className="flex justify-center pt-1">
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving}
+          className="inline-flex min-w-[160px] items-center justify-center gap-2 rounded-full bg-primary px-10 py-3.5 text-sm font-semibold text-white shadow-[0_14px_30px_rgba(255,77,28,0.28)] transition-colors hover:bg-primary/90 disabled:opacity-60"
+        >
+          {saving && <Upload size={14} className="animate-pulse" />}
+          Save
+        </button>
       </div>
     </div>
   );
@@ -1083,33 +1232,34 @@ export default function ContractorDashboard({
   }, []);
 
   return (
-    <div className="flex h-screen bg-background overflow-hidden">
-      {/* New-job pop-up toast — full-width on mobile, corner on desktop */}
+    <div className="flex h-screen overflow-hidden bg-[#F3F0EA]">
+      {/* New-job pop-up toast */}
       {newJobToast && (
         <motion.div
           initial={{ opacity: 0, y: 50 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: 30 }}
-          className="fixed bottom-16 md:bottom-6 left-3 right-3 md:left-auto md:right-6 md:w-80 z-50 border border-primary bg-card shadow-xl"
+          className="fixed bottom-16 left-3 right-3 z-50 overflow-hidden rounded-[1.5rem] border border-primary/30 bg-card shadow-xl md:bottom-6 md:left-auto md:right-6 md:w-80"
         >
-          <div className="bg-primary px-4 py-2.5 flex items-center justify-between">
+          <div className="flex items-center justify-between bg-primary px-4 py-2.5">
             <div className="flex items-center gap-2">
               <Bell size={13} className="text-white" />
-              <span className="font-mono text-[10px] tracking-wider text-white uppercase">New Job Posted</span>
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-white">New Job Posted</span>
               {newJobToast.urgent && (
-                <span className="font-mono text-[9px] bg-white text-primary px-1.5 py-0.5">URGENT</span>
+                <span className="rounded-full bg-white px-1.5 py-0.5 text-[9px] font-bold text-primary">URGENT</span>
               )}
             </div>
-            <button onClick={() => setNewJobToast(null)} className="text-white/80 hover:text-white p-1">
+            <button type="button" onClick={() => setNewJobToast(null)} className="p-1 text-white/80 hover:text-white">
               <X size={13} />
             </button>
           </div>
           <div className="px-4 py-3">
-            <p className="text-sm font-medium text-foreground mb-1 leading-snug">{newJobToast.title}</p>
-            <p className="font-mono text-[10px] text-muted-foreground uppercase mb-3">{newJobToast.category}</p>
+            <p className="mb-1 text-sm font-medium leading-snug text-foreground">{newJobToast.title}</p>
+            <p className="mb-3 text-[10px] uppercase text-muted-foreground">{newJobToast.category}</p>
             <button
+              type="button"
               onClick={() => { setNewJobToast(null); setActiveTab("find"); }}
-              className="w-full bg-primary text-white text-xs font-medium py-2.5 hover:bg-primary/90 transition-colors flex items-center justify-center gap-1.5"
+              className="flex w-full items-center justify-center gap-1.5 rounded-2xl bg-primary py-2.5 text-xs font-semibold text-white hover:bg-primary/90"
             >
               View Job <ChevronRight size={12} />
             </button>
@@ -1117,145 +1267,142 @@ export default function ContractorDashboard({
         </motion.div>
       )}
 
-      {/* Sidebar overlay */}
       {mobileMenuOpen && (
-        <button type="button" className="fixed inset-0 bg-black/50 z-30 md:hidden" onClick={() => setMobileMenuOpen(false)} aria-label="Close menu overlay" />
+        <button type="button" className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={() => setMobileMenuOpen(false)} aria-label="Close menu overlay" />
       )}
 
-      {/* Sidebar */}
-      <aside className={`fixed md:static inset-y-0 left-0 z-40 flex flex-col border-r border-border bg-card transition-all duration-300 ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} ${sidebarOpen ? "md:w-56" : "md:w-16"} w-72 shrink-0`}>
-        <div className="border-b border-border px-4 py-4 flex items-center justify-between h-16">
-          <button onClick={() => setSidebarOpen((s) => !s)} className="flex items-center gap-1.5">
-            <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-lg tracking-wider text-foreground">FIX</span>
-            <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-lg tracking-wider text-primary">BRIDGE</span>
-            {sidebarOpen && <span className="font-mono text-[9px] bg-primary text-white px-1 py-0.5 ml-0.5">PRO</span>}
-          </button>
-          <button type="button" onClick={() => setMobileMenuOpen(false)} className="md:hidden p-1 text-muted-foreground hover:text-foreground">
-            <X size={18} />
-          </button>
-        </div>
-
-        {/* Mobile user info */}
-        <div className="md:hidden px-4 py-3 border-b border-border bg-muted/30">
-          <p className="text-sm font-semibold text-foreground">{displayName}</p>
-          <div className="flex items-center gap-2 mt-0.5">
-            <span className="font-mono text-[10px] text-primary uppercase tracking-wider">{trade}</span>
-            <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-            <span className="font-mono text-[10px] text-green-600">Active</span>
+      <aside className={`fixed md:static inset-y-0 left-0 z-40 m-0 flex flex-col transition-all duration-300 md:m-3 ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} ${sidebarOpen ? "md:w-56" : "md:w-[4.5rem]"} w-72 shrink-0`}>
+        <div className="flex h-full flex-col overflow-hidden rounded-[1.75rem] border border-border/60 bg-[#1A1614] text-white shadow-[0_20px_50px_rgba(10,10,10,0.18)]">
+          <div className="flex h-16 items-center justify-between border-b border-white/10 px-4">
+            <button type="button" onClick={() => setSidebarOpen((s) => !s)} className="flex items-center gap-1.5">
+              <span className="[font-family:'Barlow_Condensed',sans-serif] text-lg font-black tracking-wider">FIX</span>
+              <span className="[font-family:'Barlow_Condensed',sans-serif] text-lg font-black tracking-wider text-primary">BRIDGE</span>
+              {sidebarOpen && <span className="ml-0.5 rounded-full bg-primary px-1.5 py-0.5 text-[9px] font-bold">PRO</span>}
+            </button>
+            <button type="button" onClick={() => setMobileMenuOpen(false)} className="p-1 text-white/60 hover:text-white md:hidden">
+              <X size={18} />
+            </button>
           </div>
-        </div>
 
-        <nav className="flex-1 py-4 px-2 space-y-0.5 overflow-y-auto">
-          {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => { setActiveTab(id); setMobileMenuOpen(false); }}
-              className={`w-full flex items-center gap-3 px-3 py-3 md:py-2.5 transition-colors relative rounded-sm ${activeTab === id ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
-            >
-              <Icon size={18} className="shrink-0" />
-              <span className={`text-sm font-medium truncate ${!sidebarOpen ? "md:hidden" : ""}`}>{label}</span>
-              {id === "find" && newJobCount > 0 && (
-                <span className="ml-auto bg-primary text-white font-mono text-[9px] px-1.5 py-0.5 rounded-full leading-none">
-                  {newJobCount}
-                </span>
-              )}
-            </button>
-          ))}
-          {user?.isAdmin && (
-            <button
-              type="button"
-              onClick={() => { onOpenAdmin(); setMobileMenuOpen(false); }}
-              className="w-full flex items-center gap-3 px-3 py-3 md:py-2.5 transition-colors rounded-sm bg-primary text-white hover:bg-primary/90 mt-2"
-            >
-              <Shield size={18} className="shrink-0" />
-              <span className={`text-sm font-semibold truncate ${!sidebarOpen ? "md:hidden" : ""}`}>Admin Panel</span>
-            </button>
-          )}
-        </nav>
+          <div className="border-b border-white/10 bg-white/5 px-4 py-3 md:hidden">
+            <p className="text-sm font-semibold">{displayName}</p>
+            <div className="mt-0.5 flex items-center gap-2">
+              <span className="text-[10px] uppercase tracking-wider text-primary">{trade}</span>
+              <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+              <span className="text-[10px] text-green-400">Active</span>
+            </div>
+          </div>
 
-        <div className="border-t border-border p-3 space-y-0.5">
-          <button onClick={onToggleDark} className="w-full flex items-center gap-3 px-3 py-2.5 md:py-2 text-muted-foreground hover:text-foreground transition-colors rounded-sm">
-            {isDark ? <Sun size={16} className="shrink-0" /> : <Moon size={16} className="shrink-0" />}
-            <span className={`text-sm ${!sidebarOpen ? "md:hidden" : ""}`}>{isDark ? "Light mode" : "Dark mode"}</span>
-          </button>
-          <button onClick={onLogout} className="w-full flex items-center gap-3 px-3 py-2.5 md:py-2 text-muted-foreground hover:text-foreground transition-colors rounded-sm">
-            <LogOut size={16} className="shrink-0" />
-            <span className={`text-sm ${!sidebarOpen ? "md:hidden" : ""}`}>Sign Out</span>
-          </button>
+          <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-4">
+            {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => { setActiveTab(id); setMobileMenuOpen(false); }}
+                className={`relative flex w-full items-center gap-3 rounded-2xl px-3 py-3 transition-colors md:py-2.5 ${
+                  activeTab === id ? "bg-primary text-white" : "text-white/65 hover:bg-white/8 hover:text-white"
+                }`}
+              >
+                <Icon size={18} className="shrink-0" />
+                <span className={`truncate text-sm font-medium ${!sidebarOpen ? "md:hidden" : ""}`}>{label}</span>
+                {id === "find" && newJobCount > 0 && (
+                  <span className="ml-auto rounded-full bg-white px-1.5 py-0.5 text-[9px] font-bold leading-none text-primary">
+                    {newJobCount}
+                  </span>
+                )}
+              </button>
+            ))}
+            {user?.isAdmin && (
+              <button
+                type="button"
+                onClick={() => { onOpenAdmin(); setMobileMenuOpen(false); }}
+                className="mt-2 flex w-full items-center gap-3 rounded-2xl bg-primary px-3 py-3 text-white hover:bg-primary/90 md:py-2.5"
+              >
+                <Shield size={18} className="shrink-0" />
+                <span className={`truncate text-sm font-semibold ${!sidebarOpen ? "md:hidden" : ""}`}>Admin Panel</span>
+              </button>
+            )}
+          </nav>
+
+          <div className="space-y-1 border-t border-white/10 p-3">
+            <button type="button" onClick={onToggleDark} className="flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-white/65 transition-colors hover:bg-white/8 hover:text-white">
+              {isDark ? <Sun size={16} className="shrink-0" /> : <Moon size={16} className="shrink-0" />}
+              <span className={`text-sm ${!sidebarOpen ? "md:hidden" : ""}`}>{isDark ? "Light mode" : "Dark mode"}</span>
+            </button>
+            <button type="button" onClick={onLogout} className="flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-white/65 transition-colors hover:bg-white/8 hover:text-white">
+              <LogOut size={16} className="shrink-0" />
+              <span className={`text-sm ${!sidebarOpen ? "md:hidden" : ""}`}>Sign Out</span>
+            </button>
+          </div>
         </div>
       </aside>
 
-      {/* Main content */}
-      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        <header className="h-14 md:h-16 border-b border-border flex items-center justify-between px-4 md:px-6 bg-card shrink-0">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden md:pr-3 md:pt-3 md:pb-3">
+        <header className="mb-0 flex h-14 shrink-0 items-center justify-between rounded-none border-b border-border/60 bg-card/90 px-4 backdrop-blur md:mb-3 md:h-16 md:rounded-[1.5rem] md:border md:px-6 md:shadow-[0_12px_30px_rgba(10,10,10,0.05)]">
           <div className="flex items-center gap-3">
-            <button type="button" className="md:hidden flex items-center gap-1" onClick={() => setMobileMenuOpen(true)} aria-label="Open menu">
-              <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-base tracking-wider text-foreground">FIX</span>
-              <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-base tracking-wider text-primary">BRIDGE</span>
+            <button type="button" className="flex items-center gap-1 md:hidden" onClick={() => setMobileMenuOpen(true)} aria-label="Open menu">
+              <span className="[font-family:'Barlow_Condensed',sans-serif] text-base font-black tracking-wider text-foreground">FIX</span>
+              <span className="[font-family:'Barlow_Condensed',sans-serif] text-base font-black tracking-wider text-primary">BRIDGE</span>
             </button>
             <div className="hidden md:block">
-              <p className="text-sm font-semibold text-foreground leading-tight">{displayName}</p>
+              <p className="text-sm font-semibold leading-tight text-foreground">{displayName}</p>
               <div className="flex items-center gap-2">
-                <span className="font-mono text-[10px] text-primary uppercase tracking-wider">{trade}</span>
-                <span className="w-1 h-1 rounded-full bg-green-500" />
-                <span className="font-mono text-[10px] text-green-600">Active</span>
+                <span className="text-[10px] uppercase tracking-wider text-primary">{trade}</span>
+                <span className="h-1 w-1 rounded-full bg-green-500" />
+                <span className="text-[10px] text-green-600">Active</span>
               </div>
             </div>
           </div>
           <div className="flex items-center gap-2.5">
-            <button className="relative w-9 h-9 flex items-center justify-center border border-border text-muted-foreground hover:text-foreground transition-colors">
+            <button type="button" className="relative flex h-9 w-9 items-center justify-center rounded-full border border-border/70 text-muted-foreground hover:text-foreground">
               <Bell size={15} />
               {newJobCount > 0 && (
-                <span className="absolute top-1 right-1 w-4 h-4 bg-primary rounded-full text-white font-mono text-[9px] flex items-center justify-center leading-none">
+                <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[9px] font-bold leading-none text-white">
                   {newJobCount > 9 ? "9+" : newJobCount}
                 </span>
               )}
             </button>
             <div className="relative">
-              <button type="button" onClick={() => setProfileMenuOpen((o) => !o)} className="w-8 h-8 bg-sky-400 rounded-full flex items-center justify-center text-white text-xs font-bold" aria-label="Open profile menu">
+              <button type="button" onClick={() => setProfileMenuOpen((o) => !o)} className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-bold text-white" aria-label="Open profile menu">
                 {initials}
               </button>
               {profileMenuOpen && (
-                <div className="absolute right-0 top-10 w-44 border border-border bg-card shadow-lg z-20">
+                <div className="absolute right-0 top-10 z-20 w-44 overflow-hidden rounded-2xl border border-border bg-card shadow-lg">
                   {user?.isAdmin && (
-                    <button type="button" onClick={() => { setProfileMenuOpen(false); onOpenAdmin(); }} className="w-full text-left px-3 py-2.5 text-sm hover:bg-muted/50 transition-colors text-primary font-medium">Admin Panel</button>
+                    <button type="button" onClick={() => { setProfileMenuOpen(false); onOpenAdmin(); }} className="w-full px-3 py-2.5 text-left text-sm font-medium text-primary transition-colors hover:bg-muted/50">Admin Panel</button>
                   )}
-                  <button type="button" onClick={() => { setProfileMenuOpen(false); setActiveTab("profile"); }} className="w-full text-left px-3 py-2.5 text-sm hover:bg-muted/50 transition-colors">My Profile</button>
-                  <button type="button" onClick={() => { setProfileMenuOpen(false); onLogout(); }} className="w-full text-left px-3 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors">Sign Out</button>
+                  <button type="button" onClick={() => { setProfileMenuOpen(false); setActiveTab("profile"); }} className="w-full px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted/50">My Profile</button>
+                  <button type="button" onClick={() => { setProfileMenuOpen(false); onLogout(); }} className="w-full px-3 py-2.5 text-left text-sm text-red-600 transition-colors hover:bg-red-50">Sign Out</button>
                 </div>
               )}
             </div>
-            <span className="hidden lg:inline font-mono text-[9px] text-muted-foreground tracking-wider" title="Deploy build stamp">
-              {typeof __FIXBRIDGE_BUILD__ !== "undefined" ? __FIXBRIDGE_BUILD__ : "dev"}
-            </span>
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 pb-20 md:pb-8">
-          <motion.div key={activeTab} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
+        <main className="flex-1 overflow-y-auto rounded-none p-4 pb-20 md:rounded-[1.75rem] md:border md:border-border/60 md:bg-card/40 md:p-6 md:pb-8 lg:p-8">
+          <motion.div key={activeTab} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }} className="mx-auto w-full max-w-5xl">
             {activeTab === "find" && <FindTab user={user} />}
             {activeTab === "work" && <WorkTab user={user} />}
-            {activeTab === "earnings" && <EarningsTab />}
+            {activeTab === "earnings" && <EarningsTab user={user} />}
             {activeTab === "profile" && <ProfileTab user={user} onUserUpdated={onUserUpdated} />}
           </motion.div>
         </main>
       </div>
 
-      {/* Mobile Bottom Navigation */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-20 bg-card border-t border-border flex">
+      <nav className="fixed bottom-0 left-0 right-0 z-20 flex border-t border-border/70 bg-card/95 backdrop-blur md:hidden">
         {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
             type="button"
             onClick={() => setActiveTab(id)}
-            className={`flex-1 relative flex flex-col items-center justify-center gap-1 py-2.5 min-h-[56px] transition-colors ${
+            className={`relative flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 py-2.5 transition-colors ${
               activeTab === id ? "text-primary" : "text-muted-foreground"
             }`}
           >
             <Icon size={20} strokeWidth={activeTab === id ? 2.5 : 1.8} />
-            <span className="font-mono text-[9px] uppercase tracking-wide leading-none">{label}</span>
+            <span className="text-[9px] font-semibold uppercase tracking-wide leading-none">{label}</span>
             {id === "find" && newJobCount > 0 && (
-              <span className="absolute top-1.5 right-[calc(50%-18px)] bg-primary text-white font-mono text-[8px] w-4 h-4 flex items-center justify-center rounded-full leading-none">
+              <span className="absolute top-1.5 right-[calc(50%-18px)] flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[8px] font-bold leading-none text-white">
                 {newJobCount > 9 ? "9+" : newJobCount}
               </span>
             )}

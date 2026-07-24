@@ -1,13 +1,14 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, type FormEvent } from "react";
 import { motion, useInView } from "motion/react";
 import { format, addDays, nextSaturday, isBefore, startOfDay } from "date-fns";
 import {
   PlusCircle, Briefcase, MessageSquare, Phone,
-  Bell, LogOut, Zap, Wrench, Flame, PaintBucket,
+  Bell, LogOut, Zap, Wrench,
   Home, Layers, Hammer, ChevronRight, Star, Clock,
   CheckCircle, AlertCircle, Send, MapPin, DollarSign,
   Mail, Sun, Moon, Menu, X, ImagePlus, Loader2, CalendarDays,
   Video, Truck, Navigation, HardHat, Receipt, ThumbsUp, User,
+  Eye, Sparkles, ArrowRight, ShieldAlert,
 } from "lucide-react";
 import { Calendar } from "./components/ui/calendar";
 import { getStoredUsers, loadAllUsers, updateUserProfile, type AuthUser } from "./auth";
@@ -36,6 +37,14 @@ import {
   type JobStatus,
   type JobLifecycle,
 } from "./jobLifecycle";
+import iconPlumbing from "../assets/category-icons/cat-plumbing.png";
+import iconElectrical from "../assets/category-icons/cat-electrical.png";
+import iconHvac from "../assets/category-icons/cat-hvac.png";
+import iconPainting from "../assets/category-icons/cat-painting.png";
+import iconRoofing from "../assets/category-icons/cat-roofing.png";
+import iconFlooring from "../assets/category-icons/cat-flooring.png";
+import iconCarpentry from "../assets/category-icons/cat-carpentry.png";
+import iconOthers from "../assets/category-icons/cat-others.png";
 
 type DashTab = "post" | "jobs" | "ai" | "profile" | "contact";
 
@@ -71,14 +80,14 @@ const NAV_ITEMS: { id: DashTab; label: string; icon: React.ElementType }[] = [
 ];
 
 const CATEGORIES = [
-  { icon: Wrench, label: "Plumbing" },
-  { icon: Zap, label: "Electrical" },
-  { icon: Flame, label: "HVAC" },
-  { icon: PaintBucket, label: "Painting" },
-  { icon: Home, label: "Roofing" },
-  { icon: Layers, label: "Flooring" },
-  { icon: Hammer, label: "Carpentry" },
-  { icon: Home, label: "Others" },
+  { label: "Plumbing", iconSrc: iconPlumbing, tint: "from-sky-100 to-blue-50", Fallback: Wrench },
+  { label: "Electrical", iconSrc: iconElectrical, tint: "from-amber-100 to-yellow-50", Fallback: Zap },
+  { label: "HVAC", iconSrc: iconHvac, tint: "from-cyan-100 to-sky-50", Fallback: Home },
+  { label: "Painting", iconSrc: iconPainting, tint: "from-orange-100 to-rose-50", Fallback: Layers },
+  { label: "Roofing", iconSrc: iconRoofing, tint: "from-stone-200 to-slate-50", Fallback: Home },
+  { label: "Flooring", iconSrc: iconFlooring, tint: "from-amber-100 to-orange-50", Fallback: Layers },
+  { label: "Carpentry", iconSrc: iconCarpentry, tint: "from-yellow-100 to-amber-50", Fallback: Hammer },
+  { label: "Others", iconSrc: iconOthers, tint: "from-neutral-200 to-stone-50", Fallback: Wrench },
 ];
 
 const POST_STEPS: { id: PostStep; label: string }[] = [
@@ -104,65 +113,11 @@ const TIME_SLOTS: { id: TimeSlotId; label: string; surcharge?: boolean }[] = [
   { id: "7-9", label: "7:00 PM – 9:00 PM (small surcharge may apply)", surcharge: true },
 ];
 
-const INITIAL_JOBS: HomeJob[] = [
-  {
-    id: 1,
-    bookingId: "FB-DEMO-0001",
-    title: "Kitchen sink drain clog",
-    category: "Plumbing",
-    posted: "Jun 22, 2024",
-    bids: 4,
-    status: "open",
-    est: "$180–$340",
-    topBid: "$195",
-    aiAssessed: true,
-  },
-  {
-    id: 2,
-    bookingId: "FB-DEMO-0002",
-    title: "Furnace not heating evenly — 2nd floor",
-    category: "HVAC",
-    posted: "Jun 18, 2024",
-    bids: 7,
-    status: "in-progress",
-    est: "$280–$520",
-    topBid: "$310",
-    aiAssessed: true,
-    contractor: "Ed Kowalski HVAC",
-  },
-  {
-    id: 3,
-    bookingId: "FB-DEMO-0003",
-    title: "Bathroom tile re-grouting",
-    category: "General",
-    posted: "May 30, 2024",
-    bids: 5,
-    status: "completed",
-    est: "$300–$600",
-    topBid: "$385",
-    aiAssessed: true,
-    saved: "$215",
-    rating: 5,
-  },
-  {
-    id: 4,
-    bookingId: "FB-DEMO-0004",
-    title: "Outdoor deck board replacement",
-    category: "Carpentry",
-    posted: "Jun 24, 2024",
-    bids: 0,
-    status: "open",
-    est: "Pending AI",
-    topBid: "—",
-    aiAssessed: false,
-  },
-];
-
 const CHAT_MESSAGES: { role: "user" | "ai"; label?: string; text: string }[] = [
   {
     role: "ai",
     label: "FixBridge AI",
-    text: "Hi — I'm your FixBridge repair assistant. Tell me what's going wrong (leak, no heat, breaker trips, etc.) and I'll help with causes, rough NYC/LI costs, and whether to DIY or hire a pro.",
+    text: "Hi there — thanks for reaching out. I'm here to help with whatever's going on at home, whether it's a leak, no heat, a breaker that keeps tripping, or something else entirely. Tell me what's happening and we'll figure out the best next step together.",
   },
 ];
 
@@ -200,6 +155,66 @@ function resolveServiceDate(timing: TimingOption | null, customDate: Date | unde
 function formatServiceDate(date: Date | null) {
   if (!date) return "Date not set";
   return format(date, "EEEE, MMM d, yyyy");
+}
+
+function urgencyTone(urgency: string) {
+  const u = urgency.toLowerCase();
+  if (u.includes("high")) {
+    return {
+      label: "High",
+      ring: "stroke-red-500",
+      soft: "bg-red-50 text-red-700 border-red-100",
+      bar: "bg-red-500",
+      pct: 90,
+    };
+  }
+  if (u.includes("low")) {
+    return {
+      label: "Low",
+      ring: "stroke-emerald-500",
+      soft: "bg-emerald-50 text-emerald-700 border-emerald-100",
+      bar: "bg-emerald-500",
+      pct: 35,
+    };
+  }
+  return {
+    label: "Medium",
+    ring: "stroke-amber-500",
+    soft: "bg-amber-50 text-amber-800 border-amber-100",
+    bar: "bg-amber-500",
+    pct: 62,
+  };
+}
+
+function UrgencyRing({ urgency }: { urgency: string }) {
+  const tone = urgencyTone(urgency);
+  const r = 34;
+  const c = 2 * Math.PI * r;
+  const offset = c - (tone.pct / 100) * c;
+  return (
+    <div className="relative flex h-[100px] w-[100px] items-center justify-center">
+      <svg width="100" height="100" className="-rotate-90">
+        <circle cx="50" cy="50" r={r} fill="none" stroke="currentColor" strokeWidth="8" className="text-secondary" />
+        <circle
+          cx="50"
+          cy="50"
+          r={r}
+          fill="none"
+          strokeWidth="8"
+          strokeLinecap="round"
+          strokeDasharray={c}
+          strokeDashoffset={offset}
+          className={tone.ring}
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+        <span className="[font-family:'Barlow_Condensed',sans-serif] text-2xl font-black leading-none text-foreground">
+          {tone.label}
+        </span>
+        <span className="mt-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">Urgency</span>
+      </div>
+    </div>
+  );
 }
 
 function AssessmentSection({
@@ -277,9 +292,9 @@ function ChipList({ items }: { items: string[] }) {
 
 function StatPill({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 flex-1 rounded-xl border border-border bg-background px-3.5 py-3">
+    <div className="min-w-0 flex-1 rounded-2xl border border-border/70 bg-card px-4 py-3.5 shadow-[0_10px_24px_rgba(10,10,10,0.04)]">
       <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className="mt-1 text-sm font-semibold text-foreground truncate">{value || "—"}</p>
+      <p className="mt-1 truncate text-sm font-semibold text-foreground">{value || "—"}</p>
     </div>
   );
 }
@@ -288,19 +303,19 @@ function StepIndicator({ current }: { current: PostStep }) {
   const order = POST_STEPS.map((s) => s.id);
   const currentIndex = order.indexOf(current);
   return (
-    <div className="flex flex-wrap gap-2 mb-8">
+    <div className="mb-5 flex flex-wrap justify-center gap-1.5 sm:justify-start">
       {POST_STEPS.map((step, index) => {
         const active = step.id === current;
         const complete = index < currentIndex;
         return (
           <div
             key={step.id}
-            className={`font-mono text-[10px] tracking-wider uppercase px-2.5 py-1 border ${
+            className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider ${
               active
-                ? "border-primary bg-primary/10 text-primary"
+                ? "border-primary/30 bg-primary text-white shadow-[0_6px_14px_rgba(255,77,28,0.22)]"
                 : complete
-                  ? "border-green-300 bg-green-50 text-green-700"
-                  : "border-border text-muted-foreground"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-border/70 bg-card text-muted-foreground"
             }`}
           >
             {index + 1}. {step.label}
@@ -338,7 +353,7 @@ function PostTab({
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [timing, setTiming] = useState<TimingOption | null>(null);
   const [customDate, setCustomDate] = useState<Date | undefined>(undefined);
-  const [address, setAddress] = useState("");
+  const [address, setAddress] = useState(user?.address ?? "");
   const [timeSlot, setTimeSlot] = useState<TimeSlotId | null>(null);
   const [bookingSummary, setBookingSummary] = useState<{
     dateLabel: string;
@@ -517,8 +532,8 @@ function PostTab({
         cityStateZip,
         fullAddress: fullAddr || "Address shared after contractor acceptance",
         contactName: user?.name || "Homeowner",
-        contactPhone: "(917) 555-0100",
-        dist: "2.0 mi",
+        contactPhone: user?.phone || user?.phones?.[0] || "Not provided",
+        dist: "Nearby",
         est: assessment.estimatedCost,
         bids: 0,
         urgent: timing === "same-day",
@@ -544,6 +559,18 @@ function PostTab({
         serviceTiming: TIMING_OPTIONS.find((t) => t.id === timing)?.label,
       };
       onJobPosted(newJob);
+      // Persist booking contact details to the homeowner profile in DB
+      if (fullAddr || user?.phone) {
+        void updateUserProfile({
+          name: user?.name || "Homeowner",
+          ...(fullAddr ? { address: fullAddr, addresses: [fullAddr] } : {}),
+          ...(user?.phone ? { phone: user.phone, phones: [user.phone] } : {}),
+        }).then((result) => {
+          if (result.ok) {
+            /* profile cache refreshed by auth helper */
+          }
+        });
+      }
       setBookingSummary({
         dateLabel,
         slotLabel: slot?.label ?? "",
@@ -603,70 +630,108 @@ function PostTab({
   }
 
   return (
-    <div className="max-w-3xl">
-      <h2 className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase text-3xl text-foreground mb-1">
-        Report an Issue
-      </h2>
-      <p className="text-sm text-muted-foreground mb-6">
-        Select a category, describe the problem, get AI suggestions, then book a pro if needed.
-      </p>
-      <div
-        className={`mb-4 inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-wider ${
-          aiConfigured
-            ? "border-green-300 bg-green-50 text-green-800"
-            : "border-amber-300 bg-amber-50 text-amber-800"
-        }`}
-      >
-        {aiConfigured ? "Connected" : "Not connected"}
+    <div className="mx-auto w-full max-w-3xl">
+      <div className="mb-4 text-center sm:text-left">
+        <div className="mb-2 flex flex-wrap items-center justify-center gap-2 sm:justify-start">
+          <h2 className="[font-family:'Barlow_Condensed',sans-serif] text-2xl font-bold uppercase tracking-tight text-foreground md:text-[1.75rem]">
+            Report an Issue
+          </h2>
+          <span
+            className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+              aiConfigured
+                ? "border-green-300 bg-green-50 text-green-800"
+                : "border-amber-300 bg-amber-50 text-amber-800"
+            }`}
+          >
+            {aiConfigured ? "Connected" : "Not connected"}
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground sm:text-sm">
+          Select a category, describe the problem, get AI suggestions, then book a pro if needed.
+        </p>
       </div>
       <StepIndicator current={step} />
 
       {/* STEP 1 — Category */}
       {step === "category" && (
-        <div>
-          <p className="font-mono text-[11px] tracking-[0.15em] text-muted-foreground uppercase mb-4">
+        <div className="rounded-[1.35rem] border border-border/70 bg-card p-4 shadow-[0_14px_32px_rgba(10,10,10,0.05)] sm:p-5">
+          <p className="mb-3.5 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground sm:text-left">
             Step 1 — What category is this?
           </p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 mb-8">
-            {CATEGORIES.map(({ icon: Icon, label }) => (
-              <button
-                key={label}
-                type="button"
-                onClick={() => setSelectedCat(label)}
-                className={`flex flex-col items-center gap-2 py-4 px-2 border transition-all duration-150 ${
-                  selectedCat === label
-                    ? "border-primary bg-primary/5 text-primary"
-                    : "border-border text-muted-foreground hover:border-foreground/20 hover:text-foreground"
-                }`}
-              >
-                <Icon size={18} />
-                <span className="font-mono text-[10px] tracking-wider uppercase">{label}</span>
-              </button>
-            ))}
+          <div className="mb-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+            {CATEGORIES.map(({ label, iconSrc, tint, Fallback }) => {
+              const selected = selectedCat === label;
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => setSelectedCat(label)}
+                  className={`group relative flex flex-col items-center gap-1.5 rounded-[1.1rem] border px-2 py-3 transition-all duration-200 ${
+                    selected
+                      ? "border-primary/45 bg-primary/[0.07] shadow-[0_10px_22px_rgba(255,77,28,0.14)] ring-1 ring-primary/20"
+                      : "border-border/60 bg-secondary/30 hover:-translate-y-0.5 hover:border-foreground/12 hover:bg-secondary/50 hover:shadow-[0_10px_20px_rgba(10,10,10,0.06)]"
+                  }`}
+                >
+                  <span
+                    className={`relative flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-b ${tint} shadow-[inset_0_1px_0_rgba(255,255,255,0.75),0_8px_16px_rgba(10,10,10,0.08)] transition-transform duration-200 group-hover:scale-[1.04] ${
+                      selected ? "scale-[1.05]" : ""
+                    }`}
+                  >
+                    <img
+                      src={iconSrc}
+                      alt={label}
+                      width={48}
+                      height={48}
+                      className="relative z-10 h-12 w-12 object-contain"
+                      draggable={false}
+                      onError={(e) => {
+                        e.currentTarget.style.display = "none";
+                        const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
+                        if (fallback) fallback.style.display = "flex";
+                      }}
+                    />
+                    <span className="hidden h-full w-full items-center justify-center text-primary">
+                      <Fallback size={22} />
+                    </span>
+                  </span>
+                  <span
+                    className={`text-[10px] font-semibold uppercase tracking-wider ${
+                      selected ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
+                    }`}
+                  >
+                    {label}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-          <button
-            type="button"
-            disabled={!selectedCat}
-            onClick={() => setStep("describe")}
-            className={`px-6 py-3 text-sm font-medium transition-colors ${
-              selectedCat ? "bg-primary text-white hover:bg-primary/90" : "bg-primary/40 text-white/80 cursor-not-allowed"
-            }`}
-          >
-            Continue
-          </button>
+          <div className="flex justify-center sm:justify-start">
+            <button
+              type="button"
+              disabled={!selectedCat}
+              onClick={() => setStep("describe")}
+              className={`rounded-xl px-6 py-2.5 text-sm font-semibold transition-all ${
+                selectedCat
+                  ? "bg-primary text-white shadow-[0_10px_22px_rgba(255,77,28,0.26)] hover:bg-primary/90"
+                  : "cursor-not-allowed bg-primary/35 text-white/80"
+              }`}
+            >
+              Continue
+            </button>
+          </div>
         </div>
       )}
 
       {/* STEP 2 — Describe */}
       {step === "describe" && (
-        <div>
-          <p className="font-mono text-[11px] tracking-[0.15em] text-muted-foreground uppercase mb-4">
+        <div className="rounded-[1.75rem] border border-border/70 bg-card p-5 shadow-[0_18px_40px_rgba(10,10,10,0.05)] sm:p-7">
+          <p className="mb-5 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
             Step 2 — Title, description & media
           </p>
 
           <div className="mb-4">
-            <label className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase block mb-1.5">
-              Job Title (optional — we'll generate one if left blank)
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Job Title (optional — we&apos;ll generate one if left blank)
             </label>
             <input
               type="text"
@@ -674,7 +739,7 @@ function PostTab({
               onChange={(e) => setTitleInput(e.target.value)}
               placeholder={`e.g. ${selectedCat} issue at my home`}
               maxLength={100}
-              className="w-full border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/60 transition-colors"
+              className="w-full rounded-2xl border border-border/70 bg-secondary/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-primary/60 focus:outline-none transition-colors"
             />
           </div>
 
@@ -683,7 +748,7 @@ function PostTab({
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Describe what happened, when it started, and what you've already tried..."
             rows={5}
-            className="w-full border border-border bg-card px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/60 transition-colors resize-none"
+            className="w-full resize-none rounded-2xl border border-border/70 bg-secondary/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-primary/60 focus:outline-none transition-colors"
           />
 
           <input
@@ -693,11 +758,11 @@ function PostTab({
             className="hidden"
             onChange={(e) => handleMediaUpload(e.target.files?.[0] ?? null)}
           />
-          <div className="mt-3 flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="inline-flex items-center gap-2 border border-primary/40 bg-primary/5 px-4 py-2.5 text-sm hover:border-primary transition-colors"
+              className="inline-flex items-center gap-2 rounded-2xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm font-medium transition-colors hover:border-primary hover:bg-primary/10"
             >
               {mediaType === "video"
                 ? <Video size={15} className="text-primary" />
@@ -705,29 +770,29 @@ function PostTab({
               }
               {mediaName ? "Change Photo / Video" : "Upload Photo or Video (recommended)"}
             </button>
-            {mediaName && <p className="font-mono text-[10px] text-muted-foreground truncate">{mediaName}</p>}
+            {mediaName && <p className="truncate text-[11px] text-muted-foreground">{mediaName}</p>}
           </div>
-          <p className="font-mono text-[10px] text-muted-foreground mt-2">
+          <p className="mt-2 text-[11px] text-muted-foreground">
             Upload a photo to analyze even without a written description — title is optional.
             {mediaType === "video" && " Video uploaded — add a short description so AI can assess it."}
           </p>
 
           {mediaPreview && mediaType === "image" && (
-            <img src={mediaPreview} alt="Uploaded issue" className="mt-4 max-h-56 w-full object-cover border border-border" />
+            <img src={mediaPreview} alt="Uploaded issue" className="mt-5 max-h-64 w-full rounded-2xl border border-border/70 object-cover" />
           )}
           {mediaPreview && mediaType === "video" && (
-            <video src={mediaPreview} controls className="mt-4 max-h-56 w-full border border-border" />
+            <video src={mediaPreview} controls className="mt-5 max-h-64 w-full rounded-2xl border border-border/70" />
           )}
 
           {selectedCat && (
-            <div className="mt-6 border border-border bg-card p-4">
-              <p className="font-mono text-[11px] tracking-[0.15em] text-primary uppercase mb-2">
+            <div className="mt-6 rounded-2xl border border-border/60 bg-secondary/50 p-4">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-primary">
                 Recommended Contractors: {recommendedCount}
               </p>
               <ul className="space-y-1 text-sm text-muted-foreground">
                 {getJobRequirements(selectedCat as JobCategory).map((req) => (
                   <li key={req} className="flex items-start gap-2">
-                    <span className="text-primary mt-0.5">•</span>
+                    <span className="mt-0.5 text-primary">•</span>
                     <span>{req}</span>
                   </li>
                 ))}
@@ -736,23 +801,23 @@ function PostTab({
           )}
 
           {analysisError && (
-            <p className="mt-4 text-xs text-red-700 border border-red-200 bg-red-50 px-3 py-2">
+            <p className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
               {analysisError}
             </p>
           )}
 
-          <div className="mt-8 flex flex-col sm:flex-row gap-3">
-            <button type="button" onClick={() => setStep("category")} className="border border-border px-5 py-3 text-sm">
+          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+            <button type="button" onClick={() => setStep("category")} className="rounded-2xl border border-border bg-background px-5 py-3.5 text-sm font-medium">
               Back
             </button>
             <button
               type="button"
               disabled={!canAnalyze || analyzing}
               onClick={runAiAssessment}
-              className={`flex-1 py-3 text-sm font-medium inline-flex items-center justify-center gap-2 ${
+              className={`flex flex-1 items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-semibold ${
                 canAnalyze && !analyzing
-                  ? "bg-primary text-white hover:bg-primary/90"
-                  : "bg-primary/40 text-white/80 cursor-not-allowed"
+                  ? "bg-primary text-white shadow-[0_12px_28px_rgba(255,77,28,0.28)] hover:bg-primary/90"
+                  : "cursor-not-allowed bg-primary/40 text-white/80"
               }`}
             >
               {analyzing ? (
@@ -775,89 +840,223 @@ function PostTab({
       {/* STEP 3 — Assessment summary */}
       {step === "assessment" && assessment && assessmentView === "summary" && (
         <div className="space-y-5">
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex items-end justify-between gap-3">
             <div>
-              <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">AI review</p>
-              <h3 className="mt-1 text-xl font-semibold tracking-tight text-foreground">What we found</h3>
+              <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">AI review</p>
+              <h3 className="mt-1 [font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight text-foreground">
+                What we found
+              </h3>
             </div>
             {analysisSource && analysisSource !== "fallback" && analysisSource !== "error" && (
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
-                Live
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold text-emerald-700">
+                <Sparkles size={12} />
+                Live analysis
               </span>
             )}
           </div>
 
           {analysisError && analysisSource === "fallback" && (
-            <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <p className="rounded-[1.25rem] border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
               {analysisError}
             </p>
           )}
 
-          <div className="overflow-hidden rounded-2xl border border-border bg-card">
-            {mediaPreview && mediaType === "image" && (
-              <img src={mediaPreview} alt="Analyzed issue" className="max-h-64 w-full object-cover" />
-            )}
-            {mediaPreview && mediaType === "video" && (
-              <video src={mediaPreview} controls className="max-h-64 w-full" />
-            )}
-            <div className="space-y-4 p-5">
-              <div>
-                <p className="text-[13px] font-semibold text-foreground">Overview</p>
-                <p className="mt-1.5 text-sm leading-relaxed text-foreground/85">{assessment.overview}</p>
-              </div>
-              {assessment.imageObservations.length > 0 && (
-                <div className="border-t border-border pt-4">
-                  <AssessmentSection title="What we see in your image" items={assessment.imageObservations} />
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+            {/* Photo / media card */}
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="overflow-hidden rounded-[1.75rem] border border-border/70 bg-card shadow-[0_18px_40px_rgba(10,10,10,0.05)] lg:col-span-5"
+            >
+              {mediaPreview && mediaType === "image" ? (
+                <img src={mediaPreview} alt="Analyzed issue" className="h-56 w-full object-cover sm:h-64" />
+              ) : mediaPreview && mediaType === "video" ? (
+                <video src={mediaPreview} controls className="h-56 w-full object-cover sm:h-64" />
+              ) : (
+                <div className="flex h-56 items-center justify-center bg-secondary sm:h-64">
+                  <div className="text-center px-6">
+                    <Eye size={28} className="mx-auto text-muted-foreground/50" />
+                    <p className="mt-3 text-sm text-muted-foreground">No photo attached — overview is based on your description.</p>
+                  </div>
                 </div>
               )}
-            </div>
+              <div className="flex items-center justify-between gap-3 px-5 py-4">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Category</p>
+                  <p className="mt-0.5 text-sm font-semibold text-foreground">{selectedCat}</p>
+                </div>
+                <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${urgencyTone(assessment.urgency).soft}`}>
+                  {urgencyTone(assessment.urgency).label} urgency
+                </span>
+              </div>
+            </motion.div>
+
+            {/* Overview + urgency ring */}
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.05 }}
+              className="flex flex-col justify-between rounded-[1.75rem] border border-border/70 bg-card p-5 shadow-[0_18px_40px_rgba(10,10,10,0.05)] sm:p-6 lg:col-span-7"
+            >
+              <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 flex-1">
+                  <div className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1 text-[11px] font-semibold text-primary">
+                    <Sparkles size={12} />
+                    Overview
+                  </div>
+                  <p className="mt-3 text-[15px] leading-relaxed text-foreground/90">{assessment.overview}</p>
+                </div>
+                <div className="shrink-0 self-center sm:self-start">
+                  <UrgencyRing urgency={assessment.urgency || "Medium"} />
+                </div>
+              </div>
+
+              <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="rounded-2xl bg-secondary/80 px-4 py-3">
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <DollarSign size={14} />
+                    <span className="text-[11px] uppercase tracking-wider">Est. cost</span>
+                  </div>
+                  <p className="mt-1 [font-family:'Barlow_Condensed',sans-serif] text-xl font-black text-foreground">
+                    {assessment.estimatedCost || "—"}
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-secondary/80 px-4 py-3">
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Clock size={14} />
+                    <span className="text-[11px] uppercase tracking-wider">Est. duration</span>
+                  </div>
+                  <p className="mt-1 [font-family:'Barlow_Condensed',sans-serif] text-xl font-black text-foreground">
+                    {assessment.estimatedDuration || "—"}
+                  </p>
+                </div>
+              </div>
+            </motion.div>
+
+            {/* What we see */}
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 }}
+              className="rounded-[1.75rem] border border-border/70 bg-card p-5 shadow-[0_18px_40px_rgba(10,10,10,0.05)] sm:p-6 lg:col-span-12"
+            >
+              <div className="mb-4 flex items-center gap-2">
+                <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-foreground text-background">
+                  <Eye size={16} />
+                </span>
+                <div>
+                  <h4 className="text-[15px] font-semibold text-foreground">What we see in your image</h4>
+                  <p className="text-xs text-muted-foreground">
+                    {assessment.imageObservations.length
+                      ? `${assessment.imageObservations.length} visual findings from your upload`
+                      : "Visual findings will appear when a photo is analyzed"}
+                  </p>
+                </div>
+              </div>
+
+              {assessment.imageObservations.length > 0 ? (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {assessment.imageObservations.map((item, index) => (
+                    <div
+                      key={`${item}-${index}`}
+                      className="rounded-2xl border border-border/60 bg-secondary/50 px-4 py-3.5 transition-colors hover:bg-secondary"
+                    >
+                      <div className="mb-2 flex items-center gap-2">
+                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-[11px] font-bold text-white">
+                          {index + 1}
+                        </span>
+                        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                          Finding
+                        </span>
+                      </div>
+                      <p className="text-sm leading-relaxed text-foreground/90">{item}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="rounded-2xl bg-secondary/60 px-4 py-3 text-sm text-muted-foreground">
+                  No photo findings yet — add a clearer image for visual details.
+                </p>
+              )}
+
+              {assessment.professionalRecommended && (
+                <div className="mt-4 flex items-start gap-3 rounded-2xl border border-orange-200/80 bg-orange-50 px-4 py-3 text-sm text-orange-900">
+                  <ShieldAlert size={16} className="mt-0.5 shrink-0" />
+                  <p>
+                    Based on this review, a licensed professional is often the safer choice — or continue with a guided DIY plan.
+                  </p>
+                </div>
+              )}
+            </motion.div>
           </div>
 
-          <p className="text-sm text-muted-foreground">
-            {assessment.professionalRecommended
-              ? "A licensed pro is often safer for this issue — or follow a guided DIY path."
-              : "Try a guided DIY fix, or book a vetted professional."}
-          </p>
-
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <button type="button" onClick={() => setStep("describe")} className="rounded-xl border border-border px-5 py-3 text-sm">
+          {/* Action cards */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[auto_1fr_1fr]">
+            <button
+              type="button"
+              onClick={() => setStep("describe")}
+              className="rounded-2xl border border-border bg-card px-5 py-4 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
+            >
               Back
             </button>
             <button
               type="button"
               onClick={() => void openDiyGuide()}
-              className="flex-1 rounded-xl border border-border bg-background px-5 py-3 text-sm font-medium transition-colors hover:border-foreground/25"
+              className="group flex items-center justify-between gap-3 rounded-2xl border border-border bg-card px-5 py-4 text-left shadow-[0_12px_28px_rgba(10,10,10,0.04)] transition-all hover:-translate-y-0.5 hover:border-foreground/15"
             >
-              Fix Myself
+              <div>
+                <p className="text-sm font-semibold text-foreground">Fix Myself</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">Guided DIY steps & parts</p>
+              </div>
+              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-secondary text-foreground transition-colors group-hover:bg-foreground group-hover:text-background">
+                <ArrowRight size={15} />
+              </span>
             </button>
             <button
               type="button"
               onClick={() => setStep("timing")}
-              className="flex-1 rounded-xl bg-primary py-3 text-sm font-medium text-white transition-colors hover:bg-primary/90"
+              className="group flex items-center justify-between gap-3 rounded-2xl bg-primary px-5 py-4 text-left text-white shadow-[0_14px_30px_rgba(255,77,28,0.28)] transition-all hover:-translate-y-0.5 hover:bg-primary/90"
             >
-              Hire a Professional
+              <div>
+                <p className="text-sm font-semibold">Hire a Professional</p>
+                <p className="mt-0.5 text-xs text-white/80">Get bids from vetted contractors</p>
+              </div>
+              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15">
+                <ArrowRight size={15} />
+              </span>
             </button>
           </div>
         </div>
       )}
 
-      {/* STEP 3b — DIY guide */}
+      {/* STEP 3b — DIY guide (soft bento) */}
       {step === "assessment" && assessment && assessmentView === "diy" && (
-        <div className="space-y-6">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">DIY guide</p>
-            <h3 className="mt-1 text-xl font-semibold tracking-tight text-foreground">Fix it yourself</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Plan based on your issue{mediaPreview && mediaType === "image" ? " and photo" : ""}.
-            </p>
+        <div className="mx-auto w-full space-y-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">DIY guide</p>
+              <h3 className="mt-1 [font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight text-foreground sm:text-4xl">
+                Fix it yourself
+              </h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Soft step cards based on your issue{mediaPreview && mediaType === "image" ? " and photo" : ""}.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAssessmentView("summary")}
+              className="self-start rounded-full border border-border/70 bg-card px-4 py-2 text-xs font-semibold text-muted-foreground shadow-sm transition-colors hover:text-foreground"
+            >
+              ← Overview
+            </button>
           </div>
 
           {diyLoading && (
-            <div className="flex items-start gap-3 rounded-xl border border-border bg-card px-4 py-4 text-sm text-foreground/85">
-              <Loader2 size={18} className="mt-0.5 shrink-0 animate-spin text-primary" />
+            <div className="flex items-start gap-3 rounded-[1.75rem] border border-border/60 bg-card px-5 py-6 shadow-[0_18px_40px_rgba(10,10,10,0.06)]">
+              <Loader2 size={20} className="mt-0.5 shrink-0 animate-spin text-primary" />
               <div className="space-y-1">
-                <p className="font-medium text-foreground">Analyzing your repair…</p>
-                <p className="text-muted-foreground leading-relaxed">
+                <p className="font-semibold text-foreground">Building your DIY plan…</p>
+                <p className="text-sm leading-relaxed text-muted-foreground">
                   Please allow a few minutes so we can analyse this and give you accurate information.
                 </p>
               </div>
@@ -865,93 +1064,250 @@ function PostTab({
           )}
 
           {analysisError && !diyLoading && (
-            <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+            <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {analysisError}
             </p>
           )}
 
           {!diyLoading && (
-            <>
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <StatPill label="Est. cost" value={assessment.estimatedCost} />
-                <StatPill label="Est. duration" value={assessment.estimatedDuration} />
-                <StatPill label="Urgency" value={assessment.urgency} />
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-5">
+              {/* Hero / diagnosis card */}
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="overflow-hidden rounded-[1.75rem] border border-border/60 bg-card shadow-[0_18px_40px_rgba(10,10,10,0.06)] lg:col-span-5"
+              >
+                <div className="relative h-36 bg-gradient-to-br from-primary/90 via-primary to-[#c43a12] sm:h-40">
+                  {mediaPreview && mediaType === "image" ? (
+                    <img src={mediaPreview} alt="Your repair" className="h-full w-full object-cover opacity-90" />
+                  ) : (
+                    <div className="absolute inset-0 opacity-30" style={{ backgroundImage: "radial-gradient(circle at 30% 40%, white 0%, transparent 55%)" }} />
+                  )}
+                  <span className="absolute right-3 top-3 rounded-full bg-foreground/90 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-white">
+                    {urgencyTone(assessment.urgency || "Medium").label} urgency
+                  </span>
+                </div>
+                <div className="relative px-5 pb-5 pt-0">
+                  <div className="-mt-8 mb-3 flex h-16 w-16 items-center justify-center rounded-full border-4 border-card bg-foreground text-white shadow-lg">
+                    <Wrench size={24} />
+                  </div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Diagnosis</p>
+                  <h4 className="mt-1 text-lg font-bold leading-snug text-foreground">
+                    {assessment.diagnosis || "Repair assessment ready"}
+                  </h4>
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                    {assessment.likelyRootCause || "Review the steps and materials below before you start."}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={resetFlow}
+                    className="mt-4 w-full rounded-full bg-gradient-to-r from-primary to-[#ff7a45] py-3 text-sm font-semibold text-white shadow-[0_12px_28px_rgba(255,77,28,0.35)] transition-transform hover:scale-[1.01]"
+                  >
+                    Done — I&apos;ll fix it myself
+                  </button>
+                </div>
+              </motion.div>
+
+              {/* Metric tiles */}
+              <div className="grid grid-cols-3 gap-3 lg:col-span-3 lg:grid-cols-1">
+                {[
+                  { label: "Est. cost", value: assessment.estimatedCost, icon: DollarSign, tone: "bg-primary/10 text-primary" },
+                  { label: "Duration", value: assessment.estimatedDuration, icon: Clock, tone: "bg-amber-100 text-amber-700" },
+                  { label: "Urgency", value: assessment.urgency, icon: Zap, tone: "bg-emerald-100 text-emerald-700" },
+                ].map(({ label, value, icon: Icon, tone }, i) => (
+                  <motion.div
+                    key={label}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.05 * i }}
+                    className="flex flex-col justify-between rounded-[1.5rem] border border-border/60 bg-card p-4 shadow-[0_14px_32px_rgba(10,10,10,0.05)]"
+                  >
+                    <span className={`mb-3 flex h-9 w-9 items-center justify-center rounded-2xl ${tone}`}>
+                      <Icon size={16} />
+                    </span>
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
+                      <p className="mt-1 text-sm font-bold leading-snug text-foreground">{value || "—"}</p>
+                    </div>
+                  </motion.div>
+                ))}
               </div>
 
-              {mediaPreview && mediaType === "image" && (
-                <div>
-                  <h4 className="mb-3 text-[13px] font-semibold text-foreground">Your photo</h4>
-                  <img
-                    src={mediaPreview}
-                    alt="Your repair issue"
-                    className="max-h-56 w-full rounded-2xl border border-border object-cover"
-                  />
+              {/* DIY timeline */}
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.08 }}
+                className="rounded-[1.75rem] border border-border/60 bg-card p-5 shadow-[0_18px_40px_rgba(10,10,10,0.06)] lg:col-span-4"
+              >
+                <div className="mb-4 flex items-center justify-between">
+                  <h4 className="text-sm font-bold text-foreground">Safe DIY steps</h4>
+                  <span className="rounded-full bg-secondary px-2.5 py-1 text-[10px] font-semibold text-muted-foreground">
+                    {(assessment.diySteps?.length || 0)} steps
+                  </span>
                 </div>
-              )}
-
-              <div className="space-y-5 rounded-2xl border border-border bg-card p-5">
-                <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-                  <div>
-                    <p className="text-[13px] font-semibold text-foreground">Diagnosis</p>
-                    <p className="mt-1.5 text-sm leading-relaxed text-foreground/85">
-                      {assessment.diagnosis || "—"}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[13px] font-semibold text-foreground">Likely root cause</p>
-                    <p className="mt-1.5 text-sm leading-relaxed text-foreground/85">
-                      {assessment.likelyRootCause || "—"}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="border-t border-border pt-5">
-                  <AssessmentSection title="Professional repair process" items={assessment.professionalSteps} ordered />
-                </div>
-
-                <div className="border-t border-border pt-5 space-y-2.5">
-                  <h3 className="text-[13px] font-semibold text-foreground">Parts & materials needed</h3>
-                  <ChipList items={assessment.partsNeeded} />
-                </div>
-
-                <div className="border-t border-border pt-5 space-y-2.5">
-                  <h3 className="text-[13px] font-semibold text-foreground">Tools a pro would bring</h3>
-                  <ChipList items={assessment.toolsRequired} />
-                </div>
-
-                <div className="border-t border-border pt-5">
-                  <AssessmentSection title="Safe DIY steps" items={assessment.diySteps} ordered />
-                </div>
-
-                {assessment.safetyNotes && (
-                  <div className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-900">
-                    <span className="font-semibold">Safety: </span>
-                    {assessment.safetyNotes}
-                  </div>
+                {(assessment.diySteps?.length ?? 0) > 0 ? (
+                  <ol className="relative space-y-0 pl-2">
+                    {assessment.diySteps.map((item, index) => (
+                      <li key={`diy-${index}`} className="relative flex gap-3 pb-5 last:pb-0">
+                        {index < assessment.diySteps.length - 1 && (
+                          <span className="absolute left-[15px] top-8 bottom-0 w-px bg-border" />
+                        )}
+                        <span className="relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-foreground text-[11px] font-bold text-background">
+                          {index + 1}
+                        </span>
+                        <p className="pt-1.5 text-sm leading-relaxed text-foreground/90">{item}</p>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Steps will appear once analysis finishes.</p>
                 )}
+              </motion.div>
+
+              {/* Parts grid */}
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.1 }}
+                className="rounded-[1.75rem] border border-border/60 bg-card p-5 shadow-[0_18px_40px_rgba(10,10,10,0.06)] lg:col-span-5"
+              >
+                <h4 className="mb-4 text-sm font-bold text-foreground">Parts & materials</h4>
+                {(assessment.partsNeeded?.length ?? 0) > 0 ? (
+                  <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                    {assessment.partsNeeded.map((part, i) => {
+                      const tones = [
+                        "from-primary/15 to-primary/5 text-primary",
+                        "from-amber-100 to-amber-50 text-amber-800",
+                        "from-emerald-100 to-emerald-50 text-emerald-800",
+                        "from-sky-100 to-sky-50 text-sky-800",
+                        "from-violet-100 to-violet-50 text-violet-800",
+                        "from-rose-100 to-rose-50 text-rose-800",
+                      ];
+                      return (
+                        <div
+                          key={`part-${i}`}
+                          className={`flex aspect-square flex-col items-center justify-center gap-2 rounded-[1.25rem] bg-gradient-to-br p-3 text-center ${tones[i % tones.length]}`}
+                        >
+                          <Layers size={18} />
+                          <span className="line-clamp-3 text-[11px] font-semibold leading-tight text-foreground/90">{part}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No specific parts listed.</p>
+                )}
+              </motion.div>
+
+              {/* Tools list */}
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.12 }}
+                className="rounded-[1.75rem] border border-border/60 bg-card p-5 shadow-[0_18px_40px_rgba(10,10,10,0.06)] lg:col-span-4"
+              >
+                <h4 className="mb-4 text-sm font-bold text-foreground">Tools you&apos;ll need</h4>
+                {(assessment.toolsRequired?.length ?? 0) > 0 ? (
+                  <ul className="space-y-2.5">
+                    {assessment.toolsRequired.map((tool, i) => (
+                      <li key={`tool-${i}`} className="flex items-center gap-3 rounded-2xl bg-secondary/50 px-3 py-2.5">
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-card text-primary shadow-sm">
+                          <Hammer size={14} />
+                        </span>
+                        <span className="text-sm font-medium text-foreground">{tool}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No tools listed.</p>
+                )}
+              </motion.div>
+
+              {/* Safety + pro process */}
+              <div className="flex flex-col gap-4 lg:col-span-3">
+                {assessment.safetyNotes && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.14 }}
+                    className="rounded-[1.5rem] border border-orange-200/80 bg-gradient-to-br from-orange-50 to-amber-50 p-4 shadow-[0_14px_32px_rgba(10,10,10,0.04)]"
+                  >
+                    <div className="mb-2 flex items-center gap-2">
+                      <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/15 text-primary">
+                        <ShieldAlert size={14} />
+                      </span>
+                      <p className="text-xs font-bold uppercase tracking-wider text-orange-900">Safety</p>
+                    </div>
+                    <p className="text-sm leading-relaxed text-orange-950/90">{assessment.safetyNotes}</p>
+                  </motion.div>
+                )}
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.16 }}
+                  className="flex flex-1 flex-col rounded-[1.5rem] bg-foreground p-4 text-background shadow-[0_18px_40px_rgba(10,10,10,0.12)]"
+                >
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Need a hand?</p>
+                  <p className="mt-1 text-sm font-semibold leading-snug">Hire a vetted pro instead</p>
+                  <p className="mt-1 flex-1 text-xs text-white/60">
+                    {(assessment.professionalSteps?.length ?? 0) > 0
+                      ? `Pros typically run ${assessment.professionalSteps.length} steps for this job.`
+                      : "Get bids from licensed contractors nearby."}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setStep("timing")}
+                    className="mt-4 flex items-center justify-center gap-2 rounded-full bg-primary py-2.5 text-xs font-bold text-white hover:bg-primary/90"
+                  >
+                    Hire a Professional <ArrowRight size={12} />
+                  </button>
+                </motion.div>
               </div>
-            </>
+
+              {/* Pro process list */}
+              {(assessment.professionalSteps?.length ?? 0) > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.18 }}
+                  className="rounded-[1.75rem] border border-border/60 bg-card p-5 shadow-[0_18px_40px_rgba(10,10,10,0.06)] lg:col-span-12"
+                >
+                  <h4 className="mb-4 text-sm font-bold text-foreground">What a professional would do</h4>
+                  <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+                    {assessment.professionalSteps.map((item, index) => (
+                      <div key={`pro-${index}`} className="flex gap-3 rounded-2xl bg-secondary/40 px-3.5 py-3">
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[11px] font-bold text-primary">
+                          {index + 1}
+                        </span>
+                        <p className="text-sm leading-relaxed text-foreground/90">{item}</p>
+                      </div>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </div>
           )}
 
           <div className="flex flex-col gap-3 sm:flex-row">
             <button
               type="button"
               onClick={() => setAssessmentView("summary")}
-              className="rounded-xl border border-border px-5 py-3 text-sm"
+              className="rounded-2xl border border-border/70 bg-card px-5 py-3.5 text-sm font-medium shadow-sm"
             >
               Back to overview
             </button>
             <button
               type="button"
               onClick={() => setStep("timing")}
-              className="flex-1 rounded-xl bg-primary py-3 text-sm font-medium text-white transition-colors hover:bg-primary/90"
+              className="flex-1 rounded-2xl bg-primary py-3.5 text-sm font-semibold text-white shadow-[0_14px_30px_rgba(255,77,28,0.28)] hover:bg-primary/90"
             >
               Hire a Professional instead
             </button>
             <button
               type="button"
               onClick={resetFlow}
-              className="rounded-xl border border-border px-5 py-3 text-sm text-muted-foreground transition-colors hover:text-foreground"
+              className="rounded-2xl border border-border/70 bg-card px-5 py-3.5 text-sm text-muted-foreground shadow-sm hover:text-foreground"
             >
               Done — I&apos;ll fix it myself
             </button>
@@ -1364,22 +1720,24 @@ function JobsTab({ jobs, user }: { jobs: HomeJob[]; user: AuthUser | null }) {
   const totalBids = jobs.reduce((s, j) => s + j.bids, 0);
 
   return (
-    <div>
-      <h2 className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase text-3xl text-foreground mb-1">
-        My Jobs
-      </h2>
-      <p className="text-sm text-muted-foreground mb-8">Track posted jobs, bids received, contractor status, and repair history.</p>
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-8">
+    <div className="mx-auto w-full">
+      <div className="mb-8 text-center sm:text-left">
+        <h2 className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase text-3xl md:text-4xl text-foreground mb-1">
+          My Jobs
+        </h2>
+        <p className="text-sm text-muted-foreground">Track posted jobs, bids received, contractor status, and repair history.</p>
+      </div>
+      <div className="mb-8 grid grid-cols-2 gap-3 xl:grid-cols-4">
         {[
           { label: "Total Posted", val: total, icon: Briefcase },
           { label: "Active Jobs", val: active, icon: AlertCircle },
           { label: "Completed", val: completed, icon: CheckCircle },
           { label: "Total Bids", val: totalBids, icon: Star },
         ].map(({ label, val, icon: Icon }) => (
-          <div key={label} className="bg-card border border-border p-4">
-            <Icon size={14} className="text-primary mb-2" />
-            <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-3xl text-foreground leading-none mb-1">{val}</p>
-            <p className="font-mono text-[11px] text-muted-foreground uppercase tracking-wider">{label}</p>
+          <div key={label} className="rounded-[1.5rem] border border-border/70 bg-card p-5 shadow-[0_14px_32px_rgba(10,10,10,0.05)]">
+            <Icon size={14} className="mb-2 text-primary" />
+            <p className="[font-family:'Barlow_Condensed',sans-serif] mb-1 text-3xl font-black leading-none text-foreground">{val}</p>
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</p>
           </div>
         ))}
       </div>
@@ -1440,16 +1798,16 @@ function AITab() {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-12rem)]">
-      <div className="mb-6">
-        <h2 className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase text-3xl text-foreground mb-1">
+    <div className="mx-auto flex h-[calc(100vh-12rem)] w-full max-w-5xl flex-col">
+      <div className="mb-6 text-center sm:text-left">
+        <h2 className="[font-family:'Barlow_Condensed',sans-serif] mb-1 text-3xl font-bold uppercase text-foreground md:text-4xl">
           AI Assistance
         </h2>
         <p className="text-sm text-muted-foreground">
           Chat live about any repair — causes, cost ranges, DIY tips, and when to hire a pro.
         </p>
       </div>
-      <div className="flex-1 overflow-y-auto border border-border bg-card p-5 space-y-4 mb-4">
+      <div className="mb-4 flex-1 space-y-4 overflow-y-auto rounded-[1.75rem] border border-border/70 bg-card p-5 shadow-[0_18px_40px_rgba(10,10,10,0.05)]">
         {messages.map((msg, i) => (
           <motion.div
             key={i}
@@ -1507,41 +1865,147 @@ function AITab() {
 }
 
 function ContactTab() {
+  const SUPPORT_EMAIL = "Services@omnipronetwork.com";
+  const [subject, setSubject] = useState("");
+  const [relatedJob, setRelatedJob] = useState("General inquiry");
+  const [message, setMessage] = useState("");
+  const [sentHint, setSentHint] = useState("");
+  const [sending, setSending] = useState(false);
+
+  const openSupportEmail = () => {
+    window.location.href = `mailto:${SUPPORT_EMAIL}`;
+  };
+
+  const sendMessage = async (e: FormEvent) => {
+    e.preventDefault();
+    const trimmedSubject = subject.trim() || "FixBridge support request";
+    const trimmedMessage = message.trim();
+    if (!trimmedMessage) {
+      setSentHint("Please enter a message before sending.");
+      return;
+    }
+    setSending(true);
+    setSentHint("");
+    try {
+      const token = window.localStorage.getItem("fixbridge-auth-token");
+      const res = await fetch("/api/support/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          subject: trimmedSubject,
+          relatedJob,
+          message: trimmedMessage,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        setSentHint(data.message || "Could not save your message. Please try again.");
+        setSending(false);
+        return;
+      }
+      const body = [
+        `Related job: ${relatedJob}`,
+        "",
+        trimmedMessage,
+        "",
+        "— Sent from FixBridge Contact Us",
+      ].join("\n");
+      const mailto = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(trimmedSubject)}&body=${encodeURIComponent(body)}`;
+      window.location.href = mailto;
+      setSentHint(`Saved to FixBridge and opening your email app for ${SUPPORT_EMAIL}…`);
+      setSubject("");
+      setMessage("");
+    } catch {
+      setSentHint("Network error while saving. Please try again.");
+    } finally {
+      setSending(false);
+    }
+  };
+
   return (
-    <div>
-      <h2 className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase text-3xl text-foreground mb-1">
-        Contact & Support
-      </h2>
-      <p className="text-sm text-muted-foreground mb-8">We're here to help with anything on the platform.</p>
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-10">
-        {[
-          { icon: MessageSquare, label: "Live Chat", desc: "Usually responds in under 2 min", cta: "Start Chat", primary: true },
-          { icon: Mail, label: "Email Support", desc: "support@fixbridge.ai · 4–6h response", cta: "Send Email", primary: false },
-          { icon: Phone, label: "Phone", desc: "(212) 555-0182 · Mon–Fri 9am–6pm EST", cta: "Call Now", primary: false },
-        ].map(({ icon: Icon, label, desc, cta, primary }) => (
-          <div key={label} className="bg-card border border-border p-6 flex flex-col gap-3">
-            <Icon size={20} className="text-primary" />
-            <div>
-              <p className="text-sm font-medium text-foreground mb-0.5">{label}</p>
-              <p className="font-mono text-[11px] text-muted-foreground">{desc}</p>
-            </div>
-            <button className={`text-sm font-medium px-4 py-2 transition-colors mt-auto ${primary ? "bg-primary text-white hover:bg-primary/90" : "border border-border text-foreground hover:border-foreground/30"}`}>
-              {cta}
-            </button>
-          </div>
-        ))}
+    <div className="mx-auto w-full">
+      <div className="mb-8 text-center sm:text-left">
+        <h2 className="[font-family:'Barlow_Condensed',sans-serif] mb-1 text-3xl font-bold uppercase text-foreground md:text-4xl">
+          Contact & Support
+        </h2>
+        <p className="text-sm text-muted-foreground">We&apos;re here to help with anything on the platform.</p>
       </div>
-      <div className="border border-border bg-card p-6 mb-6">
-        <p className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase mb-4">Send a Message</p>
+      <div className="mb-10 grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="flex flex-col gap-3 rounded-[1.5rem] border border-border/70 bg-card p-6 opacity-75 shadow-[0_14px_32px_rgba(10,10,10,0.05)]">
+          <MessageSquare size={20} className="text-muted-foreground" />
+          <div>
+            <p className="mb-0.5 text-sm font-medium text-foreground">Live Chat</p>
+            <p className="text-[11px] text-muted-foreground">Live chat is not available yet.</p>
+          </div>
+          <button
+            type="button"
+            disabled
+            className="mt-auto cursor-not-allowed rounded-2xl bg-secondary px-4 py-2 text-sm font-medium text-muted-foreground"
+          >
+            Coming Soon
+          </button>
+        </div>
+
+        <div className="flex flex-col gap-3 rounded-[1.5rem] border border-border/70 bg-card p-6 shadow-[0_14px_32px_rgba(10,10,10,0.05)]">
+          <Mail size={20} className="text-primary" />
+          <div>
+            <p className="mb-0.5 text-sm font-medium text-foreground">Email Support</p>
+            <p className="text-[11px] text-muted-foreground">{SUPPORT_EMAIL}</p>
+          </div>
+          <button
+            type="button"
+            onClick={openSupportEmail}
+            className="mt-auto rounded-2xl border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:border-foreground/30"
+          >
+            Send Email
+          </button>
+        </div>
+
+        <div className="flex flex-col gap-3 rounded-[1.5rem] border border-border/70 bg-card p-6 shadow-[0_14px_32px_rgba(10,10,10,0.05)]">
+          <Phone size={20} className="text-primary" />
+          <div>
+            <p className="mb-0.5 text-sm font-medium text-foreground">Phone</p>
+            <p className="text-[11px] text-muted-foreground">(212) 555-0182 · Mon–Fri 9am–6pm EST</p>
+          </div>
+          <a
+            href="tel:+12125550182"
+            className="mt-auto rounded-2xl border border-border px-4 py-2 text-center text-sm font-medium text-foreground transition-colors hover:border-foreground/30"
+          >
+            Call Now
+          </a>
+        </div>
+      </div>
+
+      <form
+        onSubmit={sendMessage}
+        className="mb-6 rounded-[1.5rem] border border-border/70 bg-card p-6 shadow-[0_14px_32px_rgba(10,10,10,0.05)]"
+      >
+        <p className="mb-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Send a Message</p>
+        <p className="mb-4 text-xs text-muted-foreground">
+          Messages are sent to <span className="font-medium text-foreground">{SUPPORT_EMAIL}</span>.
+        </p>
         <div className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase block mb-1.5">Subject</label>
-              <input type="text" placeholder="Issue with bid received" className="w-full border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/60" />
+              <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Subject</label>
+              <input
+                type="text"
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                placeholder="Issue with bid received"
+                className="w-full rounded-2xl border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-primary/60 focus:outline-none"
+              />
             </div>
             <div>
-              <label className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase block mb-1.5">Related Job</label>
-              <select className="w-full border border-border bg-background px-4 py-2.5 text-sm text-foreground focus:outline-none focus:border-primary/60">
+              <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Related Job</label>
+              <select
+                value={relatedJob}
+                onChange={(e) => setRelatedJob(e.target.value)}
+                className="w-full rounded-2xl border border-border bg-background px-4 py-2.5 text-sm text-foreground focus:border-primary/60 focus:outline-none"
+              >
                 <option>Kitchen sink drain clog</option>
                 <option>Furnace repair</option>
                 <option>General inquiry</option>
@@ -1549,17 +2013,31 @@ function ContactTab() {
             </div>
           </div>
           <div>
-            <label className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase block mb-1.5">Message</label>
-            <textarea rows={4} placeholder="Describe your issue or question…" className="w-full border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/60 resize-none" />
+            <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Message</label>
+            <textarea
+              rows={4}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Describe your issue or question…"
+              className="w-full resize-none rounded-2xl border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-primary/60 focus:outline-none"
+            />
           </div>
-          <button className="bg-primary text-white px-6 py-2.5 text-sm font-medium hover:bg-primary/90 transition-colors">Send Message</button>
+          {sentHint && <p className="text-xs text-muted-foreground">{sentHint}</p>}
+          <button
+            type="submit"
+            disabled={sending}
+            className="rounded-2xl bg-primary px-6 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:opacity-60"
+          >
+            {sending ? "Saving…" : "Send Message"}
+          </button>
         </div>
-      </div>
-      <div className="bg-muted/50 border border-border p-5">
-        <p className="font-mono text-[11px] tracking-wider text-foreground uppercase mb-3">Quick FAQs</p>
+      </form>
+
+      <div className="rounded-[1.5rem] border border-border/70 bg-muted/50 p-5">
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-foreground">Quick FAQs</p>
         <div className="space-y-2">
           {["How long until I get my first bid?", "Can I reject a bid after accepting?", "What does the booking fee cover?", "How are contractors vetted?"].map((q) => (
-            <button key={q} className="w-full flex items-center justify-between text-sm text-muted-foreground hover:text-foreground py-2 border-b border-border/50 last:border-0 transition-colors text-left">
+            <button key={q} type="button" className="flex w-full items-center justify-between border-b border-border/50 py-2 text-left text-sm text-muted-foreground transition-colors last:border-0 hover:text-foreground">
               {q}
               <ChevronRight size={14} className="shrink-0" />
             </button>
@@ -1572,21 +2050,60 @@ function ContactTab() {
 
 function HomeownerProfileTab({
   user,
+  jobs = [],
   onUserUpdated,
+  onViewJobs,
 }: {
   user: AuthUser | null;
+  jobs?: HomeJob[];
   onUserUpdated: (u: AuthUser) => void;
+  onViewJobs?: () => void;
 }) {
-  const [name, setName] = useState(user?.name ?? "");
+  const nameParts = (user?.name ?? "").trim().split(/\s+/).filter(Boolean);
+  const [firstName, setFirstName] = useState(nameParts[0] ?? "");
+  const [lastName, setLastName] = useState(nameParts.slice(1).join(" ") || "");
   const [phone, setPhone] = useState(user?.phone ?? "");
   const [address, setAddress] = useState(user?.address ?? "");
   const [contactEmail, setContactEmail] = useState(user?.contactEmail ?? user?.email ?? "");
+  const [photoDataUrl, setPhotoDataUrl] = useState(user?.photoDataUrl ?? "");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const parts = (user?.name ?? "").trim().split(/\s+/).filter(Boolean);
+    setFirstName(parts[0] ?? "");
+    setLastName(parts.slice(1).join(" ") || "");
+    setPhone(user?.phone ?? "");
+    setAddress(user?.address ?? "");
+    setContactEmail(user?.contactEmail ?? user?.email ?? "");
+    setPhotoDataUrl(user?.photoDataUrl ?? "");
+  }, [user]);
+
+  const fullName = [firstName, lastName].filter(Boolean).join(" ").trim() || user?.name || "Homeowner";
+  const initials = fullName.split(" ").map((p) => p[0]).join("").slice(0, 2).toUpperCase() || "HO";
+
+  const openCount = jobs.filter((j) => j.status === "open" || j.status === "in-progress").length;
+  const completedCount = jobs.filter((j) => j.status === "completed").length;
+  const totalBids = jobs.reduce((s, j) => s + (j.bids || 0), 0);
+  const profileFill = [firstName, lastName, phone, address, contactEmail, photoDataUrl].filter((v) => String(v).trim()).length;
+  const profilePct = Math.round((profileFill / 6) * 100);
+
+  const fieldClass =
+    "w-full rounded-2xl border border-border/70 bg-secondary/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-primary/50 focus:outline-none";
+
+  const handlePhoto = (file: File | undefined) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") setPhotoDataUrl(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
 
   const handleSave = async () => {
-    if (!name.trim()) {
+    if (!fullName.trim()) {
       setError("Name is required.");
       return;
     }
@@ -1594,13 +2111,14 @@ function HomeownerProfileTab({
     setError(null);
     setMessage(null);
     const result = await updateUserProfile({
-      name: name.trim(),
+      name: fullName.trim(),
       phone: phone.trim(),
       address: address.trim(),
       contactEmail: contactEmail.trim(),
       emails: contactEmail.trim() ? [contactEmail.trim()] : [],
       phones: phone.trim() ? [phone.trim()] : [],
       addresses: address.trim() ? [address.trim()] : [],
+      ...(photoDataUrl ? { photoDataUrl } : {}),
     });
     setSaving(false);
     if (!result.ok) {
@@ -1611,41 +2129,186 @@ function HomeownerProfileTab({
     setMessage("Profile saved.");
   };
 
+  const recentJobs = jobs.slice(0, 4);
+
   return (
-    <div className="max-w-2xl">
-      <h2 className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase text-3xl text-foreground mb-1">My Profile</h2>
-      <p className="text-sm text-muted-foreground mb-8">Contact details shared with contractors after they accept your job.</p>
-      <div className="bg-card border border-border p-6 space-y-4">
-        <div>
-          <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">Full Name</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border border-border bg-background px-4 py-2.5 text-sm focus:outline-none focus:border-primary/60" />
+    <div className="mx-auto w-full max-w-5xl space-y-5">
+      <div className="text-center sm:text-left">
+        <h2 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-bold uppercase text-foreground md:text-4xl">
+          My Profile
+        </h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Details shared with contractors after they accept your job.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-5">
+        {/* Profile summary */}
+        <div className="flex flex-col items-center rounded-[1.75rem] border border-border/60 bg-card p-6 text-center shadow-[0_18px_40px_rgba(10,10,10,0.06)] lg:col-span-4">
+          <div className="relative mb-4">
+            {photoDataUrl ? (
+              <img src={photoDataUrl} alt={fullName} className="h-28 w-28 rounded-full object-cover shadow-md ring-4 ring-secondary" />
+            ) : (
+              <div className="flex h-28 w-28 items-center justify-center rounded-full bg-primary text-3xl font-black text-white shadow-md ring-4 ring-secondary [font-family:'Barlow_Condensed',sans-serif]">
+                {initials}
+              </div>
+            )}
+          </div>
+          <h3 className="text-xl font-bold text-foreground">{fullName}</h3>
+          <div className="mt-2 flex flex-col items-center gap-1 text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1">
+              <MapPin size={12} className="text-primary" />
+              {address.trim() || "Add your service address"}
+            </span>
+            <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary">
+              Homeowner
+            </span>
+          </div>
+          <input
+            ref={photoInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => handlePhoto(e.target.files?.[0])}
+          />
+          <button
+            type="button"
+            onClick={() => photoInputRef.current?.click()}
+            className="mt-5 inline-flex items-center gap-2 rounded-full bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary transition-colors hover:bg-primary/15"
+          >
+            <ImagePlus size={14} />
+            Upload Photo
+          </button>
         </div>
-        <div>
-          <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">Account Email</label>
-          <input value={user?.email ?? ""} disabled className="w-full border border-border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground" />
+
+        {/* Personal details */}
+        <div className="rounded-[1.75rem] border border-border/60 bg-card p-6 shadow-[0_18px_40px_rgba(10,10,10,0.06)] lg:col-span-8">
+          <h3 className="mb-5 text-base font-bold text-foreground">Personal Details</h3>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">First Name</label>
+              <input value={firstName} onChange={(e) => setFirstName(e.target.value)} className={fieldClass} />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Last Name</label>
+              <input value={lastName} onChange={(e) => setLastName(e.target.value)} className={fieldClass} />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Account Email</label>
+              <input value={user?.email ?? ""} disabled className={`${fieldClass} opacity-70`} />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Contact Email</label>
+              <input value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} className={fieldClass} />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Phone</label>
+              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(917) 555-0100" className={fieldClass} />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Service Address</label>
+              <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="123 Main St, Brooklyn, NY" className={fieldClass} />
+            </div>
+          </div>
         </div>
-        <div>
-          <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">Contact Email</label>
-          <input value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} className="w-full border border-border bg-background px-4 py-2.5 text-sm focus:outline-none focus:border-primary/60" />
+
+        {/* Activity meters */}
+        <div className="rounded-[1.75rem] border border-border/60 bg-card p-6 shadow-[0_18px_40px_rgba(10,10,10,0.06)] lg:col-span-5">
+          <div className="mb-5 flex items-center justify-between">
+            <h3 className="text-base font-bold text-foreground">My Activity</h3>
+            <span className="text-[11px] font-semibold text-primary">{profilePct}% complete</span>
+          </div>
+          <div className="space-y-5">
+            {[
+              { label: "Profile completeness", pct: profilePct, scale: ["Start", "Halfway", "Ready"] },
+              { label: "Active jobs", pct: Math.min(100, openCount * 25), scale: ["0", "Few", "Busy"], hint: `${openCount} open` },
+              { label: "Jobs completed", pct: Math.min(100, completedCount * 20), scale: ["0", "Some", "Many"], hint: `${completedCount} done` },
+              { label: "Bids received", pct: Math.min(100, totalBids * 10), scale: ["Low", "Steady", "High"], hint: `${totalBids} total` },
+            ].map(({ label, pct, scale, hint }) => (
+              <div key={label}>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-sm font-medium text-foreground">{label}</p>
+                  {hint && <span className="text-[11px] text-muted-foreground">{hint}</span>}
+                </div>
+                <div className="relative h-2.5 rounded-full bg-secondary">
+                  <div className="absolute inset-y-0 left-0 rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+                  <span
+                    className="absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-white bg-primary shadow"
+                    style={{ left: `calc(${pct}% - 8px)` }}
+                  />
+                </div>
+                <div className="mt-1.5 flex justify-between text-[10px] text-muted-foreground">
+                  {scale.map((s) => (
+                    <span key={s}>{s}</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-        <div>
-          <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">Phone</label>
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(917) 555-0100" className="w-full border border-border bg-background px-4 py-2.5 text-sm focus:outline-none focus:border-primary/60" />
+
+        {/* Recent jobs */}
+        <div className="rounded-[1.75rem] border border-border/60 bg-card p-6 shadow-[0_18px_40px_rgba(10,10,10,0.06)] lg:col-span-7">
+          <div className="mb-5 flex items-center justify-between">
+            <h3 className="text-base font-bold text-foreground">My Jobs</h3>
+            {onViewJobs && (
+              <button type="button" onClick={onViewJobs} className="text-xs font-semibold text-primary hover:underline">
+                View all
+              </button>
+            )}
+          </div>
+          {recentJobs.length === 0 ? (
+            <p className="rounded-2xl bg-secondary/50 px-4 py-8 text-center text-sm text-muted-foreground">
+              No jobs yet — post a repair to get started.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {recentJobs.map((job) => (
+                <div key={job.id} className="flex flex-col rounded-[1.25rem] border border-border/60 bg-secondary/30 p-4">
+                  <p className="line-clamp-2 text-sm font-semibold text-foreground">{job.title}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                    <span className="inline-flex items-center gap-1">
+                      <Briefcase size={11} className="text-primary" />
+                      {job.category}
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <Clock size={11} />
+                      {job.posted}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between">
+                    <span className="rounded-full bg-card px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      {job.status}
+                    </span>
+                    {onViewJobs && (
+                      <button
+                        type="button"
+                        onClick={onViewJobs}
+                        className="rounded-full bg-primary/10 px-3 py-1 text-[11px] font-semibold text-primary hover:bg-primary/15"
+                      >
+                        View
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-        <div>
-          <label className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase block mb-1.5">Service Address</label>
-          <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="123 Main St, Brooklyn, NY 11201" className="w-full border border-border bg-background px-4 py-2.5 text-sm focus:outline-none focus:border-primary/60" />
-        </div>
-        {error && <p className="text-sm text-red-700 border border-red-200 bg-red-50 px-3 py-2">{error}</p>}
-        {message && <p className="text-sm text-green-700 border border-green-200 bg-green-50 px-3 py-2">{message}</p>}
+      </div>
+
+      {error && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</p>}
+      {message && <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-700">{message}</p>}
+
+      <div className="flex justify-center pt-1">
         <button
           type="button"
           onClick={handleSave}
           disabled={saving}
-          className="bg-primary text-white px-5 py-2.5 text-sm font-medium hover:bg-primary/90 disabled:opacity-60 inline-flex items-center gap-2"
+          className="inline-flex min-w-[160px] items-center justify-center gap-2 rounded-full bg-primary px-10 py-3.5 text-sm font-semibold text-white shadow-[0_14px_30px_rgba(255,77,28,0.28)] transition-colors hover:bg-primary/90 disabled:opacity-60"
         >
           {saving && <Loader2 size={14} className="animate-spin" />}
-          Save Profile
+          Save
         </button>
       </div>
     </div>
@@ -1668,10 +2331,21 @@ export default function HomeownerDashboard({
   const [activeTab, setActiveTab] = useState<DashTab>("post");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [jobs, setJobs] = useState<HomeJob[]>(INITIAL_JOBS);
+  const [jobs, setJobs] = useState<HomeJob[]>([]);
   const [profileUser, setProfileUser] = useState<AuthUser | null>(user);
+  const mainScrollRef = useRef<HTMLElement>(null);
   const displayName = profileUser?.name || user?.name || "Maria Santos";
   const initials = displayName.split(" ").map((p) => p[0]).join("").slice(0, 2).toUpperCase();
+
+  const goToTab = (id: DashTab) => {
+    setActiveTab(id);
+    setMobileMenuOpen(false);
+    // Always start Contact Us (and other tabs) from the top of the content area
+    requestAnimationFrame(() => {
+      mainScrollRef.current?.scrollTo({ top: 0, behavior: id === "contact" ? "smooth" : "auto" });
+      window.scrollTo({ top: 0, behavior: id === "contact" ? "smooth" : "auto" });
+    });
+  };
 
   useEffect(() => {
     setProfileUser(user);
@@ -1679,29 +2353,44 @@ export default function HomeownerDashboard({
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      const mine = await getMyJobs();
-      if (cancelled || !mine.length) return;
+    const mapStatus = (s: string): HomeJob["status"] => {
+      if (s === "completed") return "completed";
+      if (s && s !== "open") return "in-progress";
+      return "open";
+    };
+    const refreshJobs = async () => {
+      const [mine, lcs] = await Promise.all([getMyJobs(), getAllLifecycles()]);
+      if (cancelled) return;
+      const lcMap = Object.fromEntries(lcs.map((lc) => [lc.jobId, lc]));
       setJobs(
-        mine.map((j) => ({
-          id: j.id,
-          bookingId: j.bookingId,
-          title: j.title,
-          category: j.category,
-          posted: j.posted,
-          bids: j.bids,
-          status: "open" as const,
-          est: j.est,
-          topBid: "—",
-          aiAssessed: Boolean(j.ai),
-          scheduledDate: j.scheduledDate,
-          timeSlot: j.timeSlot,
-          serviceTiming: j.serviceTiming,
-        })),
+        mine.map((j) => {
+          const lc = lcMap[j.id];
+          return {
+            id: j.id,
+            bookingId: j.bookingId,
+            title: j.title,
+            category: j.category,
+            posted: j.posted,
+            bids: j.bids,
+            status: mapStatus(lc?.status ?? "open"),
+            est: j.est,
+            topBid: "—",
+            aiAssessed: Boolean(j.ai),
+            scheduledDate: j.scheduledDate,
+            timeSlot: j.timeSlot,
+            serviceTiming: j.serviceTiming,
+            contractor: lc?.contractorName,
+            rating: lc?.rating,
+          };
+        }),
       );
-    })();
+    };
+    void refreshJobs();
+    const onLc = () => { void refreshJobs(); };
+    window.addEventListener("fixbridge-lifecycle-update", onLc);
     return () => {
       cancelled = true;
+      window.removeEventListener("fixbridge-lifecycle-update", onLc);
     };
   }, []);
 
@@ -1711,105 +2400,117 @@ export default function HomeownerDashboard({
   };
 
   return (
-    <div className="flex h-screen bg-background overflow-hidden">
+    <div className="flex h-screen overflow-hidden bg-[#F3F0EA]">
       {/* Sidebar overlay (mobile) */}
       {mobileMenuOpen && (
-        <button type="button" className="fixed inset-0 bg-black/50 z-30 md:hidden" onClick={() => setMobileMenuOpen(false)} aria-label="Close menu overlay" />
+        <button type="button" className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={() => setMobileMenuOpen(false)} aria-label="Close menu overlay" />
       )}
 
-      {/* Sidebar — desktop always visible, mobile slide-in for secondary actions */}
-      <aside className={`fixed md:static inset-y-0 left-0 z-40 flex flex-col border-r border-border bg-card transition-all duration-300 ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} ${sidebarOpen ? "md:w-56" : "md:w-16"} w-72 shrink-0`}>
-        <div className="border-b border-border px-4 py-4 flex items-center justify-between h-16">
-          <button onClick={() => setSidebarOpen((s) => !s)} className="flex items-center gap-1.5">
-            <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-lg tracking-wider text-foreground">FIX</span>
-            <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-lg tracking-wider text-primary">BRIDGE</span>
-            {sidebarOpen && <span className="font-mono text-[9px] bg-primary text-white px-1 py-0.5 ml-0.5">AI</span>}
-          </button>
-          <button type="button" onClick={() => setMobileMenuOpen(false)} className="md:hidden p-1 text-muted-foreground hover:text-foreground">
-            <X size={18} />
-          </button>
-        </div>
-
-        {/* Mobile-only user info */}
-        <div className="md:hidden px-4 py-3 border-b border-border bg-muted/30">
-          <p className="text-sm font-semibold text-foreground">{displayName}</p>
-          <p className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider">Homeowner</p>
-        </div>
-
-        <nav className="flex-1 py-4 px-2 space-y-0.5 overflow-y-auto">
-          {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => { setActiveTab(id); setMobileMenuOpen(false); }}
-              className={`w-full flex items-center gap-3 px-3 py-3 md:py-2.5 transition-colors rounded-sm ${activeTab === id ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
-            >
-              <Icon size={18} className="shrink-0" />
-              <span className={`text-sm font-medium truncate ${!sidebarOpen ? "md:hidden" : ""}`}>{label}</span>
+      {/* Slim pill sidebar */}
+      <aside className={`fixed md:static inset-y-0 left-0 z-40 m-0 flex flex-col transition-all duration-300 md:m-3 ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} ${sidebarOpen ? "md:w-56" : "md:w-[4.5rem]"} w-72 shrink-0`}>
+        <div className="flex h-full flex-col overflow-hidden rounded-[1.75rem] border border-border/60 bg-[#1A1614] text-white shadow-[0_20px_50px_rgba(10,10,10,0.18)]">
+          <div className="flex h-16 items-center justify-between border-b border-white/10 px-4">
+            <button type="button" onClick={() => setSidebarOpen((s) => !s)} className="flex items-center gap-1.5">
+              <span className="[font-family:'Barlow_Condensed',sans-serif] text-lg font-black tracking-wider">FIX</span>
+              <span className="[font-family:'Barlow_Condensed',sans-serif] text-lg font-black tracking-wider text-primary">BRIDGE</span>
+              {sidebarOpen && <span className="ml-0.5 rounded-full bg-primary px-1.5 py-0.5 text-[9px] font-bold">AI</span>}
             </button>
-          ))}
-        </nav>
+            <button type="button" onClick={() => setMobileMenuOpen(false)} className="p-1 text-white/60 hover:text-white md:hidden">
+              <X size={18} />
+            </button>
+          </div>
 
-        <div className="border-t border-border p-3 space-y-0.5">
-          <button onClick={onToggleDark} className="w-full flex items-center gap-3 px-3 py-2.5 md:py-2 text-muted-foreground hover:text-foreground transition-colors rounded-sm">
-            {isDark ? <Sun size={16} className="shrink-0" /> : <Moon size={16} className="shrink-0" />}
-            <span className={`text-sm ${!sidebarOpen ? "md:hidden" : ""}`}>{isDark ? "Light mode" : "Dark mode"}</span>
-          </button>
-          <button onClick={onLogout} className="w-full flex items-center gap-3 px-3 py-2.5 md:py-2 text-muted-foreground hover:text-foreground transition-colors rounded-sm">
-            <LogOut size={16} className="shrink-0" />
-            <span className={`text-sm ${!sidebarOpen ? "md:hidden" : ""}`}>Sign Out</span>
-          </button>
+          <div className="border-b border-white/10 bg-white/5 px-4 py-3 md:hidden">
+            <p className="text-sm font-semibold">{displayName}</p>
+            <p className="text-[10px] uppercase tracking-wider text-white/50">Homeowner</p>
+          </div>
+
+          <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-4">
+            {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => goToTab(id)}
+                className={`flex w-full items-center gap-3 rounded-2xl px-3 py-3 transition-colors md:py-2.5 ${
+                  activeTab === id ? "bg-primary text-white" : "text-white/65 hover:bg-white/8 hover:text-white"
+                }`}
+              >
+                <Icon size={18} className="shrink-0" />
+                <span className={`truncate text-sm font-medium ${!sidebarOpen ? "md:hidden" : ""}`}>{label}</span>
+              </button>
+            ))}
+          </nav>
+
+          <div className="space-y-1 border-t border-white/10 p-3">
+            <button type="button" onClick={onToggleDark} className="flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-white/65 transition-colors hover:bg-white/8 hover:text-white">
+              {isDark ? <Sun size={16} className="shrink-0" /> : <Moon size={16} className="shrink-0" />}
+              <span className={`text-sm ${!sidebarOpen ? "md:hidden" : ""}`}>{isDark ? "Light mode" : "Dark mode"}</span>
+            </button>
+            <button type="button" onClick={onLogout} className="flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-white/65 transition-colors hover:bg-white/8 hover:text-white">
+              <LogOut size={16} className="shrink-0" />
+              <span className={`text-sm ${!sidebarOpen ? "md:hidden" : ""}`}>Sign Out</span>
+            </button>
+          </div>
         </div>
       </aside>
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        {/* Header */}
-        <header className="h-14 md:h-16 border-b border-border flex items-center justify-between px-4 md:px-6 bg-card shrink-0">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden md:pr-3 md:pt-3 md:pb-3">
+        <header className="mb-0 flex h-14 shrink-0 items-center justify-between rounded-none border-b border-border/60 bg-card/90 px-4 backdrop-blur md:mb-3 md:h-16 md:rounded-[1.5rem] md:border md:px-6 md:shadow-[0_12px_30px_rgba(10,10,10,0.05)]">
           <div className="flex items-center gap-3">
-            {/* Desktop sidebar toggle / Mobile logo */}
-            <button type="button" className="md:hidden flex items-center gap-1" onClick={() => setMobileMenuOpen(true)} aria-label="Open menu">
-              <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-base tracking-wider text-foreground">FIX</span>
-              <span className="[font-family:'Barlow_Condensed',sans-serif] font-black text-base tracking-wider text-primary">BRIDGE</span>
+            <button type="button" className="flex items-center gap-1 md:hidden" onClick={() => setMobileMenuOpen(true)} aria-label="Open menu">
+              <span className="[font-family:'Barlow_Condensed',sans-serif] text-base font-black tracking-wider text-foreground">FIX</span>
+              <span className="[font-family:'Barlow_Condensed',sans-serif] text-base font-black tracking-wider text-primary">BRIDGE</span>
             </button>
             <div className="hidden md:block">
-              <p className="text-sm font-semibold text-foreground leading-tight">{displayName}</p>
+              <p className="text-sm font-semibold leading-tight text-foreground">{displayName}</p>
               <div className="flex items-center gap-1">
                 <MapPin size={10} className="text-primary" />
-                <p className="font-mono text-[10px] text-muted-foreground">Homeowner</p>
+                <p className="text-[10px] text-muted-foreground">Homeowner</p>
               </div>
             </div>
           </div>
           <div className="flex items-center gap-2.5">
-            <button className="relative w-9 h-9 flex items-center justify-center border border-border text-muted-foreground hover:text-foreground transition-colors">
+            <button type="button" className="relative flex h-9 w-9 items-center justify-center rounded-full border border-border/70 text-muted-foreground transition-colors hover:text-foreground">
               <Bell size={15} />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-primary rounded-full" />
+              <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-primary" />
             </button>
-            <button type="button" onClick={() => setMobileMenuOpen(true)} className="md:hidden w-8 h-8 bg-orange-400 rounded-full flex items-center justify-center text-white text-xs font-bold">
+            <button type="button" onClick={() => setMobileMenuOpen(true)} className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-bold text-white md:hidden">
               {initials}
             </button>
-            <div className="hidden md:flex w-8 h-8 bg-orange-400 rounded-full items-center justify-center text-white text-xs font-bold">
+            <div className="hidden h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-bold text-white md:flex">
               {initials}
             </div>
-            <span className="hidden lg:inline font-mono text-[9px] text-muted-foreground tracking-wider" title="Deploy build stamp">
-              {typeof __FIXBRIDGE_BUILD__ !== "undefined" ? __FIXBRIDGE_BUILD__ : "dev"}
-            </span>
           </div>
         </header>
 
-        {/* Page content */}
-        <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 pb-20 md:pb-8">
-          <motion.div key={activeTab} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
+        <main
+          ref={mainScrollRef}
+          className="flex-1 overflow-y-auto rounded-none p-4 pb-20 md:rounded-[1.75rem] md:border md:border-border/60 md:bg-card/40 md:p-6 md:pb-8 lg:p-8"
+        >
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.25 }}
+            className="mx-auto w-full max-w-5xl"
+          >
             {activeTab === "post" && (
               <PostTab
                 onJobPosted={(job) => setJobs((prev) => [job, ...prev.filter((j) => j.id !== job.id)])}
-                onViewJobs={() => setActiveTab("jobs")}
+                onViewJobs={() => goToTab("jobs")}
                 user={profileUser}
               />
             )}
             {activeTab === "jobs" && <JobsTab jobs={jobs} user={profileUser} />}
             {activeTab === "ai" && <AITab />}
             {activeTab === "profile" && (
-              <HomeownerProfileTab user={profileUser} onUserUpdated={handleProfileUpdated} />
+              <HomeownerProfileTab
+                user={profileUser}
+                jobs={jobs}
+                onUserUpdated={handleProfileUpdated}
+                onViewJobs={() => goToTab("jobs")}
+              />
             )}
             {activeTab === "contact" && <ContactTab />}
           </motion.div>
@@ -1817,18 +2518,18 @@ export default function HomeownerDashboard({
       </div>
 
       {/* Mobile Bottom Navigation */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-20 bg-card border-t border-border flex safe-area-inset-bottom">
+      <nav className="fixed bottom-0 left-0 right-0 z-20 flex border-t border-border/70 bg-card/95 backdrop-blur safe-area-inset-bottom md:hidden">
         {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
             type="button"
-            onClick={() => setActiveTab(id)}
-            className={`flex-1 flex flex-col items-center justify-center gap-1 py-2.5 transition-colors min-h-[56px] ${
+            onClick={() => goToTab(id)}
+            className={`flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 py-2.5 transition-colors ${
               activeTab === id ? "text-primary" : "text-muted-foreground"
             }`}
           >
             <Icon size={20} strokeWidth={activeTab === id ? 2.5 : 1.8} />
-            <span className="font-mono text-[9px] uppercase tracking-wide leading-none">{label}</span>
+            <span className="text-[9px] font-semibold uppercase tracking-wide leading-none">{label}</span>
           </button>
         ))}
       </nav>
