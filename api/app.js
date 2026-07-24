@@ -8,6 +8,7 @@ import rateLimit from 'express-rate-limit';
 import { OAuth2Client } from 'google-auth-library';
 import { Resend } from 'resend';
 import crypto from 'crypto';
+import { analyzeRepair, chatWithCustomer, getAiStatus } from './ai.js';
 
 const isProduction = process.env.NODE_ENV === 'production';
 const useInMemoryDb = !process.env.NEON_DATABASE_URL;
@@ -1339,6 +1340,65 @@ app.post('/api/chat/:jobId', async (req, res) => {
   } catch (e) {
     console.error('add message:', e);
     return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Multi-provider AI assessment (Gemini / OpenAI / OpenRouter / custom) ──────
+app.get('/api/ai/status', (_req, res) => {
+  return res.json(getAiStatus());
+});
+
+app.post('/api/ai/assess', async (req, res) => {
+  try {
+    const { category, description, imageDataUrl, mode } = req.body || {};
+    const desc = typeof description === 'string' ? description.trim() : '';
+    const hasImage = typeof imageDataUrl === 'string' && imageDataUrl.startsWith('data:');
+    if (!category || (!desc && !hasImage)) {
+      return res.status(400).json({
+        ok: false,
+        message: 'category and either a description or a photo are required.',
+      });
+    }
+    const result = await analyzeRepair({
+      category,
+      description: desc || 'No written description provided. Analyze the attached photo and infer the repair issue.',
+      imageDataUrl: hasImage ? imageDataUrl : null,
+      mode: mode === 'detail' ? 'detail' : 'summary',
+    });
+    return res.json(result);
+  } catch (e) {
+    console.error('ai assess:', e);
+    return res.status(500).json({
+      assessment: null,
+      source: 'error',
+      error: 'Server error calling AI provider',
+    });
+  }
+});
+
+app.post('/api/ai/chat', async (req, res) => {
+  try {
+    const { messages } = req.body || {};
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ ok: false, message: 'messages array is required.' });
+    }
+    const normalized = messages
+      .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+      .map((m) => ({ role: m.role, content: m.content.trim() }))
+      .filter((m) => m.content.length > 0)
+      .slice(-20);
+    if (!normalized.some((m) => m.role === 'user')) {
+      return res.status(400).json({ ok: false, message: 'At least one user message is required.' });
+    }
+    const result = await chatWithCustomer({ messages: normalized });
+    return res.json(result);
+  } catch (e) {
+    console.error('ai chat:', e);
+    return res.status(500).json({
+      reply: null,
+      source: 'error',
+      error: 'Server error calling AI chat',
+    });
   }
 });
 

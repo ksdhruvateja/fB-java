@@ -21,10 +21,12 @@ import {
   type JobCategory,
 } from "./jobBoard";
 import {
-  analyzeWithGemini,
-  getGeminiKeyIssue,
-  isGeminiConfigured,
-  type GeminiAssessment,
+  analyzeWithAi,
+  chatWithAi,
+  isAiConfigured,
+  refreshAiStatus,
+  type AiAssessment,
+  type AiProviderSource,
 } from "./geminiAssessment";
 import {
   getJobLifecycle,
@@ -156,11 +158,12 @@ const INITIAL_JOBS: HomeJob[] = [
   },
 ];
 
-const CHAT_MESSAGES = [
-  { role: "user", text: "My bathroom faucet is dripping constantly. It started about a week ago." },
-  { role: "ai", label: "Assessment", text: "A constantly dripping faucet is usually a worn cartridge, O-ring, or washer. It's low urgency but wastes water — a typical NYC household loses 3,000+ gallons/year from a drip." },
-  { role: "ai", label: "Cost Estimate", text: "NYC area repair range: $85–$200. Faucet cartridge replacement if DIY-able: $15–$40 in parts. Licensed plumber visit: $95–$185 including labor." },
-  { role: "ai", label: "Next Steps", text: "Ready to post this for bids? I'll include the assessment in your job listing so contractors come prepared with the right parts." },
+const CHAT_MESSAGES: { role: "user" | "ai"; label?: string; text: string }[] = [
+  {
+    role: "ai",
+    label: "FixBridge AI",
+    text: "Hi — I'm your FixBridge repair assistant. Tell me what's going wrong (leak, no heat, breaker trips, etc.) and I'll help with causes, rough NYC/LI costs, and whether to DIY or hire a pro.",
+  },
 ];
 
 const JOB_STATUS_UI: Record<JobStatus, { label: string; className: string; icon: React.ElementType }> = {
@@ -209,18 +212,74 @@ function AssessmentSection({
   ordered?: boolean;
 }) {
   if (items.length === 0) return null;
-  const ListTag = ordered ? "ol" : "ul";
   return (
-    <div>
-      <p className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase mb-2">{title}</p>
-      <ListTag className={`space-y-1.5 text-sm text-foreground ${ordered ? "list-decimal list-inside" : ""}`}>
-        {items.map((item) => (
-          <li key={item} className={ordered ? "" : "flex gap-2"}>
-            {!ordered && <span className="text-primary shrink-0">•</span>}
+    <section className="space-y-2.5">
+      <h3 className="text-[13px] font-semibold text-foreground tracking-tight">{title}</h3>
+      <ul className="space-y-2">
+        {items.map((item, index) => (
+          <li key={`${title}-${index}`} className="flex gap-3 text-sm text-foreground/90 leading-relaxed">
+            <span
+              className={`mt-0.5 shrink-0 ${
+                ordered
+                  ? "flex h-5 w-5 items-center justify-center rounded-full bg-foreground text-[10px] font-semibold text-background"
+                  : "mt-2 h-1.5 w-1.5 rounded-full bg-primary"
+              }`}
+            >
+              {ordered ? index + 1 : null}
+            </span>
             <span>{item}</span>
           </li>
         ))}
-      </ListTag>
+      </ul>
+    </section>
+  );
+}
+
+/** Shrink photo before AI upload for faster analysis. */
+function compressImageDataUrl(dataUrl: string, maxSide = 768, quality = 0.55): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+      const width = Math.max(1, Math.round(img.width * scale));
+      const height = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        resolve(dataUrl);
+        return;
+      }
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+function ChipList({ items }: { items: string[] }) {
+  if (!items.length) return null;
+  return (
+    <div className="flex flex-wrap gap-2">
+      {items.map((item) => (
+        <span
+          key={item}
+          className="rounded-full border border-border bg-background px-3 py-1 text-xs text-foreground"
+        >
+          {item}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function StatPill({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 flex-1 rounded-xl border border-border bg-background px-3.5 py-3">
+      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-foreground truncate">{value || "—"}</p>
     </div>
   );
 }
@@ -270,8 +329,12 @@ function PostTab({
   const [mediaName, setMediaName] = useState<string | null>(null);
   const [mediaType, setMediaType] = useState<"image" | "video" | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
-  const [assessment, setAssessment] = useState<GeminiAssessment | null>(null);
-  const [analysisSource, setAnalysisSource] = useState<"gemini" | "fallback" | "error" | null>(null);
+  const [diyLoading, setDiyLoading] = useState(false);
+  const [diyReady, setDiyReady] = useState(false);
+  const [compressedImage, setCompressedImage] = useState<string | null>(null);
+  const [assessment, setAssessment] = useState<AiAssessment | null>(null);
+  const [assessmentView, setAssessmentView] = useState<"summary" | "diy">("summary");
+  const [analysisSource, setAnalysisSource] = useState<AiProviderSource | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [timing, setTiming] = useState<TimingOption | null>(null);
   const [customDate, setCustomDate] = useState<Date | undefined>(undefined);
@@ -285,6 +348,10 @@ function PostTab({
   } | null>(null);
 
   const [contractorUsers, setContractorUsers] = useState<AuthUser[]>([]);
+  const [aiConfigured, setAiConfigured] = useState(isAiConfigured());
+  useEffect(() => {
+    void refreshAiStatus().then(setAiConfigured);
+  }, []);
   useEffect(() => {
     // getStoredUsers is synchronous (localStorage cache). Calling .then on it
     // threw TypeError and white-screened the entire homeowner dashboard.
@@ -308,7 +375,11 @@ function PostTab({
     setMediaName(null);
     setMediaType(null);
     setAnalyzing(false);
+    setDiyLoading(false);
+    setDiyReady(false);
+    setCompressedImage(null);
     setAssessment(null);
+    setAssessmentView("summary");
     setAnalysisSource(null);
     setAnalysisError(null);
     setTiming(null);
@@ -328,14 +399,33 @@ function PostTab({
     reader.readAsDataURL(file);
   };
 
-  const runGeminiAssessment = async () => {
-    if (!selectedCat || !description.trim()) return;
+  const canAnalyze =
+    Boolean(selectedCat) &&
+    (Boolean(description.trim()) || (mediaType === "image" && Boolean(mediaPreview)));
+
+  const runAiAssessment = async () => {
+    if (!canAnalyze) return;
     setAnalyzing(true);
     setAnalysisError(null);
-    const result = await analyzeWithGemini({
+    setDiyReady(false);
+    let imageDataUrl: string | null = mediaType === "image" ? mediaPreview : null;
+    if (imageDataUrl) {
+      try {
+        imageDataUrl = await compressImageDataUrl(imageDataUrl);
+        setCompressedImage(imageDataUrl);
+      } catch {
+        setCompressedImage(imageDataUrl);
+      }
+    } else {
+      setCompressedImage(null);
+    }
+    const result = await analyzeWithAi({
       category: selectedCat as JobCategory,
-      description,
-      imageDataUrl: mediaType === "image" ? mediaPreview : null,
+      description:
+        description.trim() ||
+        "No written description provided. Analyze the attached photo and infer the repair issue.",
+      imageDataUrl,
+      mode: "summary",
     });
     setAnalysisSource(result.source);
     setAnalysisError(result.error ?? null);
@@ -345,15 +435,59 @@ function PostTab({
       return;
     }
     setAssessment(result.assessment);
+    setAssessmentView("summary");
     setAnalyzing(false);
     setStep("assessment");
   };
 
+  const openDiyGuide = async () => {
+    if (!selectedCat || !assessment) return;
+    if (!description.trim() && !(mediaType === "image" && (compressedImage || mediaPreview))) return;
+    setAssessmentView("diy");
+    if (diyReady && assessment.diagnosis) return;
+    setDiyLoading(true);
+    setAnalysisError(null);
+    const result = await analyzeWithAi({
+      category: selectedCat as JobCategory,
+      description:
+        description.trim() ||
+        "No written description provided. Analyze the attached photo and infer the repair issue.",
+      imageDataUrl: compressedImage ?? (mediaType === "image" ? mediaPreview : null),
+      mode: "detail",
+    });
+    if (result.assessment) {
+      setAssessment((prev) =>
+        prev
+          ? {
+              ...prev,
+              ...result.assessment!,
+              overview: prev.overview || result.assessment!.overview,
+              imageObservations:
+                prev.imageObservations.length > 0
+                  ? prev.imageObservations
+                  : result.assessment!.imageObservations,
+            }
+          : result.assessment,
+      );
+      setDiyReady(true);
+      setAnalysisSource(result.source);
+    } else {
+      setAnalysisError(result.error ?? "Could not load DIY details");
+    }
+    setDiyLoading(false);
+  };
+
   const submitBooking = async () => {
-    if (!selectedCat || !description.trim() || !assessment || !timing || !timeSlot || !serviceDate) return;
+    if (!selectedCat || !assessment || !timing || !timeSlot || !serviceDate) return;
+    const jobDescription =
+      description.trim() || assessment.overview || "Photo-based repair request";
+    if (!jobDescription.trim()) return;
     const slot = TIME_SLOTS.find((s) => s.id === timeSlot);
     const dateLabel = formatServiceDate(serviceDate);
-    const finalTitle = titleInput.trim() || description.trim().slice(0, 70);
+    const finalTitle =
+      titleInput.trim() ||
+      assessment.diagnosis?.slice(0, 70) ||
+      jobDescription.slice(0, 70);
     // Extract neighbourhood from address (everything after first comma)
     // so the exact street number isn't shown to contractors before acceptance.
     const fullAddr = address.trim();
@@ -365,7 +499,7 @@ function PostTab({
       const created = await addJobBoardJob({
         category: selectedCat as JobCategory,
         title: finalTitle,
-        description: description.trim(),
+        description: jobDescription,
         ...(mediaType === "image" && mediaPreview ? { mediaDataUrl: mediaPreview, mediaType: "image" as const } : {}),
         ...(mediaType === "video" ? { mediaType: "video" as const } : {}),
         aiAssessment: {
@@ -474,37 +608,16 @@ function PostTab({
         Report an Issue
       </h2>
       <p className="text-sm text-muted-foreground mb-6">
-        Select a category, describe the problem, get Gemini suggestions, then book a pro if needed.
+        Select a category, describe the problem, get AI suggestions, then book a pro if needed.
       </p>
       <div
-        className={`flex items-start justify-between gap-3 text-xs border px-3 py-2 mb-4 ${
-          isGeminiConfigured()
-            ? "text-green-700 border-green-200 bg-green-50"
-            : "text-amber-700 border-amber-200 bg-amber-50"
+        className={`mb-4 inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-wider ${
+          aiConfigured
+            ? "border-green-300 bg-green-50 text-green-800"
+            : "border-amber-300 bg-amber-50 text-amber-800"
         }`}
       >
-        <p className="min-w-0">
-          Upload a photo and click Analyze for live AI repair assessment.
-          {!isGeminiConfigured() && (
-            <>
-              {" "}
-              {getGeminiKeyIssue()}. Get a free key at{" "}
-              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="underline">
-                aistudio.google.com/apikey
-              </a>
-              , add it as a Replit Secret named <code className="font-mono">VITE_GEMINI_API_KEY</code>, then restart the app.
-            </>
-          )}
-        </p>
-        <span
-          className={`shrink-0 font-mono text-[10px] uppercase tracking-wider px-2 py-0.5 border ${
-            isGeminiConfigured()
-              ? "bg-green-100 text-green-800 border-green-300"
-              : "bg-amber-100 text-amber-800 border-amber-300"
-          }`}
-        >
-          {isGeminiConfigured() ? "Connected" : "Not connected"}
-        </span>
+        {aiConfigured ? "Connected" : "Not connected"}
       </div>
       <StepIndicator current={step} />
 
@@ -595,8 +708,8 @@ function PostTab({
             {mediaName && <p className="font-mono text-[10px] text-muted-foreground truncate">{mediaName}</p>}
           </div>
           <p className="font-mono text-[10px] text-muted-foreground mt-2">
-            Gemini uses your photo to identify damage, likely parts, and the professional repair plan.
-            {mediaType === "video" && " Video uploaded — AI will analyze based on your description."}
+            Upload a photo to analyze even without a written description — title is optional.
+            {mediaType === "video" && " Video uploaded — add a short description so AI can assess it."}
           </p>
 
           {mediaPreview && mediaType === "image" && (
@@ -634,10 +747,10 @@ function PostTab({
             </button>
             <button
               type="button"
-              disabled={!description.trim() || analyzing}
-              onClick={runGeminiAssessment}
+              disabled={!canAnalyze || analyzing}
+              onClick={runAiAssessment}
               className={`flex-1 py-3 text-sm font-medium inline-flex items-center justify-center gap-2 ${
-                description.trim() && !analyzing
+                canAnalyze && !analyzing
                   ? "bg-primary text-white hover:bg-primary/90"
                   : "bg-primary/40 text-white/80 cursor-not-allowed"
               }`}
@@ -645,101 +758,202 @@ function PostTab({
               {analyzing ? (
                 <>
                   <Loader2 size={15} className="animate-spin" />
-                  {mediaType === "image" ? "Analyzing photo + description..." : "Analyzing description..."}
+                  {mediaType === "image" && !description.trim()
+                    ? "Analyzing photo..."
+                    : mediaType === "image"
+                      ? "Analyzing photo + description..."
+                      : "Analyzing description..."}
                 </>
               ) : (
-                "Analyze with Gemini"
+                "Analyze with AI"
               )}
             </button>
           </div>
         </div>
       )}
 
-      {/* STEP 3 — Assessment */}
-      {step === "assessment" && assessment && (
-        <div>
-          <div className="flex items-center gap-2 mb-4">
-            <p className="font-mono text-[11px] tracking-[0.15em] text-primary uppercase">
-              Gemini Repair Analysis
-            </p>
-            {analysisSource === "gemini" && (
-              <span className="font-mono text-[9px] uppercase tracking-wider bg-green-100 text-green-700 border border-green-200 px-2 py-0.5">
-                Live AI
-              </span>
-            )}
-            {analysisSource === "fallback" && (
-              <span className="font-mono text-[9px] uppercase tracking-wider bg-yellow-100 text-yellow-700 border border-yellow-200 px-2 py-0.5">
-                Offline — no API key
+      {/* STEP 3 — Assessment summary */}
+      {step === "assessment" && assessment && assessmentView === "summary" && (
+        <div className="space-y-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">AI review</p>
+              <h3 className="mt-1 text-xl font-semibold tracking-tight text-foreground">What we found</h3>
+            </div>
+            {analysisSource && analysisSource !== "fallback" && analysisSource !== "error" && (
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
+                Live
               </span>
             )}
           </div>
+
           {analysisError && analysisSource === "fallback" && (
-            <p className="text-xs text-amber-700 border border-amber-200 bg-amber-50 px-3 py-2 mb-4">
+            <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               {analysisError}
             </p>
           )}
 
-          {mediaPreview && mediaType === "image" && (
-            <img src={mediaPreview} alt="Analyzed issue" className="mb-4 max-h-48 w-full object-cover border border-border" />
-          )}
-          {mediaPreview && mediaType === "video" && (
-            <video src={mediaPreview} controls className="mb-4 max-h-48 w-full border border-border" />
-          )}
-
-          <div className="border border-primary/30 bg-primary/5 p-5 space-y-5 mb-6">
-            <div>
-              <p className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase mb-1">Overview</p>
-              <p className="text-sm text-foreground leading-relaxed">{assessment.overview}</p>
-            </div>
-            <AssessmentSection title="What we see in your image" items={assessment.imageObservations} />
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <div className="overflow-hidden rounded-2xl border border-border bg-card">
+            {mediaPreview && mediaType === "image" && (
+              <img src={mediaPreview} alt="Analyzed issue" className="max-h-64 w-full object-cover" />
+            )}
+            {mediaPreview && mediaType === "video" && (
+              <video src={mediaPreview} controls className="max-h-64 w-full" />
+            )}
+            <div className="space-y-4 p-5">
               <div>
-                <p className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase mb-1">Diagnosis</p>
-                <p className="text-sm text-foreground">{assessment.diagnosis}</p>
+                <p className="text-[13px] font-semibold text-foreground">Overview</p>
+                <p className="mt-1.5 text-sm leading-relaxed text-foreground/85">{assessment.overview}</p>
               </div>
-              <div>
-                <p className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase mb-1">Likely Root Cause</p>
-                <p className="text-sm text-foreground">{assessment.likelyRootCause}</p>
-              </div>
+              {assessment.imageObservations.length > 0 && (
+                <div className="border-t border-border pt-4">
+                  <AssessmentSection title="What we see in your image" items={assessment.imageObservations} />
+                </div>
+              )}
             </div>
-            <AssessmentSection title="Professional repair process" items={assessment.professionalSteps} ordered />
-            <AssessmentSection title="Parts & materials needed" items={assessment.partsNeeded} />
-            <AssessmentSection title="Tools a pro would bring" items={assessment.toolsRequired} />
-            <AssessmentSection title="Safe DIY steps (if you want to try)" items={assessment.diySteps} ordered />
-            <AssessmentSection title="Safety tips" items={assessment.safetyNotes ? [assessment.safetyNotes] : []} />
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm border-t border-primary/20 pt-4">
-              <p className="text-muted-foreground">Est. cost<br /><span className="text-foreground font-medium">{assessment.estimatedCost}</span></p>
-              <p className="text-muted-foreground">Est. duration<br /><span className="text-foreground font-medium">{assessment.estimatedDuration}</span></p>
-              <p className="text-muted-foreground">Urgency<br /><span className="text-foreground font-medium">{assessment.urgency}</span></p>
-            </div>
-            <p className="text-xs text-orange-700 border border-orange-200 bg-orange-50 px-3 py-2">
-              {assessment.safetyNotes}
-            </p>
           </div>
 
-          <p className="text-sm text-muted-foreground mb-4">
+          <p className="text-sm text-muted-foreground">
             {assessment.professionalRecommended
-              ? "Based on the assessment, a licensed professional is recommended."
-              : "You can try the DIY steps above, or book a vetted professional for peace of mind."}
+              ? "A licensed pro is often safer for this issue — or follow a guided DIY path."
+              : "Try a guided DIY fix, or book a vetted professional."}
           </p>
 
-          <div className="flex flex-col sm:flex-row gap-3">
-            <button type="button" onClick={() => setStep("describe")} className="border border-border px-5 py-3 text-sm">
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <button type="button" onClick={() => setStep("describe")} className="rounded-xl border border-border px-5 py-3 text-sm">
               Back
             </button>
             <button
               type="button"
+              onClick={() => void openDiyGuide()}
+              className="flex-1 rounded-xl border border-border bg-background px-5 py-3 text-sm font-medium transition-colors hover:border-foreground/25"
+            >
+              Fix Myself
+            </button>
+            <button
+              type="button"
               onClick={() => setStep("timing")}
-              className="flex-1 bg-primary text-white py-3 text-sm font-medium hover:bg-primary/90 transition-colors"
+              className="flex-1 rounded-xl bg-primary py-3 text-sm font-medium text-white transition-colors hover:bg-primary/90"
             >
               Hire a Professional
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 3b — DIY guide */}
+      {step === "assessment" && assessment && assessmentView === "diy" && (
+        <div className="space-y-6">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">DIY guide</p>
+            <h3 className="mt-1 text-xl font-semibold tracking-tight text-foreground">Fix it yourself</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Plan based on your issue{mediaPreview && mediaType === "image" ? " and photo" : ""}.
+            </p>
+          </div>
+
+          {diyLoading && (
+            <div className="flex items-start gap-3 rounded-xl border border-border bg-card px-4 py-4 text-sm text-foreground/85">
+              <Loader2 size={18} className="mt-0.5 shrink-0 animate-spin text-primary" />
+              <div className="space-y-1">
+                <p className="font-medium text-foreground">Analyzing your repair…</p>
+                <p className="text-muted-foreground leading-relaxed">
+                  Please allow a few minutes so we can analyse this and give you accurate information.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {analysisError && !diyLoading && (
+            <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              {analysisError}
+            </p>
+          )}
+
+          {!diyLoading && (
+            <>
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <StatPill label="Est. cost" value={assessment.estimatedCost} />
+                <StatPill label="Est. duration" value={assessment.estimatedDuration} />
+                <StatPill label="Urgency" value={assessment.urgency} />
+              </div>
+
+              {mediaPreview && mediaType === "image" && (
+                <div>
+                  <h4 className="mb-3 text-[13px] font-semibold text-foreground">Your photo</h4>
+                  <img
+                    src={mediaPreview}
+                    alt="Your repair issue"
+                    className="max-h-56 w-full rounded-2xl border border-border object-cover"
+                  />
+                </div>
+              )}
+
+              <div className="space-y-5 rounded-2xl border border-border bg-card p-5">
+                <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+                  <div>
+                    <p className="text-[13px] font-semibold text-foreground">Diagnosis</p>
+                    <p className="mt-1.5 text-sm leading-relaxed text-foreground/85">
+                      {assessment.diagnosis || "—"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[13px] font-semibold text-foreground">Likely root cause</p>
+                    <p className="mt-1.5 text-sm leading-relaxed text-foreground/85">
+                      {assessment.likelyRootCause || "—"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="border-t border-border pt-5">
+                  <AssessmentSection title="Professional repair process" items={assessment.professionalSteps} ordered />
+                </div>
+
+                <div className="border-t border-border pt-5 space-y-2.5">
+                  <h3 className="text-[13px] font-semibold text-foreground">Parts & materials needed</h3>
+                  <ChipList items={assessment.partsNeeded} />
+                </div>
+
+                <div className="border-t border-border pt-5 space-y-2.5">
+                  <h3 className="text-[13px] font-semibold text-foreground">Tools a pro would bring</h3>
+                  <ChipList items={assessment.toolsRequired} />
+                </div>
+
+                <div className="border-t border-border pt-5">
+                  <AssessmentSection title="Safe DIY steps" items={assessment.diySteps} ordered />
+                </div>
+
+                {assessment.safetyNotes && (
+                  <div className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-900">
+                    <span className="font-semibold">Safety: </span>
+                    {assessment.safetyNotes}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <button
+              type="button"
+              onClick={() => setAssessmentView("summary")}
+              className="rounded-xl border border-border px-5 py-3 text-sm"
+            >
+              Back to overview
+            </button>
+            <button
+              type="button"
+              onClick={() => setStep("timing")}
+              className="flex-1 rounded-xl bg-primary py-3 text-sm font-medium text-white transition-colors hover:bg-primary/90"
+            >
+              Hire a Professional instead
             </button>
             <button
               type="button"
               onClick={resetFlow}
-              className="border border-border px-5 py-3 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              className="rounded-xl border border-border px-5 py-3 text-sm text-muted-foreground transition-colors hover:text-foreground"
             >
-              Fix It Myself
+              Done — I&apos;ll fix it myself
             </button>
           </div>
         </div>
@@ -874,7 +1088,13 @@ function PostTab({
               </div>
               <div className="col-span-2">
                 <p className="font-mono text-[10px] text-muted-foreground uppercase">Job Title</p>
-                <p className="text-foreground">{titleInput.trim() || description.trim().slice(0, 70)}</p>
+                <p className="text-foreground">
+                  {titleInput.trim() ||
+                    assessment?.diagnosis?.slice(0, 70) ||
+                    description.trim().slice(0, 70) ||
+                    assessment?.overview?.slice(0, 70) ||
+                    "Photo-based repair"}
+                </p>
               </div>
               <div>
                 <p className="font-mono text-[10px] text-muted-foreground uppercase">Service Date</p>
@@ -1175,22 +1395,48 @@ function JobsTab({ jobs, user }: { jobs: HomeJob[]; user: AuthUser | null }) {
 function AITab() {
   const [messages, setMessages] = useState(CHAT_MESSAGES);
   const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
 
-  const handleSend = () => {
-    if (!input.trim()) return;
-    setMessages((m) => [...m, { role: "user", text: input }]);
-    const q = input;
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, sending]);
+
+  const handleSend = async () => {
+    const q = input.trim();
+    if (!q || sending) return;
     setInput("");
-    setTimeout(() => {
+    setChatError(null);
+    const nextMessages = [...messages, { role: "user" as const, text: q }];
+    setMessages(nextMessages);
+    setSending(true);
+
+    const history = nextMessages
+      .filter((m) => m.role === "user" || m.role === "ai")
+      .map((m) => ({
+        role: (m.role === "ai" ? "assistant" : "user") as "user" | "assistant",
+        content: m.text,
+      }));
+
+    const result = await chatWithAi(history);
+    if (result.reply) {
+      setMessages((m) => [
+        ...m,
+        { role: "ai", label: "FixBridge AI", text: result.reply! },
+      ]);
+    } else {
+      setChatError(result.error ?? "Could not reach AI right now. Try again.");
       setMessages((m) => [
         ...m,
         {
           role: "ai",
-          label: "AI Response",
-          text: `I understand your question about "${q}". Based on typical NYC-area jobs, this sounds like a repair that would cost approximately $150–$400 and may require a licensed professional. Shall I help you post this as a job for contractor bids?`,
+          label: "FixBridge AI",
+          text: "Sorry — I couldn't reach the AI service just now. Please try again in a moment.",
         },
       ]);
-    }, 800);
+    }
+    setSending(false);
   };
 
   return (
@@ -1200,7 +1446,7 @@ function AITab() {
           AI Assistance
         </h2>
         <p className="text-sm text-muted-foreground">
-          Describe any repair problem — get an instant assessment, cost estimate, and next steps.
+          Chat live about any repair — causes, cost ranges, DIY tips, and when to hire a pro.
         </p>
       </div>
       <div className="flex-1 overflow-y-auto border border-border bg-card p-5 space-y-4 mb-4">
@@ -1209,27 +1455,50 @@ function AITab() {
             key={i}
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.1 }}
+            transition={{ duration: 0.2 }}
             className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
           >
             <div className={`max-w-[80%] p-4 ${msg.role === "user" ? "bg-primary/10 border border-primary/20" : "bg-background border border-border"}`}>
               {"label" in msg && msg.label && (
                 <p className="font-mono text-[10px] tracking-[0.15em] text-primary uppercase mb-1.5">{msg.label}</p>
               )}
-              <p className="text-sm text-foreground leading-relaxed">{msg.text}</p>
+              <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap">{msg.text}</p>
             </div>
           </motion.div>
         ))}
+        {sending && (
+          <div className="flex justify-start">
+            <div className="inline-flex items-center gap-2 border border-border bg-background px-4 py-3 text-sm text-muted-foreground">
+              <Loader2 size={14} className="animate-spin" />
+              Thinking…
+            </div>
+          </div>
+        )}
+        <div ref={bottomRef} />
       </div>
+      {chatError && (
+        <p className="mb-2 text-xs text-red-700 border border-red-200 bg-red-50 px-3 py-2">{chatError}</p>
+      )}
       <div className="flex gap-2">
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSend()}
-          placeholder="Describe your repair problem…"
-          className="flex-1 border border-border bg-card px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/60 transition-colors"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              void handleSend();
+            }
+          }}
+          disabled={sending}
+          placeholder="Ask about a leak, no heat, breaker trips…"
+          className="flex-1 border border-border bg-card px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary/60 transition-colors disabled:opacity-60"
         />
-        <button onClick={handleSend} className="bg-primary text-white px-4 py-3 hover:bg-primary/90 transition-colors">
+        <button
+          type="button"
+          onClick={() => void handleSend()}
+          disabled={sending || !input.trim()}
+          className="bg-primary text-white px-4 py-3 hover:bg-primary/90 transition-colors disabled:opacity-50"
+        >
           <Send size={16} />
         </button>
       </div>

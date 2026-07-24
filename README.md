@@ -7,7 +7,7 @@ React + Vite app that connects homeowners with local contractors. Auth, jobs, pr
 - **Frontend**: React 18 + Vite 6, Tailwind CSS v4, React Router 7
 - **API**: Express (`api/app.js`) — local Node server or Netlify Function
 - **Database**: Neon Postgres (`NEON_DATABASE_URL`), or in-memory fallback for local-only
-- **AI**: Google Gemini (`VITE_GEMINI_API_KEY`) for job assessment
+- **AI**: Multi-provider assessment — OpenAI, OpenRouter, any OpenAI-compatible API, or Gemini (`OPENAI_API_KEY` / `OPENROUTER_API_KEY` / `AI_API_KEY`+`AI_BASE_URL` / `GEMINI_API_KEY`)
 
 ## Local development
 
