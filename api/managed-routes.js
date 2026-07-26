@@ -788,8 +788,17 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin }) 
         });
       }
 
+      // Block expired license or insurance
+      const _now = new Date();
+      if (contractors[0].license_expires_at && new Date(contractors[0].license_expires_at) < _now) {
+        return res.status(400).json({ ok: false, message: 'Contractor license has expired. Update it under Contractors before assigning.' });
+      }
+      if (contractors[0].insurance_expires_at && new Date(contractors[0].insurance_expires_at) < _now) {
+        return res.status(400).json({ ok: false, message: 'Contractor insurance certificate has expired. Update it under Contractors before assigning.' });
+      }
+
       await pool.query(
-        `INSERT INTO job_invitations (job_id, contractor_user_id, status, expected_net_low, expected_net_high, message, invited_by)
+        `INSERT INTO job_invitations (job_id, contractor_user_id, status, expected_net_low, expected_net_high, message, invited_by)`
          VALUES ($1,$2,'invited',$3,$4,$5,$6)
          ON CONFLICT (job_id, contractor_user_id) DO UPDATE SET
            status='invited',
@@ -869,6 +878,15 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin }) 
           ok: false,
           message: 'Contractor is not approved yet. Approve them under Contractors first.',
         });
+      }
+
+      // Block expired license or insurance
+      const _now = new Date();
+      if (contractors[0].license_expires_at && new Date(contractors[0].license_expires_at) < _now) {
+        return res.status(400).json({ ok: false, message: 'Contractor license has expired. Update it under Contractors before assigning.' });
+      }
+      if (contractors[0].insurance_expires_at && new Date(contractors[0].insurance_expires_at) < _now) {
+        return res.status(400).json({ ok: false, message: 'Contractor insurance certificate has expired. Update it under Contractors before assigning.' });
       }
 
       // Ensure invitation row exists so contractor sees it in their portal

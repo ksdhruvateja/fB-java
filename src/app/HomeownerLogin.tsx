@@ -4,6 +4,7 @@ import { Eye, EyeOff, ArrowLeft, ArrowRight, Home, Loader2 } from "lucide-react"
 import { GoogleLogin, type CredentialResponse } from "@react-oauth/google";
 import { getDemoUser, signInUser, signUpUser, signInWithGoogle, type AuthUser } from "./auth";
 import ForgotPasswordModal from "./ForgotPasswordModal";
+import { brand } from "../config/brand";
 
 const GOOGLE_ENABLED = Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID);
 
@@ -82,10 +83,7 @@ export default function HomeownerLogin({
             >
               <ArrowLeft size={14} /> Back to site
             </button>
-            <div className="flex items-center gap-1">
-              <span className="[font-family:'Barlow_Condensed',sans-serif] text-xl font-black tracking-wider">FIX</span>
-              <span className="[font-family:'Barlow_Condensed',sans-serif] text-xl font-black tracking-wider text-primary">BRIDGE</span>
-            </div>
+            <span className="[font-family:'Barlow_Condensed',sans-serif] text-xl font-black tracking-wider text-primary">{brand.productName.toUpperCase()}</span>
           </div>
 
           <div className="grid flex-1 items-center gap-6 pb-8 lg:grid-cols-12">

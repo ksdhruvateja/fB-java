@@ -1247,6 +1247,42 @@ export default function HomeownerDashboard({
                       </div>
                     )}
 
+                    {/* Completion proof — shown whenever report exists */}
+                    {selectedJob.completionReport && (
+                      <div className="rounded-xl border border-border bg-secondary/30 p-4 space-y-3">
+                        <p className="text-sm font-semibold flex items-center gap-2">
+                          <HardHat className="h-4 w-4 text-[#FF4D1C]" /> Completion report
+                        </p>
+                        {(selectedJob.completionReport as Record<string,unknown>).summary && (
+                          <p className="text-sm text-muted-foreground">{String((selectedJob.completionReport as Record<string,unknown>).summary)}</p>
+                        )}
+                        {((selectedJob.completionReport as Record<string,unknown>).beforePhotoUrl || (selectedJob.completionReport as Record<string,unknown>).afterPhotoUrl) && (
+                          <div className="grid grid-cols-2 gap-3">
+                            {(selectedJob.completionReport as Record<string,unknown>).beforePhotoUrl && (
+                              <div className="space-y-1">
+                                <p className="text-xs text-muted-foreground font-medium">Before</p>
+                                <img
+                                  src={String((selectedJob.completionReport as Record<string,unknown>).beforePhotoUrl)}
+                                  alt="Before work"
+                                  className="h-32 w-full rounded-lg object-cover border border-border"
+                                />
+                              </div>
+                            )}
+                            {(selectedJob.completionReport as Record<string,unknown>).afterPhotoUrl && (
+                              <div className="space-y-1">
+                                <p className="text-xs text-muted-foreground font-medium">After</p>
+                                <img
+                                  src={String((selectedJob.completionReport as Record<string,unknown>).afterPhotoUrl)}
+                                  alt="After work"
+                                  className="h-32 w-full rounded-lg object-cover border border-border"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {selectedJob.status === "customer_review_pending" && (
                       <button
                         type="button"
