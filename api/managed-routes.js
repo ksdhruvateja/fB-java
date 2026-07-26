@@ -787,6 +787,21 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin }) 
           message: 'Contractor is not approved yet. Approve them under Contractors first.',
         });
       }
+      // Document presence checks
+      if (!contractors[0].license_document_data) {
+        return res.status(400).json({ ok: false, message: 'Contractor has not uploaded a license document. Documents are required before inviting.' });
+      }
+      if (!contractors[0].insurance_document_data) {
+        return res.status(400).json({ ok: false, message: 'Contractor has not uploaded an insurance document. Documents are required before inviting.' });
+      }
+      // Expiry checks
+      const today = new Date().toISOString().slice(0, 10);
+      if (contractors[0].license_expires_at && String(contractors[0].license_expires_at).slice(0, 10) < today) {
+        return res.status(400).json({ ok: false, message: 'Contractor license has expired. Ask them to update their license before inviting.' });
+      }
+      if (contractors[0].insurance_expires_at && String(contractors[0].insurance_expires_at).slice(0, 10) < today) {
+        return res.status(400).json({ ok: false, message: 'Contractor insurance has expired. Ask them to update their insurance before inviting.' });
+      }
 
       // Block expired license or insurance
       const _now = new Date();
@@ -878,6 +893,21 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin }) 
           ok: false,
           message: 'Contractor is not approved yet. Approve them under Contractors first.',
         });
+      }
+      // Document presence checks (same gates as invite path)
+      if (!contractors[0].license_document_data) {
+        return res.status(400).json({ ok: false, message: 'Contractor has not uploaded a license document. Documents are required before assignment.' });
+      }
+      if (!contractors[0].insurance_document_data) {
+        return res.status(400).json({ ok: false, message: 'Contractor has not uploaded an insurance document. Documents are required before assignment.' });
+      }
+      // Expiry checks
+      const today = new Date().toISOString().slice(0, 10);
+      if (contractors[0].license_expires_at && String(contractors[0].license_expires_at).slice(0, 10) < today) {
+        return res.status(400).json({ ok: false, message: 'Contractor license has expired. Ask them to update their license before assignment.' });
+      }
+      if (contractors[0].insurance_expires_at && String(contractors[0].insurance_expires_at).slice(0, 10) < today) {
+        return res.status(400).json({ ok: false, message: 'Contractor insurance has expired. Ask them to update their insurance before assignment.' });
       }
 
       // Block expired license or insurance

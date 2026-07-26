@@ -672,6 +672,53 @@ export default function AdminPanel({
                       </p>
                     </div>
                   </div>
+                  {/* Completion proof report */}
+                  {selectedJob.completionReport && (
+                    <div className="space-y-3 rounded-xl border border-teal-200 bg-teal-50/40 p-4">
+                      <p className="text-sm font-semibold text-teal-800">Completion proof</p>
+                      {(selectedJob.completionReport as Record<string, unknown>).summary && (
+                        <p className="text-sm text-muted-foreground">
+                          {String((selectedJob.completionReport as Record<string, unknown>).summary)}
+                        </p>
+                      )}
+                      {(selectedJob.completionReport as Record<string, unknown>).warranty && (
+                        <p className="text-xs text-muted-foreground">
+                          <span className="font-medium">Warranty: </span>
+                          {String((selectedJob.completionReport as Record<string, unknown>).warranty)}
+                        </p>
+                      )}
+                      {(selectedJob.completionReport as Record<string, unknown>).completedAt && (
+                        <p className="text-xs text-muted-foreground">
+                          Completed {new Date(String((selectedJob.completionReport as Record<string, unknown>).completedAt)).toLocaleString()}
+                        </p>
+                      )}
+                      {((selectedJob.completionReport as Record<string, unknown>).beforePhotoUrl ||
+                        (selectedJob.completionReport as Record<string, unknown>).afterPhotoUrl) && (
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          {(selectedJob.completionReport as Record<string, unknown>).beforePhotoUrl && (
+                            <div className="space-y-1">
+                              <p className="text-xs font-medium text-muted-foreground">Before</p>
+                              <img
+                                src={String((selectedJob.completionReport as Record<string, unknown>).beforePhotoUrl)}
+                                alt="Before"
+                                className="h-40 w-full rounded-xl object-cover border border-border"
+                              />
+                            </div>
+                          )}
+                          {(selectedJob.completionReport as Record<string, unknown>).afterPhotoUrl && (
+                            <div className="space-y-1">
+                              <p className="text-xs font-medium text-muted-foreground">After</p>
+                              <img
+                                src={String((selectedJob.completionReport as Record<string, unknown>).afterPhotoUrl)}
+                                alt="After"
+                                className="h-40 w-full rounded-xl object-cover border border-border"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div className="space-y-3 border-t border-border pt-4">
                     <p className="text-sm font-medium">Invite contractor</p>
                     {selectedJob.assignedContractorUserId ? (

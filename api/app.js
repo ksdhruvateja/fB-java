@@ -328,14 +328,20 @@ export async function initDb() {
         [u.role, u.email]
       );
     }
-    // Demo contractor must be invite-ready
+    // Demo contractor must be invite-ready (include placeholder docs so compliance gates pass)
     if (u.role === 'contractor') {
+      // Tiny 1x1 transparent PNG as a stand-in document for demo purposes
+      const DEMO_DOC = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
       await pool.query(
         `UPDATE users SET compliance_status='approved',
            trade=COALESCE(NULLIF(trade,''), $1),
-           license_number=COALESCE(NULLIF(license_number,''), $2)
-         WHERE role=$3 AND LOWER(email)=LOWER($4)`,
-        [u.trade, u.license_number, u.role, u.email]
+           license_number=COALESCE(NULLIF(license_number,''), $2),
+           license_document_name=COALESCE(license_document_name, 'demo-license.png'),
+           license_document_data=COALESCE(license_document_data, $3),
+           insurance_document_name=COALESCE(insurance_document_name, 'demo-insurance.png'),
+           insurance_document_data=COALESCE(insurance_document_data, $3)
+         WHERE role=$4 AND LOWER(email)=LOWER($5)`,
+        [u.trade, u.license_number, DEMO_DOC, u.role, u.email]
       );
     }
   }
