@@ -1,3 +1,5 @@
+import { getStoredToken } from "./auth";
+
 export type JobStatus =
   | "open"
   | "accepted"
@@ -53,11 +55,18 @@ function broadcast() {
   }
 }
 
+function authHeaders(): HeadersInit {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = getStoredToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
 // ── Async API ─────────────────────────────────────────────────────────────────
 
 export async function getJobLifecycle(jobId: number): Promise<JobLifecycle> {
   try {
-    const res = await fetch(`/api/lifecycle/${jobId}`);
+    const res = await fetch(`/api/lifecycle/${jobId}`, { headers: authHeaders() });
     if (!res.ok) return { jobId, status: "open" };
     const data = await res.json();
     if (!data || typeof data !== "object" || !data.status) {
@@ -71,7 +80,7 @@ export async function getJobLifecycle(jobId: number): Promise<JobLifecycle> {
 
 export async function getAllLifecycles(): Promise<JobLifecycle[]> {
   try {
-    const res = await fetch("/api/lifecycle");
+    const res = await fetch("/api/lifecycle", { headers: authHeaders() });
     if (!res.ok) return [];
     const data = await res.json();
     return Array.isArray(data) ? (data as JobLifecycle[]) : [];
@@ -88,9 +97,12 @@ export async function updateJobStatus(
 ): Promise<JobLifecycle> {
   const res = await fetch(`/api/lifecycle/${jobId}/status`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders(),
     body: JSON.stringify({ status, contractorName, contractorEmail }),
   });
+  if (!res.ok) {
+    throw new Error("Could not update job status.");
+  }
   const updated: JobLifecycle = await res.json();
   broadcast();
   return updated;
@@ -104,7 +116,7 @@ export async function updateJobInvoice(
 ): Promise<JobLifecycle> {
   const res = await fetch(`/api/lifecycle/${jobId}/invoice`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders(),
     body: JSON.stringify({ amount, fileName, ...(fileData ? { fileData } : {}) }),
   });
   if (!res.ok) {
@@ -122,9 +134,12 @@ export async function updateJobRating(
 ): Promise<JobLifecycle> {
   const res = await fetch(`/api/lifecycle/${jobId}/rating`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders(),
     body: JSON.stringify({ rating, review }),
   });
+  if (!res.ok) {
+    throw new Error("Could not save rating.");
+  }
   const updated: JobLifecycle = await res.json();
   broadcast();
   return updated;

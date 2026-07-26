@@ -157,9 +157,16 @@ export function getGeminiKeyIssue(): string | null {
 
 export async function analyzeWithAi(input: AssessInput): Promise<AnalyzeResult> {
   try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    try {
+      const token = window.localStorage.getItem("fixbridge-auth-token");
+      if (token) headers.Authorization = `Bearer ${token}`;
+    } catch {
+      // ignore
+    }
     const response = await fetch("/api/ai/assess", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({
         category: input.category,
         description: input.description,
@@ -229,9 +236,16 @@ export type ChatResult = {
 /** Live customer chat via the same OpenRouter / OpenAI / Gemini provider. */
 export async function chatWithAi(messages: ChatMessage[]): Promise<ChatResult> {
   try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    try {
+      const token = window.localStorage.getItem("fixbridge-auth-token");
+      if (token) headers.Authorization = `Bearer ${token}`;
+    } catch {
+      // ignore
+    }
     const response = await fetch("/api/ai/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({
         messages: messages.map((m) => ({ role: m.role, content: m.content })),
       }),

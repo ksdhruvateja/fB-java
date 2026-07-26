@@ -21,37 +21,72 @@ const DEFAULT_OPENROUTER_MODEL = 'nvidia/nemotron-nano-12b-v2-vl:free';
 const OPENAI_BASE = 'https://api.openai.com/v1';
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
-export const SUMMARY_PROMPT = `You are FixBridge AI. Inspect the repair (and photo if attached). Be specific.
-
-Return ONLY valid JSON:
+/** Structured assessment — NO prices. Pricing engine owns retail ranges. */
+export const STRUCTURED_PROMPT = `You are a property-repair assessment engine. Analyze the issue and photo if attached.
+Return ONLY valid JSON with this exact schema (no prices, no dollar amounts, no markdown):
 {
-  "overview": "1-2 short sentences",
-  "imageObservations": ["detail 1", "detail 2", "detail 3"],
-  "estimatedCost": "$min-$max NYC/LI",
-  "estimatedDuration": "e.g. 1-2 hours",
-  "urgency": "Low/Medium/High — brief reason",
-  "professionalRecommended": true
+  "category": "plumbing|electrical|hvac|painting|roofing|flooring|carpentry|others",
+  "summary": "1-2 short sentences",
+  "urgency": "low|medium|high|emergency",
+  "confidence": 0.0,
+  "recommended_trade": "licensed_plumber|electrician|hvac_tech|painter|roofer|flooring_tech|carpenter|handyman",
+  "professional_required": true,
+  "safe_diy_allowed": false,
+  "immediate_safety_steps": ["step"],
+  "visual_findings": ["finding"],
+  "estimated_labor_hours_min": 1,
+  "estimated_labor_hours_max": 3,
+  "complexity": "low|medium|high",
+  "questions_needed": [],
+  "diy_difficulty": "easy|moderate|hard|blocked",
+  "tools_required": ["tool"],
+  "materials_needed": ["material"],
+  "diy_steps": ["only if safe_diy_allowed"],
+  "stop_conditions": ["when to call a pro"],
+  "disclaimer": "AI-assisted assessment, not a professional diagnosis."
 }
-No markdown. Keep it short.`;
+Rules:
+- Never invent prices or cost ranges.
+- Set safe_diy_allowed=false for gas, major electrical, flooding, sewage, fire/smoke/CO, structural, dangerous roof, asbestos/lead/hazmat, or low confidence.
+- Active leaks / flooding / gas smell => urgency high or emergency and professional_required true.`;
 
-export const DETAIL_PROMPT = `You are FixBridge AI. Given this repair, return a concise DIY/pro plan. Be specific to the issue/photo.
+export const SUMMARY_PROMPT = STRUCTURED_PROMPT;
+export const DETAIL_PROMPT = STRUCTURED_PROMPT;
+export const PROMPT = STRUCTURED_PROMPT;
 
-Return ONLY valid JSON:
-{
-  "diagnosis": "one short paragraph",
-  "likelyRootCause": "one sentence",
-  "professionalSteps": ["step 1", "step 2", "step 3", "step 4"],
-  "partsNeeded": ["part", "part"],
-  "toolsRequired": ["tool", "tool"],
-  "diySteps": ["safe DIY step 1", "step 2", "step 3"],
-  "safetyNotes": "one safety warning",
-  "estimatedCost": "$min-$max NYC/LI",
-  "estimatedDuration": "e.g. 1-2 hours",
-  "urgency": "Low/Medium/High — brief reason"
+const DIY_BLOCK_PATTERNS = [
+  /gas\s*leak/i,
+  /natural\s*gas/i,
+  /combustion/i,
+  /high\s*voltage/i,
+  /main\s*panel/i,
+  /flood/i,
+  /sewage|sewer\s*backup/i,
+  /fire|smoke|carbon\s*monoxide|\bCO\b/i,
+  /structural|load[- ]bearing|foundation/i,
+  /asbestos|lead\s*paint|hazardous/i,
+  /roof\s*(collapse|edge|steep)/i,
+];
+
+export function applyDiySafetyRules(assessment, description = '') {
+  const text = `${assessment.summary || ''} ${description} ${(assessment.visual_findings || []).join(' ')}`;
+  const blocked = DIY_BLOCK_PATTERNS.some((re) => re.test(text));
+  const confidence = typeof assessment.confidence === 'number' ? assessment.confidence : 0.5;
+  if (blocked || confidence < 0.4) {
+    return {
+      ...assessment,
+      safe_diy_allowed: false,
+      professional_required: true,
+      diy_difficulty: 'blocked',
+      diy_steps: [],
+      immediate_safety_steps:
+        assessment.immediate_safety_steps?.length
+          ? assessment.immediate_safety_steps
+          : ['If unsafe, leave the area and contact emergency services or a licensed professional.'],
+    };
+  }
+  return assessment;
 }
-Max 4 items per array. No markdown.`;
-
-export const PROMPT = DETAIL_PROMPT;
 
 function asString(value, fallback = '') {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
@@ -64,51 +99,132 @@ function asStringArray(value) {
     .map((item) => item.trim());
 }
 
-export function parseAssessment(text) {
+export function parseStructuredAssessment(text) {
   try {
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return null;
     const parsed = JSON.parse(jsonMatch[0]);
-    const diyGuideImages = Array.isArray(parsed.diyGuideImages)
-      ? parsed.diyGuideImages
-          .map((item) => {
-            if (!item || typeof item !== 'object') return null;
-            const title = asString(item.title);
-            const caption = asString(item.caption);
-            const imagePrompt = asString(item.imagePrompt) || asString(item.prompt);
-            if (!title && !imagePrompt) return null;
-            return {
-              title: title || 'DIY guide',
-              caption,
-              imagePrompt: imagePrompt || title,
-            };
-          })
-          .filter(Boolean)
-      : [];
+    const urgencyRaw = asString(parsed.urgency, 'medium').toLowerCase();
+    let urgency = 'medium';
+    if (urgencyRaw.includes('emerg')) urgency = 'emergency';
+    else if (urgencyRaw.includes('high')) urgency = 'high';
+    else if (urgencyRaw.includes('low')) urgency = 'low';
+
+    const confidence = typeof parsed.confidence === 'number'
+      ? Math.min(1, Math.max(0, parsed.confidence))
+      : 0.6;
+
     const assessment = {
-      overview: asString(parsed.overview),
-      imageObservations: asStringArray(parsed.imageObservations),
-      diagnosis: asString(parsed.diagnosis),
-      likelyRootCause: asString(parsed.likelyRootCause),
-      professionalSteps: asStringArray(parsed.professionalSteps),
-      partsNeeded: asStringArray(parsed.partsNeeded),
-      workScope: asStringArray(parsed.workScope),
-      toolsRequired: asStringArray(parsed.toolsRequired),
-      diySteps: asStringArray(parsed.diySteps),
-      diyGuideImages,
-      suggestions: asStringArray(parsed.suggestions),
-      estimatedCost: asString(parsed.estimatedCost),
-      estimatedDuration: asString(parsed.estimatedDuration),
-      urgency: asString(parsed.urgency),
-      safetyNotes: asString(parsed.safetyNotes),
-      professionalRecommended:
-        typeof parsed.professionalRecommended === 'boolean' ? parsed.professionalRecommended : true,
+      category: asString(parsed.category, 'others').toLowerCase(),
+      summary: asString(parsed.summary) || asString(parsed.overview) || asString(parsed.diagnosis),
+      urgency,
+      confidence,
+      recommended_trade: asString(parsed.recommended_trade, 'handyman'),
+      professional_required:
+        typeof parsed.professional_required === 'boolean'
+          ? parsed.professional_required
+          : typeof parsed.professionalRecommended === 'boolean'
+            ? parsed.professionalRecommended
+            : true,
+      safe_diy_allowed:
+        typeof parsed.safe_diy_allowed === 'boolean' ? parsed.safe_diy_allowed : false,
+      immediate_safety_steps: asStringArray(parsed.immediate_safety_steps),
+      visual_findings: asStringArray(parsed.visual_findings).length
+        ? asStringArray(parsed.visual_findings)
+        : asStringArray(parsed.imageObservations),
+      estimated_labor_hours_min: Number(parsed.estimated_labor_hours_min) || 1,
+      estimated_labor_hours_max: Number(parsed.estimated_labor_hours_max) || 3,
+      complexity: asString(parsed.complexity, 'medium').toLowerCase(),
+      questions_needed: asStringArray(parsed.questions_needed),
+      diy_difficulty: asString(parsed.diy_difficulty, 'blocked'),
+      tools_required: asStringArray(parsed.tools_required).length
+        ? asStringArray(parsed.tools_required)
+        : asStringArray(parsed.toolsRequired),
+      materials_needed: asStringArray(parsed.materials_needed).length
+        ? asStringArray(parsed.materials_needed)
+        : asStringArray(parsed.partsNeeded),
+      diy_steps: asStringArray(parsed.diy_steps).length
+        ? asStringArray(parsed.diy_steps)
+        : asStringArray(parsed.diySteps),
+      stop_conditions: asStringArray(parsed.stop_conditions),
+      disclaimer: asString(
+        parsed.disclaimer,
+        'AI-assisted assessment, not a professional diagnosis.'
+      ),
     };
-    if (!assessment.diagnosis && !assessment.overview) return null;
+    if (!assessment.summary) return null;
+    // Strip any accidental price fields from model output
+    delete assessment.estimatedCost;
+    delete assessment.estimated_cost;
     return assessment;
   } catch {
     return null;
   }
+}
+
+export function fallbackStructuredAssessment({ category, description } = {}) {
+  const text = `${category || ''} ${description || ''}`.toLowerCase();
+  let urgency = 'medium';
+  if (/flood|gas|fire|sparks|sewage|no heat.*winter|burning smell/.test(text)) urgency = 'emergency';
+  else if (/leak|broken|not working|outage/.test(text)) urgency = 'high';
+
+  const cat = String(category || 'others').toLowerCase();
+  return applyDiySafetyRules(
+    {
+      category: cat.includes('plumb') ? 'plumbing' : cat.includes('electr') ? 'electrical' : 'others',
+      summary: description
+        ? `Possible ${category || 'repair'} issue based on the description provided.`
+        : 'Issue reported — professional review recommended.',
+      urgency,
+      confidence: description ? 0.55 : 0.35,
+      recommended_trade: 'handyman',
+      professional_required: true,
+      safe_diy_allowed: false,
+      immediate_safety_steps: urgency === 'emergency'
+        ? ['If there is immediate danger, leave the area and call emergency services.']
+        : ['Document the issue with photos and avoid further damage if safe.'],
+      visual_findings: [],
+      estimated_labor_hours_min: 1,
+      estimated_labor_hours_max: 4,
+      complexity: 'medium',
+      questions_needed: ['Can you share clearer photos of the affected area?'],
+      diy_difficulty: 'blocked',
+      tools_required: [],
+      materials_needed: [],
+      diy_steps: [],
+      stop_conditions: ['Stop and request a professional if the issue worsens.'],
+      disclaimer: 'AI-assisted assessment, not a professional diagnosis.',
+    },
+    description
+  );
+}
+
+/** Legacy mapper for older UI that still expects overview/estimatedCost fields (cost left empty). */
+export function parseAssessment(text) {
+  const structured = parseStructuredAssessment(text);
+  if (structured) {
+    return {
+      overview: structured.summary,
+      imageObservations: structured.visual_findings,
+      diagnosis: structured.summary,
+      likelyRootCause: '',
+      professionalSteps: [],
+      partsNeeded: structured.materials_needed,
+      workScope: [],
+      toolsRequired: structured.tools_required,
+      diySteps: structured.safe_diy_allowed ? structured.diy_steps : [],
+      diyGuideImages: [],
+      suggestions: structured.immediate_safety_steps,
+      estimatedCost: '', // pricing engine only
+      estimatedDuration: `${structured.estimated_labor_hours_min}-${structured.estimated_labor_hours_max} hours`,
+      urgency: structured.urgency,
+      safetyNotes: structured.immediate_safety_steps.join(' '),
+      professionalRecommended: structured.professional_required,
+      // structured fields also available
+      ...structured,
+    };
+  }
+  return null;
 }
 
 function userPromptText({ category, description, imageDataUrl, mode = 'summary' }) {
@@ -670,6 +786,68 @@ export async function analyzeRepair(input) {
   }
 
   return analyzeWithOpenAiCompatible(resolved, payload);
+}
+
+/**
+ * Managed MVP assessment: structured technical fields only (no invented prices).
+ */
+export async function analyzeRepairStructured(input) {
+  const result = await analyzeRepair({ ...input, mode: 'summary' });
+  let structured = null;
+
+  if (result.assessment) {
+    // analyzeRepair already parsed via parseAssessment which embeds structured fields
+    if (result.assessment.summary || result.assessment.category) {
+      structured = {
+        category: result.assessment.category || String(input.category || 'others').toLowerCase(),
+        summary: result.assessment.summary || result.assessment.overview || result.assessment.diagnosis || '',
+        urgency: String(result.assessment.urgency || 'medium').toLowerCase().includes('emerg')
+          ? 'emergency'
+          : String(result.assessment.urgency || 'medium').toLowerCase().includes('high')
+            ? 'high'
+            : String(result.assessment.urgency || 'medium').toLowerCase().includes('low')
+              ? 'low'
+              : 'medium',
+        confidence: typeof result.assessment.confidence === 'number' ? result.assessment.confidence : 0.65,
+        recommended_trade: result.assessment.recommended_trade || 'handyman',
+        professional_required:
+          typeof result.assessment.professional_required === 'boolean'
+            ? result.assessment.professional_required
+            : result.assessment.professionalRecommended !== false,
+        safe_diy_allowed: result.assessment.safe_diy_allowed === true,
+        immediate_safety_steps: result.assessment.immediate_safety_steps || [],
+        visual_findings: result.assessment.visual_findings || result.assessment.imageObservations || [],
+        estimated_labor_hours_min: result.assessment.estimated_labor_hours_min || 1,
+        estimated_labor_hours_max: result.assessment.estimated_labor_hours_max || 3,
+        complexity: result.assessment.complexity || 'medium',
+        questions_needed: result.assessment.questions_needed || [],
+        diy_difficulty: result.assessment.diy_difficulty || 'blocked',
+        tools_required: result.assessment.tools_required || result.assessment.toolsRequired || [],
+        materials_needed: result.assessment.materials_needed || result.assessment.partsNeeded || [],
+        diy_steps: result.assessment.diy_steps || result.assessment.diySteps || [],
+        stop_conditions: result.assessment.stop_conditions || [],
+        disclaimer:
+          result.assessment.disclaimer || 'AI-assisted assessment, not a professional diagnosis.',
+      };
+    }
+  }
+
+  if (!structured) {
+    structured = fallbackStructuredAssessment(input);
+    return {
+      assessment: applyDiySafetyRules(structured, input.description),
+      source: result.source === 'error' ? 'fallback' : result.source || 'fallback',
+      model: result.model,
+      error: result.error,
+    };
+  }
+
+  return {
+    assessment: applyDiySafetyRules(structured, input.description),
+    source: result.source,
+    model: result.model,
+    error: result.error,
+  };
 }
 
 const CHAT_SYSTEM = `# SYSTEM PROMPT

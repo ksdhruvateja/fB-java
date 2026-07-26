@@ -1,7 +1,7 @@
-export type UserRole = "homeowner" | "contractor";
+export type UserRole = "homeowner" | "contractor" | "admin";
 
 export type AuthUser = {
-  id?: string;
+  id?: string | number;
   role: UserRole;
   name: string;
   email: string;
@@ -11,6 +11,7 @@ export type AuthUser = {
   isAdmin?: boolean;
   trade?: string;
   licenseNumber?: string;
+  complianceStatus?: string;
   licenseDocumentName?: string;
   insuranceDocumentName?: string;
   idDocumentName?: string;
@@ -254,20 +255,25 @@ export function getStoredUsers(): AuthUser[] {
   }
 }
 
-/** Fetch the public contractor list from the server and cache it locally.
- *  Requires a valid session token — skips silently if not logged in yet. */
-export async function loadAllUsers(): Promise<void> {
+/** Fetch contractors (or all users for admin) and cache locally.
+ *  Returns the loaded list so callers don't depend on a stale cache read. */
+export async function loadAllUsers(): Promise<AuthUser[]> {
   const token = getStoredToken();
-  if (!token) return; // Not authenticated — skip
+  if (!token) return getStoredUsers();
   try {
-    const res = await fetch("/api/users", {
+    const cached = getStoredUser();
+    const path = cached?.isAdmin || cached?.role === "admin" ? "/api/admin/users" : "/api/users";
+    const res = await fetch(path, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const data = await res.json();
-    if (!data.ok || !canUseStorage()) return;
-    window.localStorage.setItem(ALL_USERS_CACHE_KEY, JSON.stringify(data.users));
+    if (!data.ok || !Array.isArray(data.users)) return getStoredUsers();
+    if (canUseStorage()) {
+      window.localStorage.setItem(ALL_USERS_CACHE_KEY, JSON.stringify(data.users));
+    }
+    return data.users as AuthUser[];
   } catch {
-    // Silently ignore — stale cache will be used
+    return getStoredUsers();
   }
 }
 
@@ -277,6 +283,15 @@ export async function loadAllUsers(): Promise<void> {
 export function getDemoUser(role: UserRole): AuthUser {
   if (role === "homeowner") {
     return { role, name: "Maria Santos", email: "maria@example.com", password: "demo123" };
+  }
+  if (role === "admin") {
+    return {
+      role: "admin",
+      name: "Ops Admin",
+      email: "admin@fixbridge.local",
+      password: "admin123",
+      isAdmin: true,
+    };
   }
   return { role, name: "James Park", email: "james@yourcompany.com", password: "demo123", trade: "Master Plumber", licenseNumber: "NY-00231847" };
 }

@@ -6,6 +6,7 @@ import {
   Wrench, Zap, Flame, PaintBucket, Home, Layers, Hammer,
 } from "lucide-react";
 import { ScrollReveal, Counter, SectionLabel, useTilt } from "./shared";
+import { brand } from "../config/brand";
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
@@ -86,7 +87,7 @@ const TESTIMONIALS = [
     name: "James Park",
     location: "Brooklyn, NY",
     trade: "Licensed Plumber",
-    text: "I was spending $400/month on lead gen that gave me garbage. FixBridge sends me real jobs with real specs. I close 60% of the bids I submit.",
+    text: `I was spending $400/month on lead gen that gave me garbage. ${brand.productName} sends me real jobs with real specs. I close 60% of the bids I submit.`,
     stat: "60% bid close rate",
   },
   {
@@ -153,7 +154,7 @@ function DashboardMockup() {
           <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/70" />
           <span className="w-2.5 h-2.5 rounded-full bg-green-500/70" />
           <span className="font-mono text-xs text-muted-foreground ml-2">
-            fixbridge — contractor portal
+            {brand.productName.toLowerCase()} — contractor portal
           </span>
         </div>
         <span className="font-mono text-[10px] text-primary uppercase tracking-wider">● Live</span>
@@ -617,7 +618,7 @@ export default function ContractorPage({
               BUSINESS?
             </h2>
             <p className="text-white/75 text-lg mb-6 max-w-sm leading-relaxed">
-              Join 312+ licensed contractors already winning jobs on FixBridge. It takes
+              Join 312+ licensed contractors already winning jobs on {brand.productName}. It takes
               10 minutes to apply. Zero dollars to join.
             </p>
             <div className="flex items-center gap-2">

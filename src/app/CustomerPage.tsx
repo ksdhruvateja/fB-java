@@ -5,6 +5,7 @@ import {
   CheckCircle, DollarSign,
 } from "lucide-react";
 import { ScrollReveal, Counter, SectionLabel, useTilt, TICKER_ITEMS } from "./shared";
+import { brand } from "../config/brand";
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
@@ -47,7 +48,7 @@ const TESTIMONIALS = [
   {
     name: "Maria Santos",
     location: "Astoria, Queens",
-    text: "My ceiling was leaking the night before Thanksgiving. FixBridge had three bids by morning — and the contractor who won was incredible.",
+    text: `My ceiling was leaking the night before Thanksgiving. ${brand.productName} had three bids by morning — and the contractor who won was incredible.`,
     saved: "$800 saved vs. initial quote",
   },
   {
@@ -207,7 +208,7 @@ function AssessmentDemo() {
         <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/70" />
         <span className="w-2.5 h-2.5 rounded-full bg-green-500/70" />
         <span className="font-mono text-xs text-muted-foreground ml-2">
-          fixbridge — ai assessment engine
+          {brand.productName.toLowerCase()} — ai assessment engine
         </span>
       </div>
       <div className="p-5 space-y-4">

@@ -11,12 +11,13 @@ import {
   Bell,
 } from "lucide-react";
 import { Counter, ScrollReveal, SectionLabel } from "./shared";
+import { brand } from "../config/brand";
 
 const PRINCIPLES = [
   {
     icon: Sparkles,
     title: "AI First, Human Accountable",
-    body: "FixBridge turns messy home repair problems into clear scopes, estimated ranges, and better-informed decisions before a contractor even bids.",
+    body: `${brand.productName} turns messy home repair problems into clear scopes, estimated ranges, and better-informed decisions before a contractor even bids.`,
   },
   {
     icon: FileCheck,
@@ -82,7 +83,7 @@ export default function AboutPage({
           <motion.div style={{ y: heroTextY }}>
             <div className="flex items-center gap-3 mb-8">
               <span className="font-mono text-[11px] tracking-[0.2em] text-primary uppercase">
-                About FixBridge
+                About {brand.productName}
               </span>
               <span className="h-px w-10 bg-primary" />
               <span className="font-mono text-[11px] tracking-[0.2em] text-muted-foreground uppercase">
@@ -105,7 +106,7 @@ export default function AboutPage({
             </h1>
 
             <p className="text-muted-foreground text-lg max-w-xl leading-relaxed mb-8">
-              FixBridge is the layer between confused homeowners and overloaded contractors.
+              {brand.productName} is the layer between confused homeowners and overloaded contractors.
               We use AI to structure repair requests, clarify scope, and help both sides move
               faster with fewer surprises.
             </p>
@@ -137,7 +138,7 @@ export default function AboutPage({
                   <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/70" />
                   <span className="w-2.5 h-2.5 rounded-full bg-green-500/70" />
                   <span className="font-mono text-xs text-muted-foreground ml-2">
-                    why fixbridge works
+                    why {brand.productName.toLowerCase()} works
                   </span>
                 </div>
                 <span className="font-mono text-[10px] text-primary uppercase tracking-wider">
@@ -277,7 +278,7 @@ export default function AboutPage({
                 TO PRO.
               </h2>
               <p className="text-muted-foreground text-lg leading-relaxed mb-8 max-w-xl">
-                Most repair marketplaces optimize for lead volume. FixBridge is built to improve
+                Most repair marketplaces optimize for lead volume. {brand.productName} is built to improve
                 understanding first, so the matching, bidding, and hiring process starts from a
                 better brief.
               </p>
@@ -311,7 +312,7 @@ export default function AboutPage({
             >
               READY TO USE
               <br />
-              FIXBRIDGE?
+              {brand.productName.toUpperCase()}?
             </h2>
             <p className="text-white/75 text-xl mb-10 max-w-2xl mx-auto leading-relaxed">
               Start from the side you are on: post a repair as a homeowner, or join the network

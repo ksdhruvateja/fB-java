@@ -1,3 +1,5 @@
+import { getStoredToken } from "./auth";
+
 export type JobChatMessage = {
   id: number;
   senderRole: "homeowner" | "contractor" | "system";
@@ -15,13 +17,22 @@ function broadcast() {
   }
 }
 
+function authHeaders(): HeadersInit {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = getStoredToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
 export async function getJobMessages(jobId: number): Promise<JobChatMessage[]> {
-  const res = await fetch(`/api/chat/${jobId}`);
+  const res = await fetch(`/api/chat/${jobId}`, { headers: authHeaders() });
+  if (!res.ok) return [];
   return res.json();
 }
 
 export async function getAllJobChats(): Promise<Record<string, JobChatMessage[]>> {
-  const res = await fetch("/api/chat");
+  const res = await fetch("/api/chat", { headers: authHeaders() });
+  if (!res.ok) return {};
   return res.json();
 }
 
@@ -31,9 +42,12 @@ export async function addJobMessage(
 ): Promise<JobChatMessage> {
   const res = await fetch(`/api/chat/${jobId}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders(),
     body: JSON.stringify(message),
   });
+  if (!res.ok) {
+    throw new Error("Could not send message.");
+  }
   const created: JobChatMessage = await res.json();
   broadcast();
   return created;

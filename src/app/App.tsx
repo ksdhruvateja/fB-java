@@ -6,11 +6,13 @@ import ContractorPage from "./ContractorPage";
 import AboutPage from "./AboutPage";
 import HomeownerLogin from "./HomeownerLogin";
 import ContractorLogin from "./ContractorLogin";
+import AdminLogin from "./AdminLogin";
 import HomeownerDashboard from "./HomeownerDashboard";
 import ContractorDashboard from "./ContractorDashboard";
 import AdminPanel from "./AdminPanel";
 import ResetPassword from "./ResetPassword";
 import { getStoredUser, validateToken, clearSession, loadAllUsers, type AuthUser, type UserRole } from "./auth";
+import { brand } from "../config/brand";
 
 type Page =
   | "home"
@@ -18,6 +20,7 @@ type Page =
   | "about"
   | "homeowner-login"
   | "contractor-login"
+  | "admin-login"
   | "homeowner-dashboard"
   | "contractor-dashboard"
   | "admin";
@@ -40,6 +43,7 @@ function isValidPage(value: unknown): value is Page {
     value === "about" ||
     value === "homeowner-login" ||
     value === "contractor-login" ||
+    value === "admin-login" ||
     value === "homeowner-dashboard" ||
     value === "contractor-dashboard" ||
     value === "admin"
@@ -297,11 +301,12 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
             {
               title: "Company",
               links: [
-                { label: "About FixBridge", page: "about" as Page },
+                { label: `About ${brand.productName}`, page: "about" as Page },
                 { label: "Blog", page: "home" as Page },
                 { label: "Press", page: "home" as Page },
                 { label: "Careers", page: "home" as Page },
                 { label: "Contact", page: "home" as Page },
+                { label: "Staff login", page: "admin-login" as Page },
               ],
             },
           ].map(({ title, links }) => (
@@ -352,7 +357,7 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
 
         <div className="border-t border-border pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
           <p className="font-mono text-[11px] text-muted-foreground">
-            © 2024 FixBridge AI, Inc. All rights reserved.
+            © 2024 {brand.legalName} AI, Inc. All rights reserved.
           </p>
           <div className="flex flex-wrap items-center justify-center md:justify-end gap-4 md:gap-6">
             {["Privacy Policy", "Terms of Service", "Contractor Agreement"].map((item) => (
@@ -383,6 +388,7 @@ export default function App() {
   const [resetParams, setResetParams] = useState<{ token: string; role: UserRole } | null>(null);
 
   // Detect password-reset links: /?action=reset-password&token=...&role=...
+  // Partner intake: /start?partner=CODE or /?partner=CODE
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("action") === "reset-password") {
@@ -392,6 +398,61 @@ export default function App() {
         setResetParams({ token, role });
         window.history.replaceState({}, "", window.location.pathname);
       }
+    }
+
+    const path = window.location.pathname.replace(/\/+$/, "") || "/";
+    const isStartPath = path === "/start" || path.endsWith("/start");
+    const partner =
+      params.get("partner") || params.get("ref") || params.get("code");
+    const discountParam = params.get("discount") || params.get("promo");
+
+    if (partner) {
+      try {
+        const code = partner.toUpperCase().replace(/[^A-Z0-9_-]/g, "");
+        if (code) {
+          sessionStorage.setItem("fixbridge-partner-code", code);
+          sessionStorage.setItem("fixbridge-partner-intake", "1");
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (discountParam) {
+      try {
+        const code = discountParam.toUpperCase().replace(/[^A-Z0-9_-]/g, "");
+        if (code) sessionStorage.setItem("fixbridge-discount-code", code);
+      } catch {
+        // ignore
+      }
+    }
+
+    if (isStartPath || partner || discountParam) {
+      // Open normal customer intake (login → report an issue)
+      const user = getStoredUser();
+      if (user?.role === "homeowner") {
+        setPage("homeowner-dashboard");
+      } else {
+        setPage("homeowner-login");
+      }
+      params.delete("partner");
+      params.delete("ref");
+      params.delete("code");
+      params.delete("discount");
+      params.delete("promo");
+      params.delete("portal");
+      const next = params.toString();
+      const cleanPath = isStartPath ? "/" : window.location.pathname;
+      window.history.replaceState({}, "", `${cleanPath}${next ? `?${next}` : ""}`);
+      return;
+    }
+
+    // Direct staff portal: /?portal=admin
+    if (params.get("portal") === "admin") {
+      setPage("admin-login");
+      params.delete("portal");
+      const next = params.toString();
+      window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}`);
     }
   }, []);
 
@@ -446,11 +507,16 @@ export default function App() {
   useEffect(() => {
     // Guard against reloading into protected pages without a valid session.
     if (!currentUser && (page === "homeowner-dashboard" || page === "contractor-dashboard" || page === "admin")) {
-      setPage("home");
+      if (page === "admin") setPage("admin-login");
+      else setPage("home");
     }
-    // Admin page requires the isAdmin flag in the user's token.
-    if (currentUser && page === "admin" && !currentUser.isAdmin) {
-      setPage("contractor-dashboard");
+    // Admin Control requires a dedicated admin-role account (not contractor).
+    if (currentUser && page === "admin" && currentUser.role !== "admin") {
+      setPage(currentUser.role === "contractor" ? "contractor-dashboard" : "homeowner-dashboard");
+    }
+    // Admins landing on contractor/homeowner dashboards go to Control.
+    if (currentUser?.role === "admin" && (page === "contractor-dashboard" || page === "homeowner-dashboard")) {
+      setPage("admin");
     }
   }, [currentUser, page]);
 
@@ -542,6 +608,16 @@ export default function App() {
             />
           )}
 
+          {page === "admin-login" && (
+            <AdminLogin
+              onLogin={(user) => {
+                setCurrentUser(user);
+                navigate("admin");
+              }}
+              onBack={() => navigate("home")}
+            />
+          )}
+
           {page === "homeowner-dashboard" && currentUser && (
             <HomeownerDashboard
               onLogout={() => {
@@ -556,16 +632,12 @@ export default function App() {
             />
           )}
 
-          {page === "contractor-dashboard" && currentUser && (
+          {page === "contractor-dashboard" && currentUser && currentUser.role === "contractor" && (
             <ContractorDashboard
               onLogout={() => {
                 clearSession();
                 setCurrentUser(null);
                 navigate("contractors");
-              }}
-              onOpenAdmin={() => {
-                // Only allow navigation if the server has granted admin access
-                if (currentUser?.isAdmin) navigate("admin");
               }}
               user={currentUser}
               isDark={isDark}
@@ -573,13 +645,13 @@ export default function App() {
               onUserUpdated={(u) => setCurrentUser(u)}
             />
           )}
-          {page === "admin" && (
+          {page === "admin" && currentUser?.role === "admin" && (
             <AdminPanel
-              onBack={() => navigate("contractor-dashboard")}
+              onBack={() => navigate("admin-login")}
               onSignOut={() => {
                 clearSession();
                 setCurrentUser(null);
-                navigate("contractors");
+                navigate("admin-login");
               }}
             />
           )}

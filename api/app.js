@@ -8,7 +8,17 @@ import rateLimit from 'express-rate-limit';
 import { OAuth2Client } from 'google-auth-library';
 import { Resend } from 'resend';
 import crypto from 'crypto';
-import { analyzeRepair, chatWithCustomer, getAiStatus } from './ai.js';
+import { analyzeRepairStructured, chatWithCustomer, getAiStatus } from './ai.js';
+import { initManagedSchema } from './schema-managed.js';
+import { registerManagedRoutes } from './managed-routes.js';
+import { registerPlatformRoutes } from './platform-routes.js';
+import {
+  corsOriginDelegate,
+  securityHeaders,
+  publicErrorMessage,
+  clampString,
+  isPositiveInt,
+} from './security.js';
 
 const isProduction = process.env.NODE_ENV === 'production';
 const useInMemoryDb = !process.env.NEON_DATABASE_URL;
@@ -97,8 +107,9 @@ function contractorTradeMatchesCategory(contractorTrade, category) {
 }
 
 const DEMO_USERS = [
-  { role: 'homeowner',   name: 'Maria Santos', email: 'maria@example.com',     plainPassword: 'demo123', is_admin: false, trade: null,             license_number: null },
-  { role: 'contractor',  name: 'James Park',   email: 'james@yourcompany.com', plainPassword: 'demo123', is_admin: true,  trade: 'Master Plumber', license_number: 'NY-00231847' },
+  { role: 'homeowner',   name: 'Maria Santos', email: 'maria@example.com',       plainPassword: 'demo123',  is_admin: false, trade: null,             license_number: null },
+  { role: 'contractor',  name: 'James Park',   email: 'james@yourcompany.com',   plainPassword: 'demo123',  is_admin: false, trade: 'Master Plumber', license_number: 'NY-00231847' },
+  { role: 'admin',       name: 'Ops Admin',    email: 'admin@fixbridge.local',  plainPassword: 'admin123', is_admin: true,  trade: null,             license_number: null },
 ];
 
 // ── Schema init ───────────────────────────────────────────────────────────────
@@ -269,9 +280,18 @@ export async function initDb() {
     );
     if (existing.rows.length === 0) {
       await pool.query(
-        `INSERT INTO users (role,name,email,password,trade,license_number,is_admin)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`,
-        [u.role, u.name, u.email, hashed, u.trade, u.license_number, u.is_admin]
+        `INSERT INTO users (role,name,email,password,trade,license_number,is_admin,compliance_status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`,
+        [
+          u.role,
+          u.name,
+          u.email,
+          hashed,
+          u.trade,
+          u.license_number,
+          u.is_admin,
+          u.role === 'contractor' ? 'approved' : 'draft',
+        ]
       );
       continue;
     }
@@ -299,6 +319,23 @@ export async function initDb() {
       await pool.query(
         'UPDATE users SET is_admin=true WHERE role=$1 AND LOWER(email)=LOWER($2)',
         [u.role, u.email]
+      );
+    }
+    // Ensure contractor demo is never treated as admin
+    if (u.role === 'contractor' && u.is_admin === false && row.is_admin === true) {
+      await pool.query(
+        'UPDATE users SET is_admin=false WHERE role=$1 AND LOWER(email)=LOWER($2)',
+        [u.role, u.email]
+      );
+    }
+    // Demo contractor must be invite-ready
+    if (u.role === 'contractor') {
+      await pool.query(
+        `UPDATE users SET compliance_status='approved',
+           trade=COALESCE(NULLIF(trade,''), $1),
+           license_number=COALESCE(NULLIF(license_number,''), $2)
+         WHERE role=$3 AND LOWER(email)=LOWER($4)`,
+        [u.trade, u.license_number, u.role, u.email]
       );
     }
   }
@@ -335,6 +372,8 @@ export async function initDb() {
     console.warn('[FixBridge API] booking_id unique index skipped:', e.message);
   }
 
+  await initManagedSchema(pool);
+
   console.log('[FixBridge API] DB ready ✓');
 }
 
@@ -346,7 +385,7 @@ function makeToken(user) {
   return jwt.sign(
     { id: user.id, role: user.role, email: user.email, isAdmin: user.isAdmin === true },
     JWT_SECRET,
-    { expiresIn: '7d' }
+    { expiresIn: '7d', algorithm: 'HS256' }
   );
 }
 
@@ -357,7 +396,7 @@ async function requireAuth(req, res, next) {
     return res.status(401).json({ ok: false, message: 'Authentication required.' });
   }
   try {
-    const decoded = jwt.verify(authHeader.slice(7), JWT_SECRET);
+    const decoded = jwt.verify(authHeader.slice(7), JWT_SECRET, { algorithms: ['HS256'] });
     const { rows } = await pool.query('SELECT * FROM users WHERE id=$1', [decoded.id]);
     if (!rows.length) {
       return res.status(401).json({ ok: false, message: 'User not found.' });
@@ -367,7 +406,11 @@ async function requireAuth(req, res, next) {
     }
     req.authUser = {
       ...decoded,
-      isAdmin: rows[0].is_admin === true,
+      id: Number(rows[0].id),
+      email: rows[0].email,
+      name: rows[0].name,
+      role: rows[0].role,
+      isAdmin: rows[0].role === 'admin' || rows[0].is_admin === true,
       isBlocked: rows[0].is_blocked === true,
     };
     next();
@@ -376,12 +419,50 @@ async function requireAuth(req, res, next) {
   }
 }
 
-/** Reject requests from non-admin token holders. */
+/** Reject requests from non-admin accounts (dedicated admin role only). */
 function requireAdmin(req, res, next) {
-  if (!req.authUser?.isAdmin) {
-    return res.status(403).json({ ok: false, message: 'Admin access required.' });
+  if (req.authUser?.role !== 'admin') {
+    return res.status(403).json({ ok: false, message: 'Admin access required. Use the staff admin login.' });
   }
   next();
+}
+
+/** Legacy board jobs: can this user read/mutate this jobId? */
+async function getLegacyJobAccess(jobId, authUser) {
+  if (!authUser) return { allowed: false, job: null, mutate: false };
+  if (authUser.role === 'admin' || authUser.isAdmin === true) {
+    const { rows } = await pool.query('SELECT * FROM jobs WHERE id=$1', [jobId]);
+    return { allowed: true, job: rows[0] || null, mutate: true };
+  }
+  const { rows } = await pool.query('SELECT * FROM jobs WHERE id=$1', [jobId]);
+  const job = rows[0] || null;
+  if (!job) return { allowed: false, job: null, mutate: false };
+
+  const email = String(authUser.email || '').toLowerCase();
+  if (authUser.role === 'homeowner' && String(job.homeowner_email || '').toLowerCase() === email) {
+    return { allowed: true, job, mutate: true };
+  }
+  if (authUser.role === 'contractor') {
+    const { rows: lc } = await pool.query('SELECT * FROM job_lifecycle WHERE job_id=$1', [jobId]);
+    const assigned =
+      lc[0] &&
+      String(lc[0].contractor_email || '').toLowerCase() === email &&
+      ['accepted', 'on-the-way', 'arrived', 'work-started', 'completed'].includes(lc[0].status);
+    // Contractors may read board jobs (masked); mutate only if assigned
+    return { allowed: true, job, mutate: Boolean(assigned), lifecycle: lc[0] || null };
+  }
+  return { allowed: false, job, mutate: false };
+}
+
+function rowToJobBoard(r) {
+  const job = rowToJob(r);
+  // Hide customer PII on open board until contractor is assigned
+  return {
+    ...job,
+    fullAddress: null,
+    contactName: null,
+    contactPhone: null,
+  };
 }
 
 // ── Row serializers ───────────────────────────────────────────────────────────
@@ -433,7 +514,7 @@ function parseDocumentField(body, nameKey, dataKey) {
 
 function rowToUser(r, { includeDocumentData = true } = {}) {
   return {
-    id: r.id,
+    id: r.id != null ? Number(r.id) : undefined,
     role: r.role, name: r.name, email: r.email,
     // Never send the password hash to the client
     ...(r.trade                    && { trade: r.trade }),
@@ -451,10 +532,11 @@ function rowToUser(r, { includeDocumentData = true } = {}) {
     ...(r.company_name             && { companyName: r.company_name }),
     ...(r.company_details          && { companyDetails: r.company_details }),
     ...(r.insurance_details        && { insuranceDetails: r.insurance_details }),
+    ...(r.compliance_status        && { complianceStatus: r.compliance_status }),
     emails: asStringArray(r.profile_emails),
     phones: asStringArray(r.profile_phones),
     addresses: asStringArray(r.profile_addresses),
-    isAdmin: r.is_admin === true,
+    isAdmin: r.role === 'admin' || r.is_admin === true,
     isBlocked: r.is_blocked === true,
     isGoogleAccount: r.password === 'GOOGLE_OAUTH',
   };
@@ -513,7 +595,7 @@ async function notifyMatchingContractors(job) {
 async function notifyAdminsOfDocumentChange({ contractorName, contractorEmail, changedLabels }) {
   if (!changedLabels?.length) return 0;
   const { rows: admins } = await pool.query(
-    `SELECT id FROM users WHERE is_admin=true AND COALESCE(is_blocked,false)=false`
+    `SELECT id FROM users WHERE role='admin' AND COALESCE(is_blocked,false)=false`
   );
   const title = 'Contractor document updated';
   const message = `${contractorName} (${contractorEmail}) updated: ${changedLabels.join(', ')}`;
@@ -555,10 +637,39 @@ function rowToMessage(r) {
 const app = express();
 // Required behind Netlify / other reverse proxies so express-rate-limit trusts X-Forwarded-For.
 app.set('trust proxy', 1);
-app.use(cors());
-app.use(express.json({ limit: '20mb' }));
+app.disable('x-powered-by');
+app.use(securityHeaders);
+app.use(
+  cors({
+    origin: corsOriginDelegate,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Stripe-Signature'],
+    maxAge: 86400,
+  })
+);
+// Keep JSON body reasonably bounded; media uploads are still data-URLs in managed job create.
+app.use(
+  express.json({
+    limit: process.env.JSON_BODY_LIMIT || '8mb',
+    verify: (req, _res, buf) => {
+      // Needed for Stripe webhook signature verification.
+      if (req.originalUrl?.includes('/api/stripe/webhook')) {
+        req.rawBody = buf;
+      }
+    },
+  })
+);
 
 // ── Rate limiters ─────────────────────────────────────────────────────────────
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.API_RATE_LIMIT_MAX || 400),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, message: 'Too many requests. Please slow down and try again.' },
+});
 
 const signInLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 min
@@ -578,6 +689,26 @@ const forgotLimiter = rateLimit({
     res.status(429).json({ ok: false, message: 'Too many reset requests. Please wait 1 hour before trying again.' }),
 });
 
+const signupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) =>
+    res.status(429).json({ ok: false, message: 'Too many sign-up attempts. Please wait and try again.' }),
+});
+
+const aiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) =>
+    res.status(429).json({ ok: false, message: 'AI rate limit reached. Please wait a few minutes.' }),
+});
+
+app.use('/api/', apiLimiter);
+
 // ── Resend email client (lazy) ─────────────────────────────────────────────
 
 function getResend() {
@@ -591,6 +722,9 @@ app.post('/api/auth/signin', signInLimiter, async (req, res) => {
   try {
     const { role, email, password } = req.body;
     if (!role || !email || !password) return res.status(400).json({ ok: false, message: 'All fields are required.' });
+    if (!['homeowner', 'contractor', 'admin'].includes(role)) {
+      return res.status(400).json({ ok: false, message: 'Invalid account type.' });
+    }
 
     const { rows } = await pool.query(
       `SELECT * FROM users WHERE role=$1 AND LOWER(email)=LOWER($2)`,
@@ -623,7 +757,7 @@ app.post('/api/auth/signin', signInLimiter, async (req, res) => {
   }
 });
 
-app.post('/api/auth/signup', async (req, res) => {
+app.post('/api/auth/signup', signupLimiter, async (req, res) => {
   try {
     const {
       role, name, email, password, trade, licenseNumber,
@@ -631,6 +765,9 @@ app.post('/api/auth/signup', async (req, res) => {
       licenseDocumentData, insuranceDocumentData, idDocumentData,
     } = req.body;
     if (!role || !name || !email || !password) return res.status(400).json({ ok: false, message: 'All required fields must be filled.' });
+    if (role !== 'homeowner' && role !== 'contractor') {
+      return res.status(400).json({ ok: false, message: 'Public signup is only available for homeowners and contractors.' });
+    }
     if (password.length < 6) return res.status(400).json({ ok: false, message: 'Password must be at least 6 characters.' });
 
     const docs = [
@@ -958,7 +1095,7 @@ app.post('/api/auth/forgot-password', forgotLimiter, async (req, res) => {
       [rows[0].email, role, token, expiresAt]
     );
 
-    const origin = req.headers.origin || process.env.APP_URL || 'http://localhost:5000';
+    const origin = (process.env.APP_URL || '').trim().replace(/\/$/, '') || 'http://localhost:5000';
     const resetUrl = `${origin}/?action=reset-password&token=${token}&role=${role}`;
     const userName = rows[0].name;
     const portalLabel = role === 'homeowner' ? 'Homeowner' : 'Contractor';
@@ -1027,8 +1164,11 @@ app.post('/api/auth/reset-password', async (req, res) => {
 });
 
 // Requires a valid token. Returns only contractor public info (no passwords, no document file bytes).
-app.get('/api/users', requireAuth, async (_req, res) => {
+app.get('/api/users', requireAuth, async (req, res) => {
   try {
+    if (!['admin', 'contractor'].includes(req.authUser.role)) {
+      return res.status(403).json({ ok: false, message: 'Not allowed.' });
+    }
     const { rows } = await pool.query(`SELECT * FROM users WHERE role='contractor' AND is_blocked=false ORDER BY created_at DESC`);
     return res.json({ ok: true, users: rows.map((r) => rowToUser(r, { includeDocumentData: false })) });
   } catch (e) {
@@ -1149,11 +1289,21 @@ app.get('/api/admin/chat/:jobId', requireAuth, requireAdmin, async (req, res) =>
 
 // ── Jobs ──────────────────────────────────────────────────────────────────────
 
-app.get('/api/jobs', async (_req, res) => {
+app.get('/api/jobs', requireAuth, async (req, res) => {
   try {
+    // Contractors see open board jobs (PII masked); admins see all; homeowners use /api/jobs/my.
+    if (req.authUser.role === 'homeowner') {
+      return res.status(403).json({ error: 'Use /api/jobs/my for your jobs.' });
+    }
     const { rows } = await pool.query('SELECT * FROM jobs ORDER BY created_at DESC');
-    return res.json(rows.map(rowToJob));
-  } catch (e) { return res.status(500).json({ error: 'Server error' }); }
+    if (req.authUser.role === 'admin') {
+      return res.json(rows.map(rowToJob));
+    }
+    return res.json(rows.map(rowToJobBoard));
+  } catch (e) {
+    console.error('jobs list:', e);
+    return res.status(500).json({ error: publicErrorMessage(e) });
+  }
 });
 
 app.get('/api/jobs/my', requireAuth, async (req, res) => {
@@ -1250,24 +1400,69 @@ app.post('/api/notifications/read', requireAuth, async (req, res) => {
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
-app.get('/api/lifecycle', async (_req, res) => {
+app.get('/api/lifecycle', requireAuth, requireAdmin, async (_req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM job_lifecycle');
     return res.json(rows.map(rowToLifecycle));
-  } catch (e) { return res.status(500).json({ error: 'Server error' }); }
+  } catch (e) {
+    return res.status(500).json({ error: publicErrorMessage(e) });
+  }
 });
 
-app.get('/api/lifecycle/:jobId', async (req, res) => {
+app.get('/api/lifecycle/:jobId', requireAuth, async (req, res) => {
   try {
+    if (!isPositiveInt(req.params.jobId)) {
+      return res.status(400).json({ error: 'Invalid job id.' });
+    }
+    const access = await getLegacyJobAccess(req.params.jobId, req.authUser);
+    if (!access.allowed) {
+      return res.status(403).json({ error: 'Not allowed.' });
+    }
     const { rows } = await pool.query('SELECT * FROM job_lifecycle WHERE job_id=$1', [req.params.jobId]);
     return res.json(rows.length ? rowToLifecycle(rows[0]) : { jobId: Number(req.params.jobId), status: 'open' });
-  } catch (e) { return res.status(500).json({ error: 'Server error' }); }
+  } catch (e) {
+    return res.status(500).json({ error: publicErrorMessage(e) });
+  }
 });
 
-app.put('/api/lifecycle/:jobId/status', async (req, res) => {
+app.put('/api/lifecycle/:jobId/status', requireAuth, async (req, res) => {
   try {
+    if (!isPositiveInt(req.params.jobId)) {
+      return res.status(400).json({ error: 'Invalid job id.' });
+    }
     const { jobId } = req.params;
-    const { status, contractorName, contractorEmail } = req.body;
+    const access = await getLegacyJobAccess(jobId, req.authUser);
+    if (!access.job && req.authUser.role !== 'admin') {
+      return res.status(404).json({ error: 'Job not found.' });
+    }
+    const status = clampString(req.body?.status, 40);
+    const allowed = ['open', 'accepted', 'on-the-way', 'arrived', 'work-started', 'completed'];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ error: 'Invalid status.' });
+    }
+
+    // Homeowners cannot set contractor progress; contractors may accept open jobs or update assigned ones
+    let contractorName = null;
+    let contractorEmail = null;
+    if (req.authUser.role === 'admin') {
+      contractorName = clampString(req.body?.contractorName, 120) || null;
+      contractorEmail = clampString(req.body?.contractorEmail, 200) || null;
+    } else if (req.authUser.role === 'contractor') {
+      if (status === 'accepted') {
+        contractorName = req.authUser.name || null;
+        contractorEmail = req.authUser.email;
+      } else if (!access.mutate) {
+        return res.status(403).json({ error: 'Accept this job before updating status.' });
+      } else {
+        contractorName = req.authUser.name || null;
+        contractorEmail = req.authUser.email;
+      }
+    } else if (req.authUser.role === 'homeowner') {
+      return res.status(403).json({ error: 'Homeowners cannot update contractor job status.' });
+    } else {
+      return res.status(403).json({ error: 'Not allowed.' });
+    }
+
     const now = new Date().toISOString();
     await pool.query(
       `INSERT INTO job_lifecycle (job_id,status,contractor_name,contractor_email,accepted_at,completed_at,updated_at)
@@ -1282,21 +1477,33 @@ app.put('/api/lifecycle/:jobId/status', async (req, res) => {
          accepted_at  = CASE WHEN $2='accepted'  AND job_lifecycle.accepted_at  IS NULL THEN $5::timestamptz ELSE job_lifecycle.accepted_at  END,
          completed_at = CASE WHEN $2='completed' AND job_lifecycle.completed_at IS NULL THEN $5::timestamptz ELSE job_lifecycle.completed_at END,
          updated_at   = $5::timestamptz`,
-      [jobId,status,contractorName||null,contractorEmail||null,now]
+      [jobId, status, contractorName, contractorEmail, now]
     );
     const { rows } = await pool.query('SELECT * FROM job_lifecycle WHERE job_id=$1', [jobId]);
     return res.json(rowToLifecycle(rows[0]));
   } catch (e) {
     console.error('update status:', e);
-    return res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: publicErrorMessage(e) });
   }
 });
 
-app.put('/api/lifecycle/:jobId/invoice', async (req, res) => {
+app.put('/api/lifecycle/:jobId/invoice', requireAuth, async (req, res) => {
   try {
+    if (!isPositiveInt(req.params.jobId)) {
+      return res.status(400).json({ error: 'Invalid job id.' });
+    }
     const { jobId } = req.params;
-    const { amount, fileName, fileData } = req.body;
-    if (fileData && typeof fileData === 'string' && fileData.length > 8_000_000) {
+    const access = await getLegacyJobAccess(jobId, req.authUser);
+    if (!access.mutate && req.authUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Not allowed.' });
+    }
+    const amount = Number(req.body?.amount);
+    const fileName = clampString(req.body?.fileName, 200) || null;
+    const fileData = req.body?.fileData;
+    if (!Number.isFinite(amount) || amount < 0 || amount > 1_000_000) {
+      return res.status(400).json({ error: 'Invalid invoice amount.' });
+    }
+    if (fileData && typeof fileData === 'string' && fileData.length > 5_000_000) {
       return res.status(400).json({ error: 'Invoice file is too large.' });
     }
     await pool.query(
@@ -1307,13 +1514,13 @@ app.put('/api/lifecycle/:jobId/invoice', async (req, res) => {
          invoice_file_name=$3,
          invoice_file_data=COALESCE($4, job_lifecycle.invoice_file_data),
          updated_at=NOW()`,
-      [jobId, amount, fileName || null, typeof fileData === 'string' ? fileData : null]
+      [jobId, amount, fileName, typeof fileData === 'string' ? fileData : null]
     );
     const { rows } = await pool.query('SELECT * FROM job_lifecycle WHERE job_id=$1', [jobId]);
     return res.json(rowToLifecycle(rows[0]));
   } catch (e) {
     console.error('update invoice:', e);
-    return res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: publicErrorMessage(e) });
   }
 });
 
@@ -1353,24 +1560,38 @@ app.post('/api/support/messages', requireAuth, async (req, res) => {
   }
 });
 
-app.put('/api/lifecycle/:jobId/rating', async (req, res) => {
+app.put('/api/lifecycle/:jobId/rating', requireAuth, async (req, res) => {
   try {
+    if (!isPositiveInt(req.params.jobId)) {
+      return res.status(400).json({ error: 'Invalid job id.' });
+    }
     const { jobId } = req.params;
-    const { rating, review } = req.body;
+    const access = await getLegacyJobAccess(jobId, req.authUser);
+    // Only the homeowner (or admin) may rate
+    if (req.authUser.role !== 'admin' && !(req.authUser.role === 'homeowner' && access.mutate)) {
+      return res.status(403).json({ error: 'Not allowed.' });
+    }
+    const rating = Number(req.body?.rating);
+    const review = clampString(req.body?.review, 2000);
+    if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
+      return res.status(400).json({ error: 'Rating must be 1–5.' });
+    }
     await pool.query(
       `INSERT INTO job_lifecycle (job_id,status,rating,review,updated_at)
        VALUES ($1,'completed',$2,$3,NOW())
        ON CONFLICT (job_id) DO UPDATE SET rating=$2, review=$3, updated_at=NOW()`,
-      [jobId,rating,review]
+      [jobId, rating, review]
     );
     const { rows } = await pool.query('SELECT * FROM job_lifecycle WHERE job_id=$1', [jobId]);
     return res.json(rowToLifecycle(rows[0]));
-  } catch (e) { return res.status(500).json({ error: 'Server error' }); }
+  } catch (e) {
+    return res.status(500).json({ error: publicErrorMessage(e) });
+  }
 });
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
-app.get('/api/chat', async (_req, res) => {
+app.get('/api/chat', requireAuth, requireAdmin, async (_req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM job_chat_messages ORDER BY created_at ASC');
     const byJob = {};
@@ -1380,78 +1601,154 @@ app.get('/api/chat', async (_req, res) => {
       byJob[k].push(rowToMessage(r));
     }
     return res.json(byJob);
-  } catch (e) { return res.status(500).json({ error: 'Server error' }); }
+  } catch (e) {
+    return res.status(500).json({ error: publicErrorMessage(e) });
+  }
 });
 
-app.get('/api/chat/:jobId', async (req, res) => {
+app.get('/api/chat/:jobId', requireAuth, async (req, res) => {
   try {
+    if (!isPositiveInt(req.params.jobId)) {
+      return res.status(400).json({ error: 'Invalid job id.' });
+    }
+    const access = await getLegacyJobAccess(req.params.jobId, req.authUser);
+    if (!access.allowed) {
+      return res.status(403).json({ error: 'Not allowed.' });
+    }
+    // Homeowners always; contractors only when assigned (or admin)
+    if (
+      req.authUser.role === 'contractor' &&
+      !access.mutate &&
+      req.authUser.role !== 'admin'
+    ) {
+      return res.status(403).json({ error: 'Accept the job before opening chat.' });
+    }
     const { rows } = await pool.query(
       'SELECT * FROM job_chat_messages WHERE job_id=$1 ORDER BY created_at ASC',
       [req.params.jobId]
     );
     return res.json(rows.map(rowToMessage));
-  } catch (e) { return res.status(500).json({ error: 'Server error' }); }
+  } catch (e) {
+    return res.status(500).json({ error: publicErrorMessage(e) });
+  }
 });
 
-app.post('/api/chat/:jobId', async (req, res) => {
+app.post('/api/chat/:jobId', requireAuth, async (req, res) => {
   try {
+    if (!isPositiveInt(req.params.jobId)) {
+      return res.status(400).json({ error: 'Invalid job id.' });
+    }
     const { jobId } = req.params;
-    const { senderRole, senderName, text, imageDataUrl } = req.body;
+    const access = await getLegacyJobAccess(jobId, req.authUser);
+    if (!access.allowed) {
+      return res.status(403).json({ error: 'Not allowed.' });
+    }
+    if (req.authUser.role === 'contractor' && !access.mutate) {
+      return res.status(403).json({ error: 'Accept the job before chatting.' });
+    }
+    // Never trust client-supplied identity
+    const senderRole = req.authUser.role;
+    const senderName = clampString(req.authUser.name || req.authUser.email || 'User', 120);
+    const text = clampString(req.body?.text, 4000);
+    const imageDataUrl = req.body?.imageDataUrl;
+    if (!text && !(typeof imageDataUrl === 'string' && imageDataUrl.startsWith('data:'))) {
+      return res.status(400).json({ error: 'Message text or image is required.' });
+    }
+    if (typeof imageDataUrl === 'string' && imageDataUrl.length > 5_000_000) {
+      return res.status(400).json({ error: 'Image is too large.' });
+    }
     const id = Date.now() + Math.floor(Math.random() * 1000);
     const { rows } = await pool.query(
       `INSERT INTO job_chat_messages (id,job_id,sender_role,sender_name,text,image_data_url)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [id,jobId,senderRole,senderName,text,imageDataUrl||null]
+      [id, jobId, senderRole, senderName, text, typeof imageDataUrl === 'string' ? imageDataUrl : null]
     );
     return res.json(rowToMessage(rows[0]));
   } catch (e) {
     console.error('add message:', e);
-    return res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: publicErrorMessage(e) });
   }
 });
 
 // ── Multi-provider AI assessment (Gemini / OpenAI / OpenRouter / custom) ──────
-app.get('/api/ai/status', (_req, res) => {
+app.get('/api/ai/status', requireAuth, (_req, res) => {
   return res.json(getAiStatus());
 });
 
-app.post('/api/ai/assess', async (req, res) => {
+app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
   try {
     const { category, description, imageDataUrl, mode } = req.body || {};
-    const desc = typeof description === 'string' ? description.trim() : '';
+    const desc = clampString(description, 4000);
+    const cat = clampString(category, 80);
     const hasImage = typeof imageDataUrl === 'string' && imageDataUrl.startsWith('data:');
-    if (!category || (!desc && !hasImage)) {
+    if (hasImage && imageDataUrl.length > 6_000_000) {
+      return res.status(400).json({ ok: false, message: 'Image is too large.' });
+    }
+    if (!cat || (!desc && !hasImage)) {
       return res.status(400).json({
         ok: false,
         message: 'category and either a description or a photo are required.',
       });
     }
-    const result = await analyzeRepair({
-      category,
+    // Prefer structured assessment (no invented prices). Legacy UI still receives mapped fields.
+    const structured = await analyzeRepairStructured({
+      category: cat,
       description: desc || 'No written description provided. Analyze the attached photo and infer the repair issue.',
       imageDataUrl: hasImage ? imageDataUrl : null,
+    });
+    const a = structured.assessment;
+    return res.json({
+      assessment: a
+        ? {
+            overview: a.summary,
+            imageObservations: a.visual_findings,
+            diagnosis: a.summary,
+            likelyRootCause: '',
+            professionalSteps: [],
+            partsNeeded: a.materials_needed || [],
+            workScope: [],
+            toolsRequired: a.tools_required || [],
+            diySteps: a.safe_diy_allowed ? a.diy_steps || [] : [],
+            diyGuideImages: [],
+            suggestions: a.immediate_safety_steps || [],
+            estimatedCost: '',
+            estimatedDuration: `${a.estimated_labor_hours_min}-${a.estimated_labor_hours_max} hours`,
+            urgency: a.urgency,
+            safetyNotes: (a.immediate_safety_steps || []).join(' '),
+            professionalRecommended: a.professional_required,
+            ...a,
+          }
+        : null,
+      source: structured.source,
+      model: structured.model,
+      error: structured.error,
       mode: mode === 'detail' ? 'detail' : 'summary',
     });
-    return res.json(result);
   } catch (e) {
     console.error('ai assess:', e);
     return res.status(500).json({
       assessment: null,
       source: 'error',
-      error: 'Server error calling AI provider',
+      error: 'Assessment unavailable. Please retry or request a professional.',
     });
   }
 });
 
-app.post('/api/ai/chat', async (req, res) => {
+registerManagedRoutes(app, { pool, requireAuth, requireAdmin });
+registerPlatformRoutes(app, { pool, requireAuth, requireAdmin });
+
+app.post('/api/ai/chat', requireAuth, aiLimiter, async (req, res) => {
   try {
     const { messages } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ ok: false, message: 'messages array is required.' });
     }
+    if (messages.length > 40) {
+      return res.status(400).json({ ok: false, message: 'Too many messages in request.' });
+    }
     const normalized = messages
       .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
-      .map((m) => ({ role: m.role, content: m.content.trim() }))
+      .map((m) => ({ role: m.role, content: clampString(m.content, 4000) }))
       .filter((m) => m.content.length > 0)
       .slice(-20);
     if (!normalized.some((m) => m.role === 'user')) {
@@ -1464,7 +1761,7 @@ app.post('/api/ai/chat', async (req, res) => {
     return res.status(500).json({
       reply: null,
       source: 'error',
-      error: 'Server error calling AI chat',
+      error: 'Chat unavailable. Please try again.',
     });
   }
 });

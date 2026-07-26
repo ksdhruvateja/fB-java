@@ -4,6 +4,7 @@ import {
   Eye, EyeOff, CheckCircle, AlertCircle, ArrowRight, Shield, Loader2,
 } from "lucide-react";
 import { resetPassword, type UserRole } from "./auth";
+import { brand } from "../config/brand";
 
 export default function ResetPassword({
   token,
@@ -79,7 +80,7 @@ export default function ResetPassword({
               Set New Password
             </h1>
             <p className="text-sm text-muted-foreground mb-8">
-              Choose a strong password for your FixBridge account.
+              Choose a strong password for your {brand.productName} account.
             </p>
 
             <form onSubmit={handleSubmit} className="space-y-4">

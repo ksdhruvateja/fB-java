@@ -95,7 +95,8 @@ function authHeaders(): HeadersInit {
 }
 
 export async function getJobBoardJobs(): Promise<JobBoardItem[]> {
-  const res = await fetch("/api/jobs");
+  const res = await fetch("/api/jobs", { headers: authHeaders() });
+  if (!res.ok) return [];
   return res.json();
 }
 
