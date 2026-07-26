@@ -1,0 +1,596 @@
+# FIXBRIDGE — TECHNICAL IMPLEMENTATION SPEC (Neon Edition)
+### Developer-Ready Architecture, Schema, and Build Checklist
+Version 1.2 — Database migrated from Supabase to **Neon Postgres**
+CONFIDENTIAL WORKING DOCUMENT
+
+---
+
+## 0. What Changed From v1.1
+
+Supabase was a bundled platform (Postgres + Auth + Storage + Realtime + Edge Functions). Neon is **Postgres only** — serverless, branchable, autoscaling — so every capability Supabase bundled has to be sourced separately. This doc replaces each one with a specific tool and gives the implementation detail needed to generate code against it.
+
+| Capability | Old (Supabase) | New (Neon stack) |
+|---|---|---|
+| Database | Supabase Postgres | **Neon Postgres (serverless, branching enabled)** |
+| Connection pooling | Supabase pooler (PgBouncer) | **Neon's built-in pooled connection string** (`-pooler` endpoint) |
+| Auth | Supabase Auth | **Auth.js (NextAuth v5)** with a custom Neon/Postgres adapter, or **Clerk** if the team wants a hosted option — see §3 |
+| File storage | Supabase Storage | **Cloudflare R2** (S3-compatible) with presigned URLs |
+| Realtime (job status, chat) | Supabase Realtime | **Postgres `LISTEN/NOTIFY` → WebSocket relay**, or **Ably/Pusher** for managed pub/sub — see §5 |
+| Server-side compute | Supabase Edge Functions | **Next.js Route Handlers / Vercel Serverless Functions** (or a standalone Node/Express service if the team prefers a dedicated backend) |
+| Row-level security | Supabase RLS | **Native Postgres RLS** — fully supported on Neon, policies defined in SQL, see §2.4 |
+| Migrations | Supabase CLI | **Drizzle ORM + drizzle-kit** (or Prisma Migrate) against the Neon connection string |
+
+Everything else in the v1.1 plan (Netlify or Vercel frontend, Stripe, OpenAI, Twilio, Resend, Google Places, n8n, Sentry, PostHog) is unchanged.
+
+**Branching note (Neon-specific advantage to build in from day one):** Neon lets you fork the database instantly for a given git branch. Wire this into CI so every PR gets an ephemeral database branch seeded from production schema — this replaces a chunk of what teams normally use Supabase's staging project for. Use `neon branches create --parent main --name pr-<number>` in the CI pipeline.
+
+---
+
+## 1. Updated Recommended Technology Stack
+
+| Purpose | Tool | Notes |
+|---|---|---|
+| Frontend + deployment | Next.js 15 (App Router) on Vercel, or Netlify | Vercel is the smoother path if using Vercel serverless functions for the backend |
+| Database | **Neon Postgres** | Single source of truth; use the pooled connection string for all app traffic, direct connection only for migrations |
+| ORM / migrations | **Drizzle ORM + drizzle-kit** | Type-safe schema, generates SQL migrations, works cleanly with Neon's HTTP and TCP drivers |
+| Auth | **Auth.js (NextAuth v5)** custom Neon adapter, or **Clerk** | Role-based sessions for every account type (homeowner, landlord, agent, contractor, admin, partner) |
+| File storage | **Cloudflare R2** | Private buckets, presigned upload/download URLs, no egress fees |
+| Realtime | **Postgres LISTEN/NOTIFY relayed through a WebSocket server**, or **Ably** | Job status, dispatch board, chat |
+| Backend compute | **Next.js Route Handlers** (or standalone Node/Express) | All pricing, AI, and payment logic stays server-side, never in the browser |
+| AI | OpenAI Responses API | Image input, Structured Outputs, configurable model via env var |
+| Payments & subscriptions | Stripe Checkout, Billing, Connect | Unchanged |
+| SMS | Twilio | Unchanged |
+| Email | Resend | Unchanged |
+| Address / distance | Google Places / Maps | Unchanged |
+| Automations | n8n | Secondary alerts only, never source of truth |
+| Error monitoring | Sentry | Unchanged |
+| Product analytics | PostHog | Unchanged |
+| Background jobs / cron | **Vercel Cron** or **Inngest** | Document-expiration reminders, payout reserve release, subscription dunning |
+
+**Connection rule (updated for Neon):**
+- Use the **pooled** Neon connection string (`...neon.tech/dbname?sslmode=require&pgbouncer=true`) for all request-scoped queries from serverless functions, since each invocation opens a new connection and Neon's pooler prevents connection exhaustion.
+- Use the **unpooled/direct** connection string only for migrations and long-running admin scripts.
+- Never expose the Neon connection string, Stripe secret key, OpenAI key, or R2 credentials to the browser — all live in server-only environment variables.
+
+---
+
+## 2. Database Layer (Neon Postgres)
+
+### 2.1 Setup
+1. Create a Neon project with a `production` branch and a `development` branch.
+2. Enable **connection pooling** in the Neon console (this is what gives you the `-pooler` host).
+3. Store two env vars: `DATABASE_URL` (pooled, used by the app) and `DATABASE_URL_UNPOOLED` (direct, used by drizzle-kit migrations).
+4. Install `drizzle-orm`, `drizzle-kit`, and `@neondatabase/serverless`.
+5. For serverless/edge runtime queries, use the `neon-http` driver (single query, low latency, no persistent connection). For anything transactional (multi-statement, needs a real client), use `neon-serverless` with `Pool`.
+
+```ts
+// db/client.ts
+import { neon } from '@neondatabase/serverless';
+import { drizzle } from 'drizzle-orm/neon-http';
+import * as schema from './schema';
+
+const sql = neon(process.env.DATABASE_URL!);
+export const db = drizzle(sql, { schema });
+```
+
+```ts
+// db/client-transactional.ts — use for multi-statement writes (e.g. payout release)
+import { Pool } from '@neondatabase/serverless';
+import { drizzle } from 'drizzle-orm/neon-serverless';
+import * as schema from './schema';
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL! });
+export const dbTx = drizzle(pool, { schema });
+```
+
+### 2.2 Core Schema (Drizzle, condensed — generate full migration from this)
+
+```ts
+// db/schema.ts
+import { pgTable, uuid, text, timestamp, numeric, boolean, jsonb, integer, pgEnum } from 'drizzle-orm/pg-core';
+
+export const userRoleEnum = pgEnum('user_role', ['homeowner','landlord','agent','contractor','admin','partner']);
+export const jobModeEnum = pgEnum('job_mode', ['managed','direct']);
+export const jobStatusEnum = pgEnum('job_status', [
+  'draft','ai_review_complete','awaiting_service_payment','paid_for_dispatch','awaiting_contractor',
+  'contractor_invited','contractor_accepted','awaiting_bid','bid_received','proposal_sent',
+  'awaiting_customer_approval','approved','scheduled','contractor_en_route','work_started',
+  'change_order_pending','work_completed','customer_review_pending','admin_review_pending',
+  'payout_pending','paid_out','closed','canceled','refunded','disputed'
+]);
+export const contractorStatusEnum = pgEnum('contractor_status', [
+  'draft','documents_pending','under_review','approved','suspended','expired','rejected'
+]);
+
+export const profiles = pgTable('profiles', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  authUserId: text('auth_user_id').notNull().unique(), // maps to Auth.js user id
+  role: userRoleEnum('role').notNull(),
+  fullName: text('full_name').notNull(),
+  email: text('email').notNull().unique(),
+  phone: text('phone'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const properties = pgTable('properties', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  ownerId: uuid('owner_id').references(() => profiles.id).notNull(),
+  addressLine1: text('address_line1').notNull(),
+  city: text('city').notNull(),
+  state: text('state').notNull(),
+  zip: text('zip').notNull(),
+  lat: numeric('lat'),
+  lng: numeric('lng'),
+  propertyType: text('property_type'),
+  accessNotes: text('access_notes'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const contractors = pgTable('contractors', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  profileId: uuid('profile_id').references(() => profiles.id).notNull(),
+  businessName: text('business_name').notNull(),
+  status: contractorStatusEnum('status').default('draft').notNull(),
+  tradesServed: jsonb('trades_served').notNull(), // string[]
+  serviceZips: jsonb('service_zips').notNull(),    // string[]
+  travelRadiusMiles: integer('travel_radius_miles'),
+  minTripFee: numeric('min_trip_fee'),
+  stripeConnectedAccountId: text('stripe_connected_account_id'),
+  connectOnboardingComplete: boolean('connect_onboarding_complete').default(false),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const contractorDocuments = pgTable('contractor_documents', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  contractorId: uuid('contractor_id').references(() => contractors.id).notNull(),
+  docType: text('doc_type').notNull(), // license, insurance, w9, workers_comp
+  fileKey: text('file_key').notNull(), // R2 object key
+  expiresAt: timestamp('expires_at'),
+  status: text('status').default('pending').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const jobs = pgTable('jobs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  propertyId: uuid('property_id').references(() => properties.id).notNull(),
+  customerId: uuid('customer_id').references(() => profiles.id).notNull(),
+  jobMode: jobModeEnum('job_mode').notNull(),
+  status: jobStatusEnum('status').default('draft').notNull(),
+  category: text('category'),
+  urgency: text('urgency'),
+  aiConfidence: numeric('ai_confidence'),
+  professionalRequired: boolean('professional_required'),
+  safeDiyAllowed: boolean('safe_diy_allowed'),
+  assignedContractorId: uuid('assigned_contractor_id').references(() => contractors.id),
+  partnerId: uuid('partner_id'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const aiAssessments = pgTable('ai_assessments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  jobId: uuid('job_id').references(() => jobs.id).notNull(),
+  rawResponse: jsonb('raw_response').notNull(),
+  category: text('category'),
+  urgency: text('urgency'),
+  confidence: numeric('confidence'),
+  recommendedTrade: text('recommended_trade'),
+  estimatedLaborHoursMin: numeric('estimated_labor_hours_min'),
+  estimatedLaborHoursMax: numeric('estimated_labor_hours_max'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const pricingRules = pgTable('pricing_rules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  key: text('key').notNull().unique(), // e.g. 'target_gross_margin', 'fixed_platform_cost'
+  value: numeric('value').notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const bids = pgTable('bids', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  jobId: uuid('job_id').references(() => jobs.id).notNull(),
+  contractorId: uuid('contractor_id').references(() => contractors.id).notNull(),
+  laborNet: numeric('labor_net'),
+  materialsNet: numeric('materials_net'),
+  equipmentNet: numeric('equipment_net'),
+  travelFee: numeric('travel_fee'),
+  permitCost: numeric('permit_cost'),
+  disposalCost: numeric('disposal_cost'),
+  contractorNetTotal: numeric('contractor_net_total').notNull(),
+  warrantyTerms: text('warranty_terms'),
+  exclusions: text('exclusions'),
+  status: text('status').default('submitted').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const proposals = pgTable('proposals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  jobId: uuid('job_id').references(() => jobs.id).notNull(),
+  bidId: uuid('bid_id').references(() => bids.id),
+  customerRetailLow: numeric('customer_retail_low'),
+  customerRetailHigh: numeric('customer_retail_high'),
+  customerFinalRetail: numeric('customer_final_retail'),
+  platformGrossProfit: numeric('platform_gross_profit'),
+  status: text('status').default('draft').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const changeOrders = pgTable('change_orders', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  jobId: uuid('job_id').references(() => jobs.id).notNull(),
+  contractorNetAddl: numeric('contractor_net_addl'),
+  customerRetailAddl: numeric('customer_retail_addl'),
+  reason: text('reason'),
+  status: text('status').default('pending').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const payments = pgTable('payments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  jobId: uuid('job_id').references(() => jobs.id),
+  stripeObjectId: text('stripe_object_id').notNull(),
+  type: text('type').notNull(), // dispatch_fee, retail_payment, lead_fee, subscription
+  amount: numeric('amount').notNull(),
+  status: text('status').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const transfers = pgTable('transfers', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  jobId: uuid('job_id').references(() => jobs.id).notNull(),
+  contractorId: uuid('contractor_id').references(() => contractors.id).notNull(),
+  stripeTransferId: text('stripe_transfer_id'),
+  amount: numeric('amount').notNull(),
+  status: text('status').default('pending').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const webhookEvents = pgTable('webhook_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  provider: text('provider').notNull(), // stripe, twilio, resend
+  eventId: text('event_id').notNull().unique(), // idempotency key
+  payload: jsonb('payload').notNull(),
+  processedAt: timestamp('processed_at').defaultNow().notNull(),
+});
+
+export const auditLogs = pgTable('audit_logs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  actorId: uuid('actor_id').references(() => profiles.id),
+  action: text('action').notNull(),
+  targetTable: text('target_table'),
+  targetId: uuid('target_id'),
+  metadata: jsonb('metadata'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const partners = pgTable('partners', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  partnerCode: text('partner_code').notNull().unique(),
+  companyName: text('company_name').notNull(),
+  contactEmail: text('contact_email'),
+  contactPhone: text('contact_phone'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const partnerReferrals = pgTable('partner_referrals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  partnerId: uuid('partner_id').references(() => partners.id).notNull(),
+  jobId: uuid('job_id').references(() => jobs.id),
+  referralStatus: text('referral_status').default('received').notNull(),
+  consentGiven: boolean('consent_given').default(false),
+  consentTimestamp: timestamp('consent_timestamp'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+```
+
+Add the remaining tables (`units`, `property_documents`, `availability`, `performance`, `invitations`, `completion_reports`, `reviews`, `status_history`, `disputes`, `subscriptions`, `lead_purchases`, `affiliate_clicks`, `conversations`, `messages`, `notifications`, `error_logs`, `consent_records`, `partner_users`, `partner_referral_events`) following the same pattern — every table gets a `uuid` primary key, explicit foreign keys, `created_at`, and (where mutable) `updated_at`.
+
+### 2.3 Migrations
+- `drizzle-kit generate` against `db/schema.ts` produces versioned SQL migration files.
+- `drizzle-kit migrate` applies them against `DATABASE_URL_UNPOOLED`.
+- Run migrations in CI before deploy; never run schema changes through the pooled connection.
+- Use Neon **branching** for migration testing: create a branch off `production`, run the migration there, verify, then apply to `production`.
+
+### 2.4 Row-Level Security on Neon
+Neon is vanilla Postgres, so native RLS works exactly as documented by Postgres — there is no Supabase-specific `auth.uid()` helper, so you replicate it with a session variable set per request.
+
+```sql
+-- Enable RLS
+ALTER TABLE jobs ENABLE ROW LEVEL SECURITY;
+
+-- App sets this once per request after verifying the session (see §3)
+-- SELECT set_config('app.current_user_id', '<profile-uuid>', true);
+-- SELECT set_config('app.current_user_role', 'contractor', true);
+
+CREATE POLICY jobs_customer_read ON jobs
+  FOR SELECT
+  USING (
+    current_setting('app.current_user_role', true) = 'admin'
+    OR customer_id = current_setting('app.current_user_id', true)::uuid
+    OR (current_setting('app.current_user_role', true) = 'contractor'
+        AND assigned_contractor_id IN (
+          SELECT id FROM contractors WHERE profile_id = current_setting('app.current_user_id', true)::uuid
+        ))
+  );
+```
+
+Wrap every request-scoped Drizzle query in a transaction that first runs the two `set_config` calls, so Postgres enforces visibility even if application code has a bug. This is what stands in for Supabase's automatic RLS-by-JWT.
+
+### 2.5 Security rules (unchanged intent, Neon-specific mechanics)
+- Enable RLS on every table containing customer, contractor, or payment data.
+- Never store card numbers or bank account numbers in Neon — Stripe holds those.
+- Every price, payout, refund, and role change writes a row to `audit_logs` in the same transaction as the mutation.
+- Rotate the Neon role password and R2 access keys on a schedule; store both only in Vercel/hosting-provider encrypted env vars.
+- Admin accounts require MFA at the Auth.js/Clerk layer.
+
+---
+
+## 3. Authentication (replacing Supabase Auth)
+
+**Recommendation: Auth.js (NextAuth v5) with the Drizzle adapter pointed at Neon**, because it keeps user identity in the same database as everything else and avoids a second vendor. Clerk is the fallback if the team wants a hosted, no-maintenance option — swap is isolated to `lib/auth.ts` either way.
+
+Implementation detail:
+1. `users` table lives in Neon (Auth.js's own schema, via `@auth/drizzle-adapter`), separate from `profiles` (business data) — link by `authUserId`.
+2. Providers: email/password (credentials) plus Google OAuth for convenience.
+3. Session strategy: JWT, with `role` and `profileId` embedded in the token via the `session` callback, so every server function can read the caller's role without a DB round trip.
+4. Middleware (`middleware.ts`) gates routes by role: `/admin/*` requires `role === 'admin'`, `/contractor/*` requires `role === 'contractor'`, etc.
+5. On every server action / route handler, after resolving the session, call `set_config('app.current_user_id', ...)` and `set_config('app.current_user_role', ...)` inside the same DB transaction (see §2.4) before running any query — this is the RLS enforcement point.
+6. MFA for admin role: TOTP via `otplib`, enforced at login for any account with `role = 'admin'`.
+
+---
+
+## 4. File Storage (replacing Supabase Storage)
+
+**Cloudflare R2**, S3-compatible, private buckets, no egress fees.
+
+- Buckets: `job-media` (photos/video of issues), `contractor-documents` (license/insurance/W-9), `completion-proof` (before/after photos), `inspection-reports` (PDF uploads).
+- Uploads: client requests a **presigned PUT URL** from a server route (`POST /api/uploads/presign`), uploads directly to R2 from the browser, then confirms the object key back to the API to attach it to the relevant row (`ai_assessments.mediaKeys`, `contractor_documents.fileKey`, etc.).
+- Downloads: server generates a **presigned GET URL** valid for a short window (e.g. 5 minutes) on each authorized request — never store a public URL.
+- Use the `@aws-sdk/client-s3` and `@aws-sdk/s3-request-presigner` packages pointed at R2's S3-compatible endpoint.
+
+```ts
+// lib/storage.ts
+import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+
+const r2 = new S3Client({
+  region: 'auto',
+  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+  },
+});
+
+export async function presignUpload(bucket: string, key: string, contentType: string) {
+  const cmd = new PutObjectCommand({ Bucket: bucket, Key: key, ContentType: contentType });
+  return getSignedUrl(r2, cmd, { expiresIn: 300 });
+}
+
+export async function presignDownload(bucket: string, key: string) {
+  const cmd = new GetObjectCommand({ Bucket: bucket, Key: key });
+  return getSignedUrl(r2, cmd, { expiresIn: 300 });
+}
+```
+
+Enforce authorization in the presign route: check the caller's role and relationship to the job/contractor before ever issuing a signed URL.
+
+---
+
+## 5. Realtime (replacing Supabase Realtime)
+
+Two viable paths — pick one before coding starts:
+
+**Option A — Postgres-native (cheapest, more moving parts):**
+1. A small always-on Node process (or a Vercel background function using a long-lived connection, e.g. on Railway/Fly.io since Vercel serverless can't hold persistent connections) opens a `LISTEN` on channels like `job_status_changed`.
+2. Database triggers `NOTIFY job_status_changed, '<json payload>'` on relevant `UPDATE`s to `jobs`, `bids`, `messages`.
+3. That process re-broadcasts to connected browser clients over WebSocket (e.g. `ws` library), scoped by job/room subscription.
+
+**Option B — Managed pub/sub (simpler to ship, recommended for MVP):** Use **Ably** or **Pusher**. Server functions publish an event to a channel (e.g. `job-<id>`) whenever they mutate job status, bid state, or post a message; the frontend subscribes to that channel directly. No persistent server process to run.
+
+For the pilot, use **Option B** — it removes an entire piece of infrastructure the team would otherwise have to operate, and the admin dispatch board / chat / "contractor en route" pings all just need publish-on-write.
+
+---
+
+## 6. Backend Compute (replacing Supabase Edge Functions)
+
+All server-side logic — AI calls, pricing engine, Stripe operations, webhook handlers — becomes **Next.js Route Handlers** under `app/api/**/route.ts`, deployed as Vercel serverless functions. Each one:
+1. Resolves and validates the Auth.js session.
+2. Opens a Neon connection, sets the RLS session variables.
+3. Runs the operation inside a transaction where money or status changes are involved.
+4. Never trusts a price, payout amount, or role sent from the client — always recomputed or re-checked server-side.
+
+Key routes to generate:
+
+| Route | Method | Purpose |
+|---|---|---|
+| `/api/jobs` | POST | Create a job (issue report) |
+| `/api/jobs/[id]/assess` | POST | Send photos/answers to OpenAI, store `ai_assessments` |
+| `/api/jobs/[id]/estimate` | GET | Run pricing engine, return retail range |
+| `/api/jobs/[id]/dispatch-payment` | POST | Create Stripe Checkout session for assessment fee |
+| `/api/jobs/[id]/invite-contractors` | POST | Admin invites qualified contractors |
+| `/api/bids` | POST | Contractor submits confidential net bid |
+| `/api/proposals` | POST | Admin/pricing engine generates retail proposal from a bid |
+| `/api/proposals/[id]/approve` | POST | Customer approves + pays |
+| `/api/change-orders` | POST / PATCH | Submit and approve change orders |
+| `/api/jobs/[id]/complete` | POST | Contractor submits completion proof |
+| `/api/payouts/[jobId]/release` | POST | Admin releases Stripe Connect transfer |
+| `/api/webhooks/stripe` | POST | Verify signature, idempotently process events |
+| `/api/uploads/presign` | POST | Issue R2 presigned URL |
+| `/api/partners/[code]/intake` | POST | Referral-link intake |
+
+---
+
+## 7. AI Assessment Engine
+
+- Endpoint: OpenAI Responses API, server-side only (`/api/jobs/[id]/assess`).
+- Model name read from `process.env.OPENAI_MODEL` (never hard-coded) — default `gpt-5.6-terra`, cheap first-pass triage `gpt-5.6-luna`, high-risk second opinion `gpt-5.6-sol`.
+- Use **Structured Outputs** with a strict JSON Schema matching the `ai_assessments` shape (category, urgency, confidence, recommended_trade, professional_required, safe_diy_allowed, immediate_safety_steps, visual_findings, estimated_labor_hours_min/max, complexity, questions_needed, disclaimer).
+- Validate the response against the schema with `zod` before writing to the database; on validation failure, retry once, then fall back to `professional_required: true, confidence: 0` and route to manual admin review rather than showing an empty or broken result.
+- Hard-block DIY (`safe_diy_allowed = false`) server-side whenever category matches gas, major electrical, active flooding/sewage, fire/smoke/CO, structural, dangerous roof work, or hazardous material — this rule lives in code, not just in the prompt, so a bad model response can't bypass it.
+- Log every raw request/response pair (minus PII where avoidable) to `error_logs` on failure for admin review.
+
+## 8. Pricing Engine (server-side, never client-side)
+
+Implement as a pure function `computeRetailEstimate(input): { low, high, breakdown }` called from `/api/jobs/[id]/estimate`, using values pulled from `pricing_rules` (all admin-editable, never hard-coded):
+
+```
+retail = (contractorNet + fixedPlatformCost + riskReserve + fixedPaymentCost)
+         / (1 - targetGrossMargin - variablePaymentFeeRate)
+
+retail = max(retail, minimumGrossProfitFloor)
+```
+
+- Apply location factor, urgency surcharge, after-hours surcharge, subscription discount, and assessment credit as modifiers before the margin division.
+- Return a **range** (low/high), never a single exact figure, with a confidence-based disclaimer when `ai_confidence` is low or category is on the "don't show a price" list (§9.8 of the original plan).
+- Store every computed estimate (not just the final one) for auditability — insert a row rather than overwrite.
+
+## 9. Stripe Integration Detail
+
+- **Connect**: separate charges and transfers. Customer payment lands in the platform account; contractor payout is a distinct `transfer` created only after admin approves completion.
+- **Onboarding**: Stripe-hosted/embedded Connect onboarding; store `stripeConnectedAccountId`, poll/receive `account.updated` to flip `connectOnboardingComplete`.
+- **Checkout**: dispatch fee, retail payment, lead fee, and deposit/progress/final payments each get their own PaymentIntent or Checkout Session — do not rely on long authorization holds for multi-stage projects.
+- **Billing**: DIY/property/contractor subscriptions.
+- **Webhooks** (`/api/webhooks/stripe`): verify signature against `STRIPE_WEBHOOK_SECRET` using the raw body; look up `event.id` in `webhook_events` before processing (idempotency); on first sight, process then insert the row in the same transaction. Required events: `checkout.session.completed`, `payment_intent.succeeded`, `payment_intent.payment_failed`, `invoice.paid`, `invoice.payment_failed`, `customer.subscription.created/updated/deleted`, `charge.refunded`, `charge.dispute.created`, `account.updated`, `transfer.created/reversed`, `payout.paid/payout.failed`.
+- **Reserve logic**: do not transfer 100% of the retail payment to available balance immediately — hold back a configurable reserve percentage (`pricing_rules` key `reserve_percentage`) for a configurable number of days (`reserve_hold_days`) before it's eligible for full release, to cover refunds/disputes/warranty callbacks.
+
+## 10. Notification Layer
+
+- **Twilio**: contractor invitation, proposal/change-order ready, appointment reminder, contractor en route, emergency alert, job completed, payment/payout status. Trigger from the relevant Route Handler right after the DB write succeeds, not from the client.
+- **Resend**: account verification, proposal PDF + receipt, subscription confirmation, compliance expiration reminders (30/14/7-day cron via Vercel Cron or Inngest), completion/warranty summary, monthly property report.
+- Both are called server-side with API keys in env vars only.
+
+## 11. n8n Integration
+
+- n8n consumes **outbound webhooks** the app fires on key events (job paid, job needs dispatch, contractor document expiring) — it does not read or write Neon directly, and it is never the system of record.
+- Use it for: Slack/email alerts to the operator, daily admin summaries, non-sensitive lead summaries into Google Sheets for outreach reporting, marketing follow-up after consent.
+
+---
+
+## 12. Environment Variables (complete list to scaffold)
+
+```
+DATABASE_URL=                  # Neon pooled connection string
+DATABASE_URL_UNPOOLED=         # Neon direct connection string (migrations only)
+AUTH_SECRET=
+AUTH_GOOGLE_ID=
+AUTH_GOOGLE_SECRET=
+R2_ACCOUNT_ID=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+R2_BUCKET_JOB_MEDIA=
+R2_BUCKET_CONTRACTOR_DOCS=
+R2_BUCKET_COMPLETION_PROOF=
+R2_BUCKET_INSPECTION_REPORTS=
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-5.6-terra
+OPENAI_MODEL_TRIAGE=gpt-5.6-luna
+OPENAI_MODEL_REVIEW=gpt-5.6-sol
+STRIPE_SECRET_KEY=
+STRIPE_PUBLISHABLE_KEY=
+STRIPE_WEBHOOK_SECRET=
+STRIPE_CONNECT_CLIENT_ID=
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+TWILIO_FROM_NUMBER=
+RESEND_API_KEY=
+GOOGLE_PLACES_API_KEY=
+ABLY_API_KEY=                  # if using Option B realtime
+N8N_WEBHOOK_URL=
+SENTRY_DSN=
+POSTHOG_KEY=
+BRAND_NAME=
+BRAND_LOGO_URL=
+BRAND_PRIMARY_COLOR=
+BRAND_SUPPORT_EMAIL=
+```
+
+Branding stays entirely in env vars / a single config module, per the original naming instruction — do not hard-code "FixBridge" anywhere in code, copy, or database seed data beyond this config.
+
+---
+
+## 13. Build Phases (Neon-adjusted)
+
+**Phase 1 — Foundation**
+1. Stand up Neon project (prod + dev branches), Drizzle schema, initial migration.
+2. Auth.js wired to Neon with role-based sessions and middleware.
+3. R2 buckets + presign routes.
+4. OpenAI Structured Outputs assessment route with validation and safety hard-blocks.
+5. Pricing engine as a pure, unit-testable function reading from `pricing_rules`.
+6. Property profile CRUD.
+7. Branding config module.
+8. Mobile-first intake flow end to end (no payment yet), tested on staging Neon branch.
+
+**Phase 2 — Paid Managed pilot**
+1. Admin dispatch dashboard (reads/writes Neon directly, realtime via Ably/Pusher channel `admin-dispatch`).
+2. Contractor onboarding + document upload + Stripe Connect.
+3. Assessment-fee Checkout + webhook handler with idempotency table.
+4. Contractor invitations + confidential bid submission.
+5. Retail proposal generation (pricing engine + admin override).
+6. Customer payment on proposal approval.
+7. Job status state machine enforced server-side (no illegal transitions).
+8. Change orders.
+9. Completion proof upload + admin/customer confirmation.
+10. Contractor transfer release with reserve-hold logic.
+11. Refund/dispute handling from Stripe webhooks.
+
+**Phase 3 — Recurring revenue**
+1. Stripe Billing subscriptions (DIY, HomeCare, Property, Portfolio, Contractor Pro/Growth).
+2. Landlord/agent role features (approval thresholds, preferred vendor lists).
+3. Contractor mini-CRM screens.
+4. Direct-mode lead purchase flow (separate from Managed, no retail markup).
+5. Recurring maintenance scheduler (Vercel Cron/Inngest).
+6. Property report generation (PDF via a server route, emailed through Resend).
+
+**Phase 4 — Expansion**
+1. Commercial multi-location accounts, SLA tracking, NTE limits.
+2. Contractor performance scoring.
+3. Parts/tool finder against approved catalogs/affiliate feeds.
+4. Partner referral links (`/start?partner=CODE`), `partners`/`partner_referrals` tables, consent capture.
+5. Inspection-report-to-work-order AI converter.
+6. Brokerage white-label theming (extends the branding config module to per-partner overrides).
+
+---
+
+## 14. Testing Checklist (Neon-specific additions in bold)
+
+| Area | Tests |
+|---|---|
+| Database | **RLS policy checks per role (customer cannot read another customer's job; contractor cannot read retail price; admin sees everything)**, **migration apply/rollback on a Neon branch before promoting to prod** |
+| Auth | Session role correctness, MFA enforcement for admin, expired-session handling |
+| AI | Good image, bad image, missing image, emergency case, safe DIY, blocked DIY, invalid JSON from model, API outage/timeout |
+| Pricing | Low/high estimate, location surcharge, subscription discount, minimum-profit floor, admin override, never-show-price categories |
+| Payments | Successful charge, declined, duplicate webhook delivery, refund, dispute, subscription failure, payout failure, reserve-hold timing |
+| Storage | Presigned URL expiry, unauthorized access attempt, large video upload, wrong content-type rejection |
+| Realtime | Dispatch board updates on status change, chat delivery, reconnect after dropped WebSocket |
+| Contractors | Expired insurance blocks job invites, incomplete Connect onboarding blocks payout, bid revision, no-response timeout, suspension |
+| Mobile | Photo upload on slow connection, one-handed use, full intake flow under three minutes |
+
+---
+
+## 15. Developer Start-Now Checklist (Neon Edition)
+
+- [ ] Create Neon project with `production` + `development` branches; enable pooling.
+- [ ] Set up Drizzle schema + drizzle-kit, generate first migration.
+- [ ] Wire Auth.js (Drizzle adapter) with role-based JWT sessions.
+- [ ] Build the RLS `set_config` wrapper used by every server query.
+- [ ] Create R2 buckets and presign routes.
+- [ ] Build OpenAI assessment route with Structured Outputs + zod validation + safety hard-blocks.
+- [ ] Build pricing engine as a standalone, unit-tested module.
+- [ ] Enable Stripe Connect on the existing Stripe account; build onboarding route.
+- [ ] Build dispatch-fee Checkout flow.
+- [ ] Build Stripe webhook handler with `webhook_events` idempotency table.
+- [ ] Build admin job/contractor review screens with realtime updates.
+- [ ] Build contractor invite/bid/completion screens.
+- [ ] Build customer retail proposal + payment screens.
+- [ ] Wire Twilio + Resend notifications to key state transitions.
+- [ ] Set up CI to create a Neon branch per PR and run migrations + RLS tests against it.
+- [ ] Run one complete Managed job end-to-end in Stripe test mode against the dev Neon branch.
+- [ ] Run a controlled pilot with trusted users on production.
+
+---
+
+## 16. Final Instruction
+
+Build the money-making loop first, on the new stack, in this order: **Neon schema + RLS → Auth.js → R2 uploads → AI assessment route → pricing engine → Stripe Connect/Checkout/webhooks → contractor bidding → retail proposal → payout release.** Partner/referral tables and the inspection-report converter are lightweight additions layered on afterward — they must not delay the core paid workflow.
