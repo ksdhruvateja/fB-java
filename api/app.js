@@ -1732,6 +1732,13 @@ app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
     });
   } catch (e) {
     console.error('ai assess:', e);
+    // Persist AI failures to error_logs for admin review (spec §7)
+    try {
+      await pool.query(
+        `INSERT INTO error_logs (source, job_id, user_id, error_code, message) VALUES ($1,$2,$3,$4,$5)`,
+        ['ai_assess', req.body?.jobId || null, req.authUser?.id || null, e.code || 'UNKNOWN', String(e.message).slice(0, 500)]
+      );
+    } catch (_) { /* don't mask original error */ }
     return res.status(500).json({
       assessment: null,
       source: 'error',

@@ -28,6 +28,9 @@ export const DEFAULT_PRICING_RULES = {
   risk_reserve: 50,
   variable_payment_fee_rate: 0.029,
   fixed_payment_fee: 0.3,
+  // Payout reserve-hold (spec §9): hold back N% of payout for M days
+  reserve_percentage: 10,   // percent of contractor payout held in reserve
+  reserve_hold_days: 7,     // days before reserve is eligible for release
   target_gross_margin: 0.25,
   minimum_gross_profit: 75,
   location_factor: 1.08, // NYC/LI pilot

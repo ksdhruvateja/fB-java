@@ -80,6 +80,20 @@ async function audit(pool, actorUserId, action, entityType, entityId, detail) {
   );
 }
 
+async function sendNotificationEmail({ to, subject, html }) {
+  if (!to) return;
+  try {
+    const key = process.env.RESEND_API_KEY?.trim();
+    if (!key) return; // silently skip until RESEND_API_KEY is configured
+    const { Resend } = await import('resend');
+    const client = new Resend(key);
+    const from = process.env.FROM_EMAIL || `${brand.productName} <onboarding@resend.dev>`;
+    await client.emails.send({ from, to, subject, html });
+  } catch (e) {
+    console.error('[email notification]', e.message);
+  }
+}
+
 async function pushStatus(pool, jobId, fromStatus, toStatus, actorUserId, note) {
   await pool.query(
     `UPDATE managed_jobs SET status=$1, updated_at=NOW() WHERE id=$2`,
@@ -495,6 +509,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin }) 
       );
 
       let job = rows[0];
+      await audit(pool, req.authUser.id, 'job_created', 'managed_job', job.id, { title: job.title, category: job.category }).catch(() => {});
       const bookingId = formatBookingId(job.id, job.created_at);
       await pool.query(`UPDATE managed_jobs SET booking_id=$1 WHERE id=$2`, [bookingId, job.id]);
       job = { ...job, booking_id: bookingId };
@@ -803,17 +818,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin }) 
         return res.status(400).json({ ok: false, message: 'Contractor insurance has expired. Ask them to update their insurance before inviting.' });
       }
 
-      // Block expired license or insurance
-      const _now = new Date();
-      if (contractors[0].license_expires_at && new Date(contractors[0].license_expires_at) < _now) {
-        return res.status(400).json({ ok: false, message: 'Contractor license has expired. Update it under Contractors before assigning.' });
-      }
-      if (contractors[0].insurance_expires_at && new Date(contractors[0].insurance_expires_at) < _now) {
-        return res.status(400).json({ ok: false, message: 'Contractor insurance certificate has expired. Update it under Contractors before assigning.' });
-      }
 
       await pool.query(
-        `INSERT INTO job_invitations (job_id, contractor_user_id, status, expected_net_low, expected_net_high, message, invited_by)`
+        `INSERT INTO job_invitations (job_id, contractor_user_id, status, expected_net_low, expected_net_high, message, invited_by)
          VALUES ($1,$2,'invited',$3,$4,$5,$6)
          ON CONFLICT (job_id, contractor_user_id) DO UPDATE SET
            status='invited',
@@ -910,14 +917,6 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin }) 
         return res.status(400).json({ ok: false, message: 'Contractor insurance has expired. Ask them to update their insurance before assignment.' });
       }
 
-      // Block expired license or insurance
-      const _now = new Date();
-      if (contractors[0].license_expires_at && new Date(contractors[0].license_expires_at) < _now) {
-        return res.status(400).json({ ok: false, message: 'Contractor license has expired. Update it under Contractors before assigning.' });
-      }
-      if (contractors[0].insurance_expires_at && new Date(contractors[0].insurance_expires_at) < _now) {
-        return res.status(400).json({ ok: false, message: 'Contractor insurance certificate has expired. Update it under Contractors before assigning.' });
-      }
 
       // Ensure invitation row exists so contractor sees it in their portal
       await pool.query(
@@ -1189,6 +1188,18 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin }) 
         net: priced.contractor_final_net_amount,
       });
 
+      // Email homeowner — proposal ready to review
+      try {
+        const { rows: hw } = await pool.query('SELECT email, name FROM users WHERE id=$1', [jobs[0].homeowner_user_id]);
+        if (hw[0]) {
+          await sendNotificationEmail({
+            to: hw[0].email,
+            subject: `Your ${brand.productName} repair proposal is ready`,
+            html: `<p>Hi ${hw[0].name || 'there'},</p><p>Your repair proposal for <strong>${jobs[0].title}</strong> is ready to review. Log in to ${brand.productName} to see the details and approve.</p>`,
+          });
+        }
+      } catch (_e) { /* non-fatal */ }
+
       res.json({ ok: true, proposal: serializeProposal(rows[0], req.authUser) });
     } catch (e) {
       console.error(e);
@@ -1362,6 +1373,20 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin }) 
       );
       await pushStatus(pool, jobId, job.status, 'work_completed', req.authUser.id, 'Work completed with proof');
       await pushStatus(pool, jobId, 'work_completed', 'customer_review_pending', req.authUser.id, 'Awaiting customer confirmation');
+
+      // Email homeowner — work done, please confirm
+      try {
+        const { rows: hw } = await pool.query('SELECT email, name FROM users WHERE id=$1', [job.homeowner_user_id]);
+        if (hw[0]) {
+          const rpt = report;
+          await sendNotificationEmail({
+            to: hw[0].email,
+            subject: `Work complete — please confirm your ${brand.productName} job`,
+            html: `<p>Hi ${hw[0].name || 'there'},</p><p>Your contractor has marked <strong>${job.title}</strong> as complete${rpt.summary ? ': ' + rpt.summary : ''}.</p><p>Log in to review the before/after photos and confirm completion.</p>`,
+          });
+        }
+      } catch (_e) { /* non-fatal */ }
+
       const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       res.json({ ok: true, job: serializeJob(fresh[0], req.authUser) });
     } catch (e) {
@@ -1445,38 +1470,57 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin }) 
         });
       }
 
+      // Reserve-hold logic (spec §9): hold back a % for N days before full eligibility
+      const payRules = await loadPricingRules(pool);
+      const reservePct = Math.max(0, Math.min(1, Number(payRules.reserve_percentage ?? 10) / 100));
+      const reserveAmount = Math.round(amount * reservePct * 100) / 100;
+      const netPayoutAmount = Math.round((amount - reserveAmount) * 100) / 100;
+      const reserveHoldDays = Number(payRules.reserve_hold_days ?? 7);
+      const reserveReleaseAt = new Date(Date.now() + reserveHoldDays * 86_400_000);
+
       let transferId = null;
       if (simulate) {
         transferId = `sim_tr_${Date.now()}`;
       } else {
         const result = await createTransfer({
-          amountCents: Math.round(amount * 100),
+          amountCents: Math.round(netPayoutAmount * 100),
           destinationAccountId: contractor.stripe_account_id,
           transferGroup: `job_${jobId}`,
-          metadata: { jobId: String(jobId) },
+          metadata: { jobId: String(jobId), reserveAmount: String(reserveAmount) },
         });
         transferId = result.transferId;
       }
 
       await pool.query(
-        `INSERT INTO transfers (job_id, contractor_user_id, amount, status, stripe_transfer_id, simulated, created_by)
-         VALUES ($1,$2,$3,'paid',$4,$5,$6)`,
-        [jobId, job.assigned_contractor_user_id, amount, transferId, simulate, req.authUser.id]
+        `INSERT INTO transfers (job_id, contractor_user_id, amount, status, stripe_transfer_id, simulated, created_by, reserve_amount, reserve_release_at)
+         VALUES ($1,$2,$3,'paid',$4,$5,$6,$7,$8)`,
+        [jobId, job.assigned_contractor_user_id, netPayoutAmount, transferId, simulate, req.authUser.id, reserveAmount, reserveReleaseAt]
       );
       await pushStatus(pool, jobId, job.status, 'paid_out', req.authUser.id, 'Contractor payout released');
       await pushStatus(pool, jobId, 'paid_out', 'closed', req.authUser.id, 'Job closed');
-      await audit(pool, req.authUser.id, 'payout_released', 'managed_job', jobId, { amount, simulate, transferId });
+      await audit(pool, req.authUser.id, 'payout_released', 'managed_job', jobId, { amount: netPayoutAmount, reserveAmount, reserveReleaseAt, simulate, transferId });
+
+      // Email contractor about payout
+      try {
+        if (contractor.email) {
+          await sendNotificationEmail({
+            to: contractor.email,
+            subject: `${brand.productName}: payout processed for job #${jobId}`,
+            html: `<p>Hi ${contractor.name || 'there'},</p><p>A payout of <strong>$${Math.round(netPayoutAmount)}</strong> has been released for job #${jobId}${reserveAmount > 0 ? `. An additional $${Math.round(reserveAmount)} will be released on ${reserveReleaseAt.toLocaleDateString()} after the reserve hold period.` : '.'}</p>`,
+          });
+        }
+      } catch (_e) { /* non-fatal */ }
 
       const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       res.json({
         ok: true,
         simulated: simulate,
-        amount,
+        amount: netPayoutAmount,
         transferId,
         job: serializeJob(fresh[0], req.authUser),
         message: simulate
-          ? `Simulated payout of $${Math.round(amount)} to ${contractor.name}.`
-          : `Payout of $${Math.round(amount)} sent to ${contractor.name}.`,
+          ? `Simulated payout of $${Math.round(netPayoutAmount)} to ${contractor.name}. $${Math.round(reserveAmount)} held in reserve until ${reserveReleaseAt.toLocaleDateString()}.`
+          : `Payout of $${Math.round(netPayoutAmount)} sent to ${contractor.name}. $${Math.round(reserveAmount)} held in reserve until ${reserveReleaseAt.toLocaleDateString()}.`,
       });
     } catch (e) {
       console.error(e);

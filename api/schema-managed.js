@@ -488,6 +488,85 @@ export async function initManagedSchema(pool) {
     )
   `);
 
+
+  // ── Missing tables from spec §2.2 ─────────────────────────────────────────
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS error_logs (
+      id          SERIAL PRIMARY KEY,
+      source      TEXT NOT NULL,
+      job_id      BIGINT,
+      user_id     INT,
+      error_code  TEXT,
+      message     TEXT,
+      metadata    JSONB,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS completion_reports (
+      id              SERIAL PRIMARY KEY,
+      job_id          BIGINT NOT NULL,
+      contractor_id   INT NOT NULL,
+      summary         TEXT,
+      materials_used  TEXT,
+      before_photo_url TEXT,
+      after_photo_url  TEXT,
+      warranty        TEXT,
+      submitted_at    TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id          SERIAL PRIMARY KEY,
+      user_id     INT NOT NULL,
+      job_id      BIGINT,
+      channel     TEXT NOT NULL DEFAULT 'email',
+      subject     TEXT,
+      body        TEXT,
+      status      TEXT NOT NULL DEFAULT 'sent',
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS conversations (
+      id          SERIAL PRIMARY KEY,
+      job_id      BIGINT NOT NULL UNIQUE,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS messages (
+      id              SERIAL PRIMARY KEY,
+      conversation_id INT NOT NULL,
+      sender_user_id  INT NOT NULL,
+      body            TEXT NOT NULL,
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS consent_records (
+      id              SERIAL PRIMARY KEY,
+      user_id         INT,
+      job_id          BIGINT,
+      consent_type    TEXT NOT NULL,
+      consent_given   BOOLEAN NOT NULL DEFAULT FALSE,
+      ip_address      TEXT,
+      user_agent      TEXT,
+      version         TEXT DEFAULT '1.0',
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // ── transfers: add reserve columns if not present ─────────────────────────
+  await pool.query(`ALTER TABLE transfers ADD COLUMN IF NOT EXISTS reserve_amount     NUMERIC DEFAULT 0`);
+  await pool.query(`ALTER TABLE transfers ADD COLUMN IF NOT EXISTS reserve_release_at TIMESTAMPTZ`);
+
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN DEFAULT FALSE`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_code TEXT`);
 
