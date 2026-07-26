@@ -1,0 +1,2 @@
+npm warn Unknown env config "devdir". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+ »   SyntaxError: No number after minus sign in JSON at position 2 (line 1 column 3)

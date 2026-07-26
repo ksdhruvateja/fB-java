@@ -1,0 +1,15 @@
+﻿{
+  "account": {
+    "Email": "bossdhruva1@gmail.com",
+    "Teams": [
+      "ksdhruvatejaΓÇÖs team"
+    ]
+  },
+  "siteData": {
+    "site-name": "fixbridge",
+    "config-path": "C:\\Users\\bossd\\Downloads\\fixbridge-main\\netlify.toml",
+    "admin-url": "https://app.netlify.com/projects/fixbridge",
+    "site-url": "https://fixbridge.netlify.app",
+    "site-id": "583454ec-841b-4824-af02-e88eef02868f"
+  }
+}
