@@ -3,7 +3,6 @@
   "private": true,
   "version": "0.0.2",
   "type": "module",
-  "packageManager": "pnpm@9.15.9",
   "scripts": {
     "dev": "concurrently -k -p \"[{name}]\" -n \"API,VITE\" -c \"cyan.bold,green.bold\" \"node --env-file=.env server.js\" \"vite\"",
     "dev:api": "node --env-file=.env server.js",
