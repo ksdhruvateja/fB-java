@@ -1,0 +1,39 @@
+[build]
+  command = "pnpm build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "20"
+  # Vite embeds these at build time — also set them in the Netlify UI.
+  # VITE_GOOGLE_CLIENT_ID =
+  # VITE_GEMINI_API_KEY =
+
+[functions]
+  directory = "netlify/functions"
+  # Bundle all deps (including express). Marking express as external under pnpm
+  # caused production 502s: Runtime.ImportModuleError Cannot find module 'express'.
+  node_bundler = "esbuild"
+
+# Express API (serverless-http) — keep before the SPA catch-all
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+  force = true
+
+# SPA fallback for React Router
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Browser security headers for the static site
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+    Cross-Origin-Opener-Policy = "same-origin"

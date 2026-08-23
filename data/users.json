@@ -1,0 +1,20 @@
+[
+  {
+    "id": "demo-homeowner",
+    "role": "homeowner",
+    "name": "Maria Santos",
+    "email": "maria@example.com",
+    "passwordHash": "$2b$10$e4cTsDjDN2MTOQQ0c8CauOsZ6mncdPz7Piq2d/eG4cX8hyJvux5c.",
+    "isAdmin": false
+  },
+  {
+    "id": "demo-contractor",
+    "role": "contractor",
+    "name": "James Park",
+    "email": "james@yourcompany.com",
+    "passwordHash": "$2b$10$e4cTsDjDN2MTOQQ0c8CauOsZ6mncdPz7Piq2d/eG4cX8hyJvux5c.",
+    "trade": "Master Plumber",
+    "licenseNumber": "NY-00231847",
+    "isAdmin": true
+  }
+]

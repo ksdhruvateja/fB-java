@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>FixBridge</title>
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/favicon.png" />
+    <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0C0C0C" media="(prefers-color-scheme: dark)" />
+    <style>
+      html, body, #root {
+        height: 100%;
+        margin: 0;
+        overflow-x: hidden;
+      }
+      html, body {
+        background: #ffffff;
+        color: #0a0a0a;
+      }
+      html.dark, html.dark body {
+        background: #0c0c0c;
+        color: #f0ebe3;
+      }
+    </style>
+    <script>
+      (function () {
+        try {
+          var dark = localStorage.getItem("fixbridge-theme") === "dark";
+          document.documentElement.classList.toggle("dark", dark);
+          document.documentElement.style.colorScheme = dark ? "dark" : "light";
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="h-full">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sample Certificate of Insurance — FixBridge</title>
+  <style>
+    :root {
+      --ink: #1f1a17;
+      --muted: #6b635c;
+      --line: #e4ddd4;
+      --accent: #ff4d1c;
+      --note: #fff4e8;
+      --note-border: #ffb070;
+      --paper: #faf8f5;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: #efeae3;
+      color: var(--ink);
+      line-height: 1.45;
+    }
+    header {
+      background: var(--ink);
+      color: #fff;
+      padding: 1.25rem 1.5rem;
+    }
+    header strong { color: var(--accent); }
+    header p { margin: 0.35rem 0 0; opacity: 0.75; font-size: 0.9rem; max-width: 52rem; }
+    main { max-width: 52rem; margin: 1.5rem auto; padding: 0 1rem 3rem; }
+    .callout {
+      background: var(--note);
+      border: 1px solid var(--note-border);
+      border-radius: 12px;
+      padding: 1rem 1.15rem;
+      margin-bottom: 1.25rem;
+      font-size: 0.92rem;
+    }
+    .cert {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 1.5rem;
+      box-shadow: 0 12px 40px rgba(31, 26, 23, 0.08);
+    }
+    h1 { font-size: 1.35rem; margin: 0 0 0.25rem; }
+    .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.25rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    th, td { border: 1px solid var(--line); padding: 0.55rem 0.65rem; text-align: left; vertical-align: top; }
+    th { background: #f3eee7; width: 32%; font-weight: 600; }
+    .mark {
+      display: inline-block;
+      margin-top: 0.35rem;
+      padding: 0.2rem 0.45rem;
+      border-radius: 6px;
+      background: rgba(255, 77, 28, 0.12);
+      color: var(--accent);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .hl { outline: 2px solid var(--accent); outline-offset: 1px; background: rgba(255, 77, 28, 0.06); }
+    footer { margin-top: 1.25rem; font-size: 0.8rem; color: var(--muted); }
+    @media print {
+      body { background: #fff; }
+      header { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div><strong>FixBridge</strong> · Sample Certificate of Insurance</div>
+    <p>
+      Use this marked-up sample when requesting a COI from your insurer. Highlighted fields are what FixBridge reviews during contractor onboarding.
+    </p>
+  </header>
+  <main>
+    <div class="callout">
+      Ask your insurance agent to issue an ACORD 25 (or equivalent) naming <strong>FixBridge</strong> as certificate holder,
+      with general liability limits shown, policy effective/expiration dates, and workers’ compensation status.
+      Upload a PDF of the completed COI in your contractor application.
+    </div>
+    <div class="cert">
+      <h1>CERTIFICATE OF LIABILITY INSURANCE</h1>
+      <p class="sub">Sample only — not a real policy. For formatting reference.</p>
+      <table>
+        <tr>
+          <th>Insured</th>
+          <td class="hl">
+            Example Plumbing LLC<br />
+            123 Main Street, Suite 200<br />
+            Brooklyn, NY 11201
+            <div class="mark">Must match legal company name</div>
+          </td>
+        </tr>
+        <tr>
+          <th>Insurer / Producer</th>
+          <td>Sample Insurance Agency · Policy #: GL-0000000</td>
+        </tr>
+        <tr>
+          <th>General Liability</th>
+          <td class="hl">
+            Each Occurrence: $1,000,000<br />
+            General Aggregate: $2,000,000<br />
+            Effective: 01/01/2026 · Expires: 01/01/2027
+            <div class="mark">Coverage amount + dates required</div>
+          </td>
+        </tr>
+        <tr>
+          <th>Workers’ Compensation</th>
+          <td class="hl">
+            Statutory limits · WC Status: Included (or Exempt with documentation)
+            <div class="mark">Indicate yes / no + proof</div>
+          </td>
+        </tr>
+        <tr>
+          <th>Certificate holder</th>
+          <td class="hl">
+            FixBridge<br />
+            Contractor Network Onboarding<br />
+            <div class="mark">List FixBridge as certificate holder</div>
+          </td>
+        </tr>
+        <tr>
+          <th>Description of operations</th>
+          <td>Commercial / residential facility maintenance and repair services as contracted via FixBridge.</td>
+        </tr>
+      </table>
+      <footer>
+        This page is educational sample content for FixBridge applicants. It does not constitute insurance advice or coverage.
+      </footer>
+    </div>
+  </main>
+</body>
+</html>
