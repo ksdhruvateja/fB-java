@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { ArrowRight, Shield, Loader2, KeyRound } from "lucide-react";
-import { getDemoUser, signInUser, type AuthUser } from "./auth";
+import { signInUser, type AuthUser } from "./auth";
 import { brand } from "../config/brand";
 import { startAdminMfa, verifyAdminMfa } from "./platformApi";
 import {
@@ -20,12 +20,11 @@ export default function AdminLogin({
   onLogin: (user: AuthUser) => void;
   onBack: () => void;
 }) {
-  const demoUser = getDemoUser("admin");
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [email, setEmail] = useState(demoUser.email);
-  const [password, setPassword] = useState(demoUser.password || "");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
 
   const [mfaStep, setMfaStep] = useState(false);
   const [mfaCode, setMfaCode] = useState("");

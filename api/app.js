@@ -638,6 +638,18 @@ function rowToUser(r, { includeDocumentData = true } = {}) {
     // Never send the password hash to the client
     ...(r.trade                    && { trade: r.trade }),
     ...(r.license_number           && { licenseNumber: r.license_number }),
+    ...(r.license_expires_at && {
+      licenseExpiresAt:
+        r.license_expires_at instanceof Date
+          ? r.license_expires_at.toISOString().slice(0, 10)
+          : String(r.license_expires_at).slice(0, 10),
+    }),
+    ...(r.insurance_expires_at && {
+      insuranceExpiresAt:
+        r.insurance_expires_at instanceof Date
+          ? r.insurance_expires_at.toISOString().slice(0, 10)
+          : String(r.insurance_expires_at).slice(0, 10),
+    }),
     ...(r.license_document_name    && { licenseDocumentName: r.license_document_name }),
     ...(r.insurance_document_name  && { insuranceDocumentName: r.insurance_document_name }),
     ...(r.id_document_name         && { idDocumentName: r.id_document_name }),
@@ -658,6 +670,8 @@ function rowToUser(r, { includeDocumentData = true } = {}) {
     ...(includeDocumentData && r.business_registration_data && { businessRegistrationData: r.business_registration_data }),
     ...(r.business_license_name    && { businessLicenseName: r.business_license_name }),
     ...(includeDocumentData && r.business_license_data && { businessLicenseData: r.business_license_data }),
+    ...(r.diversity_document_name  && { diversityDocumentName: r.diversity_document_name }),
+    ...(includeDocumentData && r.diversity_document_data && { diversityDocumentData: r.diversity_document_data }),
     ...(r.contractor_application != null && {
       contractorApplication:
         typeof r.contractor_application === 'string'
@@ -951,9 +965,12 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
       w9DocumentName, w9DocumentData,
       businessRegistrationName, businessRegistrationData,
       businessLicenseName, businessLicenseData,
+      diversityDocumentName, diversityDocumentData,
       contractorApplication,
       phone, address, contactEmail, companyName, companyDetails, insuranceDetails,
       serviceZips, travelRadiusMiles, visitFee, emergencyVisitFee, minimumLaborFee,
+      afterHoursFee, weekendFee, cancellationFee, freeEstimate, visitAppliesToRepair,
+      referredByCode,
     } = req.body;
     if (!role || !name || !email || !password) return res.status(400).json({ ok: false, message: 'All required fields must be filled.' });
     if (role !== 'homeowner' && role !== 'contractor') {
@@ -968,6 +985,7 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
       { label: 'W-9', name: w9DocumentName, data: w9DocumentData },
       { label: 'Business Registration', name: businessRegistrationName, data: businessRegistrationData },
       { label: 'Business License', name: businessLicenseName, data: businessLicenseData },
+      { label: 'Diversity Certification', name: diversityDocumentName, data: diversityDocumentData },
     ];
     for (const doc of docs) {
       if (doc.data) {
@@ -1005,6 +1023,15 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
       : null;
     const zipsJson = Array.isArray(serviceZips) ? JSON.stringify(serviceZips) : null;
 
+    const licenseExpiresAt =
+      role === 'contractor' && contractorApplication?.licenseExpiration
+        ? String(contractorApplication.licenseExpiration).slice(0, 10)
+        : null;
+    const insuranceExpiresAt =
+      role === 'contractor' && contractorApplication?.insuranceExpiration
+        ? String(contractorApplication.insuranceExpiration).slice(0, 10)
+        : null;
+
     const { rows } = await pool.query(
       `INSERT INTO users (
          role,name,email,password,trade,license_number,
@@ -1013,15 +1040,17 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
          w9_document_name,w9_document_data,
          business_registration_name,business_registration_data,
          business_license_name,business_license_data,
+         diversity_document_name,diversity_document_data,
          contractor_application,
          phone,address,contact_email,company_name,company_details,insurance_details,
          service_zips,travel_radius_miles,visit_fee,emergency_visit_fee,minimum_labor_fee,
-         compliance_status
+         after_hours_fee,weekend_fee,cancellation_fee,free_estimate,visit_applies_to_repair,
+         compliance_status,license_expires_at,insurance_expires_at,referred_by_code
        )
        VALUES (
-         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,
-         $20,$21,$22,$23,$24,$25,$26::jsonb,$27,$28,$29,$30,
-         $31
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+         $21::jsonb,$22,$23,$24,$25,$26,$27,$28::jsonb,$29,$30,$31,$32,$33,$34,$35,$36,$37,
+         $38,$39,$40,$41
        ) RETURNING *`,
       [
         role, name.trim(), email.trim().toLowerCase(), hashed,
@@ -1031,6 +1060,7 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
         w9DocumentName||null, w9DocumentData||null,
         businessRegistrationName||null, businessRegistrationData||null,
         businessLicenseName||null, businessLicenseData||null,
+        diversityDocumentName||null, diversityDocumentData||null,
         appJson,
         phone?.trim()||null, address?.trim()||null, contactEmail?.trim()||null,
         companyName?.trim()||null, companyDetails?.trim()||null, insuranceDetails?.trim()||null,
@@ -1039,9 +1069,18 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
         visitFee != null && visitFee !== '' ? Number(visitFee) : null,
         emergencyVisitFee != null && emergencyVisitFee !== '' ? Number(emergencyVisitFee) : null,
         minimumLaborFee != null && minimumLaborFee !== '' ? Number(minimumLaborFee) : null,
+        afterHoursFee != null && afterHoursFee !== '' ? Number(afterHoursFee) : null,
+        weekendFee != null && weekendFee !== '' ? Number(weekendFee) : null,
+        cancellationFee != null && cancellationFee !== '' ? Number(cancellationFee) : null,
+        freeEstimate === true,
+        visitAppliesToRepair === true,
         role === 'contractor' ? 'under_review' : null,
+        licenseExpiresAt && /^\d{4}-\d{2}-\d{2}$/.test(licenseExpiresAt) ? licenseExpiresAt : null,
+        insuranceExpiresAt && /^\d{4}-\d{2}-\d{2}$/.test(insuranceExpiresAt) ? insuranceExpiresAt : null,
+        typeof referredByCode === 'string' && referredByCode.trim() ? referredByCode.trim().toUpperCase() : null,
       ]
     );
+    await ensureUserReferralCode(pool, rows[0]);
     const user = rowToUser(rows[0]);
     if (role === 'contractor') {
       const uploaded = docs.filter((d) => d.data || d.name).map((d) => d.label);
@@ -1092,10 +1131,11 @@ app.post('/api/auth/google', async (req, res) => {
 
     if (!rows.length) {
       // Auto-create for the portal role that initiated Google auth (homeowner or contractor).
+      const compliance = role === 'contractor' ? 'draft' : null;
       const result = await pool.query(
-        `INSERT INTO users (role,name,email,password,photo_data_url)
-         VALUES ($1,$2,$3,'GOOGLE_OAUTH',$4) RETURNING *`,
-        [role, displayName, email, picture]
+        `INSERT INTO users (role,name,email,password,photo_data_url,compliance_status)
+         VALUES ($1,$2,$3,'GOOGLE_OAUTH',$4,$5) RETURNING *`,
+        [role, displayName, email, picture, compliance]
       );
       rows = result.rows;
     } else {
@@ -1116,6 +1156,7 @@ app.post('/api/auth/google', async (req, res) => {
       return res.status(403).json({ ok: false, message: 'This account has been blocked. Please contact support.' });
     }
 
+    await ensureUserReferralCode(pool, rows[0]);
     const user = rowToUser(rows[0]);
     return res.json({ ok: true, token: makeToken(user), user });
   } catch (e) {
@@ -1349,6 +1390,7 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
 
     const { rows } = await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id]);
     if (!rows.length) return res.status(401).json({ ok: false, message: 'User not found.' });
+    await ensureUserReferralCode(pool, rows[0]);
     return res.json({ ok: true, user: rowToUser(rows[0]) });
   } catch (e) {
     console.error('me:', e);
@@ -1394,7 +1436,8 @@ app.put('/api/auth/profile', requireAuth, async (req, res) => {
     const w9Doc = parseDocumentField(body, 'w9DocumentName', 'w9DocumentData');
     const bizRegDoc = parseDocumentField(body, 'businessRegistrationName', 'businessRegistrationData');
     const bizLicDoc = parseDocumentField(body, 'businessLicenseName', 'businessLicenseData');
-    for (const doc of [licenseDoc, insuranceDoc, idDoc, w9Doc, bizRegDoc, bizLicDoc]) {
+    const diversityDoc = parseDocumentField(body, 'diversityDocumentName', 'diversityDocumentData');
+    for (const doc of [licenseDoc, insuranceDoc, idDoc, w9Doc, bizRegDoc, bizLicDoc, diversityDoc]) {
       if (doc.error) return res.status(400).json({ ok: false, message: doc.error });
     }
 
@@ -1411,6 +1454,23 @@ app.put('/api/auth/profile', requireAuth, async (req, res) => {
       return res.status(404).json({ ok: false, message: 'User not found.' });
     }
     const before = beforeRows[0];
+
+    // Allow homeowner/contractor to update login email when provided and unique for their role.
+    const nextEmailRaw = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    if (nextEmailRaw && nextEmailRaw !== String(before.email || '').toLowerCase()) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmailRaw)) {
+        return res.status(400).json({ ok: false, message: 'Enter a valid email address.' });
+      }
+      const { rows: emailTaken } = await pool.query(
+        `SELECT id FROM users WHERE role=$1 AND LOWER(email)=LOWER($2) AND id<>$3`,
+        [before.role, nextEmailRaw, req.authUser.id]
+      );
+      if (emailTaken.length) {
+        return res.status(409).json({ ok: false, message: 'An account with that email already exists.' });
+      }
+      await pool.query(`UPDATE users SET email=$1 WHERE id=$2`, [nextEmailRaw, req.authUser.id]);
+      before.email = nextEmailRaw;
+    }
 
     const { rows } = await pool.query(
       `UPDATE users SET
@@ -1565,6 +1625,11 @@ app.put('/api/auth/profile', requireAuth, async (req, res) => {
              WHEN $12::boolean AND $29::text IS NOT NULL AND $29::text <> '' THEN $29::date
              WHEN $12::boolean THEN license_expires_at
              ELSE license_expires_at
+           END,
+           insurance_expires_at = CASE
+             WHEN $12::boolean AND $30::text IS NOT NULL AND $30::text <> '' THEN $30::date
+             WHEN $12::boolean THEN insurance_expires_at
+             ELSE insurance_expires_at
            END
          WHERE id = $11`,
         [
@@ -1625,9 +1690,46 @@ app.put('/api/auth/profile', requireAuth, async (req, res) => {
           Boolean(bizLicDoc.set),
           bizLicDoc.provided ? bizLicDoc.name : null,
           bizLicDoc.provided ? bizLicDoc.data : null,
-          body.contractorApplication?.licenseExpiration || null,
+          body.contractorApplication?.licenseExpiration || body.licenseExpiresAt || null,
+          body.contractorApplication?.insuranceExpiration || body.insuranceExpiresAt || null,
         ]
       );
+      if (diversityDoc.provided) {
+        await pool.query(
+          `UPDATE users SET
+             diversity_document_name = CASE
+               WHEN $2::boolean THEN NULL
+               WHEN $3::boolean THEN $4
+               WHEN $4::text IS NOT NULL AND NOT $3::boolean THEN $4
+               ELSE diversity_document_name
+             END,
+             diversity_document_data = CASE
+               WHEN $2::boolean THEN NULL
+               WHEN $3::boolean THEN $5
+               ELSE diversity_document_data
+             END
+           WHERE id = $1`,
+          [
+            req.authUser.id,
+            Boolean(diversityDoc.clear),
+            Boolean(diversityDoc.set),
+            diversityDoc.provided ? diversityDoc.name : null,
+            diversityDoc.provided ? diversityDoc.data : null,
+          ]
+        );
+      }
+      // Google (or incomplete) contractors who submit a full application move into review.
+      if (
+        body.contractorApplication &&
+        typeof body.contractorApplication === 'object' &&
+        (!before.compliance_status || before.compliance_status === 'draft')
+      ) {
+        await pool.query(
+          `UPDATE users SET compliance_status='under_review'
+           WHERE id=$1 AND (compliance_status IS NULL OR compliance_status='draft')`,
+          [req.authUser.id]
+        );
+      }
       const { rows: freshUser } = await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id]);
       if (freshUser[0]) {
         updated = freshUser[0];
@@ -1640,6 +1742,7 @@ app.put('/api/auth/profile', requireAuth, async (req, res) => {
     if (w9Doc.set && w9Doc.data !== before.w9_document_data) changedLabels.push('W-9');
     if (bizRegDoc.set && bizRegDoc.data !== before.business_registration_data) changedLabels.push('Business Registration');
     if (bizLicDoc.set && bizLicDoc.data !== before.business_license_data) changedLabels.push('Business License');
+    if (diversityDoc.set && diversityDoc.data !== before.diversity_document_data) changedLabels.push('Diversity Certification');
     if (before.role === 'contractor' && changedLabels.length) {
       try {
         await notifyAdminsOfDocumentChange({
@@ -1652,7 +1755,8 @@ app.put('/api/auth/profile', requireAuth, async (req, res) => {
       }
     }
 
-    return res.json({ ok: true, user: rowToUser(updated) });
+    const user = rowToUser(updated);
+    return res.json({ ok: true, user, token: makeToken(user) });
   } catch (e) {
     console.error('profile update:', e);
     return res.status(500).json({ ok: false, message: 'Server error.' });

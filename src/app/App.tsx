@@ -574,6 +574,7 @@ export default function App() {
     clearSession();
     setCurrentUser(null);
     navigate(nextPage);
+    void import("./auth0SignOut").then(({ runAuth0SignOut }) => runAuth0SignOut()).catch(() => {});
   };
 
   const isMarketing = page === "home" || page === "contractors" || page === "about";
@@ -629,6 +630,10 @@ export default function App() {
     }
     // Admins landing on contractor/homeowner dashboards go to Control.
     if (currentUser?.role === "admin" && (page === "contractor-dashboard" || page === "homeowner-dashboard")) {
+      setPage("admin");
+    }
+    // Already signed-in staff should skip the login screen.
+    if (currentUser?.role === "admin" && page === "admin-login") {
       setPage("admin");
     }
   }, [currentUser, page]);
@@ -705,7 +710,6 @@ export default function App() {
               }}
               onBack={() => navigate("home")}
               onGoContractor={() => navigate("contractor-login")}
-              onGoStaff={() => navigate("admin-login")}
             />
           )}
 
@@ -754,12 +758,8 @@ export default function App() {
           {page === "admin" && currentUser?.role === "admin" && (
             <ErrorBoundary>
               <AdminPanel
-                onBack={() => navigate("admin-login")}
-                onSignOut={() => {
-                  clearSession();
-                  setCurrentUser(null);
-                  navigate("admin-login");
-                }}
+                onBack={() => navigate(marketingContext)}
+                onSignOut={() => handleSignOut("admin-login")}
                 user={currentUser}
                 isDark={isDark}
                 onToggleDark={toggleDark}

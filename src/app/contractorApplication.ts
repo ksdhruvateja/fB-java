@@ -1,5 +1,7 @@
 /** Shared contractor application — Broadway-style vendor fields + FixBridge extras. */
 
+import { getContractorExpiryAlerts } from "./contractorExpiry";
+
 export const BUSINESS_TYPES = [
   "LLC",
   "S-Corporation",
@@ -154,6 +156,7 @@ export type ContractorApplication = {
   licenseExpiration: string;
   generalLiability: YesNo;
   coverageAmount: string;
+  insuranceExpiration: string;
   workersComp: YesNo;
 
   facilityYears: string;
@@ -200,7 +203,7 @@ export function emptyContractorApplication(
     contactName: "",
     contactTitle: "",
     contactPhone: "",
-    contactPhoneType: "Office",
+    contactPhoneType: "",
     contactEmail: "",
     primaryServices: [],
     serviceStates: [],
@@ -211,12 +214,13 @@ export function emptyContractorApplication(
     servicesDescription: "",
     emergencyAfterHours: "",
     preventiveMaintenance: "",
-    companySize: "2–5",
+    companySize: "",
     licenseNumber: "",
     licenseState: "",
     licenseExpiration: "",
     generalLiability: "",
     coverageAmount: "",
+    insuranceExpiration: "",
     workersComp: "",
     facilityYears: "",
     commercialExperience: "",
@@ -237,12 +241,19 @@ export function emptyContractorApplication(
   };
 }
 
+function dateOnly(value?: string | null): string {
+  if (!value) return "";
+  return String(value).slice(0, 10);
+}
+
 export function applicationFromUser(user: {
   name?: string;
   email?: string;
   phone?: string;
   trade?: string;
   licenseNumber?: string;
+  licenseExpiresAt?: string | null;
+  insuranceExpiresAt?: string | null;
   companyName?: string;
   address?: string;
   contactEmail?: string;
@@ -267,7 +278,6 @@ export function applicationFromUser(user: {
     companyEmail: saved.companyEmail || user.email || "",
     companyPhone: saved.companyPhone || user.phone || "",
     businessAddress: saved.businessAddress || user.address || "",
-    licenseNumber: saved.licenseNumber || user.licenseNumber || "",
     primaryServices:
       Array.isArray(saved.primaryServices) && saved.primaryServices.length
         ? saved.primaryServices
@@ -283,6 +293,9 @@ export function applicationFromUser(user: {
       saved.emergencyHourlyRate ||
       (user.emergencyVisitFee != null ? String(user.emergencyVisitFee) : ""),
     ...saved,
+    licenseNumber: saved.licenseNumber || user.licenseNumber || "",
+    licenseExpiration: dateOnly(saved.licenseExpiration) || dateOnly(user.licenseExpiresAt),
+    insuranceExpiration: dateOnly(saved.insuranceExpiration) || dateOnly(user.insuranceExpiresAt),
     serviceZips: zips || (typeof saved.serviceZips === "string" ? saved.serviceZips : "") || "",
   });
 }
@@ -332,6 +345,7 @@ export function validateContractorApplication(
       return bad ? `Invalid ZIP code: ${bad}` : null;
     })(),
     req(app.maxServiceRadius, "Maximum service radius"),
+    req(app.companySize, "Number of field technicians"),
     req(app.generalLiability, "General liability insurance status"),
     app.generalLiability === "yes" ? req(app.coverageAmount, "Coverage amount") : null,
     req(app.workersComp, "Workers' compensation status"),
@@ -354,11 +368,89 @@ export function validateContractorApplication(
   if (!docs.insurance?.data && !docs.existingInsurance && app.generalLiability === "yes") {
     return "Certificate of Insurance (COI) upload is required when you carry general liability.";
   }
-  if (app.licenseNumber.trim() && !docs.license?.data && !docs.existingLicense) {
-    return "License document upload is required when a license number is provided.";
+  if (app.licenseNumber.trim()) {
+    if (!app.licenseExpiration.trim()) {
+      return "License expiration date is required when a license number is provided.";
+    }
+    if (!docs.license?.data && !docs.existingLicense) {
+      return "License document upload is required when a license number is provided.";
+    }
+  }
+  if (app.generalLiability === "yes" && !app.insuranceExpiration.trim()) {
+    return "Insurance expiration date is required when you carry general liability.";
   }
 
   return null;
+}
+
+/** Gaps admins can email contractors about (docs, required fields, credentials). */
+export function listContractorMissingInfo(user: {
+  name?: string;
+  email?: string;
+  phone?: string;
+  licenseNumber?: string | null;
+  licenseExpiresAt?: string | null;
+  insuranceExpiresAt?: string | null;
+  insuranceDocumentName?: string | null;
+  licenseDocumentName?: string | null;
+  w9DocumentName?: string | null;
+  idDocumentName?: string | null;
+  contractorApplication?: Partial<ContractorApplication> | null;
+}): string[] {
+  const app = applicationFromUser(user);
+  const missing: string[] = [];
+
+  const need = (ok: boolean, label: string) => {
+    if (!ok) missing.push(label);
+  };
+
+  need(Boolean(app.legalBusinessName.trim()), "Legal company name");
+  need(Boolean(app.businessType.trim()), "Entity type");
+  need(Boolean(app.ein.trim()), "Tax ID (EIN/SSN)");
+  need(Boolean(app.unionStatus.trim()), "Union / Non-Union status");
+  need(Boolean(app.yearsInBusiness.trim()), "Years in business");
+  need(Boolean(app.businessAddress.trim()), "Business street address");
+  need(Boolean(app.businessCity.trim()), "Business city");
+  need(Boolean(app.businessState.trim()), "Business state");
+  need(Boolean(app.businessZip.trim()), "Business ZIP");
+  need(Boolean(app.contactName.trim()), "Primary contact name");
+  need(Boolean(app.contactEmail.trim() || user.email), "Contact email");
+  need(Boolean(app.contactPhone.trim() || user.phone), "Contact phone");
+  need(app.primaryServices.length > 0, "At least one trade");
+  need(Boolean(String(app.serviceZips || "").trim()), "Service ZIP codes");
+  need(Boolean(app.maxServiceRadius.trim()), "Maximum service radius");
+  need(Boolean(app.companySize.trim()), "Number of field technicians");
+  need(Boolean(app.generalLiability), "General liability insurance status");
+  if (app.generalLiability === "yes") {
+    need(Boolean(app.coverageAmount.trim()), "Insurance coverage amount");
+    need(Boolean(app.insuranceExpiration.trim() || user.insuranceExpiresAt), "Insurance expiration date");
+    need(Boolean(user.insuranceDocumentName), "Certificate of Insurance (COI) upload");
+  }
+  need(Boolean(app.workersComp), "Workers' compensation status");
+  need(Boolean(app.facilityYears.trim()), "Facility maintenance experience (years)");
+  need(Boolean(app.commercialExperience), "Commercial experience");
+  need(Boolean(app.standardHourlyRate.trim()), "Standard hourly rate");
+  need(Boolean(user.w9DocumentName), "W-9 upload");
+
+  if (app.licenseNumber.trim() || user.licenseNumber) {
+    need(Boolean(app.licenseExpiration.trim() || user.licenseExpiresAt), "License expiration date");
+    need(Boolean(user.licenseDocumentName), "License document upload");
+  }
+
+  const expiryAlerts = getContractorExpiryAlerts({
+    licenseNumber: user.licenseNumber || app.licenseNumber,
+    licenseExpiresAt: user.licenseExpiresAt || app.licenseExpiration,
+    insuranceExpiresAt: user.insuranceExpiresAt || app.insuranceExpiration,
+    insuranceDocumentName: user.insuranceDocumentName,
+    contractorApplication: app,
+  });
+  for (const item of expiryAlerts) {
+    if (item.severity === "expired" || item.severity === "missing" || item.severity === "critical") {
+      if (!missing.includes(item.message)) missing.push(item.message);
+    }
+  }
+
+  return missing;
 }
 
 /** Map application into legacy user columns for jobs matching / invites. */

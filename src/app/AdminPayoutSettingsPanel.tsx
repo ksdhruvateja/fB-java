@@ -2,40 +2,147 @@ import { useEffect, useState } from "react";
 import { Loader2, Save } from "lucide-react";
 import { adminGetPayoutSettings, adminUpdatePayoutSettings, formatCents, type PayoutSettings } from "./managedJobs";
 
+type MoneyDrafts = {
+  instantFeePercentage: string;
+  instantFeeFixed: string;
+  minimumInstantFee: string;
+  maximumInstantFee: string;
+  minimumInstantPayout: string;
+  maximumInstantPayout: string;
+};
+
+function centsToDraft(cents: number | null | undefined): string {
+  if (cents == null || !Number.isFinite(Number(cents))) return "";
+  return (Number(cents) / 100).toFixed(2);
+}
+
+function draftToCents(raw: string): number {
+  const cleaned = String(raw ?? "").trim().replace(/,/g, "");
+  if (!cleaned) return 0;
+  const n = Number(cleaned);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.round(n * 100);
+}
+
+function draftToPercentage(raw: string): number {
+  const cleaned = String(raw ?? "").trim().replace(/,/g, "");
+  if (!cleaned) return 0;
+  const n = Number(cleaned);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return n;
+}
+
+function draftsFromSettings(s: PayoutSettings): MoneyDrafts {
+  return {
+    instantFeePercentage: String(s.instantFeePercentage ?? s.instantFeePercentageBps / 100 ?? 0),
+    instantFeeFixed: centsToDraft(s.instantFeeFixedCents),
+    minimumInstantFee: centsToDraft(s.minimumInstantFeeCents),
+    maximumInstantFee: centsToDraft(s.maximumInstantFeeCents),
+    minimumInstantPayout: centsToDraft(s.minimumInstantPayoutCents),
+    maximumInstantPayout: centsToDraft(s.maximumInstantPayoutCents),
+  };
+}
+
+function settingsFromDrafts(settings: PayoutSettings, drafts: MoneyDrafts): PayoutSettings {
+  const pct = draftToPercentage(drafts.instantFeePercentage);
+  return {
+    ...settings,
+    instantFeePercentage: pct,
+    instantFeePercentageBps: Math.round(pct * 100),
+    instantFeeFixedCents: draftToCents(drafts.instantFeeFixed),
+    minimumInstantFeeCents: draftToCents(drafts.minimumInstantFee),
+    maximumInstantFeeCents: draftToCents(drafts.maximumInstantFee),
+    minimumInstantPayoutCents: draftToCents(drafts.minimumInstantPayout),
+    maximumInstantPayoutCents: draftToCents(drafts.maximumInstantPayout),
+  };
+}
+
+function MoneyInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="block text-sm">
+      <span className="font-medium">{label}</span>
+      <input
+        type="text"
+        inputMode="decimal"
+        value={value}
+        onChange={(e) => {
+          const next = e.target.value;
+          if (next === "" || /^-?\d*\.?\d*$/.test(next)) onChange(next);
+        }}
+        onBlur={() => {
+          if (value.trim() === "") return;
+          const n = Number(value.replace(/,/g, ""));
+          if (Number.isFinite(n)) onChange(n.toFixed(2));
+        }}
+        className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/15"
+      />
+    </label>
+  );
+}
+
 export default function AdminPayoutSettingsPanel() {
   const [settings, setSettings] = useState<PayoutSettings | null>(null);
+  const [drafts, setDrafts] = useState<MoneyDrafts | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
     adminGetPayoutSettings().then((r) => {
-      if (r.ok) setSettings(r.settings);
+      if (r.ok) {
+        setSettings(r.settings);
+        setDrafts(draftsFromSettings(r.settings));
+      }
       setLoading(false);
     });
   }, []);
 
+  const setDraft = (key: keyof MoneyDrafts, value: string) => {
+    setDrafts((prev) => (prev ? { ...prev, [key]: value } : prev));
+  };
+
   const save = async () => {
-    if (!settings) return;
+    if (!settings || !drafts) return;
     setSaving(true);
     setMessage("");
-    const r = await adminUpdatePayoutSettings(settings);
+    const payload = settingsFromDrafts(settings, drafts);
+    const r = await adminUpdatePayoutSettings(payload);
     setSaving(false);
     if (r.ok) {
       setSettings(r.settings);
+      setDrafts(draftsFromSettings(r.settings));
       setMessage("Payout settings saved.");
     } else {
-      setMessage("Could not save settings.");
+      setMessage(r.message || "Could not save settings.");
     }
   };
 
-  if (loading || !settings) {
+  if (loading || !settings || !drafts) {
     return (
       <div className="flex justify-center py-16">
         <Loader2 className="h-6 w-6 animate-spin text-primary" />
       </div>
     );
   }
+
+  const preview = settingsFromDrafts(settings, drafts);
+  const exampleFee = Math.min(
+    preview.maximumInstantFeeCents,
+    Math.max(
+      preview.minimumInstantFeeCents,
+      (preview.instantFeeType.includes("percentage")
+        ? Math.round((42500 * preview.instantFeePercentageBps) / 10000)
+        : 0) + (preview.instantFeeType.includes("fixed") ? preview.instantFeeFixedCents : 0)
+    )
+  );
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -53,6 +160,7 @@ export default function AdminPayoutSettingsPanel() {
             type="button"
             onClick={() => setSettings({ ...settings, instantPayoutEnabled: !settings.instantPayoutEnabled })}
             className={`relative h-7 w-12 rounded-full transition ${settings.instantPayoutEnabled ? "bg-primary" : "bg-muted"}`}
+            aria-pressed={settings.instantPayoutEnabled}
           >
             <span
               className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition ${settings.instantPayoutEnabled ? "left-5" : "left-0.5"}`}
@@ -73,89 +181,37 @@ export default function AdminPayoutSettingsPanel() {
           </select>
         </label>
 
-        {(settings.instantFeeType === "percentage" || settings.instantFeeType === "percentage_plus_fixed") && (
-          <label className="block text-sm">
-            <span className="font-medium">Percentage fee (%)</span>
-            <input
-              type="number"
-              step="0.01"
-              value={settings.instantFeePercentage}
-              onChange={(e) =>
-                setSettings({
-                  ...settings,
-                  instantFeePercentage: Number(e.target.value),
-                  instantFeePercentageBps: Math.round(Number(e.target.value) * 100),
-                })
-              }
-              className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-            />
-          </label>
-        )}
-
-        {(settings.instantFeeType === "fixed" || settings.instantFeeType === "percentage_plus_fixed") && (
-          <label className="block text-sm">
-            <span className="font-medium">Fixed fee ($)</span>
-            <input
-              type="number"
-              step="0.01"
-              value={(settings.instantFeeFixedCents / 100).toFixed(2)}
-              onChange={(e) =>
-                setSettings({ ...settings, instantFeeFixedCents: Math.round(Number(e.target.value) * 100) })
-              }
-              className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-            />
-          </label>
-        )}
-
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block text-sm">
-            <span className="font-medium">Minimum fee ($)</span>
-            <input
-              type="number"
-              step="0.01"
-              value={(settings.minimumInstantFeeCents / 100).toFixed(2)}
-              onChange={(e) =>
-                setSettings({ ...settings, minimumInstantFeeCents: Math.round(Number(e.target.value) * 100) })
-              }
-              className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-            />
-          </label>
-          <label className="block text-sm">
-            <span className="font-medium">Maximum fee ($)</span>
-            <input
-              type="number"
-              step="0.01"
-              value={(settings.maximumInstantFeeCents / 100).toFixed(2)}
-              onChange={(e) =>
-                setSettings({ ...settings, maximumInstantFeeCents: Math.round(Number(e.target.value) * 100) })
-              }
-              className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-            />
-          </label>
-          <label className="block text-sm">
-            <span className="font-medium">Min instant payout ($)</span>
-            <input
-              type="number"
-              step="0.01"
-              value={(settings.minimumInstantPayoutCents / 100).toFixed(2)}
-              onChange={(e) =>
-                setSettings({ ...settings, minimumInstantPayoutCents: Math.round(Number(e.target.value) * 100) })
-              }
-              className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-            />
-          </label>
-          <label className="block text-sm">
-            <span className="font-medium">Max instant payout ($)</span>
-            <input
-              type="number"
-              step="0.01"
-              value={(settings.maximumInstantPayoutCents / 100).toFixed(2)}
-              onChange={(e) =>
-                setSettings({ ...settings, maximumInstantPayoutCents: Math.round(Number(e.target.value) * 100) })
-              }
-              className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-            />
-          </label>
+          <MoneyInput
+            label="Percentage fee (%)"
+            value={drafts.instantFeePercentage}
+            onChange={(v) => setDraft("instantFeePercentage", v)}
+          />
+          <MoneyInput
+            label="Fixed fee ($)"
+            value={drafts.instantFeeFixed}
+            onChange={(v) => setDraft("instantFeeFixed", v)}
+          />
+          <MoneyInput
+            label="Minimum fee ($)"
+            value={drafts.minimumInstantFee}
+            onChange={(v) => setDraft("minimumInstantFee", v)}
+          />
+          <MoneyInput
+            label="Maximum fee ($)"
+            value={drafts.maximumInstantFee}
+            onChange={(v) => setDraft("maximumInstantFee", v)}
+          />
+          <MoneyInput
+            label="Min instant payout ($)"
+            value={drafts.minimumInstantPayout}
+            onChange={(v) => setDraft("minimumInstantPayout", v)}
+          />
+          <MoneyInput
+            label="Max instant payout ($)"
+            value={drafts.maximumInstantPayout}
+            onChange={(v) => setDraft("maximumInstantPayout", v)}
+          />
         </div>
 
         <label className="flex items-center gap-2 text-sm">
@@ -176,19 +232,10 @@ export default function AdminPayoutSettingsPanel() {
         </label>
 
         <p className="text-xs text-muted-foreground">
-          Example on {formatCents(42500)}: fee ≈{" "}
-          {formatCents(
-            Math.min(
-              settings.maximumInstantFeeCents,
-              Math.max(
-                settings.minimumInstantFeeCents,
-                (settings.instantFeeType.includes("percentage")
-                  ? Math.round((42500 * settings.instantFeePercentageBps) / 10000)
-                  : 0) +
-                  (settings.instantFeeType.includes("fixed") ? settings.instantFeeFixedCents : 0)
-              )
-            )
-          )}
+          Example on {formatCents(42500)}: fee ≈ {formatCents(exampleFee)}
+          {settings.instantFeeType === "percentage" && " (percentage only applies)"}
+          {settings.instantFeeType === "fixed" && " (fixed only applies)"}
+          {settings.instantFeeType === "percentage_plus_fixed" && " (percentage + fixed)"}
         </p>
 
         <button
@@ -201,7 +248,9 @@ export default function AdminPayoutSettingsPanel() {
           Save settings
         </button>
 
-        {message && <p className="text-sm text-emerald-700">{message}</p>}
+        {message && (
+          <p className={`text-sm ${message.includes("saved") ? "text-emerald-700" : "text-red-600"}`}>{message}</p>
+        )}
       </div>
     </div>
   );

@@ -53,35 +53,53 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, req
     }
   });
 
-  app.put('/api/admin/payout-settings', requireAuth, requireAdmin, async (req, res) => {
+  app.put('/api/admin/payout-settings', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const b = req.body || {};
+      const numOr = (v, fallback) => (v == null || v === '' || Number.isNaN(Number(v)) ? fallback : Number(v));
+      const boolOr = (v, fallback) => (typeof v === 'boolean' ? v : fallback);
+
+      const { rows: curRows } = await pool.query(`SELECT * FROM payout_settings WHERE id='default'`);
+      const cur = curRows[0];
+      if (!cur) {
+        return res.status(404).json({ ok: false, message: 'Payout settings not found.' });
+      }
+
+      const percentageBps =
+        b.instantFeePercentageBps != null
+          ? numOr(b.instantFeePercentageBps, cur.instant_fee_percentage_bps)
+          : b.instantFeePercentage != null
+            ? Math.round(numOr(b.instantFeePercentage, 0) * 100)
+            : cur.instant_fee_percentage_bps;
+
       await pool.query(
         `UPDATE payout_settings SET
-           instant_payout_enabled=COALESCE($1, instant_payout_enabled),
-           instant_fee_type=COALESCE($2, instant_fee_type),
-           instant_fee_percentage_bps=COALESCE($3, instant_fee_percentage_bps),
-           instant_fee_fixed_cents=COALESCE($4, instant_fee_fixed_cents),
-           minimum_instant_fee_cents=COALESCE($5, minimum_instant_fee_cents),
-           maximum_instant_fee_cents=COALESCE($6, maximum_instant_fee_cents),
-           minimum_instant_payout_cents=COALESCE($7, minimum_instant_payout_cents),
-           maximum_instant_payout_cents=COALESCE($8, maximum_instant_payout_cents),
-           contractor_absorbs_fee=COALESCE($9, contractor_absorbs_fee),
-           fixbridge_absorbs_fee=COALESCE($10, fixbridge_absorbs_fee),
+           instant_payout_enabled=$1,
+           instant_fee_type=$2,
+           instant_fee_percentage_bps=$3,
+           instant_fee_fixed_cents=$4,
+           minimum_instant_fee_cents=$5,
+           maximum_instant_fee_cents=$6,
+           minimum_instant_payout_cents=$7,
+           maximum_instant_payout_cents=$8,
+           contractor_absorbs_fee=$9,
+           fixbridge_absorbs_fee=$10,
            updated_by=$11,
            updated_at=NOW()
          WHERE id='default'`,
         [
-          b.instantPayoutEnabled,
-          b.instantFeeType,
-          b.instantFeePercentageBps ?? (b.instantFeePercentage != null ? Math.round(Number(b.instantFeePercentage) * 100) : null),
-          b.instantFeeFixedCents,
-          b.minimumInstantFeeCents,
-          b.maximumInstantFeeCents,
-          b.minimumInstantPayoutCents,
-          b.maximumInstantPayoutCents,
-          b.contractorAbsorbsFee,
-          b.fixbridgeAbsorbsFee,
+          boolOr(b.instantPayoutEnabled, cur.instant_payout_enabled),
+          b.instantFeeType != null && String(b.instantFeeType).trim()
+            ? String(b.instantFeeType).trim()
+            : cur.instant_fee_type,
+          percentageBps,
+          numOr(b.instantFeeFixedCents, cur.instant_fee_fixed_cents),
+          numOr(b.minimumInstantFeeCents, cur.minimum_instant_fee_cents),
+          numOr(b.maximumInstantFeeCents, cur.maximum_instant_fee_cents),
+          numOr(b.minimumInstantPayoutCents, cur.minimum_instant_payout_cents),
+          numOr(b.maximumInstantPayoutCents, cur.maximum_instant_payout_cents),
+          boolOr(b.contractorAbsorbsFee, cur.contractor_absorbs_fee),
+          boolOr(b.fixbridgeAbsorbsFee, cur.fixbridge_absorbs_fee),
           req.authUser.id,
         ]
       );

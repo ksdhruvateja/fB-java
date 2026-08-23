@@ -2,7 +2,7 @@ import { useState } from "react";
 import { motion } from "motion/react";
 import { ArrowRight, Bell, Loader2, FileCheck, DollarSign } from "lucide-react";
 import { GoogleLogin, type CredentialResponse } from "@react-oauth/google";
-import { getDemoUser, signInUser, signUpUser, signInWithGoogle, type AuthUser } from "./auth";
+import { signInUser, signUpUser, signInWithGoogle, type AuthUser } from "./auth";
 import ForgotPasswordModal from "./ForgotPasswordModal";
 import { brand } from "../config/brand";
 import {
@@ -47,13 +47,12 @@ export default function ContractorLogin({
   onGoHomeowner: () => void;
   onGoStaff: () => void;
 }) {
-  const demoUser = getDemoUser("contractor");
   const [showPass, setShowPass] = useState(false);
   const [tab, setTab] = useState<"login" | "signup">("login");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [email, setEmail] = useState(demoUser.email);
-  const [password, setPassword] = useState(demoUser.password);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showForgot, setShowForgot] = useState(false);
   const [application, setApplication] = useState<ContractorApplication>(() => emptyContractorApplication());
   const [docs, setDocs] = useState<ContractorApplicationDocs>(emptyDocs);
@@ -144,6 +143,8 @@ export default function ContractorLogin({
         businessRegistrationData: docs.businessRegistration?.data,
         businessLicenseName: docs.businessLicense?.name,
         businessLicenseData: docs.businessLicense?.data,
+        diversityDocumentName: docs.diversityCert?.name,
+        diversityDocumentData: docs.diversityCert?.data,
       });
       setLoading(false);
       if (!result.ok) {
@@ -221,6 +222,12 @@ export default function ContractorLogin({
               onChange={(t) => {
                 setTab(t);
                 setError("");
+                if (t === "signup") {
+                  setEmail("");
+                  setPassword("");
+                  setApplication(emptyContractorApplication());
+                  setDocs(emptyDocs());
+                }
               }}
               tabs={[
                 { id: "login", label: "Sign In" },
@@ -277,7 +284,7 @@ export default function ContractorLogin({
                 <AuthEmailField
                   value={email}
                   onChange={setEmail}
-                  placeholder="james@yourcompany.com"
+                  placeholder="you@email.com"
                   label="Email address"
                 />
                 <AuthPasswordField
@@ -285,6 +292,7 @@ export default function ContractorLogin({
                   onChange={setPassword}
                   show={showPass}
                   onToggleShow={() => setShowPass((s) => !s)}
+                  autoComplete={tab === "signup" ? "new-password" : "current-password"}
                 />
               </div>
 

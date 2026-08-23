@@ -248,6 +248,7 @@ export default function ContractorApplicationForm({
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground leading-relaxed">
               Fill this out once, upload your W-9 and insurance certificate, and you&apos;re ready for review.
               Most contractors finish in under 10 minutes. You can update anything later in Profile &amp; Compliance.
+              Fields marked <span className="text-primary font-semibold">*</span> are required.
             </p>
           </div>
         </div>
@@ -296,7 +297,7 @@ export default function ContractorApplicationForm({
               className={inputClass}
               type="number"
               min={0}
-              placeholder="e.g., 12"
+              placeholder="Years"
               value={value.yearsInBusiness}
               onChange={(e) => set("yearsInBusiness", e.target.value)}
               required
@@ -327,7 +328,7 @@ export default function ContractorApplicationForm({
             </div>
             <input
               className={inputClass}
-              placeholder="XX-XXXXXXX or XXX-XX-XXXX"
+              placeholder="Tax ID"
               value={value.ein}
               onChange={(e) => set("ein", e.target.value)}
               required
@@ -366,7 +367,7 @@ export default function ContractorApplicationForm({
           >
             <input
               className={inputClass}
-              placeholder="e.g., WBE, MBE, SBE — leave blank if none"
+              placeholder="Optional — leave blank if none"
               value={value.diversityClassifications}
               onChange={(e) => set("diversityClassifications", e.target.value)}
             />
@@ -452,7 +453,7 @@ export default function ContractorApplicationForm({
           <Field label="Title / role">
             <input
               className={inputClass}
-              placeholder="e.g., Operations Manager"
+              placeholder="Optional"
               value={value.contactTitle}
               onChange={(e) => set("contactTitle", e.target.value)}
             />
@@ -483,6 +484,7 @@ export default function ContractorApplicationForm({
               onChange={(e) => set("contactPhoneType", e.target.value)}
               required
             >
+              <option value="">Choose one…</option>
               {PHONE_TYPES.map((t) => (
                 <option key={t} value={t}>
                   {t}
@@ -543,7 +545,7 @@ export default function ContractorApplicationForm({
 
       {/* 6. Trades */}
       <div className={sectionClass}>
-        <SectionTitle icon={SECTION_ICONS.trades}>6. Trades you cover</SectionTitle>
+        <SectionTitle icon={SECTION_ICONS.trades}>6. Trades you cover <span className="text-primary">*</span></SectionTitle>
         <p className={helpClass}>
           You can select multiple trades — choose all that apply. Tap a trade again to deselect. At least one is
           required.
@@ -599,7 +601,7 @@ export default function ContractorApplicationForm({
           <Field label="Primary ZIP codes" required className="sm:col-span-2">
             <input
               className={inputClass}
-              placeholder="10001, 11201, 11202"
+              placeholder="Comma-separated 5-digit ZIP codes"
               value={value.serviceZips}
               onChange={(e) => set("serviceZips", e.target.value)}
               required
@@ -619,7 +621,7 @@ export default function ContractorApplicationForm({
           <Field label="Available days">
             <input
               className={inputClass}
-              placeholder="Mon–Fri, weekends by appt"
+              placeholder="e.g. weekdays, weekends by appointment"
               value={value.availableDays}
               onChange={(e) => set("availableDays", e.target.value)}
             />
@@ -627,10 +629,11 @@ export default function ContractorApplicationForm({
           <Field label="Number of field technicians" required>
             <select
               className={inputClass}
-              value={value.companySize || "2–5"}
+              value={value.companySize}
               onChange={(e) => set("companySize", e.target.value)}
               required
             >
+              <option value="">Choose one…</option>
               {["1", "2–5", "6–10", "11–25", "26–50", "50+"].map((s) => (
                 <option key={s} value={s}>
                   {s}
@@ -641,7 +644,7 @@ export default function ContractorApplicationForm({
           <Field label="Emergency availability" className="sm:col-span-2">
             <input
               className={inputClass}
-              placeholder="24/7, evenings only, etc."
+              placeholder="e.g. evenings, weekends"
               value={value.emergencyAvailability}
               onChange={(e) => set("emergencyAvailability", e.target.value)}
             />
@@ -674,12 +677,13 @@ export default function ContractorApplicationForm({
               ))}
             </select>
           </Field>
-          <Field label="License expiration">
+          <Field label="License expiration" required={Boolean(value.licenseNumber.trim())}>
             <input
               className={inputClass}
               type="date"
               value={value.licenseExpiration}
               onChange={(e) => set("licenseExpiration", e.target.value)}
+              required={Boolean(value.licenseNumber.trim())}
             />
           </Field>
           <Field label="General liability insurance?" required>
@@ -692,9 +696,18 @@ export default function ContractorApplicationForm({
           <Field label="Coverage amount" required={value.generalLiability === "yes"}>
             <input
               className={inputClass}
-              placeholder="$1,000,000"
+              placeholder="Enter coverage amount"
               value={value.coverageAmount}
               onChange={(e) => set("coverageAmount", e.target.value)}
+              required={value.generalLiability === "yes"}
+            />
+          </Field>
+          <Field label="Insurance expiration" required={value.generalLiability === "yes"}>
+            <input
+              className={inputClass}
+              type="date"
+              value={value.insuranceExpiration}
+              onChange={(e) => set("insuranceExpiration", e.target.value)}
               required={value.generalLiability === "yes"}
             />
           </Field>

@@ -122,9 +122,10 @@ export function ContractorApplicationAdminView({
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">License, insurance & pricing</p>
           <Row label="License #" value={app.licenseNumber || user.licenseNumber} />
           <Row label="License state" value={app.licenseState} />
-          <Row label="License exp." value={app.licenseExpiration} />
+          <Row label="License exp." value={app.licenseExpiration || user.licenseExpiresAt} />
           <Row label="GL insurance" value={app.generalLiability} />
           <Row label="Coverage" value={app.coverageAmount} />
+          <Row label="Insurance exp." value={app.insuranceExpiration || user.insuranceExpiresAt} />
           <Row label="Workers' comp" value={app.workersComp} />
           <Row label="Facility years" value={app.facilityYears} />
           <Row label="Commercial exp." value={app.commercialExperience} />

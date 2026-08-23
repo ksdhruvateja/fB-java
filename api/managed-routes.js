@@ -8,6 +8,9 @@ import {
   getDispatchFee,
   applyAdminPriceAdjustment,
   DEFAULT_PRICING_RULES,
+  buildZipMarketProfile,
+  getLocationFactorByZip,
+  getZipMarketLabel,
 } from './pricing.js';
 import { analyzeRepairStructured } from './ai.js';
 import {
@@ -268,6 +271,14 @@ async function audit(pool, actorUserId, action, entityType, entityId, detail) {
   );
 }
 
+function escapeHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 async function sendNotificationEmail({ to, subject, html }) {
   if (!to) return;
   try {
@@ -396,13 +407,12 @@ function serializeJob(row, viewer) {
     base.technician = null;
   }
 
-  // Customer retail visibility
+  // Customer retail visibility — homeowners only see final FixBridge amounts
   if (isOwner || isAdmin) {
     base.customerRetailEstimateLow = row.customer_retail_estimate_low != null
       ? Number(row.customer_retail_estimate_low) : null;
     base.customerRetailEstimateHigh = row.customer_retail_estimate_high != null
       ? Number(row.customer_retail_estimate_high) : null;
-    base.pricing = parseJson(row.pricing);
     base.visitFeeAuthorized = row.visit_fee_authorized === true;
     base.visitFeeCaptured = row.visit_fee_captured === true;
     base.diyRiskLevel = row.diy_risk_level || 'green';
@@ -420,6 +430,18 @@ function serializeJob(row, viewer) {
     }
   }
 
+  // Full pricing engine blob (incl. AI raw + markup internals) — admin only
+  if (isAdmin) {
+    base.pricing = parseJson(row.pricing);
+  } else if (isOwner) {
+    base.pricing = {
+      show_price: row.show_retail_price !== false,
+      customer_retail_estimate_low: base.customerRetailEstimateLow,
+      customer_retail_estimate_high: base.customerRetailEstimateHigh,
+      disclaimer: base.pricingDisclaimer,
+    };
+  }
+
   // Contractor net visibility
   if (isAssignedContractor || isAdmin || role === 'contractor') {
     base.estimatedContractorNetLow = row.estimated_contractor_net_low != null
@@ -430,12 +452,12 @@ function serializeJob(row, viewer) {
 
   // Admin-only internals
   if (isAdmin) {
-    base.pricing = parseJson(row.pricing);
     base.homeownerUserId = row.homeowner_user_id;
     base.adminNotes = row.admin_notes;
     base.referralStatus = row.referral_status;
     base.referringName = row.referring_name;
     base.referringCompany = row.referring_company;
+    base.estimateConfidence = row.estimate_confidence || null;
   }
 
   return base;
@@ -532,6 +554,7 @@ function serializeProposal(row, viewer) {
   const isCustomer = viewer?.role === 'homeowner';
   const base = {
     id: Number(row.id),
+    quoteNumber: row.quote_number || `FBQ-${String(row.id).padStart(5, '0')}`,
     jobId: Number(row.job_id),
     scopeSummary: row.scope_summary,
     retailAmount: Number(row.retail_amount),
@@ -542,6 +565,7 @@ function serializeProposal(row, viewer) {
     status: row.status,
     publishedAt: row.published_at,
     approvedAt: row.approved_at,
+    createdAt: row.created_at,
   };
   if (isAdmin) {
     base.contractorNet = row.contractor_net != null ? Number(row.contractor_net) : null;
@@ -558,6 +582,15 @@ function serializeProposal(row, viewer) {
     base.customerLineItems = row.customer_line_items;
     base.serviceCharge = row.service_charge != null ? Number(row.service_charge) : null;
     base.expectedMarginPct = row.expected_margin_pct != null ? Number(row.expected_margin_pct) : null;
+    base.bookingId = row.booking_id || null;
+    base.jobTitle = row.job_title || null;
+    base.jobCategory = row.job_category || null;
+    base.jobZip = row.job_zip || null;
+    base.homeownerName = row.homeowner_name || null;
+    base.homeownerEmail = row.homeowner_email || null;
+    base.contractorName = row.contractor_name || null;
+    base.aiEstimateLow = row.ai_estimate_low != null ? Number(row.ai_estimate_low) : null;
+    base.aiEstimateHigh = row.ai_estimate_high != null ? Number(row.ai_estimate_high) : null;
   }
   if (isCustomer) {
     base.customerLineItems = row.customer_line_items;
@@ -570,6 +603,15 @@ function serializeProposal(row, viewer) {
     delete base.depositAmount;
   }
   return base;
+}
+
+async function ensureQuoteNumber(pool, proposalId) {
+  const quoteNumber = `FBQ-${String(proposalId).padStart(5, '0')}`;
+  await pool.query(
+    `UPDATE proposals SET quote_number = COALESCE(quote_number, $1) WHERE id = $2`,
+    [quoteNumber, proposalId]
+  );
+  return quoteNumber;
 }
 
 export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, makeToken, rowToUser }) {
@@ -601,6 +643,152 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       res.json({ ok: true, rules });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Server error' });
+    }
+  });
+
+  /** Searchable quotes workspace — permanent FBQ numbers + internal vs customer amounts. */
+  app.get('/api/admin/quotes', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const q = String(req.query.q || '').trim().toLowerCase();
+      const status = String(req.query.status || '').trim().toLowerCase();
+      const params = [];
+      const where = [];
+      if (status && status !== 'all') {
+        params.push(status);
+        where.push(`p.status = $${params.length}`);
+      }
+      if (q) {
+        params.push(`%${q}%`);
+        const i = params.length;
+        where.push(`(
+          LOWER(COALESCE(p.quote_number,'')) LIKE $${i}
+          OR LOWER(COALESCE(j.booking_id,'')) LIKE $${i}
+          OR LOWER(COALESCE(j.title,'')) LIKE $${i}
+          OR LOWER(COALESCE(j.category,'')) LIKE $${i}
+          OR LOWER(COALESCE(j.zip,'')) LIKE $${i}
+          OR LOWER(COALESCE(hw.name,'')) LIKE $${i}
+          OR LOWER(COALESCE(hw.email,'')) LIKE $${i}
+          OR LOWER(COALESCE(ct.name,'')) LIKE $${i}
+          OR CAST(p.retail_amount AS TEXT) LIKE $${i}
+          OR CAST(p.id AS TEXT) LIKE $${i}
+        )`);
+      }
+      const sql = `
+        SELECT p.*,
+               j.booking_id,
+               j.title AS job_title,
+               j.category AS job_category,
+               j.zip AS job_zip,
+               j.customer_retail_estimate_low AS ai_estimate_low,
+               j.customer_retail_estimate_high AS ai_estimate_high,
+               hw.name AS homeowner_name,
+               hw.email AS homeowner_email,
+               ct.name AS contractor_name
+        FROM proposals p
+        JOIN managed_jobs j ON j.id = p.job_id
+        LEFT JOIN users hw ON hw.id = j.homeowner_user_id
+        LEFT JOIN bids b ON b.id = p.bid_id
+        LEFT JOIN users ct ON ct.id = b.contractor_user_id
+        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+        ORDER BY p.created_at DESC NULLS LAST, p.id DESC
+        LIMIT 100
+      `;
+      const { rows } = await pool.query(sql, params);
+      for (const r of rows) {
+        if (!r.quote_number) {
+          r.quote_number = await ensureQuoteNumber(pool, r.id);
+        }
+      }
+      res.json({
+        ok: true,
+        quotes: rows.map((r) => serializeProposal(r, { isAdmin: true, role: 'admin' })),
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Could not load quotes.' });
+    }
+  });
+
+  app.get('/api/admin/quotes/:id', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const idOrNum = String(req.params.id || '').trim();
+      const { rows } = await pool.query(
+        `SELECT p.*,
+                j.booking_id,
+                j.title AS job_title,
+                j.category AS job_category,
+                j.zip AS job_zip,
+                j.customer_retail_estimate_low AS ai_estimate_low,
+                j.customer_retail_estimate_high AS ai_estimate_high,
+                j.description AS job_description,
+                j.full_address AS job_address,
+                hw.name AS homeowner_name,
+                hw.email AS homeowner_email,
+                hw.phone AS homeowner_phone,
+                ct.name AS contractor_name,
+                ct.email AS contractor_email
+         FROM proposals p
+         JOIN managed_jobs j ON j.id = p.job_id
+         LEFT JOIN users hw ON hw.id = j.homeowner_user_id
+         LEFT JOIN bids b ON b.id = p.bid_id
+         LEFT JOIN users ct ON ct.id = b.contractor_user_id
+         WHERE p.id::text = $1 OR LOWER(COALESCE(p.quote_number,'')) = LOWER($1)
+         LIMIT 1`,
+        [idOrNum]
+      );
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Quote not found.' });
+      if (!rows[0].quote_number) {
+        rows[0].quote_number = await ensureQuoteNumber(pool, rows[0].id);
+      }
+      res.json({ ok: true, quote: serializeProposal(rows[0], { isAdmin: true, role: 'admin' }) });
+    } catch (e) {
+      res.status(500).json({ ok: false, message: 'Could not load quote.' });
+    }
+  });
+
+  /** ZIP + trade market intelligence for Admin. */
+  app.get('/api/admin/market-intelligence', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const zip = String(req.query.zip || '').trim();
+      const trade = String(req.query.trade || 'hvac').trim();
+      if (!zip || zip.length < 3) {
+        return res.status(400).json({ ok: false, message: 'Enter a ZIP code to analyze.' });
+      }
+      const rules = await loadPricingRules(pool);
+      const prefix = zip.slice(0, 3);
+      const { rows: jobs } = await pool.query(
+        `SELECT id, zip, category, title, customer_retail_estimate_low, customer_retail_estimate_high, status, created_at
+         FROM managed_jobs
+         WHERE zip IS NOT NULL AND (zip = $1 OR zip LIKE $2)
+         ORDER BY created_at DESC
+         LIMIT 80`,
+        [zip, `${prefix}%`]
+      );
+      const jobIds = jobs.map((j) => j.id);
+      let bids = [];
+      if (jobIds.length) {
+        const { rows: bidRows } = await pool.query(
+          `SELECT job_id, net_total, labor, materials, travel_diagnostic, created_at
+           FROM bids
+           WHERE job_id = ANY($1::bigint[])
+           ORDER BY created_at DESC
+           LIMIT 80`,
+          [jobIds]
+        );
+        bids = bidRows;
+      }
+      const profile = buildZipMarketProfile({ zip, trade, rules, jobs, bids });
+      res.json({
+        ok: true,
+        profile: {
+          ...profile,
+          locationFactor: getLocationFactorByZip(zip) || profile.locationFactor,
+          market: getZipMarketLabel(zip),
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Could not analyze market.' });
     }
   });
 
@@ -1033,13 +1221,45 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
       if (existingUsers.length > 0) {
         user = existingUsers[0];
+        // Keep profile in sync with the latest contact details from the report wizard.
+        const nextName = name || user.name;
+        const nextPhone = phone || user.phone || null;
+        const nextAddress = fullAddress !== 'TBD' ? fullAddress : user.address || null;
+        const { rows: refreshed } = await pool.query(
+          `UPDATE users SET
+             name = $1,
+             phone = COALESCE(NULLIF($2, ''), phone),
+             address = COALESCE($3, address),
+             profile_phones = CASE
+               WHEN (profile_phones IS NULL OR profile_phones = '[]'::jsonb)
+                 AND NULLIF($2, '') IS NOT NULL
+               THEN jsonb_build_array($2::text)
+               ELSE profile_phones
+             END,
+             profile_addresses = CASE
+               WHEN (profile_addresses IS NULL OR profile_addresses = '[]'::jsonb)
+                 AND $3::text IS NOT NULL
+               THEN jsonb_build_array($3::text)
+               ELSE profile_addresses
+             END
+           WHERE id=$4
+           RETURNING *`,
+          [nextName, phone || null, fullAddress !== 'TBD' ? fullAddress : null, user.id]
+        );
+        user = refreshed[0] || user;
       } else {
         // Create new homeowner with a default password for the beta
         const hashed = await bcrypt.hash('password123', 10);
+        const profileAddress = fullAddress !== 'TBD' ? fullAddress : null;
         const { rows: newUsers } = await pool.query(
-          `INSERT INTO users (role, name, email, password, phone, compliance_status)
-           VALUES ('homeowner', $1, $2, $3, $4, 'approved') RETURNING *`,
-          [name, email.toLowerCase(), hashed, phone || null]
+          `INSERT INTO users (role, name, email, password, phone, address, profile_phones, profile_addresses, compliance_status)
+           VALUES (
+             'homeowner', $1, $2, $3, $4, $5,
+             CASE WHEN $4::text IS NOT NULL THEN jsonb_build_array($4::text) ELSE '[]'::jsonb END,
+             CASE WHEN $5::text IS NOT NULL THEN jsonb_build_array($5::text) ELSE '[]'::jsonb END,
+             'approved'
+           ) RETURNING *`,
+          [name, email.toLowerCase(), hashed, phone || null, profileAddress]
         );
         user = newUsers[0];
       }
@@ -2241,6 +2461,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         ]
       );
 
+      const quoteNumber = await ensureQuoteNumber(pool, rows[0].id);
+      rows[0].quote_number = quoteNumber;
+
       await recordFinancialSnapshot(pool, {
         jobId,
         snapshotType: 'customer_quote',
@@ -2949,6 +3172,357 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Server error' });
+    }
+  });
+
+  /** Email contractor asking them to update missing application / credential info. */
+  app.post('/api/admin/contractors/:id/request-info', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    try {
+      const contractorId = Number(req.params.id);
+      const { rows } = await pool.query(`SELECT * FROM users WHERE id=$1 AND role='contractor'`, [contractorId]);
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Contractor not found.' });
+      const contractor = rows[0];
+      const to = String(contractor.email || '').trim();
+      if (!to) return res.status(400).json({ ok: false, message: 'Contractor has no email on file.' });
+
+      const items = Array.isArray(req.body?.items)
+        ? req.body.items.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 40)
+        : [];
+      const note = typeof req.body?.message === 'string' ? req.body.message.trim().slice(0, 2000) : '';
+      const appUrl = (process.env.APP_URL || brand.domain || '').replace(/\/$/, '');
+      const loginUrl = appUrl
+        ? `${appUrl.includes('://') ? appUrl : `https://${appUrl}`}/?portal=contractor`
+        : '';
+
+      const listHtml = items.length
+        ? `<ul>${items.map((i) => `<li>${escapeHtml(i)}</li>`).join('')}</ul>`
+        : `<p>Please review your contractor application and upload any missing documents.</p>`;
+
+      const subject = `${brand.productName}: Please update your contractor information`;
+      const html = `
+        <div style="font-family:system-ui,sans-serif;line-height:1.5;color:#111">
+          <p>Hi ${escapeHtml(contractor.name || 'there')},</p>
+          <p>Our team needs updated information on your ${escapeHtml(brand.productName)} contractor profile so we can keep you eligible for jobs.</p>
+          <p><strong>Please update the following:</strong></p>
+          ${listHtml}
+          ${note ? `<p><strong>Note from staff:</strong> ${escapeHtml(note)}</p>` : ''}
+          <p>Sign in to your contractor dashboard, open <strong>Compliance</strong> (or Settings → Update profile), and save your changes.</p>
+          ${loginUrl ? `<p><a href="${loginUrl}">Open contractor portal →</a></p>` : ''}
+          <p style="color:#666;font-size:13px">If you have questions, reply to this email or contact support.</p>
+        </div>
+      `;
+
+      const delivery = await sendEmailSafe({ to, subject, html });
+      if (!delivery.ok) {
+        return res.status(502).json({ ok: false, message: delivery.message || 'Email failed to send.' });
+      }
+
+      try {
+        await pool.query(
+          `INSERT INTO notifications (user_id, type, title, message)
+           VALUES ($1,'info_request',$2,$3)`,
+          [
+            contractorId,
+            'Update your contractor information',
+            items.length
+              ? `Staff requested updates: ${items.slice(0, 5).join('; ')}${items.length > 5 ? '…' : ''}`
+              : 'Staff asked you to review and complete your application details.',
+          ]
+        );
+      } catch {
+        /* ignore notification insert failures */
+      }
+
+      await audit(pool, req.authUser.id, 'contractor_request_info', 'user', contractorId, {
+        to,
+        items,
+        simulated: Boolean(delivery.simulated),
+      });
+
+      res.json({
+        ok: true,
+        simulated: Boolean(delivery.simulated),
+        message: delivery.simulated
+          ? 'Request logged (email provider not configured — check server logs).'
+          : `Info request emailed to ${to}.`,
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Could not send info request.' });
+    }
+  });
+
+  /** Admin edits contractor application / profile fields anytime. */
+  app.put('/api/admin/contractors/:id/profile', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    try {
+      const contractorId = Number(req.params.id);
+      const { rows: beforeRows } = await pool.query(`SELECT * FROM users WHERE id=$1 AND role='contractor'`, [
+        contractorId,
+      ]);
+      if (!beforeRows[0]) return res.status(404).json({ ok: false, message: 'Contractor not found.' });
+      const before = beforeRows[0];
+      const body = req.body || {};
+
+      const name = typeof body.name === 'string' ? body.name.trim() : before.name;
+      if (!name) return res.status(400).json({ ok: false, message: 'Name is required.' });
+
+      const parseDoc = (nameKey, dataKey) => {
+        const provided = Object.prototype.hasOwnProperty.call(body, nameKey) || Object.prototype.hasOwnProperty.call(body, dataKey);
+        if (!provided) return { provided: false };
+        const docName = typeof body[nameKey] === 'string' ? body[nameKey].trim() : '';
+        const docData = typeof body[dataKey] === 'string' ? body[dataKey] : null;
+        if (!docName && !docData) return { provided: true, clear: true };
+        if (docData && docData.length > 4_000_000) return { error: `${nameKey} is too large.` };
+        return { provided: true, set: true, name: docName || 'document', data: docData };
+      };
+
+      const licenseDoc = parseDoc('licenseDocumentName', 'licenseDocumentData');
+      const insuranceDoc = parseDoc('insuranceDocumentName', 'insuranceDocumentData');
+      const idDoc = parseDoc('idDocumentName', 'idDocumentData');
+      const w9Doc = parseDoc('w9DocumentName', 'w9DocumentData');
+      const bizRegDoc = parseDoc('businessRegistrationName', 'businessRegistrationData');
+      const bizLicDoc = parseDoc('businessLicenseName', 'businessLicenseData');
+      const diversityDoc = parseDoc('diversityDocumentName', 'diversityDocumentData');
+      for (const d of [licenseDoc, insuranceDoc, idDoc, w9Doc, bizRegDoc, bizLicDoc, diversityDoc]) {
+        if (d.error) return res.status(400).json({ ok: false, message: d.error });
+      }
+
+      let nextApp = before.contractor_application;
+      if (before.contractor_application && typeof before.contractor_application === 'string') {
+        try {
+          nextApp = JSON.parse(before.contractor_application);
+        } catch {
+          nextApp = {};
+        }
+      }
+      nextApp = nextApp && typeof nextApp === 'object' ? nextApp : {};
+      if (body.contractorApplication && typeof body.contractorApplication === 'object') {
+        nextApp = {
+          ...nextApp,
+          ...body.contractorApplication,
+          primaryServices: Array.isArray(body.contractorApplication.primaryServices)
+            ? body.contractorApplication.primaryServices
+            : nextApp.primaryServices || [],
+          serviceStates: Array.isArray(body.contractorApplication.serviceStates)
+            ? body.contractorApplication.serviceStates
+            : nextApp.serviceStates || [],
+        };
+      }
+
+      const licenseExpires =
+        (body.contractorApplication && body.contractorApplication.licenseExpiration) ||
+        body.licenseExpiresAt ||
+        null;
+      const insuranceExpires =
+        (body.contractorApplication && body.contractorApplication.insuranceExpiration) ||
+        body.insuranceExpiresAt ||
+        null;
+
+      const serviceZips =
+        body.serviceZips !== undefined
+          ? JSON.stringify(Array.isArray(body.serviceZips) ? body.serviceZips : [])
+          : JSON.stringify(before.service_zips || []);
+
+      await pool.query(
+        `UPDATE users SET
+           name=$1,
+           phone=COALESCE($2, phone),
+           address=COALESCE($3, address),
+           contact_email=COALESCE($4, contact_email),
+           company_name=COALESCE($5, company_name),
+           company_details=COALESCE($6, company_details),
+           insurance_details=COALESCE($7, insurance_details),
+           trade=COALESCE($8, trade),
+           license_number=COALESCE($9, license_number),
+           visit_fee=COALESCE($10, visit_fee),
+           emergency_visit_fee=COALESCE($11, emergency_visit_fee),
+           minimum_labor_fee=COALESCE($12, minimum_labor_fee),
+           service_zips=$13::jsonb,
+           travel_radius_miles=COALESCE($14, travel_radius_miles),
+           contractor_application=$15::jsonb,
+           license_expires_at=COALESCE($16::date, license_expires_at),
+           insurance_expires_at=COALESCE($17::date, insurance_expires_at),
+           license_document_name=CASE
+             WHEN $18::boolean AND $19::boolean THEN NULL
+             WHEN $18::boolean AND $20::boolean THEN $21
+             ELSE license_document_name END,
+           license_document_data=CASE
+             WHEN $18::boolean AND $19::boolean THEN NULL
+             WHEN $18::boolean AND $20::boolean THEN $22
+             ELSE license_document_data END,
+           insurance_document_name=CASE
+             WHEN $23::boolean AND $24::boolean THEN NULL
+             WHEN $23::boolean AND $25::boolean THEN $26
+             ELSE insurance_document_name END,
+           insurance_document_data=CASE
+             WHEN $23::boolean AND $24::boolean THEN NULL
+             WHEN $23::boolean AND $25::boolean THEN $27
+             ELSE insurance_document_data END,
+           id_document_name=CASE
+             WHEN $28::boolean AND $29::boolean THEN NULL
+             WHEN $28::boolean AND $30::boolean THEN $31
+             ELSE id_document_name END,
+           id_document_data=CASE
+             WHEN $28::boolean AND $29::boolean THEN NULL
+             WHEN $28::boolean AND $30::boolean THEN $32
+             ELSE id_document_data END,
+           w9_document_name=CASE
+             WHEN $33::boolean AND $34::boolean THEN NULL
+             WHEN $33::boolean AND $35::boolean THEN $36
+             ELSE w9_document_name END,
+           w9_document_data=CASE
+             WHEN $33::boolean AND $34::boolean THEN NULL
+             WHEN $33::boolean AND $35::boolean THEN $37
+             ELSE w9_document_data END,
+           business_registration_name=CASE
+             WHEN $38::boolean AND $39::boolean THEN NULL
+             WHEN $38::boolean AND $40::boolean THEN $41
+             ELSE business_registration_name END,
+           business_registration_data=CASE
+             WHEN $38::boolean AND $39::boolean THEN NULL
+             WHEN $38::boolean AND $40::boolean THEN $42
+             ELSE business_registration_data END,
+           business_license_name=CASE
+             WHEN $43::boolean AND $44::boolean THEN NULL
+             WHEN $43::boolean AND $45::boolean THEN $46
+             ELSE business_license_name END,
+           business_license_data=CASE
+             WHEN $43::boolean AND $44::boolean THEN NULL
+             WHEN $43::boolean AND $45::boolean THEN $47
+             ELSE business_license_data END
+         WHERE id=$48 AND role='contractor'`,
+        [
+          name,
+          typeof body.phone === 'string' ? body.phone.trim() || null : null,
+          typeof body.address === 'string' ? body.address.trim() || null : null,
+          typeof body.contactEmail === 'string' ? body.contactEmail.trim() || null : null,
+          typeof body.companyName === 'string' ? body.companyName.trim() || null : null,
+          typeof body.companyDetails === 'string' ? body.companyDetails.trim() || null : null,
+          typeof body.insuranceDetails === 'string' ? body.insuranceDetails.trim() || null : null,
+          typeof body.trade === 'string' ? body.trade.trim() || null : null,
+          typeof body.licenseNumber === 'string' ? body.licenseNumber.trim() || null : null,
+          body.visitFee !== undefined ? (body.visitFee === null ? null : Number(body.visitFee)) : null,
+          body.emergencyVisitFee !== undefined
+            ? body.emergencyVisitFee === null
+              ? null
+              : Number(body.emergencyVisitFee)
+            : null,
+          body.minimumLaborFee !== undefined
+            ? body.minimumLaborFee === null
+              ? null
+              : Number(body.minimumLaborFee)
+            : null,
+          serviceZips,
+          body.travelRadiusMiles !== undefined
+            ? body.travelRadiusMiles === null
+              ? null
+              : Number(body.travelRadiusMiles)
+            : null,
+          JSON.stringify(nextApp),
+          licenseExpires && /^\d{4}-\d{2}-\d{2}/.test(String(licenseExpires))
+            ? String(licenseExpires).slice(0, 10)
+            : null,
+          insuranceExpires && /^\d{4}-\d{2}-\d{2}/.test(String(insuranceExpires))
+            ? String(insuranceExpires).slice(0, 10)
+            : null,
+          Boolean(licenseDoc.provided),
+          Boolean(licenseDoc.clear),
+          Boolean(licenseDoc.set),
+          licenseDoc.provided ? licenseDoc.name : null,
+          licenseDoc.provided ? licenseDoc.data : null,
+          Boolean(insuranceDoc.provided),
+          Boolean(insuranceDoc.clear),
+          Boolean(insuranceDoc.set),
+          insuranceDoc.provided ? insuranceDoc.name : null,
+          insuranceDoc.provided ? insuranceDoc.data : null,
+          Boolean(idDoc.provided),
+          Boolean(idDoc.clear),
+          Boolean(idDoc.set),
+          idDoc.provided ? idDoc.name : null,
+          idDoc.provided ? idDoc.data : null,
+          Boolean(w9Doc.provided),
+          Boolean(w9Doc.clear),
+          Boolean(w9Doc.set),
+          w9Doc.provided ? w9Doc.name : null,
+          w9Doc.provided ? w9Doc.data : null,
+          Boolean(bizRegDoc.provided),
+          Boolean(bizRegDoc.clear),
+          Boolean(bizRegDoc.set),
+          bizRegDoc.provided ? bizRegDoc.name : null,
+          bizRegDoc.provided ? bizRegDoc.data : null,
+          Boolean(bizLicDoc.provided),
+          Boolean(bizLicDoc.clear),
+          Boolean(bizLicDoc.set),
+          bizLicDoc.provided ? bizLicDoc.name : null,
+          bizLicDoc.provided ? bizLicDoc.data : null,
+          contractorId,
+        ]
+      );
+
+      if (diversityDoc.provided) {
+        await pool.query(
+          `UPDATE users SET
+             diversity_document_name = CASE
+               WHEN $2::boolean THEN NULL
+               WHEN $3::boolean THEN $4
+               WHEN $4::text IS NOT NULL AND NOT $3::boolean THEN $4
+               ELSE diversity_document_name
+             END,
+             diversity_document_data = CASE
+               WHEN $2::boolean THEN NULL
+               WHEN $3::boolean THEN $5
+               ELSE diversity_document_data
+             END
+           WHERE id=$1 AND role='contractor'`,
+          [
+            contractorId,
+            Boolean(diversityDoc.clear),
+            Boolean(diversityDoc.set),
+            diversityDoc.provided ? diversityDoc.name : null,
+            diversityDoc.provided ? diversityDoc.data : null,
+          ]
+        );
+      }
+
+      await audit(pool, req.authUser.id, 'contractor_profile_updated', 'user', contractorId, {
+        by: 'admin',
+      });
+
+      const { rows } = await pool.query(`SELECT * FROM users WHERE id=$1`, [contractorId]);
+      if (typeof rowToUser === 'function') {
+        return res.json({ ok: true, user: rowToUser(rows[0]), message: 'Contractor profile updated.' });
+      }
+      // Prefer shared rowToUser if available via app — fall back to raw-safe shape
+      res.json({
+        ok: true,
+        user: {
+          id: Number(rows[0].id),
+          role: rows[0].role,
+          name: rows[0].name,
+          email: rows[0].email,
+          phone: rows[0].phone,
+          companyName: rows[0].company_name,
+          trade: rows[0].trade,
+          licenseNumber: rows[0].license_number,
+          licenseExpiresAt: rows[0].license_expires_at
+            ? String(rows[0].license_expires_at).slice(0, 10)
+            : null,
+          insuranceExpiresAt: rows[0].insurance_expires_at
+            ? String(rows[0].insurance_expires_at).slice(0, 10)
+            : null,
+          complianceStatus: rows[0].compliance_status,
+          contractorApplication: rows[0].contractor_application,
+          w9DocumentName: rows[0].w9_document_name,
+          licenseDocumentName: rows[0].license_document_name,
+          insuranceDocumentName: rows[0].insurance_document_name,
+          diversityDocumentName: rows[0].diversity_document_name,
+          serviceZips: rows[0].service_zips,
+        },
+        message: 'Contractor profile updated.',
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Could not update contractor profile.' });
     }
   });
 

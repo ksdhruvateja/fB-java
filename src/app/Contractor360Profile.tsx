@@ -212,6 +212,7 @@ export default function Contractor360Profile({
             <Row label="Verification" value={contractor.complianceStatus} />
             <Row label="License #" value={app.licenseNumber || contractor.licenseNumber} />
             <Row label="License exp." value={app.licenseExpiration || contractor.licenseExpiresAt} />
+            <Row label="Insurance exp." value={app.insuranceExpiration || contractor.insuranceExpiresAt} />
             <Row label="EIN / Tax ID" value={app.ein} />
             <Row label="GL insurance" value={app.generalLiability} />
             <Row label="Workers' comp" value={app.workersComp} />

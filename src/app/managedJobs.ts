@@ -187,6 +187,7 @@ export type Property = {
 
 export type Proposal = {
   id: number;
+  quoteNumber?: string;
   jobId: number;
   scopeSummary?: string;
   retailAmount?: number;
@@ -203,6 +204,16 @@ export type Proposal = {
   couponCode?: string | null;
   serviceCharge?: number | null;
   expectedMarginPct?: number | null;
+  bookingId?: string | null;
+  jobTitle?: string | null;
+  jobCategory?: string | null;
+  jobZip?: string | null;
+  homeownerName?: string | null;
+  homeownerEmail?: string | null;
+  contractorName?: string | null;
+  aiEstimateLow?: number | null;
+  aiEstimateHigh?: number | null;
+  createdAt?: string | null;
 };
 
 export type Bid = {
@@ -744,6 +755,36 @@ export async function adminSetCompliance(userId: number, complianceStatus: strin
   });
 }
 
+export async function adminRequestContractorInfo(
+  userId: number,
+  body: { items?: string[]; message?: string }
+) {
+  return api<{ ok: boolean; message?: string; simulated?: boolean }>(
+    `/api/admin/contractors/${userId}/request-info`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    }
+  );
+}
+
+export async function adminUpdateContractorProfile(userId: number, fields: Record<string, unknown>) {
+  return api<{ ok: boolean; user?: AuthUserLike; message?: string }>(
+    `/api/admin/contractors/${userId}/profile`,
+    {
+      method: "PUT",
+      body: JSON.stringify(fields),
+    }
+  );
+}
+
+type AuthUserLike = {
+  id?: number;
+  name?: string;
+  email?: string;
+  [key: string]: unknown;
+};
+
 export async function adminAiOverride(
   jobId: number,
   body: Record<string, unknown>
@@ -940,7 +981,7 @@ export async function adminGetPayoutSettings() {
 }
 
 export async function adminUpdatePayoutSettings(settings: Partial<PayoutSettings>) {
-  return api<{ ok: boolean; settings: PayoutSettings }>("/api/admin/payout-settings", {
+  return api<{ ok: boolean; settings: PayoutSettings; message?: string }>("/api/admin/payout-settings", {
     method: "PUT",
     body: JSON.stringify(settings),
   });

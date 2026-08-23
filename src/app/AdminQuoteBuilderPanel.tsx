@@ -4,7 +4,6 @@ import {
   adminCreateProposal,
   adminQuoteBuilderPreview,
   formatMoney,
-  retailRangeLabel,
   type Bid,
   type ManagedJob,
 } from "./managedJobs";
@@ -164,7 +163,9 @@ export default function AdminQuoteBuilderPanel({
       onMessage(r.message || "Could not publish quote.");
       return;
     }
-    onMessage(`Quote sent to homeowner at ${formatMoney(r.proposal?.retailAmount)}`);
+    onMessage(
+      `Quote ${r.proposal?.quoteNumber || ""} sent to homeowner at ${formatMoney(r.proposal?.retailAmount)}`.trim()
+    );
     await onPublished();
   };
 
@@ -172,10 +173,45 @@ export default function AdminQuoteBuilderPanel({
     <div className="space-y-5 rounded-2xl border border-border bg-card p-5 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Quote builder</p>
-          <p className="mt-1 text-lg font-semibold">Build FixBridge quote from contractor bid</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Stage B · Contractor quote base
+          </p>
+          <p className="mt-1 text-lg font-semibold">Build FixBridge quote</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Uses the contractor&apos;s actual bid (not the earlier AI estimate). Publishes a permanent FBQ number.
+            Homeowner only sees the final customer price.
+          </p>
         </div>
         <span className={`rounded-full px-3 py-1 text-xs font-semibold ${pos.tone}`}>{pos.text}</span>
+      </div>
+
+      <div className="overflow-x-auto rounded-xl border border-border">
+        <table className="w-full min-w-[28rem] text-left text-sm">
+          <thead className="bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
+            <tr>
+              <th className="px-3 py-2 font-semibold"> </th>
+              <th className="px-3 py-2 font-semibold">AI</th>
+              <th className="px-3 py-2 font-semibold">Contractor</th>
+              <th className="px-3 py-2 font-semibold">Final (customer)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="border-t border-border">
+              <td className="px-3 py-2 text-muted-foreground">Amount</td>
+              <td className="px-3 py-2 tabular-nums">
+                {aiEstimate?.low != null && aiEstimate?.high != null
+                  ? `${formatMoney(aiEstimate.low)}–${formatMoney(aiEstimate.high)}`
+                  : "—"}
+              </td>
+              <td className="px-3 py-2 font-medium tabular-nums text-violet-700 dark:text-violet-300">
+                {formatMoney(bid.netTotal)}
+              </td>
+              <td className="px-3 py-2 font-bold tabular-nums text-[#FF4D1C]">
+                {preview ? formatMoney(preview.customerQuote) : "—"}
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -193,7 +229,7 @@ export default function AdminQuoteBuilderPanel({
           <p className="text-xs font-semibold uppercase tracking-wider text-primary">AI market estimate</p>
           <p className="mt-2 text-2xl font-bold tabular-nums">
             {aiEstimate?.low != null && aiEstimate?.high != null
-              ? retailRangeLabel(aiEstimate.low, aiEstimate.high)
+              ? `${formatMoney(aiEstimate.low)}–${formatMoney(aiEstimate.high)}`
               : "—"}
           </p>
           <p className="mt-2 text-sm text-muted-foreground">

@@ -17,7 +17,8 @@ import {
   Home,
   Zap,
 } from "lucide-react";
-import { getDemoUser, signInUser, signUpUser, createPublicGuestJob, type AuthUser } from "./auth";
+import { GoogleLogin, type CredentialResponse } from "@react-oauth/google";
+import { signInUser, signUpUser, signInWithGoogle, createPublicGuestJob, type AuthUser } from "./auth";
 import ForgotPasswordModal from "./ForgotPasswordModal";
 import {
   AuthShell,
@@ -42,6 +43,8 @@ import { isValidUsZip, normalizeZip, zipInputProps } from "./zipCode";
 
 type ReportStep = 0 | 1 | 2 | 3;
 
+const GOOGLE_ENABLED = Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID);
+
 const REPORT_STEPS = [
   { id: 0, label: "Area", hint: "Where?" },
   { id: 1, label: "Service", hint: "What?" },
@@ -53,21 +56,18 @@ export default function HomeownerLogin({
   onLogin,
   onBack,
   onGoContractor,
-  onGoStaff,
 }: {
   onLogin: (user: AuthUser) => void;
   onBack: () => void;
   onGoContractor: () => void;
-  onGoStaff: () => void;
 }) {
-  const demoUser = getDemoUser("homeowner");
   const [showPass, setShowPass] = useState(false);
   const [tab, setTab] = useState<"report" | "login" | "signup">("report");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState(demoUser.email);
-  const [password, setPassword] = useState(demoUser.password);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showForgot, setShowForgot] = useState(false);
 
   const [reportStep, setReportStep] = useState<ReportStep>(0);
@@ -86,6 +86,27 @@ export default function HomeownerLogin({
   const [mediaDataUrl, setMediaDataUrl] = useState<string | null>(null);
   const [mediaType, setMediaType] = useState<string | null>(null);
   const [mediaName, setMediaName] = useState("");
+
+  const handleGoogleSuccess = async (response: CredentialResponse) => {
+    if (!response.credential) {
+      setError("Google sign-in failed. Please try again.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const result = await signInWithGoogle(response.credential, "homeowner");
+      setLoading(false);
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
+      onLogin(result.user);
+    } catch {
+      setLoading(false);
+      setError("Google sign-in failed. Please try again.");
+    }
+  };
 
   const filteredAreas = useMemo(
     () =>
@@ -295,7 +316,7 @@ export default function HomeownerLogin({
                 key={tab}
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
+                exit={{ opacity: 0, y: -4 }}
                 transition={{ duration: 0.2 }}
               >
                 <h1 className="text-[26px] font-semibold tracking-tight text-neutral-900 sm:text-[28px] dark:text-foreground">
@@ -314,6 +335,11 @@ export default function HomeownerLogin({
                 setTab(t);
                 setError("");
                 if (t === "report") setReportStep(0);
+                if (t === "signup") {
+                  setFullName("");
+                  setEmail("");
+                  setPassword("");
+                }
               }}
               tabs={[
                 { id: "report", label: "Get help" },
@@ -348,6 +374,36 @@ export default function HomeownerLogin({
               </div>
             )}
 
+            {(tab === "login" || tab === "signup") && (
+              <div className="mt-5">
+                {GOOGLE_ENABLED ? (
+                  <div className="flex justify-center">
+                    <GoogleLogin
+                      onSuccess={handleGoogleSuccess}
+                      onError={() => setError("Google sign-in failed. Please try again.")}
+                      text="continue_with"
+                      shape="pill"
+                      theme="outline"
+                      size="large"
+                      width="380"
+                    />
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-3 text-center dark:border-border dark:bg-muted/40">
+                    <p className="text-sm font-medium">Continue with Google</p>
+                    <p className="mt-1 text-[10px] text-muted-foreground">Available when Google Sign-In is configured</p>
+                  </div>
+                )}
+                <div className="mt-4 flex items-center gap-3">
+                  <div className="h-px flex-1 bg-neutral-200 dark:bg-border" />
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 dark:text-muted-foreground">
+                    or email
+                  </span>
+                  <div className="h-px flex-1 bg-neutral-200 dark:bg-border" />
+                </div>
+              </div>
+            )}
+
             <form onSubmit={handleSubmit} className="mt-4 space-y-4">
               <AnimatePresence mode="wait">
                 {tab === "report" && reportStep === 0 && (
@@ -355,7 +411,7 @@ export default function HomeownerLogin({
                     key="r0"
                     initial={{ opacity: 0, x: 16 }}
                     animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -16 }}
+                    exit={{ opacity: 0, x: -12 }}
                     transition={{ duration: 0.22 }}
                     className="space-y-3"
                   >
@@ -417,7 +473,7 @@ export default function HomeownerLogin({
                     key="r1"
                     initial={{ opacity: 0, x: 16 }}
                     animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -16 }}
+                    exit={{ opacity: 0, x: -12 }}
                     transition={{ duration: 0.22 }}
                     className="space-y-3"
                   >
@@ -477,7 +533,7 @@ export default function HomeownerLogin({
                     key="r2"
                     initial={{ opacity: 0, x: 16 }}
                     animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -16 }}
+                    exit={{ opacity: 0, x: -12 }}
                     transition={{ duration: 0.22 }}
                     className="space-y-4"
                   >
@@ -514,43 +570,47 @@ export default function HomeownerLogin({
                     <div className="space-y-3 rounded-2xl border border-border/70 bg-muted/15 p-3.5">
                       <p className="text-xs font-semibold text-muted-foreground">Service address</p>
                       <div>
-                        <AuthFieldLabel>Street</AuthFieldLabel>
+                        <AuthFieldLabel required>Street</AuthFieldLabel>
                         <input
                           type="text"
-                          placeholder="123 Main St"
+                          placeholder="Street address"
                           value={reportStreet}
                           onChange={(e) => setReportStreet(e.target.value)}
+                          required
                           className={authInputClass}
                         />
                       </div>
                       <div className="grid grid-cols-2 gap-2.5">
                         <div>
-                          <AuthFieldLabel>City</AuthFieldLabel>
+                          <AuthFieldLabel required>City</AuthFieldLabel>
                           <input
                             type="text"
-                            placeholder="Brooklyn"
+                            placeholder="City"
                             value={reportCity}
                             onChange={(e) => setReportCity(e.target.value)}
+                            required
                             className={authInputClass}
                           />
                         </div>
                         <div>
-                          <AuthFieldLabel>State</AuthFieldLabel>
+                          <AuthFieldLabel required>State</AuthFieldLabel>
                           <input
                             type="text"
-                            placeholder="NY"
+                            placeholder="State"
                             value={reportState}
                             onChange={(e) => setReportState(e.target.value)}
+                            required
                             className={authInputClass}
                           />
                         </div>
                         <div>
-                          <AuthFieldLabel>ZIP</AuthFieldLabel>
+                          <AuthFieldLabel required>ZIP</AuthFieldLabel>
                           <input
                             type="text"
                             {...zipInputProps()}
                             value={reportZip}
                             onChange={(e) => setReportZip(normalizeZip(e.target.value))}
+                            required
                             className={authInputClass}
                           />
                         </div>
@@ -564,7 +624,7 @@ export default function HomeownerLogin({
                     key="r3"
                     initial={{ opacity: 0, x: 16 }}
                     animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -16 }}
+                    exit={{ opacity: 0, x: -12 }}
                     transition={{ duration: 0.22 }}
                     className="space-y-4"
                   >
@@ -582,10 +642,10 @@ export default function HomeownerLogin({
                       How can we reach you?
                     </div>
                     <div>
-                      <AuthFieldLabel>Full name</AuthFieldLabel>
+                      <AuthFieldLabel required>Full name</AuthFieldLabel>
                       <input
                         type="text"
-                        placeholder="Alex Rivera"
+                        placeholder="Your full name"
                         value={reportName}
                         onChange={(e) => setReportName(e.target.value)}
                         required
@@ -593,10 +653,10 @@ export default function HomeownerLogin({
                       />
                     </div>
                     <div>
-                      <AuthFieldLabel>Email</AuthFieldLabel>
+                      <AuthFieldLabel required>Email</AuthFieldLabel>
                       <input
                         type="email"
-                        placeholder="you@example.com"
+                        placeholder="you@email.com"
                         value={reportEmail}
                         onChange={(e) => setReportEmail(e.target.value)}
                         required
@@ -604,10 +664,10 @@ export default function HomeownerLogin({
                       />
                     </div>
                     <div>
-                      <AuthFieldLabel>Phone</AuthFieldLabel>
+                      <AuthFieldLabel required>Phone</AuthFieldLabel>
                       <input
                         type="tel"
-                        placeholder="(555) 555-5555"
+                        placeholder="Phone number"
                         value={reportPhone}
                         onChange={(e) => setReportPhone(e.target.value)}
                         required
@@ -623,19 +683,20 @@ export default function HomeownerLogin({
                   value={fullName}
                   onChange={setFullName}
                   label="Full name"
-                  placeholder="Maria Santos"
+                  placeholder="Your full name"
                   required
                 />
               )}
 
               {(tab === "login" || tab === "signup") && (
                 <>
-                  <AuthEmailField value={email} onChange={setEmail} placeholder="maria@example.com" />
+                  <AuthEmailField value={email} onChange={setEmail} placeholder="you@email.com" />
                   <AuthPasswordField
                     value={password}
                     onChange={setPassword}
                     show={showPass}
                     onToggleShow={() => setShowPass((s) => !s)}
+                    autoComplete={tab === "signup" ? "new-password" : "current-password"}
                   />
                 </>
               )}
@@ -699,11 +760,6 @@ export default function HomeownerLogin({
               prompt="Are you a licensed contractor?"
               actionLabel="Go to contractor portal →"
               onAction={onGoContractor}
-              secondary={
-                <button type="button" onClick={onGoStaff} className="text-xs font-medium text-neutral-600 hover:text-neutral-900 dark:text-muted-foreground dark:hover:text-foreground">
-                  Staff member? Sign in as Staff →
-                </button>
-              }
             />
           </AuthPanel>
         </motion.div>

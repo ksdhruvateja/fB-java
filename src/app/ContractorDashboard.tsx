@@ -44,6 +44,14 @@ import ContractorPricingPanel from "./ContractorPricingPanel";
 import ContractorPayoutsPanel from "./ContractorPayoutsPanel";
 import ContractorPerformancePanel from "./ContractorPerformancePanel";
 import ContractorReviewsSection from "./ContractorReviewsSection";
+import ContractorExpiryAlert from "./ContractorExpiryAlert";
+import {
+  evaluateCredentialExpiry,
+  expiryBadgeClass,
+  expiryLabel,
+  formatExpiryDate,
+  getContractorExpiryAlerts,
+} from "./contractorExpiry";
 
 type DashTab =
   | "dashboard"
@@ -170,6 +178,66 @@ export default function ContractorDashboard({
   const [travel, setTravel] = useState("50");
   const [warranty, setWarranty] = useState("90-day workmanship");
   const [exclusions, setExclusions] = useState("Hidden damage, permits not included");
+  const [expiryAlertOpen, setExpiryAlertOpen] = useState(false);
+  const expiryDismissKey = `fixbridge-expiry-dismiss-${user.id}`;
+
+  const expiryAlerts = useMemo(() => getContractorExpiryAlerts(user), [user]);
+  const licenseStatus = useMemo(
+    () =>
+      evaluateCredentialExpiry(
+        "Contractor license",
+        "license",
+        application.licenseExpiration || user.licenseExpiresAt,
+        { required: Boolean(application.licenseNumber || user.licenseNumber) }
+      ),
+    [application.licenseExpiration, application.licenseNumber, user.licenseExpiresAt, user.licenseNumber]
+  );
+  const insuranceStatus = useMemo(
+    () =>
+      evaluateCredentialExpiry(
+        "Liability insurance",
+        "insurance",
+        application.insuranceExpiration || user.insuranceExpiresAt,
+        {
+          required:
+            application.generalLiability === "yes" ||
+            Boolean(user.insuranceDocumentName) ||
+            Boolean(user.insuranceExpiresAt),
+        }
+      ),
+    [
+      application.insuranceExpiration,
+      application.generalLiability,
+      user.insuranceExpiresAt,
+      user.insuranceDocumentName,
+    ]
+  );
+
+  useEffect(() => {
+    if (!expiryAlerts.length) {
+      setExpiryAlertOpen(false);
+      return;
+    }
+    const hasBlocking = expiryAlerts.some((i) => i.severity === "expired" || i.severity === "missing");
+    if (hasBlocking) {
+      setExpiryAlertOpen(true);
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(expiryDismissKey);
+      if (!raw) {
+        setExpiryAlertOpen(true);
+        return;
+      }
+      const dismissedAt = Number(raw);
+      // Re-show warning alerts after 24h
+      if (!Number.isFinite(dismissedAt) || Date.now() - dismissedAt > 86_400_000) {
+        setExpiryAlertOpen(true);
+      }
+    } catch {
+      setExpiryAlertOpen(true);
+    }
+  }, [expiryAlerts, expiryDismissKey]);
 
   useEffect(() => {
     setApplication(applicationFromUser(user));
@@ -271,6 +339,10 @@ export default function ContractorDashboard({
       if (appDocs.businessLicense) {
         payload.businessLicenseName = appDocs.businessLicense.name;
         payload.businessLicenseData = appDocs.businessLicense.data;
+      }
+      if (appDocs.diversityCert) {
+        payload.diversityDocumentName = appDocs.diversityCert.name;
+        payload.diversityDocumentData = appDocs.diversityCert.data;
       }
 
       const { updateUserProfile } = await import("./auth");
@@ -666,12 +738,56 @@ export default function ContractorDashboard({
 
           {tab === "documents" && (
             <section className="mx-auto max-w-3xl space-y-4">
-              <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase">Documents</h1>
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase">Documents</h1>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    License and insurance expirations are monitored. Update anytime from Compliance.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => go("compliance")}
+                  className="rounded-xl bg-[#FF4D1C] px-4 py-2.5 text-sm font-semibold text-white hover:brightness-105"
+                >
+                  Update details
+                </button>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-[1.25rem] border border-border bg-card p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold">Contractor license</p>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${expiryBadgeClass(licenseStatus.severity)}`}>
+                      {expiryLabel(licenseStatus.severity)}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">Number</p>
+                  <p className="font-medium">{application.licenseNumber || user.licenseNumber || "—"}</p>
+                  <p className="mt-2 text-xs text-muted-foreground">Expires</p>
+                  <p className="font-medium">{formatExpiryDate(licenseStatus.expiresAt)}</p>
+                  <p className="mt-2 text-xs text-muted-foreground">File</p>
+                  <p className="text-sm">{user.licenseDocumentName || "Not uploaded"}</p>
+                </div>
+                <div className="rounded-[1.25rem] border border-border bg-card p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold">Liability insurance</p>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${expiryBadgeClass(insuranceStatus.severity)}`}>
+                      {expiryLabel(insuranceStatus.severity)}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">Coverage</p>
+                  <p className="font-medium">{application.coverageAmount || "—"}</p>
+                  <p className="mt-2 text-xs text-muted-foreground">Expires</p>
+                  <p className="font-medium">{formatExpiryDate(insuranceStatus.expiresAt)}</p>
+                  <p className="mt-2 text-xs text-muted-foreground">File</p>
+                  <p className="text-sm">{user.insuranceDocumentName || "Not uploaded"}</p>
+                </div>
+              </div>
+
               <ul className="rounded-[1.5rem] border border-border bg-card divide-y divide-border">
                 {[
                   ["W-9", user.w9DocumentName],
-                  ["Contractor license", user.licenseDocumentName],
-                  ["Insurance", user.insuranceDocumentName],
                   ["Business registration", user.businessRegistrationName],
                   ["Business license", user.businessLicenseName],
                   ["ID", user.idDocumentName],
@@ -682,9 +798,6 @@ export default function ContractorDashboard({
                   </li>
                 ))}
               </ul>
-              <button type="button" onClick={() => go("compliance")} className="text-sm font-semibold text-primary hover:underline">
-                Manage uploads in Compliance →
-              </button>
             </section>
           )}
 
@@ -692,7 +805,51 @@ export default function ContractorDashboard({
             <Stub title="Messages" body="Job threads with homeowners and FixBridge dispatch will appear here. Messaging goes live with assigned jobs." />
           )}
           {tab === "settings" && (
-            <Stub title="Settings" body="Notification preferences, password, and account controls. Use Compliance for company profile and rates." />
+            <section className="mx-auto max-w-3xl space-y-4">
+              <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase">Settings</h1>
+              <div className="rounded-[1.5rem] border border-border bg-card p-5 space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  Update your company profile, license, insurance, documents, and rates anytime — during signup and after approval.
+                  Required fields are marked with *. Changes apply immediately for new job invitations.
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => go("compliance")}
+                    className="rounded-xl border border-border px-4 py-3 text-left hover:bg-muted/40"
+                  >
+                    <p className="font-semibold text-sm">Update profile &amp; credentials</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Full application, W-9 / COI / license uploads, and expiration dates
+                    </p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => go("documents")}
+                    className="rounded-xl border border-border px-4 py-3 text-left hover:bg-muted/40"
+                  >
+                    <p className="font-semibold text-sm">View document status</p>
+                    <p className="mt-1 text-xs text-muted-foreground">See expiration dates and upload status</p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => go("pricing")}
+                    className="rounded-xl border border-border px-4 py-3 text-left hover:bg-muted/40"
+                  >
+                    <p className="font-semibold text-sm">Pricing & fees</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Hourly rates, trip fees, after-hours</p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={goToPayoutAccount}
+                    className="rounded-xl border border-border px-4 py-3 text-left hover:bg-muted/40"
+                  >
+                    <p className="font-semibold text-sm">Payout account</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Stripe Connect banking details</p>
+                  </button>
+                </div>
+              </div>
+            </section>
           )}
           {tab === "help" && (
             <Stub title="Help & Support" body="Email support@fixbridge.app or use Compliance → Stripe Connect if payouts need setup. For job issues, open the Job Workspace and contact dispatch." />
@@ -700,7 +857,24 @@ export default function ContractorDashboard({
 
           {tab === "compliance" && (
             <section className="mx-auto max-w-3xl space-y-4">
-              <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase">Compliance</h1>
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase">Compliance</h1>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Keep your license, insurance, company details, and documents current anytime — including after signup.
+                    Fields marked * are required. Save here whenever FixBridge or a staff member asks for updates.
+                  </p>
+                </div>
+              </div>
+              {(licenseStatus.severity !== "ok" || insuranceStatus.severity !== "ok") && (
+                <div className="rounded-xl border border-amber-300/60 bg-amber-50/80 px-4 py-3 text-sm text-amber-950 dark:border-amber-800/50 dark:bg-amber-950/30 dark:text-amber-100">
+                  <p className="font-semibold">Credential reminders</p>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs">
+                    {licenseStatus.severity !== "ok" && <li>{licenseStatus.message}</li>}
+                    {insuranceStatus.severity !== "ok" && <li>{insuranceStatus.message}</li>}
+                  </ul>
+                </div>
+              )}
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
@@ -826,6 +1000,28 @@ export default function ContractorDashboard({
           )}
         </main>
       </div>
+
+      <ContractorExpiryAlert
+        items={expiryAlerts}
+        open={expiryAlertOpen}
+        onClose={() => {
+          setExpiryAlertOpen(false);
+          try {
+            window.localStorage.setItem(expiryDismissKey, String(Date.now()));
+          } catch {
+            /* ignore */
+          }
+        }}
+        onUpdate={() => {
+          setExpiryAlertOpen(false);
+          try {
+            window.localStorage.setItem(expiryDismissKey, String(Date.now()));
+          } catch {
+            /* ignore */
+          }
+          go("compliance");
+        }}
+      />
     </div>
   );
 }

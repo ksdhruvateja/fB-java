@@ -14,6 +14,8 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_registration_data TEXT`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_license_name TEXT`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_license_data TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS diversity_document_name TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS diversity_document_data TEXT`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS contractor_application JSONB`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS service_zips JSONB`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS travel_radius_miles INT`);
@@ -890,6 +892,8 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS customer_line_items JSONB`);
   await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS service_charge NUMERIC DEFAULT 0`);
   await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS expected_margin_pct NUMERIC`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS quote_number TEXT`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_proposals_quote_number ON proposals (quote_number) WHERE quote_number IS NOT NULL`);
 
   await pool.query(`ALTER TABLE job_invitations ADD COLUMN IF NOT EXISTS request_type TEXT DEFAULT 'remote_quote'`);
   await pool.query(`ALTER TABLE job_invitations ADD COLUMN IF NOT EXISTS site_visit_window TEXT`);

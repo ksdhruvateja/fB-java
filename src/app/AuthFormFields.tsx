@@ -59,7 +59,9 @@ export function AuthEmailField({
 
   return (
     <div>
-      <AuthFieldLabel soft>{label}</AuthFieldLabel>
+      <AuthFieldLabel soft required={required}>
+        {label}
+      </AuthFieldLabel>
       <div className="relative">
         <Mail className="pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-neutral-400" />
         <input
@@ -117,7 +119,9 @@ export function AuthPasswordField({
 
   return (
     <div>
-      <AuthFieldLabel soft>{label}</AuthFieldLabel>
+      <AuthFieldLabel soft required={required}>
+        {label}
+      </AuthFieldLabel>
       <div className="relative">
         <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-neutral-400" />
         <input
@@ -151,8 +155,9 @@ export function AuthTextField({
   value,
   onChange,
   label = "Full name",
-  placeholder = "Maria Santos",
+  placeholder = "Your full name",
   icon: Icon = UserRound,
+  required,
   ...rest
 }: {
   value: string;
@@ -160,13 +165,16 @@ export function AuthTextField({
   label?: string;
   placeholder?: string;
   icon?: typeof UserRound;
+  required?: boolean;
 } & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "className">) {
   const mascot = useAuthMascotOptional();
   const handlers = wireMascotInput(mascot, "text", { onChange });
 
   return (
     <div>
-      <AuthFieldLabel soft>{label}</AuthFieldLabel>
+      <AuthFieldLabel soft required={required}>
+        {label}
+      </AuthFieldLabel>
       <div className="relative">
         <Icon className="pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-neutral-400" />
         <input
@@ -174,6 +182,7 @@ export function AuthTextField({
           type="text"
           placeholder={placeholder}
           value={value}
+          required={required}
           onChange={(e) => {
             handlers.onChange(e.target.value);
             onChange(e.target.value);

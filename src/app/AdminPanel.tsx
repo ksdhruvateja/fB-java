@@ -3,7 +3,7 @@ import {
   ArrowLeft, LogOut, Loader2, Shield, DollarSign, Users, Briefcase,
   Settings2, Link2, BarChart3, Sparkles, Menu, X, LayoutDashboard,
   Search, Check, Copy, MapPin, ChevronRight, Ban, BadgeCheck,
-  Sun, Moon, ChevronDown, Bell, ListTodo, ScrollText,
+  Sun, Moon, ChevronDown, Bell, ListTodo, ScrollText, Mail,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { loadAllUsers, type AuthUser } from "./auth";
@@ -21,9 +21,19 @@ import AdminPricingPanel, { type PricingRules } from "./AdminPricingPanel";
 import AdminContractorPayoutsPanel from "./AdminContractorPayoutsPanel";
 import AdminPayoutSettingsPanel from "./AdminPayoutSettingsPanel";
 import AdminQuoteBuilderPanel from "./AdminQuoteBuilderPanel";
+import AdminQuotesWorkspace from "./AdminQuotesWorkspace";
+import AdminMarketIntelligencePanel from "./AdminMarketIntelligencePanel";
 import AdminAuditLogsPanel from "./AdminAuditLogsPanel";
 import AdminHomeownerInvoicePanel from "./AdminHomeownerInvoicePanel";
+import AdminContractorEditPanel from "./AdminContractorEditPanel";
 import Contractor360Profile from "./Contractor360Profile";
+import {
+  expiryBadgeClass,
+  expiryLabel,
+  formatExpiryDate,
+  listAdminCredentialAlerts,
+} from "./contractorExpiry";
+import { listContractorMissingInfo } from "./contractorApplication";
 import { ROLE_PRESETS } from "./adminPermissions";
 import {
   holdTransfer,
@@ -90,6 +100,7 @@ type Tab =
   | "contractors"
   | "partners"
   | "ai"
+  | "market-intel"
   | "reporting"
   | "platform"
   | "subscriptions"
@@ -107,6 +118,7 @@ const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React
       { id: "dispatch", label: "Dispatch", icon: Briefcase },
       { id: "proposals", label: "Quotes", icon: DollarSign },
       { id: "ai", label: "AI Estimates", icon: Sparkles },
+      { id: "market-intel", label: "Market Intelligence", icon: MapPin },
     ],
   },
   {
@@ -122,7 +134,7 @@ const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React
     items: [
       { id: "payments", label: "Payments", icon: DollarSign },
       { id: "contractor-payouts", label: "Payouts", icon: DollarSign },
-      { id: "pricing", label: "Pricing Controls", icon: Settings2 },
+      { id: "pricing", label: "Pricing Rules", icon: Settings2 },
       { id: "payout-settings", label: "Payout Settings", icon: Settings2 },
       { id: "reporting", label: "Profitability", icon: BarChart3 },
     ],
@@ -713,9 +725,26 @@ export default function AdminPanel({
   };
 
   const attention = useMemo(() => computeAttention(jobs), [jobs]);
+  const credentialAlerts = useMemo(() => listAdminCredentialAlerts(contractors), [contractors]);
+  const criticalCredentialAlerts = useMemo(
+    () =>
+      credentialAlerts.filter(
+        (a) => a.worst === "expired" || a.worst === "missing" || a.worst === "critical"
+      ),
+    [credentialAlerts]
+  );
 
   const notifications = useMemo(() => {
-    const items: { id: string; title: string; body: string; jobId?: number; when?: string }[] = [];
+    const items: {
+      id: string;
+      title: string;
+      body: string;
+      jobId?: number;
+      contractorId?: number;
+      when?: string;
+      tone?: "danger" | "warn" | "default";
+    }[] = [];
+
     for (const j of attention.quotes_ready.slice(0, 4)) {
       items.push({
         id: `qr-${j.id}`,
@@ -732,6 +761,7 @@ export default function AdminPanel({
         body: `${jobBookingLabel(j)} · ${j.cityStateZip || ""}`,
         jobId: j.id,
         when: relativeTime(j.updatedAt || j.createdAt),
+        tone: "danger",
       });
     }
     for (const j of attention.accepted.slice(0, 3)) {
@@ -752,9 +782,15 @@ export default function AdminPanel({
         when: relativeTime(j.updatedAt || j.createdAt),
       });
     }
-    return items.slice(0, 10);
+    return items.slice(0, 12);
   }, [attention]);
 
+  const openContractorCredential = (contractorId: number) => {
+    setTab("contractors");
+    const c = contractors.find((x) => Number(x.id) === contractorId);
+    if (c) void openContractorDetail(c);
+    else setExpandedContractorId(contractorId);
+  };
   const commandActions: CommandAction[] = useMemo(
     () => [
       { id: "wq", label: "Open Work Queue", group: "Navigate", run: () => setTab("work-queue") },
@@ -765,6 +801,13 @@ export default function AdminPanel({
       { id: "payments", label: "Open Payments", group: "Navigate", run: () => setTab("payments") },
       { id: "pricing", label: "Pricing Controls", group: "Navigate", run: () => setTab("pricing") },
       { id: "contractors", label: "Find Contractors", group: "Navigate", run: () => setTab("contractors") },
+      {
+        id: "creds",
+        label: "Credential expirations",
+        group: "Attention",
+        hint: `${criticalCredentialAlerts.length || credentialAlerts.length} alerts`,
+        run: () => setTab("contractors"),
+      },
       {
         id: "ready",
         label: "Quotes ready to send",
@@ -786,7 +829,7 @@ export default function AdminPanel({
         run: () => openAttention("accepted"),
       },
     ],
-    [attention],
+    [attention, credentialAlerts, criticalCredentialAlerts],
   );
 
   const globalSearchHits = useMemo(() => {
@@ -831,12 +874,45 @@ export default function AdminPanel({
     }
   }
 
+  const handleBack = () => {
+    if (mobileNav) {
+      setMobileNav(false);
+      return;
+    }
+    if (cmdOpen) {
+      setCmdOpen(false);
+      return;
+    }
+    if (notifOpen) {
+      setNotifOpen(false);
+      return;
+    }
+    if (drawerOpen) {
+      setDrawerOpen(false);
+      return;
+    }
+    if (expandedContractorId != null) {
+      setExpandedContractorId(null);
+      return;
+    }
+    if (tab !== "overview") {
+      setTab("overview");
+      return;
+    }
+    onBack();
+  };
+
+  const handleSignOutClick = () => {
+    setMobileNav(false);
+    onSignOut();
+  };
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       {/* Mobile top bar */}
       <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-background/95 px-4 py-3 backdrop-blur lg:hidden">
         <div className="flex items-center gap-2">
-          <button type="button" onClick={onBack} className="rounded-md p-2 hover:bg-muted" aria-label="Back">
+          <button type="button" onClick={handleBack} className="rounded-md p-2 hover:bg-muted" aria-label="Back">
             <ArrowLeft className="h-4 w-4" />
           </button>
           <div>
@@ -877,10 +953,10 @@ export default function AdminPanel({
                   {isDark ? "Light mode" : "Dark mode"}
                 </button>
               )}
-              <button type="button" onClick={onBack} className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm hover:bg-muted">
-                <ArrowLeft className="h-4 w-4" /> Staff sign in
+              <button type="button" onClick={handleBack} className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm hover:bg-muted">
+                <ArrowLeft className="h-4 w-4" /> Back
               </button>
-              <button type="button" onClick={onSignOut} className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm hover:bg-muted">
+              <button type="button" onClick={handleSignOutClick} className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm hover:bg-muted">
                 <LogOut className="h-4 w-4" /> Sign out
               </button>
             </div>
@@ -905,10 +981,10 @@ export default function AdminPanel({
                 {isDark ? "Light mode" : "Dark mode"}
               </button>
             )}
-            <button type="button" onClick={onBack} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition hover:bg-muted hover:translate-x-0.5">
-              <ArrowLeft className="h-4 w-4" /> Staff sign in
+            <button type="button" onClick={handleBack} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition hover:bg-muted hover:translate-x-0.5">
+              <ArrowLeft className="h-4 w-4" /> Back
             </button>
-            <button type="button" onClick={onSignOut} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition hover:bg-muted hover:translate-x-0.5">
+            <button type="button" onClick={handleSignOutClick} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition hover:bg-muted hover:translate-x-0.5">
               <LogOut className="h-4 w-4" /> Sign out
             </button>
           </div>
@@ -992,14 +1068,29 @@ export default function AdminPanel({
                             type="button"
                             className="flex w-full flex-col gap-0.5 px-3 py-2.5 text-left hover:bg-muted"
                             onClick={() => {
-                              if (n.jobId) {
+                              if (n.contractorId) {
+                                setTab("contractors");
+                                const c = contractors.find((x) => Number(x.id) === n.contractorId);
+                                if (c) void openContractorDetail(c);
+                                else setExpandedContractorId(n.contractorId);
+                              } else if (n.jobId) {
                                 setTab("work-queue");
                                 openJobDrawer(n.jobId);
                               }
                               setNotifOpen(false);
                             }}
                           >
-                            <span className="text-sm font-medium">{n.title}</span>
+                            <span
+                              className={`text-sm font-medium ${
+                                n.tone === "danger"
+                                  ? "text-red-700 dark:text-red-300"
+                                  : n.tone === "warn"
+                                    ? "text-amber-800 dark:text-amber-300"
+                                    : ""
+                              }`}
+                            >
+                              {n.title}
+                            </span>
                             <span className="text-xs text-muted-foreground">{n.body}</span>
                             {n.when && <span className="text-[10px] text-muted-foreground">{n.when}</span>}
                           </button>
@@ -1519,51 +1610,63 @@ export default function AdminPanel({
         )}
 
         {tab === "proposals" && (
-          <section className="space-y-4">
-            <SectionHeader
-              title="Bids & retail proposals"
-              subtitle="Pick a job, review confidential net bids, then publish a customer retail proposal."
+          <section className="space-y-8">
+            <AdminQuotesWorkspace
+              onMessage={setMessage}
+              onOpenJob={(jobId) => {
+                setSelectedJobId(jobId);
+                setTab("work-queue");
+                openJobDrawer(jobId);
+              }}
             />
-            <select
-              className={fieldClass}
-              value={selectedJobId || ""}
-              onChange={(e) => setSelectedJobId(e.target.value ? Number(e.target.value) : null)}
-            >
-              <option value="">Select job</option>
-              {jobs.map((j) => (
-                <option key={j.id} value={j.id}>
-                  #{j.id} {j.title} · {STATUS_LABELS[j.status] || j.status}
-                </option>
-              ))}
-            </select>
-            {!selectedJobId ? (
-              <EmptyState title="Choose a job" hint="Bids appear after a contractor submits a confidential net bid." />
-            ) : bids.length === 0 ? (
-              <EmptyState title="No bids yet" hint="Invite a contractor from Dispatch first." />
-            ) : (
-              <div className="grid gap-4">
-                {bids.map((b, i) => (
-                  <motion.div
-                    key={b.id}
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: i * 0.05 }}
-                  >
-                    <AdminQuoteBuilderPanel
-                      job={jobs.find((j) => j.id === selectedJobId)!}
-                      bid={b}
-                      busy={busy}
-                      onMessage={setMessage}
-                      onPublished={async () => {
-                        await refreshJobs();
-                      }}
-                    />
-                  </motion.div>
+            <div className="border-t border-border pt-6 space-y-4">
+              <SectionHeader
+                title="Build quote from contractor bid"
+                subtitle="Stage B — contractor actual quote is the base. Apply adjustments, then publish a unique FBQ number. Homeowner only sees the final FixBridge amount."
+              />
+              <select
+                className={fieldClass}
+                value={selectedJobId || ""}
+                onChange={(e) => setSelectedJobId(e.target.value ? Number(e.target.value) : null)}
+              >
+                <option value="">Select job</option>
+                {jobs.map((j) => (
+                  <option key={j.id} value={j.id}>
+                    {j.bookingId || `#${j.id}`} {j.title} · {STATUS_LABELS[j.status] || j.status}
+                  </option>
                 ))}
-              </div>
-            )}
+              </select>
+              {!selectedJobId ? (
+                <EmptyState title="Choose a job" hint="Bids appear after a contractor submits a confidential net bid." />
+              ) : bids.length === 0 ? (
+                <EmptyState title="No bids yet" hint="Invite a contractor from Dispatch first." />
+              ) : (
+                <div className="grid gap-4">
+                  {bids.map((b, i) => (
+                    <motion.div
+                      key={b.id}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.05 }}
+                    >
+                      <AdminQuoteBuilderPanel
+                        job={jobs.find((j) => j.id === selectedJobId)!}
+                        bid={b}
+                        busy={busy}
+                        onMessage={setMessage}
+                        onPublished={async () => {
+                          await refreshJobs();
+                        }}
+                      />
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+            </div>
           </section>
         )}
+
+        {tab === "market-intel" && <AdminMarketIntelligencePanel />}
 
         {tab === "pricing" && (
           <AdminPricingPanel
@@ -1765,6 +1868,45 @@ export default function AdminPanel({
 
         {tab === "contractors" && (
           <section className="space-y-4">
+            {criticalCredentialAlerts.length > 0 && (
+              <div className="sticky top-0 z-30 space-y-2 rounded-2xl border border-red-300 bg-red-50 p-4 shadow-sm dark:border-red-900/50 dark:bg-red-950/30">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-bold text-red-900 dark:text-red-100">
+                      Critical credential alert
+                      {criticalCredentialAlerts.length === 1 ? "" : "s"} · {criticalCredentialAlerts.length}
+                    </p>
+                    <p className="mt-0.5 text-xs text-red-800/80 dark:text-red-200/80">
+                      Expired, missing, or due within 14 days. Click a contractor to open their profile.
+                    </p>
+                  </div>
+                </div>
+                <ul className="divide-y divide-red-200/70 overflow-hidden rounded-xl border border-red-200/80 bg-white/70 dark:divide-red-900/40 dark:border-red-900/40 dark:bg-background/40">
+                  {criticalCredentialAlerts.map((alert) => (
+                    <li key={alert.contractorId}>
+                      <button
+                        type="button"
+                        className="flex w-full items-start justify-between gap-3 px-3 py-2.5 text-left hover:bg-red-100/60 dark:hover:bg-red-950/40"
+                        onClick={() => openContractorCredential(alert.contractorId)}
+                      >
+                        <span className="min-w-0">
+                          <span className="block text-sm font-semibold text-foreground">{alert.contractorName}</span>
+                          <span className="mt-0.5 block text-xs text-muted-foreground">
+                            {alert.items.map((i) => i.message).join(" · ")}
+                          </span>
+                        </span>
+                        <span
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${expiryBadgeClass(alert.worst)}`}
+                        >
+                          {expiryLabel(alert.worst)}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             <SectionHeader
               title="Contractors"
               subtitle="360° contractor profiles — verification, Stripe Connect status, jobs, performance, and financials. Banking details stay with Stripe."
@@ -1792,13 +1934,21 @@ export default function AdminPanel({
                     (typeof app?.legalBusinessName === "string" && app.legalBusinessName) ||
                     c.companyName ||
                     "";
+                  const credAlert = credentialAlerts.find((a) => a.contractorId === id);
+                  const missingInfo = listContractorMissingInfo(c);
                   return (
                     <motion.div
                       key={c.id}
                       initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: Math.min(i * 0.04, 0.24) }}
-                      className={`${cardClass} p-4`}
+                      className={`${cardClass} p-4 ${
+                        credAlert && (credAlert.worst === "expired" || credAlert.worst === "missing")
+                          ? "border-red-300/80 ring-1 ring-red-200/60 dark:border-red-800/60"
+                          : credAlert
+                            ? "border-amber-300/70 ring-1 ring-amber-200/50 dark:border-amber-800/50"
+                            : ""
+                      }`}
                     >
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="flex min-w-0 items-center gap-3">
@@ -1823,15 +1973,40 @@ export default function AdminPanel({
                                     ? "Suspended"
                                     : "Pending Review"}
                               </span>
+                              {credAlert && (
+                                <span
+                                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${expiryBadgeClass(credAlert.worst)}`}
+                                >
+                                  {expiryLabel(credAlert.worst)}
+                                </span>
+                              )}
                             </div>
                             <p className="truncate text-sm text-muted-foreground">
                               {c.email}
                               {company ? ` · ${company}` : ""}
                               {c.trade ? ` · ${c.trade}` : ""}
                             </p>
-                            {c.licenseNumber && (
+                            {(c.licenseNumber || c.licenseExpiresAt || c.insuranceExpiresAt) && (
                               <p className="mt-1 text-xs text-muted-foreground">
-                                License No: <span className="font-mono">{c.licenseNumber}</span>
+                                {c.licenseNumber ? (
+                                  <>
+                                    License <span className="font-mono">{c.licenseNumber}</span>
+                                    {c.licenseExpiresAt ? ` · exp ${formatExpiryDate(c.licenseExpiresAt)}` : ""}
+                                  </>
+                                ) : null}
+                                {c.insuranceExpiresAt
+                                  ? `${c.licenseNumber ? " · " : ""}Insurance exp ${formatExpiryDate(c.insuranceExpiresAt)}`
+                                  : ""}
+                              </p>
+                            )}
+                            {credAlert && (
+                              <p className="mt-1 text-xs font-medium text-amber-800 dark:text-amber-300">
+                                {credAlert.items.map((item) => item.message).join(" · ")}
+                              </p>
+                            )}
+                            {!credAlert && missingInfo.length > 0 && (
+                              <p className="mt-1 text-xs font-medium text-amber-800 dark:text-amber-300">
+                                {missingInfo.length} missing item{missingInfo.length === 1 ? "" : "s"} — expand to request or edit
                               </p>
                             )}
                             {c.serviceZips && Array.isArray(c.serviceZips) && c.serviceZips.length > 0 && (
@@ -1853,6 +2028,19 @@ export default function AdminPanel({
                             )}
                             {expanded ? "Hide application" : "View full application"}
                           </button>
+                          {missingInfo.length > 0 && (
+                            <button
+                              type="button"
+                              className={btnSecondary}
+                              disabled={isReadOnly}
+                              onClick={() => {
+                                if (!expanded) void openContractorDetail(c);
+                              }}
+                            >
+                              <Mail className="h-4 w-4" />
+                              Request / edit info
+                            </button>
+                          )}
                           {c.complianceStatus !== "approved" && (
                             <button
                               type="button"
@@ -1896,7 +2084,23 @@ export default function AdminPanel({
                         </div>
                       </div>
                       {expanded && (
-                        <div className="mt-4 border-t border-border pt-4">
+                        <div className="mt-4 space-y-4 border-t border-border pt-4">
+                          <AdminContractorEditPanel
+                            contractor={c}
+                            readOnly={isReadOnly}
+                            onMessage={setMessage}
+                            onUpdated={async () => {
+                              await refreshContractors();
+                              if (c.id) {
+                                const fresh = await fetchAdminUser(c.id);
+                                if (fresh) {
+                                  setContractors((prev) =>
+                                    prev.map((x) => (Number(x.id) === Number(c.id) ? { ...x, ...fresh } : x))
+                                  );
+                                }
+                              }
+                            }}
+                          />
                           <Contractor360Profile
                             contractor={c}
                             jobs={jobs}

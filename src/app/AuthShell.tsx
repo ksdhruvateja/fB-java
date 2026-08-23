@@ -12,7 +12,15 @@ export const authInputClass =
 /** @deprecated Use authInputClass — kept for gradual migration */
 export const authInputClassHomeowner = authInputClass;
 
-export function AuthFieldLabel({ children, soft }: { children: ReactNode; soft?: boolean }) {
+export function AuthFieldLabel({
+  children,
+  soft,
+  required,
+}: {
+  children: ReactNode;
+  soft?: boolean;
+  required?: boolean;
+}) {
   return (
     <span
       className={`mb-1.5 block font-medium ${
@@ -20,6 +28,7 @@ export function AuthFieldLabel({ children, soft }: { children: ReactNode; soft?:
       }`}
     >
       {children}
+      {required ? <span className="ml-0.5 text-primary">*</span> : null}
     </span>
   );
 }
@@ -120,7 +129,6 @@ function MascotAside({
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_30%_20%,rgba(255,77,28,0.22),transparent_55%),radial-gradient(ellipse_at_80%_70%,rgba(59,130,246,0.14),transparent_50%)]"
         aria-hidden
       />
-      {/* Dribbble-style decorative shapes */}
       <motion.div
         aria-hidden
         className="pointer-events-none absolute right-[8%] top-[12%] h-24 w-24 rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm"
@@ -140,7 +148,6 @@ function MascotAside({
         transition={{ repeat: Infinity, duration: 9, ease: "easeInOut" }}
       />
 
-      {/* Character hero — focal point like Dribbble split login */}
       <div className="relative z-10 flex flex-1 flex-col items-center justify-center py-4">
         <motion.div
           initial={{ opacity: 0, scale: 0.92, y: 24 }}

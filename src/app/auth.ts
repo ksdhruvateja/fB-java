@@ -11,6 +11,8 @@ export type AuthUser = {
   isAdmin?: boolean;
   trade?: string;
   licenseNumber?: string;
+  licenseExpiresAt?: string | null;
+  insuranceExpiresAt?: string | null;
   complianceStatus?: string;
   licenseDocumentName?: string;
   insuranceDocumentName?: string;
@@ -24,6 +26,8 @@ export type AuthUser = {
   businessRegistrationData?: string;
   businessLicenseName?: string;
   businessLicenseData?: string;
+  diversityDocumentName?: string;
+  diversityDocumentData?: string;
   contractorApplication?: Record<string, unknown> | null;
   photoDataUrl?: string;
   phone?: string;
@@ -143,6 +147,8 @@ export async function signUpUser(user: {
   businessRegistrationData?: string;
   businessLicenseName?: string;
   businessLicenseData?: string;
+  diversityDocumentName?: string;
+  diversityDocumentData?: string;
   contractorApplication?: Record<string, unknown>;
   phone?: string;
   address?: string;
@@ -155,6 +161,12 @@ export async function signUpUser(user: {
   visitFee?: number | null;
   emergencyVisitFee?: number | null;
   minimumLaborFee?: number | null;
+  afterHoursFee?: number | null;
+  weekendFee?: number | null;
+  cancellationFee?: number | null;
+  freeEstimate?: boolean;
+  visitAppliesToRepair?: boolean;
+  referredByCode?: string;
 }): Promise<{ ok: true; user: AuthUser } | { ok: false; message: string }> {
   try {
     const res = await fetch("/api/auth/signup", {
@@ -275,7 +287,7 @@ export async function updateUserProfile(
     });
     const data = await res.json();
     if (!data.ok) return { ok: false, message: data.message ?? "Could not save profile." };
-    storeSession(token, data.user);
+    storeSession(typeof data.token === "string" && data.token ? data.token : token, data.user);
     return { ok: true, user: data.user };
   } catch {
     return { ok: false, message: "Network error. Please try again." };

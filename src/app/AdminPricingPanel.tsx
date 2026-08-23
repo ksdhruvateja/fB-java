@@ -31,6 +31,16 @@ export type PricingRules = {
   after_hours_surcharge: number;
   subscription_discount: number;
   assessment_credit: number;
+  customer_display_adjustment?: {
+    type?: string;
+    value?: number;
+    min_dollars?: number | null;
+    max_dollars?: number | null;
+  };
+  pricing_overrides?: {
+    by_trade?: Record<string, { type?: string; value?: number; min_dollars?: number; max_dollars?: number | null }>;
+    by_zip_prefix?: Record<string, { type?: string; value?: number; min_dollars?: number; max_dollars?: number | null }>;
+  };
   [key: string]: unknown;
 };
 
@@ -60,9 +70,10 @@ const URGENCY_META: Record<string, { label: string; color: string }> = {
   emergency: { label: "Emergency", color: "#B91C1C" },
 };
 
-type PricingSection = "margins" | "urgency" | "dispatch" | "trades" | "preview";
+type PricingSection = "display" | "margins" | "urgency" | "dispatch" | "trades" | "preview";
 
 const SECTIONS: { id: PricingSection; label: string; icon: React.ElementType }[] = [
+  { id: "display", label: "Customer price", icon: Sparkles },
   { id: "margins", label: "Margins", icon: Percent },
   { id: "urgency", label: "Urgency", icon: Gauge },
   { id: "dispatch", label: "Dispatch fees", icon: Truck },
@@ -252,7 +263,7 @@ export default function AdminPricingPanel({
   onReload: () => Promise<PricingRules | null>;
   disabled?: boolean;
 }) {
-  const [section, setSection] = useState<PricingSection>("margins");
+  const [section, setSection] = useState<PricingSection>("display");
   const [savedSnapshot, setSavedSnapshot] = useState<PricingRules | null>(null);
   const [expandedTrade, setExpandedTrade] = useState<string>("plumbing");
   const [previewTrade, setPreviewTrade] = useState("plumbing");
@@ -413,6 +424,125 @@ export default function AdminPricingPanel({
           transition={{ duration: 0.2 }}
           className="space-y-4"
         >
+          {section === "display" && (
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-[#FF4D1C]/25 bg-[#FF4D1C]/5 p-5 shadow-sm">
+                <h2 className="font-semibold">Default customer pricing rule</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Applied to the <strong>AI-generated recommended value</strong> (Stage A) before the homeowner sees an
+                  estimate. Later, Stage B uses the contractor&apos;s actual quote as the base instead. Homeowners never
+                  see AI raw amount or this markup.
+                </p>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <label className="grid gap-1 text-sm">
+                    <span className="font-medium">Adjustment type</span>
+                    <select
+                      className="rounded-xl border border-border bg-background px-3 py-2.5"
+                      value={pricingRules.customer_display_adjustment?.type || "percentage"}
+                      onChange={(e) =>
+                        setPricingRules({
+                          ...pricingRules,
+                          customer_display_adjustment: {
+                            ...(pricingRules.customer_display_adjustment || {}),
+                            type: e.target.value,
+                          },
+                        })
+                      }
+                    >
+                      <option value="percentage">Percentage</option>
+                      <option value="fixed">Fixed dollars</option>
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-sm">
+                    <span className="font-medium">
+                      Value {(pricingRules.customer_display_adjustment?.type || "percentage") === "fixed" ? "($)" : "(%)"}
+                    </span>
+                    <input
+                      type="number"
+                      step="0.1"
+                      className="rounded-xl border border-border bg-background px-3 py-2.5"
+                      value={pricingRules.customer_display_adjustment?.value ?? 15}
+                      onChange={(e) =>
+                        setPricingRules({
+                          ...pricingRules,
+                          customer_display_adjustment: {
+                            ...(pricingRules.customer_display_adjustment || {}),
+                            value: Number(e.target.value),
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm">
+                    <span className="font-medium">Minimum adjustment ($)</span>
+                    <input
+                      type="number"
+                      step="1"
+                      className="rounded-xl border border-border bg-background px-3 py-2.5"
+                      value={pricingRules.customer_display_adjustment?.min_dollars ?? 25}
+                      onChange={(e) =>
+                        setPricingRules({
+                          ...pricingRules,
+                          customer_display_adjustment: {
+                            ...(pricingRules.customer_display_adjustment || {}),
+                            min_dollars: Number(e.target.value),
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm">
+                    <span className="font-medium">Maximum adjustment ($)</span>
+                    <input
+                      type="number"
+                      step="1"
+                      className="rounded-xl border border-border bg-background px-3 py-2.5"
+                      placeholder="Optional"
+                      value={pricingRules.customer_display_adjustment?.max_dollars ?? ""}
+                      onChange={(e) =>
+                        setPricingRules({
+                          ...pricingRules,
+                          customer_display_adjustment: {
+                            ...(pricingRules.customer_display_adjustment || {}),
+                            max_dollars: e.target.value === "" ? null : Number(e.target.value),
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+                <div className="mt-4 rounded-xl border border-border/70 bg-background/80 p-3 text-sm">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Example</p>
+                  <p className="mt-1 tabular-nums text-muted-foreground">
+                    AI recommended $485 → customer sees{" "}
+                    <span className="font-semibold text-foreground">
+                      {formatMoney(
+                        (() => {
+                          const raw = 485;
+                          const adj = pricingRules.customer_display_adjustment || { type: "percentage", value: 15, min_dollars: 25 };
+                          let delta =
+                            String(adj.type) === "fixed"
+                              ? Number(adj.value || 0)
+                              : Math.round(raw * (Number(adj.value || 0) / 100));
+                          delta = Math.max(delta, Number(adj.min_dollars || 0));
+                          if (adj.max_dollars != null) delta = Math.min(delta, Number(adj.max_dollars));
+                          return raw + delta;
+                        })()
+                      )}
+                    </span>
+                  </p>
+                </div>
+              </div>
+              <div className="rounded-2xl border border-border bg-card p-5 text-sm text-muted-foreground">
+                <p className="font-medium text-foreground">Hierarchy (coming into full use)</p>
+                <p className="mt-1">
+                  Overrides resolve as ZIP prefix → trade → global. Configure trade/ZIP overrides under saved rules JSON
+                  via <code className="text-xs">pricing_overrides</code> — UI editors for those layers can expand next.
+                </p>
+              </div>
+            </div>
+          )}
+
           {section === "margins" && (
             <>
               <div className="rounded-2xl border border-border/70 bg-card p-5 shadow-sm">
