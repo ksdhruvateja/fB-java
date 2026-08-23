@@ -15,6 +15,7 @@ import {
   listConnectExternalAccounts,
   summarizeConnectAccount,
 } from './stripe.js';
+import { writeAudit } from './audit.js';
 
 export async function loadPayoutSettings(pool) {
   const { rows } = await pool.query(`SELECT * FROM payout_settings WHERE id='default'`);
@@ -322,6 +323,38 @@ export async function approveAndReleasePayout(pool, payoutId, adminUserId, { adj
   });
 
   const { rows: fresh } = await pool.query(`SELECT * FROM contractor_payouts WHERE id=$1`, [payoutId]);
+
+  // Close managed job lifecycle when payout is wired
+  try {
+    const { rows: jobRows } = await pool.query(`SELECT id, status FROM managed_jobs WHERE id=$1`, [payout.job_id]);
+    const job = jobRows[0];
+    if (job && !['paid_out', 'closed', 'canceled', 'refunded'].includes(job.status)) {
+      const fromStatus = job.status;
+      await pool.query(`UPDATE managed_jobs SET status='paid_out', updated_at=NOW() WHERE id=$1`, [payout.job_id]);
+      await pool.query(
+        `INSERT INTO job_status_history (job_id, from_status, to_status, actor_user_id, note)
+         VALUES ($1,$2,'paid_out',$3,$4)`,
+        [payout.job_id, fromStatus, adminUserId, 'Contractor payout released']
+      );
+      await pool.query(`UPDATE managed_jobs SET status='closed', updated_at=NOW() WHERE id=$1`, [payout.job_id]);
+      await pool.query(
+        `INSERT INTO job_status_history (job_id, from_status, to_status, actor_user_id, note)
+         VALUES ($1,'paid_out','closed',$2,$3)`,
+        [payout.job_id, adminUserId, 'Job closed after payout']
+      );
+    }
+    await writeAudit(pool, adminUserId, 'payout_released', 'managed_job', payout.job_id, {
+      payoutId,
+      netAmountCents,
+      transferAmountCents,
+      reserveAmountCents,
+      transferId,
+      simulated: simulate,
+    });
+  } catch (e) {
+    console.error('[Payout job close]', e.message);
+  }
+
   return { ok: true, payout: fresh[0], transferId, simulated: simulate };
 }
 

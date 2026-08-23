@@ -66,6 +66,15 @@ export default function ResetPassword({
         subtitle: done
           ? "Redirecting you to sign in…"
           : `Choose a strong password for your ${brand.productName} account.`,
+        hero: {
+          line1: done ? "You're all set!" : "Almost there.",
+          line2: done ? "Welcome back." : "Secure your account.",
+          subtitle: done
+            ? "Your password has been updated. Redirecting you to sign in…"
+            : "Pick a strong password — our pro will cover his eyes while you type.",
+          trustTitle: "Your info stays protected.",
+          trustBody: "Passwords are encrypted and never shared with contractors or third parties.",
+        },
       }}
     >
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="w-full">

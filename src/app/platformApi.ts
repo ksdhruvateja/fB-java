@@ -258,6 +258,18 @@ export async function loadStaffAdmins() {
   return api<{ ok: boolean; staff: AuthUser[] }>("/api/admin/staff");
 }
 
+export async function createStaffAdmin(input: {
+  name: string;
+  email: string;
+  password: string;
+  accessLevel: "read" | "write" | "read-write";
+}) {
+  return api<{ ok: boolean; user?: AuthUser; message?: string }>("/api/admin/staff/create", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function updateStaffAccess(userId: number, accessLevel: string) {
   return api<{ ok: boolean; user: AuthUser }>("/api/admin/staff/access", {
     method: "POST",

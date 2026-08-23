@@ -13,6 +13,9 @@ import {
   ShieldCheck,
   Star,
   Lock,
+  Wrench,
+  Home,
+  Zap,
 } from "lucide-react";
 import { getDemoUser, signInUser, signUpUser, createPublicGuestJob, type AuthUser } from "./auth";
 import ForgotPasswordModal from "./ForgotPasswordModal";
@@ -25,7 +28,7 @@ import {
   AuthSwitchCard,
   authInputClass,
 } from "./AuthShell";
-import { AuthEmailField, AuthPasswordField } from "./AuthFormFields";
+import { AuthEmailField, AuthPasswordField, AuthTextField } from "./AuthFormFields";
 import {
   HOMEOWNER_AREA_DEFAULT_SERVICE,
   HOMEOWNER_AREA_ICONS,
@@ -255,33 +258,29 @@ export default function HomeownerLogin({
           variant: "homeowner",
           title: titles[tab],
           subtitle: subtitles[tab],
-          badges: (
-            <>
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-3 py-1.5 text-xs font-medium text-neutral-600 shadow-sm backdrop-blur dark:bg-card/80 dark:text-muted-foreground">
-                <ShieldCheck size={13} className="text-emerald-600" /> Verified pros
-              </span>
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-3 py-1.5 text-xs font-medium text-neutral-600 shadow-sm backdrop-blur dark:bg-card/80 dark:text-muted-foreground">
-                <Lock size={13} /> Secure account
-              </span>
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-3 py-1.5 text-xs font-medium text-neutral-600 shadow-sm backdrop-blur dark:bg-card/80 dark:text-muted-foreground">
-                <Star size={13} className="fill-amber-400 text-amber-400" /> 4.8 avg rating
-              </span>
-            </>
-          ),
+          hero: {
+            line1: "Need something fixed?",
+            line2: "We've got you covered.",
+            subtitle:
+              "Connect with trusted professionals for repairs, maintenance, and services across NYC & Long Island.",
+            trustTitle: "Trusted. Verified. Reliable.",
+            trustBody:
+              "Real bids from licensed, background-checked pros — no subscription, no cold calls.",
+          },
           features: (
-            <div className="space-y-3 rounded-2xl border border-white/60 bg-white/50 p-4 shadow-sm backdrop-blur dark:border-border dark:bg-card/60">
+            <div className="space-y-4">
               {[
-                { icon: Sparkles, title: "Clear next steps", text: "AI helps explain the issue before you hire." },
-                { icon: MapPin, title: "Local, vetted pros", text: "Matched contractors in your area." },
-                { icon: CheckCircle2, title: "No surprise fees", text: "Free to post — pay only when you book." },
+                { icon: Wrench, title: "Repairs", text: "Fix it right the first time." },
+                { icon: Home, title: "Maintenance", text: "Keep your home running smoothly." },
+                { icon: Zap, title: "Emergency help", text: "We're here when you need us most." },
               ].map(({ icon: Icon, title, text }) => (
-                <div key={title} className="flex gap-3">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                    <Icon size={16} strokeWidth={1.75} />
+                <div key={title} className="flex items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/10 text-primary ring-1 ring-white/10">
+                    <Icon size={18} strokeWidth={1.75} />
                   </span>
                   <div>
-                    <p className="text-sm font-semibold text-neutral-900 dark:text-foreground">{title}</p>
-                    <p className="mt-0.5 text-xs leading-relaxed text-neutral-600 dark:text-muted-foreground">{text}</p>
+                    <p className="text-sm font-semibold text-white">{title}</p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-white/60">{text}</p>
                   </div>
                 </div>
               ))}
@@ -620,17 +619,13 @@ export default function HomeownerLogin({
               </AnimatePresence>
 
               {tab === "signup" && (
-                <div>
-                  <AuthFieldLabel soft>Full name</AuthFieldLabel>
-                  <input
-                    type="text"
-                    placeholder="Maria Santos"
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    required
-                    className={authInputClass}
-                  />
-                </div>
+                <AuthTextField
+                  value={fullName}
+                  onChange={setFullName}
+                  label="Full name"
+                  placeholder="Maria Santos"
+                  required
+                />
               )}
 
               {(tab === "login" || tab === "signup") && (

@@ -49,55 +49,158 @@ export function AuthMascotSync({
   loading?: boolean;
   error?: boolean;
 }) {
-  const { setCopy, setMood } = useAuthMascot();
+  const { setCopy, setMood, focusField } = useAuthMascot();
 
   useEffect(() => {
     setCopy({ title, subtitle });
   }, [title, subtitle, setCopy]);
 
   useEffect(() => {
-    if (loading) setMood("loading");
-    else if (error) setMood("error");
+    if (loading) {
+      setMood("loading");
+      return;
+    }
+    if (error) {
+      setMood("error");
+      return;
+    }
+    if (focusField === "email") setMood("focus-email");
+    else if (focusField === "password") setMood("focus-password");
+    else if (focusField === "text") setMood("focus-text");
     else setMood("idle");
-  }, [loading, error, setMood]);
+  }, [loading, error, focusField, setMood]);
 
   return null;
 }
 
-function MascotAside({ badges, features }: { badges?: ReactNode; features?: ReactNode }) {
-  const { variant, mood, title, subtitle } = useAuthMascot();
+export type AuthMascotHero = {
+  line1: string;
+  line2: string;
+  subtitle: string;
+  trustTitle?: string;
+  trustBody?: string;
+};
+
+function MobileMascotHeader({ hero, title, subtitle }: { hero?: AuthMascotHero; title: string; subtitle: string }) {
+  const { variant, mood } = useAuthMascot();
+  const headline = hero?.line1 ?? title;
+  const subline = hero?.subtitle ?? subtitle;
 
   return (
-    <div className="relative flex h-full flex-col items-center justify-center overflow-hidden px-8 py-12 xl:px-14">
+    <div className="mx-auto flex max-w-xl flex-col items-center gap-4 sm:flex-row sm:items-center sm:gap-5">
+      <div className="shrink-0 rounded-2xl bg-white/10 p-2 backdrop-blur-sm">
+        <AuthMascot variant={variant} mood={mood} compact />
+      </div>
+      <div className="min-w-0 text-center sm:text-left">
+        <p className="text-lg font-semibold tracking-tight text-white">{headline}</p>
+        {hero?.line2 ? <p className="text-lg font-semibold tracking-tight text-primary">{hero.line2}</p> : null}
+        <p className="mt-0.5 line-clamp-2 text-sm text-white/70">{subline}</p>
+      </div>
+    </div>
+  );
+}
+
+function MascotAside({
+  hero,
+  badges,
+  features,
+}: {
+  hero?: AuthMascotHero;
+  badges?: ReactNode;
+  features?: ReactNode;
+}) {
+  const { variant, mood, title, subtitle } = useAuthMascot();
+  const headline1 = hero?.line1 ?? title;
+  const headline2 = hero?.line2;
+  const bodyCopy = hero?.subtitle ?? subtitle;
+
+  return (
+    <div className="relative flex h-full min-h-screen flex-col overflow-hidden bg-gradient-to-br from-[#0B1B3A] via-[#0f2447] to-[#0B1B3A] px-8 py-10 text-white xl:px-12 xl:py-12">
       <div
-        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_30%_20%,rgba(255,77,28,0.22),transparent_55%),radial-gradient(ellipse_at_80%_80%,rgba(255,180,140,0.35),transparent_50%)]"
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_30%_20%,rgba(255,77,28,0.22),transparent_55%),radial-gradient(ellipse_at_80%_70%,rgba(59,130,246,0.14),transparent_50%)]"
         aria-hidden
       />
-      <div className="pointer-events-none absolute -left-16 top-20 h-64 w-64 rounded-full bg-primary/20 blur-3xl" aria-hidden />
-      <div className="pointer-events-none absolute -right-10 bottom-16 h-56 w-56 rounded-full bg-orange-200/40 blur-3xl" aria-hidden />
+      {/* Dribbble-style decorative shapes */}
+      <motion.div
+        aria-hidden
+        className="pointer-events-none absolute right-[8%] top-[12%] h-24 w-24 rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm"
+        animate={{ rotate: [0, 8, 0], y: [0, -8, 0] }}
+        transition={{ repeat: Infinity, duration: 7, ease: "easeInOut" }}
+      />
+      <motion.div
+        aria-hidden
+        className="pointer-events-none absolute left-[6%] bottom-[28%] h-16 w-16 rounded-full border border-primary/30 bg-primary/10"
+        animate={{ scale: [1, 1.08, 1] }}
+        transition={{ repeat: Infinity, duration: 5, ease: "easeInOut" }}
+      />
+      <motion.div
+        aria-hidden
+        className="pointer-events-none absolute -left-20 top-24 h-72 w-72 rounded-full bg-primary/10 blur-3xl"
+        animate={{ x: [0, 20, 0], y: [0, 14, 0], scale: [1, 1.1, 1] }}
+        transition={{ repeat: Infinity, duration: 9, ease: "easeInOut" }}
+      />
 
-      <div className="relative z-10 flex max-w-md flex-col items-center text-center">
-        <AuthMascot variant={variant} mood={mood} />
-        <motion.h2
-          key={title}
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mt-8 text-3xl font-semibold tracking-tight text-neutral-900 dark:text-foreground"
+      {/* Character hero — focal point like Dribbble split login */}
+      <div className="relative z-10 flex flex-1 flex-col items-center justify-center py-4">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.92, y: 24 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          transition={{ type: "spring", stiffness: 140, damping: 20, delay: 0.05 }}
+          className="w-full max-w-[380px]"
         >
-          {title}
-        </motion.h2>
-        <motion.p
-          key={subtitle}
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.04 }}
-          className="mt-3 text-[15px] leading-relaxed text-neutral-600 dark:text-muted-foreground"
-        >
-          {subtitle}
-        </motion.p>
-        {badges ? <div className="mt-6 flex flex-wrap justify-center gap-2">{badges}</div> : null}
-        {features ? <div className="mt-8 w-full text-left">{features}</div> : null}
+          <AuthMascot variant={variant} mood={mood} />
+        </motion.div>
       </div>
+
+      <motion.div
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ type: "spring", stiffness: 160, damping: 22, delay: 0.1 }}
+        className="relative z-10 max-w-lg"
+      >
+        <h1 className="text-[1.85rem] font-bold leading-[1.15] tracking-tight xl:text-[2.4rem]">{headline1}</h1>
+        {headline2 ? (
+          <h2 className="mt-1 text-[1.85rem] font-bold leading-[1.15] tracking-tight text-primary xl:text-[2.4rem]">
+            {headline2}
+          </h2>
+        ) : null}
+        <p className="mt-3 max-w-md text-[15px] leading-relaxed text-white/70">{bodyCopy}</p>
+      </motion.div>
+
+      {features ? (
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.12 }}
+          className="relative z-10 w-full max-w-md"
+        >
+          {features}
+        </motion.div>
+      ) : null}
+
+      {badges ? (
+        <motion.div
+          animate={{ y: [0, -3, 0] }}
+          transition={{ repeat: Infinity, duration: 4.5, ease: "easeInOut" }}
+          className="relative z-10 mt-6 flex flex-wrap gap-2"
+        >
+          {badges}
+        </motion.div>
+      ) : null}
+
+      {(hero?.trustTitle || hero?.trustBody) && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="relative z-10 mt-auto pt-8"
+        >
+          <div className="rounded-2xl border border-white/10 bg-white/[0.08] px-5 py-4 backdrop-blur-sm">
+            {hero.trustTitle ? <p className="text-sm font-bold tracking-wide text-white">{hero.trustTitle}</p> : null}
+            {hero.trustBody ? <p className="mt-1 text-xs leading-relaxed text-white/65">{hero.trustBody}</p> : null}
+          </div>
+        </motion.div>
+      )}
     </div>
   );
 }
@@ -123,6 +226,7 @@ export function AuthShell({
     variant: AuthMascotVariant;
     title: string;
     subtitle: string;
+    hero?: AuthMascotHero;
     badges?: ReactNode;
     features?: ReactNode;
   };
@@ -136,8 +240,8 @@ export function AuthShell({
       <AuthMascotProvider variant={mascot.variant} initialTitle={mascot.title} initialSubtitle={mascot.subtitle}>
         <AuthMascotSync title={mascot.title} subtitle={mascot.subtitle} loading={loading} error={error} />
         <div className="grid min-h-screen lg:grid-cols-2">
-          <div className="relative hidden bg-gradient-to-br from-[#FFF0EA] via-[#FFE8DE] to-[#FFF8F4] lg:block dark:from-background dark:via-muted/30 dark:to-background">
-            <MascotAside badges={mascot.badges} features={mascot.features ?? aside} />
+          <div className="relative hidden lg:block">
+            <MascotAside hero={mascot.hero} badges={mascot.badges} features={mascot.features ?? aside} />
           </div>
 
           <div className="relative flex min-h-screen flex-col bg-white dark:bg-background">
@@ -155,14 +259,8 @@ export function AuthShell({
               </div>
             </div>
 
-            <div className="lg:hidden border-b border-neutral-100 bg-gradient-to-br from-[#FFF0EA] to-[#FFF8F4] px-5 py-6 dark:border-border dark:from-muted/40 dark:to-background">
-              <div className="mx-auto flex max-w-xl items-center gap-4">
-                <AuthMascot variant={mascot.variant} mood={error ? "error" : loading ? "loading" : "idle"} compact />
-                <div className="min-w-0 text-left">
-                  <p className="text-lg font-semibold tracking-tight text-neutral-900 dark:text-foreground">{mascot.title}</p>
-                  <p className="mt-0.5 line-clamp-2 text-sm text-neutral-600 dark:text-muted-foreground">{mascot.subtitle}</p>
-                </div>
-              </div>
+            <div className="border-b border-neutral-100 bg-gradient-to-br from-[#0B1B3A] via-[#0f2447] to-[#0B1B3A] px-5 py-8 lg:hidden dark:border-border">
+              <MobileMascotHeader hero={mascot.hero} title={mascot.title} subtitle={mascot.subtitle} />
             </div>
 
             <main className="flex flex-1 flex-col justify-center px-5 py-8 sm:px-8 sm:py-10">

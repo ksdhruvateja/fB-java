@@ -179,34 +179,31 @@ export default function ContractorLogin({
           variant: "contractor",
           title: contractorTitles[tab],
           subtitle: contractorSubtitles[tab],
-          badges: (
-            <>
-              <span className="rounded-full bg-white/80 px-3 py-1.5 text-xs font-semibold text-neutral-700 shadow-sm backdrop-blur dark:bg-card/80 dark:text-foreground">
-                60% close rate
-              </span>
-              <span className="rounded-full bg-white/80 px-3 py-1.5 text-xs font-semibold text-neutral-700 shadow-sm backdrop-blur dark:bg-card/80 dark:text-foreground">
-                312+ active pros
-              </span>
-              <span className="rounded-full bg-neutral-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm dark:bg-primary">
-                $0 monthly fee
-              </span>
-            </>
-          ),
+          hero: {
+            line1: "Grow your business.",
+            line2: "Get matched jobs.",
+            subtitle: "Join verified homeowners looking for licensed pros across NYC & Long Island.",
+            trustTitle: "Free to join. Pay when you win.",
+            trustBody: "No monthly fees — submit bids on real jobs with full specs before you quote.",
+          },
           features: (
-            <ul className="space-y-2.5 rounded-2xl border border-white/60 bg-white/50 p-4 text-left shadow-sm backdrop-blur dark:border-border dark:bg-card/60">
+            <div className="space-y-4">
               {[
-                { icon: Bell, text: "Matched jobs in your trade & area" },
-                { icon: FileCheck, text: "Full specs before you bid" },
-                { icon: DollarSign, text: "$0 to join or stay listed" },
-              ].map(({ icon: Icon, text }) => (
-                <li key={text} className="flex items-center gap-2.5 text-sm text-neutral-700 dark:text-muted-foreground">
-                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                    <Icon size={14} />
+                { icon: Bell, title: "Matched jobs", text: "In your trade and service area." },
+                { icon: FileCheck, title: "Full specs", text: "Know the job before you bid." },
+                { icon: DollarSign, title: "$0 to join", text: "No monthly fee to stay listed." },
+              ].map(({ icon: Icon, title, text }) => (
+                <div key={title} className="flex items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/10 text-primary ring-1 ring-white/10">
+                    <Icon size={18} strokeWidth={1.75} />
                   </span>
-                  {text}
-                </li>
+                  <div>
+                    <p className="text-sm font-semibold text-white">{title}</p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-white/60">{text}</p>
+                  </div>
+                </div>
               ))}
-            </ul>
+            </div>
           ),
         }}
       >

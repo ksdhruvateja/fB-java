@@ -34,79 +34,8 @@ const PLAN_CATALOG = {
   contractor_growth: { family: 'contractor', label: 'Contractor Growth', amount: 249, interval: 'month' },
 };
 
-async function audit(pool, actorUserId, action, entityType, entityId, detail) {
-  await pool.query(
-    `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, detail)
-     VALUES ($1,$2,$3,$4,$5)`,
-    [actorUserId || null, action, entityType || null, entityId != null ? String(entityId) : null, JSON.stringify(detail || {})]
-  );
-}
-
-async function sendEmailSafe({ to, subject, html }) {
-  const key = process.env.RESEND_API_KEY?.trim();
-  if (!key) {
-    console.log(`[Email skipped] to=${to} subject=${subject}`);
-    return { ok: true, simulated: true };
-  }
-  try {
-    const { Resend } = await import('resend');
-    const resend = new Resend(key);
-    await resend.emails.send({
-      from: process.env.FROM_EMAIL || `${brand.productName} <onboarding@resend.dev>`,
-      to,
-      subject,
-      html,
-    });
-    return { ok: true, simulated: false };
-  } catch (e) {
-    console.error('[Resend]', e.message);
-    return { ok: false, message: e.message };
-  }
-}
-
-async function sendSmsSafe({ to, body }) {
-  const sid = process.env.TWILIO_ACCOUNT_SID?.trim();
-  const token = process.env.TWILIO_AUTH_TOKEN?.trim();
-  const from = process.env.TWILIO_FROM_NUMBER?.trim();
-  if (!sid || !token || !from) {
-    console.log(`[SMS skipped] to=${to} body=${body}`);
-    return { ok: true, simulated: true };
-  }
-  try {
-    const auth = Buffer.from(`${sid}:${token}`).toString('base64');
-    const params = new URLSearchParams({ To: to, From: from, Body: body });
-    const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${auth}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: params,
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      console.error('[Twilio]', text);
-      return { ok: false, message: text };
-    }
-    return { ok: true, simulated: false };
-  } catch (e) {
-    console.error('[Twilio]', e.message);
-    return { ok: false, message: e.message };
-  }
-}
-
-function notifyOps(message) {
-  const url = process.env.SLACK_WEBHOOK_URL?.trim() || process.env.N8N_WEBHOOK_URL?.trim();
-  if (!url) {
-    console.log(`[Ops alert] ${message}`);
-    return;
-  }
-  fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: message }),
-  }).catch((e) => console.error('[Ops webhook]', e.message));
-}
+import { writeAudit } from './audit.js';
+import { sendEmailSafe, sendSmsSafe, notifyOps } from './notify.js';
 
 export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, pushStatus }) {
   const statusPush = typeof pushStatus === 'function' ? pushStatus : pushStatusLocal;
@@ -230,16 +159,11 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
         );
       }
 
-      // Insert audit log
-      await pool.query(
-        `INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, detail)
-         VALUES ($1, 'subscription_change_by_admin', 'user', $2, $3)`,
-        [
-          req.authUser.id,
-          String(homeownerUserId),
-          JSON.stringify({ planCode, staffName, editedAt: new Date().toISOString() })
-        ]
-      );
+      await writeAudit(pool, req.authUser.id, 'subscription_change_by_admin', 'user', homeownerUserId, {
+        planCode,
+        staffName: staffName.trim(),
+        editedAt: new Date().toISOString(),
+      });
 
       res.json({ ok: true, message: 'Subscription status updated successfully.' });
     } catch (e) {
@@ -306,7 +230,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
             [req.authUser.id, planCode, family, JSON.stringify({ planCode, amount, label, family, isLocalTrial: true })]
           );
           await pool.query(`UPDATE users SET plan_code=$1 WHERE id=$2`, [planCode, req.authUser.id]);
-          await audit(pool, req.authUser.id, 'subscription_started', 'subscription', rows[0].id, { planCode, localTrial: true });
+          await writeAudit(pool, req.authUser.id, 'subscription_started', 'subscription', rows[0].id, { planCode, localTrial: true });
           return res.json({ ok: true, simulated: true, subscription: rows[0] });
         } else {
           // They already had a trial, so Stripe comes now with NO trial days!
@@ -329,7 +253,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
           [req.authUser.id, planCode, family, JSON.stringify({ planCode, amount, label, family })]
         );
         await pool.query(`UPDATE users SET plan_code=$1 WHERE id=$2`, [planCode, req.authUser.id]);
-        await audit(pool, req.authUser.id, 'subscription_started', 'subscription', rows[0].id, { planCode, simulated: true });
+        await writeAudit(pool, req.authUser.id, 'subscription_started', 'subscription', rows[0].id, { planCode, simulated: true });
         return res.json({ ok: true, simulated: true, subscription: rows[0] });
       }
 
@@ -366,7 +290,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
           [req.authUser.id, planCode, family, JSON.stringify({ planCode, amount, label, family })]
         );
         await pool.query(`UPDATE users SET plan_code=$1 WHERE id=$2`, [planCode, req.authUser.id]);
-        await audit(pool, req.authUser.id, 'subscription_started', 'subscription', rows[0].id, { planCode, simulated: true });
+        await writeAudit(pool, req.authUser.id, 'subscription_started', 'subscription', rows[0].id, { planCode, simulated: true });
         return res.json({ ok: true, simulated: true, subscription: rows[0] });
       }
 
@@ -416,7 +340,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
            ON CONFLICT (job_id, contractor_user_id) DO UPDATE SET status='unlocked', unlocked_at=NOW()`,
           [jobId, req.authUser.id, fee]
         );
-        await audit(pool, req.authUser.id, 'lead_unlocked', 'managed_job', jobId, { fee, simulated: true });
+        await writeAudit(pool, req.authUser.id, 'lead_unlocked', 'managed_job', jobId, { fee, simulated: true });
         return res.json({
           ok: true,
           simulated: true,
@@ -462,7 +386,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
         return res.status(400).json({ ok: false, message: 'jobMode must be managed or direct.' });
       }
       await pool.query(`UPDATE managed_jobs SET job_mode=$1, updated_at=NOW() WHERE id=$2`, [mode, jobId]);
-      await audit(pool, req.authUser.id, 'job_mode_set', 'managed_job', jobId, { mode });
+      await writeAudit(pool, req.authUser.id, 'job_mode_set', 'managed_job', jobId, { mode });
       res.json({ ok: true, jobMode: mode });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Server error' });
@@ -614,7 +538,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
         const { rows: jobs } = await pool.query(`SELECT status FROM managed_jobs WHERE id=$1`, [rows[0].job_id]);
         await statusPush(pool, rows[0].job_id, jobs[0]?.status, 'refunded', req.authUser.id, reason);
       }
-      await audit(pool, req.authUser.id, 'payment_refunded', 'payment', paymentId, { amount, reason, simulate, stripeRefundId });
+      await writeAudit(pool, req.authUser.id, 'payment_refunded', 'payment', paymentId, { amount, reason, simulate, stripeRefundId });
       notifyOps(`Refund ${simulate ? '(sim) ' : ''}$${amount} on payment #${paymentId}`);
       res.json({ ok: true, refund: refundRows[0], simulated: simulate });
     } catch (e) {
@@ -988,8 +912,8 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       const match = await bcrypt.compare(password, rows[0].password_hash);
       if (!match) return res.status(401).json({ ok: false, message: 'Invalid partner credentials.' });
       const token = crypto.createHash('sha256').update(`${rows[0].id}:${Date.now()}:${password}`).digest('hex');
-      // Lightweight opaque token stored in audit for pilot (JWT-style optional later)
-      await audit(pool, null, 'partner_login', 'partner_user', rows[0].id, { email });
+      // Lightweight opaque token stored in writeAudit for pilot (JWT-style optional later)
+      await writeAudit(pool, null, 'partner_login', 'partner_user', rows[0].id, { email });
       res.json({
         ok: true,
         token,
@@ -1323,6 +1247,72 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       res.status(500).json({ ok: false, message: 'Server error' });
     }
   });
+
+  // Immutable admin audit trail (includes payout audit events)
+  app.get('/api/admin/audit-logs', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 80));
+
+      const { rows: platformRows } = await pool.query(
+        `SELECT a.*, u.name AS actor_name, u.email AS actor_email
+         FROM audit_logs a
+         LEFT JOIN users u ON u.id = a.actor_user_id
+         ORDER BY a.created_at DESC
+         LIMIT $1`,
+        [limit],
+      );
+
+      let payoutRows = [];
+      try {
+        const payoutRes = await pool.query(
+          `SELECT p.*, u.name AS actor_name, u.email AS actor_email
+           FROM payout_audit_logs p
+           LEFT JOIN users u ON u.id = p.performed_by
+           ORDER BY p.created_at DESC
+           LIMIT $1`,
+          [limit],
+        );
+        payoutRows = payoutRes.rows || [];
+      } catch {
+        payoutRows = [];
+      }
+
+      const merged = [
+        ...platformRows.map((r) => ({
+          id: Number(r.id),
+          actorUserId: r.actor_user_id != null ? Number(r.actor_user_id) : null,
+          actorName: r.actor_name || null,
+          actorEmail: r.actor_email || null,
+          action: r.action,
+          entityType: r.entity_type,
+          entityId: r.entity_id,
+          detail: typeof r.detail === 'string' ? JSON.parse(r.detail) : r.detail,
+          createdAt: r.created_at,
+          source: 'platform',
+        })),
+        ...payoutRows.map((r) => ({
+          id: Number(r.id) + 1_000_000_000,
+          actorUserId: r.performed_by != null ? Number(r.performed_by) : null,
+          actorName: r.actor_name || null,
+          actorEmail: r.actor_email || null,
+          action: `payout_${r.action}`,
+          entityType: 'contractor_payout',
+          entityId: r.payout_id != null ? String(r.payout_id) : null,
+          detail: typeof r.metadata === 'string' ? JSON.parse(r.metadata) : r.metadata,
+          createdAt: r.created_at,
+          source: 'payout',
+        })),
+      ]
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, limit);
+
+      res.json({ ok: true, logs: merged });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Could not load audit logs.' });
+    }
+  });
 }
 
-export { sendEmailSafe, sendSmsSafe, notifyOps, PLAN_CATALOG };
+export { sendEmailSafe, sendSmsSafe, notifyOps } from './notify.js';
+export { PLAN_CATALOG };

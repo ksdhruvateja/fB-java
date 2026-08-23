@@ -106,16 +106,13 @@ export default function AdminLogin({
         variant: "admin",
         title: mascotTitle,
         subtitle: mascotSubtitle,
-        badges: (
-          <>
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-3 py-1.5 text-xs font-medium text-neutral-600 shadow-sm backdrop-blur dark:bg-card/80 dark:text-muted-foreground">
-              <Shield size={13} className="text-primary" /> MFA protected
-            </span>
-            <span className="rounded-full bg-neutral-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm dark:bg-primary">
-              Staff only
-            </span>
-          </>
-        ),
+        hero: {
+          line1: mfaStep ? "Verify it's you." : "Staff access.",
+          line2: mfaStep ? "One more step." : "Secure sign in.",
+          subtitle: mascotSubtitle,
+          trustTitle: "MFA protected.",
+          trustBody: "All admin sessions require multi-factor verification.",
+        },
       }}
     >
       <AnimatePresence mode="wait">

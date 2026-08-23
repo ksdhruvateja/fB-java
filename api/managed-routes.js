@@ -4,6 +4,7 @@ import {
   mergePricingRules,
   computePreliminaryRetail,
   retailFromBid,
+  computeCustomerQuoteFromBid,
   getDispatchFee,
   applyAdminPriceAdjustment,
   DEFAULT_PRICING_RULES,
@@ -39,6 +40,14 @@ import {
   applyDiscountToAmount,
   incrementDiscountUse,
 } from './discounts.js';
+import { recordFinancialSnapshot, confidenceLabel, serializeFinancialSnapshot } from './financial-snapshots.js';
+import {
+  buildInvoiceForJob,
+  renderInvoiceHtml,
+  renderInvoiceSms,
+  normalizePhone,
+} from './invoices.js';
+import { sendEmailSafe, sendSmsSafe } from './notify.js';
 
 async function ensureUserReferralCodeInline(pool, r) {
   if (r.referral_code) return r.referral_code;
@@ -339,6 +348,7 @@ function serializeJob(row, viewer) {
       ? row.contact_phone
       : null,
     propertyId: row.property_id,
+    homeownerUserId: isAdmin ? row.homeowner_user_id : undefined,
     aiAssessment: parseJson(row.ai_assessment),
     showRetailPrice: row.show_retail_price !== false,
     preferredTimeNote: 'Preferred service time — not confirmed until a contractor is scheduled.',
@@ -538,6 +548,21 @@ function serializeProposal(row, viewer) {
     base.platformGross = row.platform_gross != null ? Number(row.platform_gross) : null;
     base.processingCost = row.processing_cost != null ? Number(row.processing_cost) : null;
     base.bidId = row.bid_id;
+    base.lineItems = row.line_items;
+    base.pricingAdjustments = row.pricing_adjustments;
+    base.adminDiscount = row.admin_discount != null ? Number(row.admin_discount) : null;
+    base.adminDiscountReason = row.admin_discount_reason;
+    base.couponCode = row.coupon_code;
+    base.couponFundedBy = row.coupon_funded_by;
+    base.quoteValidUntil = row.quote_valid_until;
+    base.customerLineItems = row.customer_line_items;
+    base.serviceCharge = row.service_charge != null ? Number(row.service_charge) : null;
+    base.expectedMarginPct = row.expected_margin_pct != null ? Number(row.expected_margin_pct) : null;
+  }
+  if (isCustomer) {
+    base.customerLineItems = row.customer_line_items;
+    base.quoteValidUntil = row.quote_valid_until;
+    base.couponCode = row.coupon_code;
   }
   if (!isAdmin && !isCustomer) {
     // Contractors must not see retail
@@ -1394,8 +1419,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
            discount_amount_low=$9,
            discount_amount_high=$10,
            diy_risk_level=$11,
+           estimate_confidence=$12,
            updated_at=NOW()
-         WHERE id=$12`,
+         WHERE id=$13`,
         [
           JSON.stringify(assessment),
           JSON.stringify(pricing),
@@ -1408,6 +1434,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           pricing.discount?.amountLow ?? null,
           pricing.discount?.amountHigh ?? null,
           assessment.diy_risk_level || 'green',
+          confidenceLabel(assessment.confidence),
           jobId,
         ]
       );
@@ -1528,14 +1555,28 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         }
       }
 
-      const amount = visitFee;
+      const amountBeforeDiscount = visitFee;
+      let amount = visitFee;
+      let dispatchDiscount = null;
+      const discount = await resolveJobDiscount(pool, job);
+      if (discount) {
+        const applied = applyDiscountToAmount(amount, discount);
+        amount = applied.retail;
+        dispatchDiscount = {
+          code: discount.code,
+          discountAmount: applied.discountAmount,
+          originalAmount: amountBeforeDiscount,
+        };
+      }
+      amount = Math.max(0, Math.round(amount * 100) / 100);
+
       const simulate = shouldSimulatePayment(req.body?.simulate === true);
 
       if (simulate) {
         await pool.query(
           `INSERT INTO payments (job_id, user_id, payment_type, amount, status, simulated, meta)
            VALUES ($1,$2,'dispatch_fee',$3,'authorized',true,$4)`,
-          [jobId, req.authUser.id, amount, JSON.stringify({ contractorVisitPayout: amount })]
+          [jobId, req.authUser.id, amount, JSON.stringify({ contractorVisitPayout: amount, dispatchDiscount })]
         );
         await pool.query(
           `UPDATE managed_jobs SET
@@ -1546,7 +1587,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         );
         await pushStatus(pool, jobId, job.status, 'paid_for_dispatch', req.authUser.id, 'Visit fee authorized (simulated hold placed)');
         await pushStatus(pool, jobId, 'paid_for_dispatch', 'awaiting_contractor', req.authUser.id, 'Ready for dispatch');
-        await audit(pool, req.authUser.id, 'dispatch_fee_authorized', 'managed_job', jobId, { amount, simulated: true });
+        await audit(pool, req.authUser.id, 'dispatch_fee_authorized', 'managed_job', jobId, {
+          amount,
+          originalAmount: amountBeforeDiscount,
+          dispatchDiscount,
+          simulated: true,
+        });
         await triggerReferralBookingReward(pool, jobId);
         
         const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
@@ -1572,7 +1618,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       await pool.query(
         `INSERT INTO payments (job_id, user_id, payment_type, amount, status, stripe_session_id, simulated, meta)
          VALUES ($1,$2,'dispatch_fee',$3,'pending',$4,false,$5)`,
-         [jobId, req.authUser.id, amount, checkout.sessionId, JSON.stringify({ contractorVisitPayout: amount })]
+         [jobId, req.authUser.id, amount, checkout.sessionId, JSON.stringify({ contractorVisitPayout: amount, dispatchDiscount })]
       );
 
       res.json({ ok: true, simulated: false, url: checkout.url, amount });
@@ -1634,14 +1680,16 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
 
       await pool.query(
-        `INSERT INTO job_invitations (job_id, contractor_user_id, status, expected_net_low, expected_net_high, message, invited_by)
-         VALUES ($1,$2,'invited',$3,$4,$5,$6)
+        `INSERT INTO job_invitations (job_id, contractor_user_id, status, expected_net_low, expected_net_high, message, invited_by, request_type, site_visit_window)
+         VALUES ($1,$2,'invited',$3,$4,$5,$6,$7,$8)
          ON CONFLICT (job_id, contractor_user_id) DO UPDATE SET
            status='invited',
            expected_net_low=EXCLUDED.expected_net_low,
            expected_net_high=EXCLUDED.expected_net_high,
            message=EXCLUDED.message,
            invited_by=EXCLUDED.invited_by,
+           request_type=EXCLUDED.request_type,
+           site_visit_window=EXCLUDED.site_visit_window,
            responded_at=NULL`,
         [
           jobId,
@@ -1650,8 +1698,17 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           job.estimated_contractor_net_high,
           req.body?.message || null,
           req.authUser.id,
+          req.body?.requestType === 'site_visit' ? 'site_visit' : 'remote_quote',
+          req.body?.siteVisitWindow || null,
         ]
       );
+
+      if (req.body?.requestType) {
+        await pool.query(
+          `UPDATE managed_jobs SET quote_request_mode=$1, updated_at=NOW() WHERE id=$2`,
+          [req.body.requestType === 'site_visit' ? 'site_visit' : 'remote_quote', jobId],
+        );
+      }
 
       // Move job into invited state when still pre-assignment
       const preInvite = [
@@ -1775,6 +1832,54 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     } catch (e) {
       console.error('assign:', e);
       res.status(500).json({ ok: false, message: 'Could not assign contractor.' });
+    }
+  });
+
+  app.post('/api/admin/managed/jobs/:id/apply-discount', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      const codeRaw = String(req.body?.code || '').trim();
+      if (!codeRaw) {
+        return res.status(400).json({ ok: false, message: 'Coupon code is required.' });
+      }
+
+      const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
+
+      const row = await lookupDiscountByCode(pool, codeRaw);
+      const checked = validateDiscountRow(row);
+      if (!checked.ok) {
+        return res.status(400).json({ ok: false, message: checked.message });
+      }
+      const discount = checked.discount;
+
+      const job = rows[0];
+      const pricing = applyDiscountToPricing(
+        {
+          customer_retail_estimate_low: job.customer_retail_estimate_low,
+          customer_retail_estimate_high: job.customer_retail_estimate_high,
+          show_price: job.show_retail_price !== false,
+        },
+        discount
+      );
+
+      await persistJobDiscountFields(pool, jobId, discount, pricing);
+      await audit(pool, req.authUser.id, 'discount_applied_to_job', 'managed_job', jobId, {
+        code: discount.code,
+        discountType: discount.discountType,
+        value: discount.value,
+        appliedBy: 'admin',
+      });
+
+      const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      res.json({
+        ok: true,
+        discount: publicDiscountView(discount),
+        job: serializeJob(fresh[0], req.authUser),
+      });
+    } catch (e) {
+      console.error('apply-discount:', e);
+      res.status(500).json({ ok: false, message: 'Could not apply coupon.' });
     }
   });
 
@@ -1943,6 +2048,106 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
+  // ── Admin quote builder preview ──────────────────────────────────────────────
+  app.get('/api/admin/managed/jobs/:id/quote-builder', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      const bidId = Number(req.query.bidId);
+      const { rows: jobs } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      if (!jobs[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
+      const job = jobs[0];
+      const { rows: bids } = await pool.query(`SELECT * FROM bids WHERE id=$1 AND job_id=$2`, [bidId, jobId]);
+      if (!bids[0]) return res.status(404).json({ ok: false, message: 'Bid not found.' });
+
+      const rules = await loadPricingRules(pool);
+      const assessment = parseJson(job.ai_assessment);
+      const afterHours = /evening|weekend/i.test(job.service_timing || '');
+      const quote = computeCustomerQuoteFromBid(Number(bids[0].net_total), rules, {
+        urgency: assessment?.urgency,
+        afterHours,
+        zip: job.zip,
+        serviceCharge: 25,
+      });
+
+      const aiLow = job.customer_retail_estimate_low != null ? Number(job.customer_retail_estimate_low) : null;
+      const aiHigh = job.customer_retail_estimate_high != null ? Number(job.customer_retail_estimate_high) : null;
+      const contractorNet = Number(bids[0].net_total);
+      let marketPosition = 'unknown';
+      if (aiLow != null && aiHigh != null) {
+        if (contractorNet < aiLow) marketPosition = 'below_range';
+        else if (contractorNet > aiHigh) marketPosition = 'above_range';
+        else marketPosition = 'within_range';
+      }
+
+      res.json({
+        ok: true,
+        job: serializeJob(job, req.authUser),
+        bid: serializeBid(bids[0]),
+        aiEstimate: {
+          low: aiLow,
+          high: aiHigh,
+          confidence: job.estimate_confidence || confidenceLabel(assessment?.confidence),
+          contractorNetLow: job.estimated_contractor_net_low != null ? Number(job.estimated_contractor_net_low) : null,
+          contractorNetHigh: job.estimated_contractor_net_high != null ? Number(job.estimated_contractor_net_high) : null,
+        },
+        marketPosition,
+        quotePreview: quote,
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Could not load quote builder.' });
+    }
+  });
+
+  app.post('/api/admin/managed/jobs/:id/quote-builder/preview', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      const bidId = Number(req.body?.bidId);
+      const { rows: jobs } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      if (!jobs[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
+      const job = jobs[0];
+      const { rows: bids } = await pool.query(`SELECT * FROM bids WHERE id=$1 AND job_id=$2`, [bidId, jobId]);
+      if (!bids[0]) return res.status(404).json({ ok: false, message: 'Bid not found.' });
+
+      const rules = await loadPricingRules(pool);
+      const assessment = parseJson(job.ai_assessment);
+      const afterHours = /evening|weekend/i.test(job.service_timing || '');
+      const quote = computeCustomerQuoteFromBid(Number(bids[0].net_total), rules, {
+        urgency: assessment?.urgency,
+        afterHours,
+        zip: job.zip,
+        serviceCharge: req.body?.serviceCharge != null ? Number(req.body.serviceCharge) : 25,
+        adjustments: req.body?.pricingAdjustments || [],
+        adminDiscount: req.body?.adminDiscount,
+        couponAmount: req.body?.couponAmount,
+      });
+
+      const aiLow = job.customer_retail_estimate_low != null ? Number(job.customer_retail_estimate_low) : null;
+      const aiHigh = job.customer_retail_estimate_high != null ? Number(job.customer_retail_estimate_high) : null;
+      const contractorNet = Number(bids[0].net_total);
+      let marketPosition = 'unknown';
+      if (aiLow != null && aiHigh != null) {
+        if (contractorNet < aiLow) marketPosition = 'below_range';
+        else if (contractorNet > aiHigh) marketPosition = 'above_range';
+        else marketPosition = 'within_range';
+      }
+
+      res.json({
+        ok: true,
+        aiEstimate: {
+          low: aiLow,
+          high: aiHigh,
+          confidence: job.estimate_confidence || confidenceLabel(assessment?.confidence),
+        },
+        marketPosition,
+        quotePreview: quote,
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Could not preview quote.' });
+    }
+  });
+
   // ── Admin proposals ────────────────────────────────────────────────────────
   app.post('/api/admin/managed/jobs/:id/proposal', requireAuth, requireAdmin, async (req, res) => {
     try {
@@ -1954,22 +2159,61 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (!bids[0]) return res.status(404).json({ ok: false, message: 'Bid not found.' });
 
       const rules = await loadPricingRules(pool);
-      const priced = retailFromBid(Number(bids[0].net_total), rules, {
-        urgency: parseJson(jobs[0].ai_assessment)?.urgency,
-        afterHours: /evening|weekend/i.test(jobs[0].service_timing || ''),
+      const assessment = parseJson(jobs[0].ai_assessment);
+      const afterHours = /evening|weekend/i.test(jobs[0].service_timing || '');
+
+      const adjustments = Array.isArray(req.body?.pricingAdjustments) ? req.body.pricingAdjustments : [];
+      const serviceCharge = req.body?.serviceCharge != null ? Number(req.body.serviceCharge) : 25;
+      let couponAmount = 0;
+      let couponCode = req.body?.couponCode || null;
+      if (couponCode) {
+        const discount = await lookupDiscountByCode(pool, couponCode);
+        if (discount) couponAmount = Number(discount.value) || 0;
+      }
+
+      const quote = computeCustomerQuoteFromBid(Number(bids[0].net_total), rules, {
+        urgency: assessment?.urgency,
+        afterHours,
+        zip: jobs[0].zip,
+        serviceCharge,
+        adjustments,
+        adminDiscount: req.body?.adminDiscount,
+        couponAmount,
       });
 
-      let retail = req.body?.retailAmount != null ? Number(req.body.retailAmount) : priced.customer_final_retail_amount;
+      let retail = req.body?.retailAmount != null ? Number(req.body.retailAmount) : quote.customerQuote;
       const discount = await resolveJobDiscount(pool, jobs[0]);
-      if (discount && req.body?.retailAmount == null) {
+      if (discount && req.body?.retailAmount == null && !couponCode) {
         const applied = applyDiscountToAmount(retail, discount);
         retail = applied.retail;
       }
+
+      const validHours = Number(req.body?.quoteValidHours || 48);
+      const quoteValidUntil = req.body?.quoteValidUntil
+        ? new Date(req.body.quoteValidUntil)
+        : new Date(Date.now() + validHours * 3600 * 1000);
+
+      const customerLineItems = [
+        { label: 'Service & Labor', amount: quote.baseRetail, visible: true },
+        ...(adjustments.filter((a) => a.includeInDisplay !== false).map((a) => ({
+          label: a.label || a.type || 'Adjustment',
+          amount: a.calculation === 'percent'
+            ? Math.round(quote.baseRetail * (Number(a.amount) / 100))
+            : Number(a.amount),
+          visible: true,
+        }))),
+        ...(serviceCharge > 0 ? [{ label: 'Service charge', amount: serviceCharge, visible: true }] : []),
+        ...(quote.adminDiscount > 0 ? [{ label: 'Discount', amount: -quote.adminDiscount, visible: true }] : []),
+        ...(couponAmount > 0 ? [{ label: couponCode || 'Coupon', amount: -couponAmount, visible: true }] : []),
+      ];
+
       const { rows } = await pool.query(
         `INSERT INTO proposals
           (job_id, bid_id, scope_summary, retail_amount, deposit_amount, timeline, warranty, exclusions,
-           contractor_net, platform_gross, processing_cost, status, created_by, published_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'sent',$12,NOW())
+           contractor_net, platform_gross, processing_cost, status, created_by, published_at,
+           line_items, pricing_adjustments, admin_discount, admin_discount_reason, coupon_code, coupon_funded_by,
+           quote_valid_until, customer_line_items, service_charge, expected_margin_pct)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'sent',$12,NOW(),$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
          RETURNING *`,
         [
           jobId,
@@ -1980,12 +2224,47 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           req.body?.timeline || null,
           req.body?.warranty || bids[0].warranty,
           req.body?.exclusions || bids[0].exclusions,
-          priced.contractor_final_net_amount,
-          priced.platform_gross_profit,
-          priced.processing_cost,
+          quote.contractorNet,
+          quote.netContribution,
+          quote.processingCost,
           req.authUser.id,
+          JSON.stringify(req.body?.lineItems || customerLineItems),
+          JSON.stringify(adjustments),
+          quote.adminDiscount,
+          req.body?.adminDiscount?.reason || null,
+          couponCode,
+          req.body?.couponFundedBy || 'fixbridge',
+          quoteValidUntil.toISOString(),
+          JSON.stringify(customerLineItems),
+          serviceCharge,
+          quote.expectedMarginPct,
         ]
       );
+
+      await recordFinancialSnapshot(pool, {
+        jobId,
+        snapshotType: 'customer_quote',
+        createdBy: req.authUser.id,
+        data: {
+          aiEstimateLow: jobs[0].customer_retail_estimate_low,
+          aiEstimateHigh: jobs[0].customer_retail_estimate_high,
+          aiConfidence: jobs[0].estimate_confidence || confidenceLabel(assessment?.confidence),
+          contractorOriginalQuote: quote.contractorNet,
+          internalPriceAdjustment: quote.pricingAdjustment,
+          additionalCharges: serviceCharge,
+          discounts: quote.adminDiscount,
+          couponAmount,
+          couponFundedBy: req.body?.couponFundedBy || 'fixbridge',
+          customerApprovedQuote: retail,
+          customerServiceTotal: retail,
+          processingCost: quote.processingCost,
+          fixbridgeGrossDifference: quote.grossDifference,
+          fixbridgeNetContribution: quote.netContribution,
+          contractorPayout: quote.contractorNet,
+          lineItems: customerLineItems,
+          metadata: { bidId, proposalId: rows[0].id },
+        },
+      });
 
       await pool.query(
         `UPDATE managed_jobs SET
@@ -1999,7 +2278,8 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       await pushStatus(pool, jobId, 'proposal_sent', 'awaiting_customer_approval', req.authUser.id, 'Awaiting customer approval');
       await audit(pool, req.authUser.id, 'proposal_published', 'proposal', rows[0].id, {
         retail,
-        net: priced.contractor_final_net_amount,
+        net: quote.contractorNet,
+        marginPct: quote.expectedMarginPct,
       });
 
       // Email homeowner — proposal ready to review
@@ -2919,6 +3199,157 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       res.status(500).json({ ok: false, message: 'Server error' });
     }
   });
+
+  // ── Homeowner invoices ─────────────────────────────────────────────────────
+  app.get('/api/admin/managed/jobs/:id/invoice', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      const built = await buildInvoiceForJob(pool, jobId, { customNote: req.query.note });
+      if (!built.ok) return res.status(404).json(built);
+      res.json({ ok: true, invoice: built.invoice, html: renderInvoiceHtml(built.invoice) });
+    } catch (e) {
+      console.error('invoice preview:', e);
+      res.status(500).json({ ok: false, message: 'Could not generate invoice.' });
+    }
+  });
+
+  app.post('/api/admin/managed/jobs/:id/invoice/send', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      const sendEmail = req.body?.sendEmail === true;
+      const sendSms = req.body?.sendSms === true;
+      if (!sendEmail && !sendSms) {
+        return res.status(400).json({ ok: false, message: 'Choose at least one delivery method: email or SMS.' });
+      }
+
+      const built = await buildInvoiceForJob(pool, jobId, { customNote: req.body?.note });
+      if (!built.ok) return res.status(404).json(built);
+      const invoice = built.invoice;
+
+      const emailTo = String(req.body?.email || invoice.billTo.email || '').trim();
+      const phoneTo = normalizePhone(String(req.body?.phone || invoice.billTo.phone || ''));
+
+      const delivery = { email: null, sms: null };
+
+      if (sendEmail) {
+        if (!emailTo) {
+          return res.status(400).json({ ok: false, message: 'No email address available. Enter an email to send the invoice.' });
+        }
+        delivery.email = await sendEmailSafe({
+          to: emailTo,
+          subject: `${brand.productName} Invoice ${invoice.invoiceNumber} — ${moneyLabel(invoice.amountDue)} due`,
+          html: renderInvoiceHtml(invoice),
+        });
+        if (delivery.email?.ok === false) {
+          return res.status(502).json({ ok: false, message: delivery.email.message || 'Email delivery failed.' });
+        }
+      }
+
+      if (sendSms) {
+        if (!phoneTo) {
+          return res.status(400).json({ ok: false, message: 'No phone number available. Enter a phone number to send via SMS.' });
+        }
+        delivery.sms = await sendSmsSafe({
+          to: phoneTo,
+          body: renderInvoiceSms(invoice),
+        });
+        if (delivery.sms?.ok === false) {
+          return res.status(502).json({ ok: false, message: delivery.sms.message || 'SMS delivery failed.' });
+        }
+      }
+
+      const { rows: saved } = await pool.query(
+        `INSERT INTO homeowner_invoices
+           (invoice_number, job_id, homeowner_user_id, amount_due, subtotal, paid, line_items, sent_via, sent_by, custom_note)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         RETURNING *`,
+        [
+          invoice.invoiceNumber,
+          jobId,
+          invoice.homeownerUserId,
+          invoice.amountDue,
+          invoice.subtotal,
+          invoice.paid,
+          JSON.stringify(invoice.lineItems),
+          JSON.stringify({
+            email: sendEmail ? { to: emailTo, simulated: delivery.email?.simulated === true } : null,
+            sms: sendSms ? { to: phoneTo, simulated: delivery.sms?.simulated === true } : null,
+          }),
+          req.authUser.id,
+          req.body?.note || null,
+        ]
+      );
+
+      await audit(pool, req.authUser.id, 'invoice_sent', 'managed_job', jobId, {
+        invoiceNumber: invoice.invoiceNumber,
+        amountDue: invoice.amountDue,
+        sendEmail,
+        sendSms,
+        emailTo: sendEmail ? emailTo : null,
+        phoneTo: sendSms ? phoneTo : null,
+      });
+
+      res.json({
+        ok: true,
+        invoice: {
+          ...invoice,
+          id: Number(saved[0].id),
+          sentVia: parseJson(saved[0].sent_via, {}),
+        },
+        delivery,
+        message: `Invoice ${invoice.invoiceNumber} sent${sendEmail && sendSms ? ' via email and SMS' : sendEmail ? ' via email' : ' via SMS'}.`,
+      });
+    } catch (e) {
+      console.error('invoice send:', e);
+      if (String(e.message || '').includes('unique')) {
+        return res.status(409).json({ ok: false, message: 'Invoice already sent for this job today. Use preview to resend manually.' });
+      }
+      res.status(500).json({ ok: false, message: 'Could not send invoice.' });
+    }
+  });
+
+  app.get('/api/admin/homeowners/:userId/jobs', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const userId = Number(req.params.userId);
+      const { rows } = await pool.query(
+        `SELECT * FROM managed_jobs WHERE homeowner_user_id=$1 ORDER BY created_at DESC LIMIT 50`,
+        [userId]
+      );
+      res.json({ ok: true, jobs: rows.map((r) => serializeJob(r, { isAdmin: true, role: 'admin' })) });
+    } catch (e) {
+      res.status(500).json({ ok: false, message: 'Server error' });
+    }
+  });
+
+  app.get('/api/admin/homeowners/:userId/invoices', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const userId = Number(req.params.userId);
+      const { rows } = await pool.query(
+        `SELECT * FROM homeowner_invoices WHERE homeowner_user_id=$1 ORDER BY created_at DESC LIMIT 50`,
+        [userId]
+      );
+      res.json({
+        ok: true,
+        invoices: rows.map((r) => ({
+          id: Number(r.id),
+          invoiceNumber: r.invoice_number,
+          jobId: Number(r.job_id),
+          amountDue: Number(r.amount_due),
+          subtotal: r.subtotal != null ? Number(r.subtotal) : null,
+          paid: r.paid != null ? Number(r.paid) : 0,
+          sentVia: parseJson(r.sent_via, {}),
+          createdAt: r.created_at,
+        })),
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, message: 'Server error' });
+    }
+  });
+
+  function moneyLabel(n) {
+    const v = Number(n);
+    return Number.isFinite(v) ? `$${v.toFixed(2)}` : '$0.00';
+  }
 
   app.get('/api/admin/reporting/summary', requireAuth, requireAdmin, async (_req, res) => {
     try {

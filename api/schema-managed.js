@@ -828,5 +828,105 @@ export async function initManagedSchema(pool) {
     ON contractor_payouts (status, created_at DESC)
   `);
 
+  // ── Workflow v2: immutable financial snapshots, quote builder, tips ────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_financial_snapshots (
+      id                          BIGSERIAL PRIMARY KEY,
+      job_id                      BIGINT NOT NULL,
+      snapshot_type               TEXT NOT NULL,
+      ai_estimate_low             NUMERIC,
+      ai_estimate_high            NUMERIC,
+      ai_confidence               TEXT,
+      contractor_original_quote   NUMERIC,
+      contractor_change_orders    NUMERIC DEFAULT 0,
+      contractor_total_due        NUMERIC,
+      internal_price_adjustment   NUMERIC DEFAULT 0,
+      additional_charges          NUMERIC DEFAULT 0,
+      discounts                   NUMERIC DEFAULT 0,
+      coupon_amount               NUMERIC DEFAULT 0,
+      coupon_funded_by            TEXT,
+      customer_approved_quote       NUMERIC,
+      customer_change_orders        NUMERIC DEFAULT 0,
+      customer_service_total        NUMERIC,
+      tip_amount                  NUMERIC DEFAULT 0,
+      customer_final_payment      NUMERIC,
+      processing_cost             NUMERIC,
+      ai_cost                     NUMERIC DEFAULT 0,
+      other_direct_cost           NUMERIC DEFAULT 0,
+      fixbridge_gross_difference  NUMERIC,
+      fixbridge_net_contribution  NUMERIC,
+      contractor_payout           NUMERIC,
+      contractor_payout_fee       NUMERIC DEFAULT 0,
+      contractor_net_payout       NUMERIC,
+      line_items                  JSONB,
+      metadata                    JSONB,
+      created_by                  INT,
+      created_at                  TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_tips (
+      id                      SERIAL PRIMARY KEY,
+      job_id                  BIGINT NOT NULL,
+      homeowner_user_id       INT NOT NULL,
+      contractor_user_id      INT,
+      amount                  NUMERIC NOT NULL,
+      percent_of_service      NUMERIC,
+      status                  TEXT NOT NULL DEFAULT 'pending',
+      stripe_payment_intent_id TEXT,
+      created_at              TIMESTAMPTZ DEFAULT NOW(),
+      paid_at                 TIMESTAMPTZ
+    )
+  `);
+
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS line_items JSONB`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS pricing_adjustments JSONB`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS admin_discount NUMERIC DEFAULT 0`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS admin_discount_reason TEXT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS coupon_code TEXT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS coupon_funded_by TEXT DEFAULT 'fixbridge'`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS quote_valid_until TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS customer_line_items JSONB`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS service_charge NUMERIC DEFAULT 0`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS expected_margin_pct NUMERIC`);
+
+  await pool.query(`ALTER TABLE job_invitations ADD COLUMN IF NOT EXISTS request_type TEXT DEFAULT 'remote_quote'`);
+  await pool.query(`ALTER TABLE job_invitations ADD COLUMN IF NOT EXISTS site_visit_window TEXT`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS estimate_confidence TEXT`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS access_instructions TEXT`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS quote_request_mode TEXT`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS similar_jobs_count INT DEFAULT 0`);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_job_financial_snapshots_job
+    ON job_financial_snapshots (job_id, created_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS homeowner_invoices (
+      id               SERIAL PRIMARY KEY,
+      invoice_number   TEXT NOT NULL UNIQUE,
+      job_id           BIGINT NOT NULL,
+      homeowner_user_id INT,
+      amount_due       NUMERIC NOT NULL,
+      subtotal         NUMERIC,
+      paid             NUMERIC DEFAULT 0,
+      line_items       JSONB,
+      sent_via         JSONB,
+      sent_by          INT,
+      custom_note      TEXT,
+      created_at       TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_homeowner_invoices_job
+    ON homeowner_invoices (job_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_homeowner_invoices_homeowner
+    ON homeowner_invoices (homeowner_user_id, created_at DESC)
+  `);
+
   console.log('[API] Managed schema ready');
 }

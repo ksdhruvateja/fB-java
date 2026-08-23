@@ -42,7 +42,7 @@ function payoutSettingsToApi(row) {
   };
 }
 
-export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin }) {
+export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite }) {
   // ── Admin payout settings ───────────────────────────────────────────────────
   app.get('/api/admin/payout-settings', requireAuth, requireAdmin, async (_req, res) => {
     try {
@@ -191,7 +191,23 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin }) {
     }
   });
 
-  app.post('/api/admin/payouts/:id/approve', requireAuth, requireAdmin, async (req, res) => {
+  app.get('/api/admin/payouts/job/:jobId', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const jobId = Number(req.params.jobId);
+      const { rows } = await pool.query(
+        `SELECT * FROM contractor_payouts WHERE job_id=$1 ORDER BY created_at DESC LIMIT 1`,
+        [jobId]
+      );
+      if (!rows[0]) {
+        return res.json({ ok: true, payout: null });
+      }
+      res.json({ ok: true, payout: serializePayout(rows[0]) });
+    } catch (e) {
+      res.status(500).json({ ok: false, message: 'Could not load payout for job.' });
+    }
+  });
+
+  app.post('/api/admin/payouts/:id/approve', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const id = Number(req.params.id);
       const adjustmentsCents = req.body?.adjustmentsCents != null ? Math.round(Number(req.body.adjustmentsCents)) : 0;
@@ -207,7 +223,7 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin }) {
     }
   });
 
-  app.post('/api/admin/payouts/:id/adjust', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/admin/payouts/:id/adjust', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const id = Number(req.params.id);
       const adjustmentsCents = Math.round(Number(req.body?.adjustmentsCents || 0));
@@ -237,24 +253,60 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin }) {
     }
   });
 
-  // Legacy admin job payout — delegates to new system
-  app.post('/api/admin/managed/jobs/:id/payout-v2', requireAuth, requireAdmin, async (req, res) => {
+  // Admin job payout — creates/updates contractor_payouts then approves release
+  app.post('/api/admin/managed/jobs/:id/payout-v2', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
       let payout = await ensurePayoutRecordForJob(pool, jobId, { actorUserId: req.authUser.id });
-      if (!payout) return res.status(400).json({ ok: false, message: 'Could not create payout for job.' });
-      if (req.body?.adjustmentsCents != null) {
+      if (!payout) return res.status(400).json({ ok: false, message: 'Could not create payout for job. Assign a contractor first.' });
+
+      const amountOverride = req.body?.amount != null && req.body.amount !== '' ? Number(req.body.amount) : null;
+      const adjustmentsCents =
+        req.body?.adjustmentsCents != null ? Math.round(Number(req.body.adjustmentsCents)) : null;
+
+      if (amountOverride != null && Number.isFinite(amountOverride) && amountOverride > 0) {
+        const netCents = Math.round(amountOverride * 100);
+        const grossCents = Math.round(netCents / 0.85);
+        const platformFeeCents = Math.max(0, grossCents - netCents);
+        await pool.query(
+          `UPDATE contractor_payouts SET
+             gross_amount_cents=$1,
+             platform_fee_cents=$2,
+             net_amount_cents=$3,
+             updated_at=NOW()
+           WHERE id=$4`,
+          [grossCents, platformFeeCents, netCents, payout.id]
+        );
+        const { rows } = await pool.query(`SELECT * FROM contractor_payouts WHERE id=$1`, [payout.id]);
+        payout = rows[0];
+      } else if (adjustmentsCents != null && Number.isFinite(adjustmentsCents)) {
         await pool.query(
           `UPDATE contractor_payouts SET adjustments_cents=$1, net_amount_cents=gross_amount_cents - platform_fee_cents + $1, updated_at=NOW() WHERE id=$2`,
-          [Math.round(Number(req.body.adjustmentsCents)), payout.id]
+          [adjustmentsCents, payout.id]
         );
         const { rows } = await pool.query(`SELECT * FROM contractor_payouts WHERE id=$1`, [payout.id]);
         payout = rows[0];
       }
-      const result = await approveAndReleasePayout(pool, payout.id, req.authUser.id);
+
+      // Adjustments/amount already applied on the payout row above
+      const result = await approveAndReleasePayout(pool, payout.id, req.authUser.id, {
+        adjustmentsCents: 0,
+        note: req.body?.note,
+      });
       if (!result.ok) return res.status(400).json(result);
-      res.json({ ok: true, payout: serializePayout(result.payout) });
+
+      const { rows: jobRows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      res.json({
+        ok: true,
+        payout: serializePayout(result.payout),
+        transferId: result.transferId,
+        simulated: result.simulated,
+        amount: Number(result.payout?.net_amount_cents || 0) / 100,
+        job: jobRows[0] ? { id: jobId, status: jobRows[0].status } : null,
+        message: `Payout of $${((Number(result.payout?.net_amount_cents || 0)) / 100).toFixed(2)} released.`,
+      });
     } catch (e) {
+      console.error(e);
       res.status(500).json({ ok: false, message: 'Could not release payout.' });
     }
   });

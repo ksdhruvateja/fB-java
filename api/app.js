@@ -14,6 +14,7 @@ import { initManagedSchema } from './schema-managed.js';
 import { registerManagedRoutes } from './managed-routes.js';
 import { registerPlatformRoutes } from './platform-routes.js';
 import { registerPayoutRoutes } from './payout-routes.js';
+import { writeAudit } from './audit.js';
 import { getStripe } from './stripe.js';
 import {
   corsOriginDelegate,
@@ -319,21 +320,50 @@ export async function initDb() {
       'SELECT id, password, is_admin FROM users WHERE role=$1 AND LOWER(email)=LOWER($2)',
       [u.role, u.email]
     );
+    const DEMO_DOC =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
     if (existing.rows.length === 0) {
-      await pool.query(
-        `INSERT INTO users (role,name,email,password,trade,license_number,is_admin,compliance_status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`,
-        [
-          u.role,
-          u.name,
-          u.email,
-          hashed,
-          u.trade,
-          u.license_number,
-          u.is_admin,
-          u.role === 'contractor' ? 'approved' : 'draft',
-        ]
-      );
+      if (u.role === 'contractor') {
+        await pool.query(
+          `INSERT INTO users (
+             role,name,email,password,trade,license_number,is_admin,compliance_status,
+             license_document_name,license_document_data,insurance_document_name,insurance_document_data,
+             company_name,phone
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT DO NOTHING`,
+          [
+            u.role,
+            u.name,
+            u.email,
+            hashed,
+            u.trade,
+            u.license_number,
+            u.is_admin,
+            'approved',
+            'demo-license.png',
+            DEMO_DOC,
+            'demo-insurance.png',
+            DEMO_DOC,
+            'ABC Heating & Air',
+            '(555) 204-8800',
+          ]
+        );
+      } else {
+        await pool.query(
+          `INSERT INTO users (role,name,email,password,trade,license_number,is_admin,compliance_status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`,
+          [
+            u.role,
+            u.name,
+            u.email,
+            hashed,
+            u.trade,
+            u.license_number,
+            u.is_admin,
+            'draft',
+          ]
+        );
+      }
       continue;
     }
 
@@ -478,6 +508,7 @@ async function requireAuth(req, res, next) {
       role: rows[0].role,
       isAdmin: rows[0].role === 'admin' || rows[0].is_admin === true,
       isBlocked: rows[0].is_blocked === true,
+      adminAccessLevel: rows[0].admin_access_level || 'read-write',
     };
     next();
   } catch {
@@ -497,8 +528,20 @@ function requireAdminWrite(req, res, next) {
   if (req.authUser?.role !== 'admin') {
     return res.status(403).json({ ok: false, message: 'Admin access required.' });
   }
-  if (req.authUser?.adminAccessLevel === 'read') {
+  const level = String(req.authUser?.adminAccessLevel || 'read-write').toLowerCase();
+  if (level === 'read') {
     return res.status(403).json({ ok: false, message: 'Write access required. Your account has Read-Only permissions.' });
+  }
+  next();
+}
+
+function requireAdminRead(req, res, next) {
+  if (req.authUser?.role !== 'admin') {
+    return res.status(403).json({ ok: false, message: 'Admin access required.' });
+  }
+  const level = String(req.authUser?.adminAccessLevel || 'read-write').toLowerCase();
+  if (level === 'write') {
+    return res.status(403).json({ ok: false, message: 'Read access required. Your account is Write-Only.' });
   }
   next();
 }
@@ -1764,6 +1807,10 @@ app.put('/api/admin/users/:userId/block', requireAuth, requireAdmin, requireAdmi
     if (!rows.length) {
       return res.status(404).json({ ok: false, message: 'User not found.' });
     }
+    await writeAudit(pool, req.authUser.id, normalizedBlocked ? 'user_blocked' : 'user_unblocked', 'user', userId, {
+      email: rows[0].email,
+      role: rows[0].role,
+    });
     return res.json({ ok: true, user: rowToUser(rows[0]) });
   } catch (e) {
     console.error('block user:', e);
@@ -1790,17 +1837,72 @@ app.post('/api/admin/staff/access', requireAuth, requireAdmin, requireAdminWrite
     if (!['read', 'write', 'read-write'].includes(accessLevel)) {
       return res.status(400).json({ ok: false, message: 'Invalid accessLevel. Choose read, write, or read-write.' });
     }
+    const { rows: prevRows } = await pool.query(`SELECT * FROM users WHERE id=$1 AND role='admin'`, [userId]);
+    if (!prevRows.length) {
+      return res.status(404).json({ ok: false, message: 'Staff member not found.' });
+    }
     const { rows } = await pool.query(
       'UPDATE users SET admin_access_level=$1 WHERE id=$2 AND role=\'admin\' RETURNING *',
       [accessLevel, userId]
     );
-    if (rows.length === 0) {
-      return res.status(404).json({ ok: false, message: 'Staff member not found.' });
-    }
+    await writeAudit(pool, req.authUser.id, 'staff_access_updated', 'user', userId, {
+      email: rows[0].email,
+      previousLevel: prevRows[0].admin_access_level || 'read-write',
+      accessLevel,
+    });
     return res.json({ ok: true, user: rowToUser(rows[0]) });
   } catch (e) {
     console.error('admin staff access update:', e);
     return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+app.post('/api/admin/staff/create', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    const accessLevel = String(req.body?.accessLevel || 'read-write').toLowerCase();
+
+    if (!name || !email || !password) {
+      return res.status(400).json({ ok: false, message: 'Name, email, and password are required.' });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ ok: false, message: 'Password must be at least 8 characters.' });
+    }
+    if (!['read', 'write', 'read-write'].includes(accessLevel)) {
+      return res.status(400).json({ ok: false, message: 'Invalid accessLevel. Choose read, write, or read-write.' });
+    }
+
+    const { rows: existing } = await pool.query(
+      `SELECT id FROM users WHERE role='admin' AND LOWER(email)=LOWER($1)`,
+      [email]
+    );
+    if (existing.length) {
+      return res.status(409).json({ ok: false, message: 'A staff account with this email already exists.' });
+    }
+
+    const hashed = await bcrypt.hash(password, 10);
+    const { rows } = await pool.query(
+      `INSERT INTO users (role, name, email, password, is_admin, admin_access_level, compliance_status)
+       VALUES ('admin', $1, $2, $3, true, $4, 'approved')
+       RETURNING *`,
+      [name, email, hashed, accessLevel]
+    );
+
+    await writeAudit(pool, req.authUser.id, 'staff_created', 'user', rows[0].id, {
+      email,
+      name,
+      accessLevel,
+    });
+
+    return res.json({ ok: true, user: rowToUser(rows[0]) });
+  } catch (e) {
+    console.error('admin staff create:', e);
+    if (e.code === '23505') {
+      return res.status(409).json({ ok: false, message: 'Email already in use.' });
+    }
+    return res.status(500).json({ ok: false, message: 'Could not create staff account.' });
   }
 });
 
@@ -2492,7 +2594,7 @@ app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
 
   registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, makeToken, rowToUser });
 registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
-registerPayoutRoutes(app, { pool, requireAuth, requireAdmin });
+registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 
 app.post('/api/ai/chat', requireAuth, aiLimiter, async (req, res) => {
   try {

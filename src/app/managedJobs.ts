@@ -10,6 +10,7 @@ export type ManagedJobStatus =
   | "contractor_invited"
   | "contractor_accepted"
   | "awaiting_bid"
+  | "diagnosing"
   | "bid_received"
   | "proposal_sent"
   | "awaiting_customer_approval"
@@ -77,6 +78,7 @@ export type ManagedJob = {
   pricingDisclaimer?: string;
   preferredTimeNote?: string;
   assignedContractorUserId?: number | null;
+  homeownerUserId?: number | null;
   technician?: {
     id: number;
     name?: string | null;
@@ -195,6 +197,12 @@ export type Proposal = {
   status: string;
   contractorNet?: number;
   platformGross?: number;
+  processingCost?: number;
+  quoteValidUntil?: string | null;
+  customerLineItems?: Array<{ label: string; amount: number; visible?: boolean }>;
+  couponCode?: string | null;
+  serviceCharge?: number | null;
+  expectedMarginPct?: number | null;
 };
 
 export type Bid = {
@@ -225,6 +233,7 @@ export const STATUS_LABELS: Record<string, string> = {
   contractor_invited: "Contractor invited",
   contractor_accepted: "Contractor accepted",
   awaiting_bid: "Awaiting bid",
+  diagnosing: "Site visit / diagnosing",
   bid_received: "Bid received",
   proposal_sent: "Proposal ready",
   awaiting_customer_approval: "Approve proposal",
@@ -431,11 +440,46 @@ export async function adminListJobs() {
   return api<{ ok: boolean; jobs: ManagedJob[] }>("/api/admin/managed/jobs");
 }
 
-export async function adminInvite(jobId: number, contractorUserId: number, message?: string) {
+export async function adminInvite(
+  jobId: number,
+  contractorUserId: number,
+  opts?: { message?: string; requestType?: "remote_quote" | "site_visit"; siteVisitWindow?: string },
+) {
   return api<{ ok: boolean; message?: string; job?: ManagedJob }>(`/api/admin/managed/jobs/${jobId}/invite`, {
     method: "POST",
-    body: JSON.stringify({ contractorUserId, message }),
+    body: JSON.stringify({
+      contractorUserId,
+      message: opts?.message,
+      requestType: opts?.requestType,
+      siteVisitWindow: opts?.siteVisitWindow,
+    }),
   });
+}
+
+export async function adminQuoteBuilderPreview(
+  jobId: number,
+  bidId: number,
+  body?: Record<string, unknown>,
+) {
+  if (body && Object.keys(body).length > 0) {
+    return api<{
+      ok: boolean;
+      quotePreview?: Record<string, unknown>;
+      aiEstimate?: { low: number | null; high: number | null; confidence: string };
+      marketPosition?: string;
+      message?: string;
+    }>(`/api/admin/managed/jobs/${jobId}/quote-builder/preview`, {
+      method: "POST",
+      body: JSON.stringify({ bidId, ...body }),
+    });
+  }
+  return api<{
+    ok: boolean;
+    quotePreview?: Record<string, unknown>;
+    aiEstimate?: { low: number | null; high: number | null; confidence: string };
+    marketPosition?: string;
+    message?: string;
+  }>(`/api/admin/managed/jobs/${jobId}/quote-builder?bidId=${bidId}`);
 }
 
 export async function adminAssign(jobId: number, contractorUserId: number) {
@@ -452,17 +496,94 @@ export async function adminCreateProposal(jobId: number, bidId: number, extras?:
   );
 }
 
-export async function adminPayout(jobId: number, amount?: number) {
+export async function adminApplyJobDiscount(jobId: number, code: string) {
   return api<{
     ok: boolean;
     job?: ManagedJob;
+    discount?: { code: string; summary?: string };
+    message?: string;
+  }>(`/api/admin/managed/jobs/${jobId}/apply-discount`, {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
+}
+
+export async function adminPayout(jobId: number, amount?: number) {
+  return adminPayoutV2(jobId, amount);
+}
+
+export async function adminPayoutV2(
+  jobId: number,
+  amount?: number,
+  extras?: { adjustmentsCents?: number; note?: string }
+) {
+  return api<{
+    ok: boolean;
+    job?: { id: number; status: string };
     amount?: number;
     simulated?: boolean;
     message?: string;
-  }>(`/api/admin/managed/jobs/${jobId}/payout`, {
+    payout?: ContractorPayout;
+  }>(`/api/admin/managed/jobs/${jobId}/payout-v2`, {
     method: "POST",
-    body: JSON.stringify({ ...(amount != null ? { amount } : {}) }),
+    body: JSON.stringify({
+      ...(amount != null ? { amount } : {}),
+      ...(extras?.adjustmentsCents != null ? { adjustmentsCents: extras.adjustmentsCents } : {}),
+      ...(extras?.note ? { note: extras.note } : {}),
+    }),
   });
+}
+
+export async function adminGetPayoutForJob(jobId: number) {
+  return api<{ ok: boolean; payout: ContractorPayout | null }>(`/api/admin/payouts/job/${jobId}`);
+}
+
+export type HomeownerInvoicePreview = {
+  invoiceNumber: string;
+  jobId: number;
+  bookingId: string;
+  issuedAt: string;
+  billTo: { name: string; email?: string | null; phone?: string | null; address?: string | null };
+  jobTitle?: string;
+  lineItems: Array<{ label: string; amount: number; note?: string }>;
+  subtotal: number;
+  paid: number;
+  amountDue: number;
+};
+
+export async function adminGetJobInvoice(jobId: number, note?: string) {
+  const q = note ? `?note=${encodeURIComponent(note)}` : "";
+  return api<{ ok: boolean; invoice?: HomeownerInvoicePreview; html?: string; message?: string }>(
+    `/api/admin/managed/jobs/${jobId}/invoice${q}`
+  );
+}
+
+export async function adminSendJobInvoice(
+  jobId: number,
+  opts: { sendEmail?: boolean; sendSms?: boolean; email?: string; phone?: string; note?: string }
+) {
+  return api<{ ok: boolean; invoice?: HomeownerInvoicePreview; message?: string }>(
+    `/api/admin/managed/jobs/${jobId}/invoice/send`,
+    { method: "POST", body: JSON.stringify(opts) }
+  );
+}
+
+export async function adminHomeownerJobs(userId: number) {
+  return api<{ ok: boolean; jobs: ManagedJob[] }>(`/api/admin/homeowners/${userId}/jobs`);
+}
+
+export async function adminHomeownerInvoices(userId: number) {
+  return api<{
+    ok: boolean;
+    invoices: Array<{
+      id: number;
+      invoiceNumber: string;
+      jobId: number;
+      amountDue: number;
+      sentVia: { email?: { to: string; simulated?: boolean } | null; sms?: { to: string; simulated?: boolean } | null };
+      createdAt: string;
+    }>;
+  }>(`/api/admin/homeowners/${userId}/invoices`);
 }
 
 export async function adminPricingRules() {

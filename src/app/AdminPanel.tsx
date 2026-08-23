@@ -3,20 +3,28 @@ import {
   ArrowLeft, LogOut, Loader2, Shield, DollarSign, Users, Briefcase,
   Settings2, Link2, BarChart3, Sparkles, Menu, X, LayoutDashboard,
   Search, Check, Copy, MapPin, ChevronRight, Ban, BadgeCheck,
-  Sun, Moon, ChevronDown,
+  Sun, Moon, ChevronDown, Bell, ListTodo, ScrollText,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { loadAllUsers, type AuthUser } from "./auth";
 import { brand } from "../config/brand";
 import {
-  ContractorApplicationAdminView,
   contractorSearchBlob,
   fetchAdminUser,
 } from "./ContractorAdminDetail";
 import AdminOverview, { type DashboardReport } from "./AdminOverview";
+import AdminAttentionOverview from "./AdminAttentionOverview";
+import AdminWorkQueue from "./AdminWorkQueue";
+import AdminJobDrawer from "./AdminJobDrawer";
+import AdminCommandPalette, { type CommandAction } from "./AdminCommandPalette";
 import AdminPricingPanel, { type PricingRules } from "./AdminPricingPanel";
 import AdminContractorPayoutsPanel from "./AdminContractorPayoutsPanel";
 import AdminPayoutSettingsPanel from "./AdminPayoutSettingsPanel";
+import AdminQuoteBuilderPanel from "./AdminQuoteBuilderPanel";
+import AdminAuditLogsPanel from "./AdminAuditLogsPanel";
+import AdminHomeownerInvoicePanel from "./AdminHomeownerInvoicePanel";
+import Contractor360Profile from "./Contractor360Profile";
+import { ROLE_PRESETS } from "./adminPermissions";
 import {
   holdTransfer,
   listOverdueOps,
@@ -32,22 +40,24 @@ import {
   updateSubscriptionOverride,
   loadStaffAdmins,
   updateStaffAccess,
+  createStaffAdmin,
 } from "./platformApi";
 import {
   STATUS_LABELS,
   adminAiOverride,
+  adminApplyJobDiscount,
   adminAssign,
   adminCreatePartner,
-  adminCreateProposal,
   adminCreateDiscount,
   adminDiscounts,
   adminUpdateDiscount,
+  adminHomeownerJobs,
   adminInvite,
   adminListJobs,
   adminPartnerReferrals,
   adminPartners,
   adminPayments,
-  adminPayout,
+  adminPayoutV2,
   adminPricingRules,
   adminReporting,
   adminSavePricingRules,
@@ -59,9 +69,18 @@ import {
   type Bid,
   type ManagedJob,
 } from "./managedJobs";
+import {
+  computeAttention,
+  jobBookingLabel,
+  jobQueueHeadline,
+  relativeTime,
+  type AttentionKind,
+  type QueueFilter,
+} from "./adminOpsHelpers";
 
 type Tab =
   | "overview"
+  | "work-queue"
   | "dispatch"
   | "proposals"
   | "pricing"
@@ -74,23 +93,48 @@ type Tab =
   | "reporting"
   | "platform"
   | "subscriptions"
-  | "access";
+  | "access"
+  | "audit-logs";
 
-const NAV: { id: Tab; label: string; icon: React.ElementType }[] = [
-  { id: "overview", label: "Overview", icon: LayoutDashboard },
-  { id: "dispatch", label: "Dispatch", icon: Briefcase },
-  { id: "proposals", label: "Bids & Proposals", icon: DollarSign },
-  { id: "pricing", label: "Pricing", icon: Settings2 },
-  { id: "payments", label: "Payments", icon: DollarSign },
-  { id: "contractor-payouts", label: "Contractor Payouts", icon: DollarSign },
-  { id: "payout-settings", label: "Payout Settings", icon: Settings2 },
-  { id: "contractors", label: "Contractors", icon: Users },
-  { id: "partners", label: "Codes", icon: Link2 },
-  { id: "ai", label: "AI Review", icon: Sparkles },
-  { id: "subscriptions", label: "Subscriptions", icon: Users },
-  { id: "access", label: "Access Control", icon: Shield },
-  { id: "platform", label: "Platform", icon: Settings2 },
-  { id: "reporting", label: "Reporting", icon: BarChart3 },
+const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React.ElementType }[] }[] = [
+  {
+    items: [{ id: "overview", label: "Overview", icon: LayoutDashboard }],
+  },
+  {
+    label: "Work",
+    items: [
+      { id: "work-queue", label: "Work Queue", icon: ListTodo },
+      { id: "dispatch", label: "Dispatch", icon: Briefcase },
+      { id: "proposals", label: "Quotes", icon: DollarSign },
+      { id: "ai", label: "AI Estimates", icon: Sparkles },
+    ],
+  },
+  {
+    label: "People",
+    items: [
+      { id: "contractors", label: "Contractors", icon: Users },
+      { id: "partners", label: "Partners", icon: Link2 },
+      { id: "subscriptions", label: "Homeowners", icon: Users },
+    ],
+  },
+  {
+    label: "Finance",
+    items: [
+      { id: "payments", label: "Payments", icon: DollarSign },
+      { id: "contractor-payouts", label: "Payouts", icon: DollarSign },
+      { id: "pricing", label: "Pricing Controls", icon: Settings2 },
+      { id: "payout-settings", label: "Payout Settings", icon: Settings2 },
+      { id: "reporting", label: "Profitability", icon: BarChart3 },
+    ],
+  },
+  {
+    label: "Administration",
+    items: [
+      { id: "access", label: "Team & Roles", icon: Shield },
+      { id: "audit-logs", label: "Audit Logs", icon: ScrollText },
+      { id: "platform", label: "Settings", icon: Settings2 },
+    ],
+  },
 ];
 
 const TRADE_LABELS: Record<string, string> = {
@@ -273,6 +317,12 @@ export default function AdminPanel({
   const [jobs, setJobs] = useState<ManagedJob[]>([]);
   const [contractors, setContractors] = useState<AuthUser[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [queueFilter, setQueueFilter] = useState<QueueFilter>("all");
+  const [queueSearch, setQueueSearch] = useState("");
+  const [cmdOpen, setCmdOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [globalSearch, setGlobalSearch] = useState("");
   const [bids, setBids] = useState<Bid[]>([]);
   const [pricingRules, setPricingRules] = useState<PricingRules | null>(null);
   const [subStats, setSubStats] = useState<{
@@ -313,7 +363,24 @@ export default function AdminPanel({
   const [mobileNav, setMobileNav] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [inviteContractorId, setInviteContractorId] = useState<number | "">("");
+  const [inviteRequestType, setInviteRequestType] = useState<"remote_quote" | "site_visit">("remote_quote");
   const [payoutAmount, setPayoutAmount] = useState<number | "">("");
+  const [payoutBonus, setPayoutBonus] = useState<number | "">("");
+  const [dispatchCouponCode, setDispatchCouponCode] = useState("");
+  const [staffCreateOpen, setStaffCreateOpen] = useState(false);
+  const [newStaffName, setNewStaffName] = useState("");
+  const [newStaffEmail, setNewStaffEmail] = useState("");
+  const [newStaffPassword, setNewStaffPassword] = useState("");
+  const [newStaffAccess, setNewStaffAccess] = useState<"read" | "write" | "read-write">("read-write");
+  const [staffCreateBusy, setStaffCreateBusy] = useState(false);
+  const [invoiceModalHomeowner, setInvoiceModalHomeowner] = useState<{
+    id: number;
+    name: string;
+    email: string;
+  } | null>(null);
+  const [invoiceModalJobs, setInvoiceModalJobs] = useState<ManagedJob[]>([]);
+  const [invoiceModalJobId, setInvoiceModalJobId] = useState<number | "">("");
+  const [invoiceModalLoading, setInvoiceModalLoading] = useState(false);
   const [partnerName, setPartnerName] = useState("");
   const [partnerCompany, setPartnerCompany] = useState("");
   const [partnerEmail, setPartnerEmail] = useState("");
@@ -491,7 +558,7 @@ export default function AdminPanel({
         if (r.ok) setReport(r);
       });
     }
-    if (tab === "dispatch" || tab === "overview" || tab === "proposals") {
+    if (tab === "dispatch" || tab === "overview" || tab === "proposals" || tab === "work-queue") {
       void refreshJobs();
     }
     if (tab === "platform") {
@@ -591,28 +658,178 @@ export default function AdminPanel({
   }, [transfers, paymentSearch]);
 
   const sidebarNav = (
-    <nav className="flex flex-col gap-1 p-3">
-      {NAV.filter((item) => item.id !== "access" || user?.email?.includes("admin")).map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          onClick={() => {
-            setTab(item.id);
-            setMobileNav(false);
-          }}
-          className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-all duration-200 ${
-            tab === item.id
-              ? "bg-[#FF4D1C] text-white shadow-sm shadow-[#FF4D1C]/30"
-              : "text-foreground hover:bg-muted hover:translate-x-0.5"
-          }`}
-        >
-          <item.icon className={`h-4 w-4 shrink-0 transition ${tab === item.id ? "" : "opacity-70 group-hover:opacity-100"}`} />
-          <span className="font-medium">{item.label}</span>
-          {tab === item.id && <ChevronRight className="ml-auto h-3.5 w-3.5 opacity-80" />}
-        </button>
+    <nav className="flex flex-col gap-4 p-3">
+      {NAV_GROUPS.map((group) => (
+        <div key={group.label || "top"}>
+          {group.label ? (
+            <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              {group.label}
+            </p>
+          ) : null}
+          <div className="flex flex-col gap-0.5">
+            {group.items
+              .filter((item) => item.id !== "access" || user?.email?.includes("admin"))
+              .map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    setTab(item.id);
+                    setMobileNav(false);
+                  }}
+                  className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-all duration-200 ${
+                    tab === item.id
+                      ? "bg-[#FF4D1C] text-white shadow-sm shadow-[#FF4D1C]/30"
+                      : "text-foreground hover:bg-muted hover:translate-x-0.5"
+                  }`}
+                >
+                  <item.icon className={`h-4 w-4 shrink-0 transition ${tab === item.id ? "" : "opacity-70 group-hover:opacity-100"}`} />
+                  <span className="font-medium">{item.label}</span>
+                  {item.id === "work-queue" && dispatchQueueCount > 0 && tab !== item.id && (
+                    <span className="ml-auto rounded-full bg-[#FF4D1C]/15 px-1.5 py-0.5 text-[10px] font-bold text-[#FF4D1C]">
+                      {dispatchQueueCount}
+                    </span>
+                  )}
+                  {tab === item.id && item.id !== "work-queue" && (
+                    <ChevronRight className="ml-auto h-3.5 w-3.5 opacity-80" />
+                  )}
+                </button>
+              ))}
+          </div>
+        </div>
       ))}
     </nav>
   );
+
+  const openJobDrawer = (jobId: number) => {
+    setSelectedJobId(jobId);
+    setDrawerOpen(true);
+  };
+
+  const openAttention = (kind: AttentionKind) => {
+    setQueueFilter(kind);
+    setTab("work-queue");
+    setDrawerOpen(false);
+  };
+
+  const attention = useMemo(() => computeAttention(jobs), [jobs]);
+
+  const notifications = useMemo(() => {
+    const items: { id: string; title: string; body: string; jobId?: number; when?: string }[] = [];
+    for (const j of attention.quotes_ready.slice(0, 4)) {
+      items.push({
+        id: `qr-${j.id}`,
+        title: "Quote ready to build",
+        body: `${jobBookingLabel(j)} · ${j.title || j.category || "Job"}`,
+        jobId: j.id,
+        when: relativeTime(j.updatedAt || j.createdAt),
+      });
+    }
+    for (const j of attention.emergency.slice(0, 3)) {
+      items.push({
+        id: `em-${j.id}`,
+        title: "Emergency request",
+        body: `${jobBookingLabel(j)} · ${j.cityStateZip || ""}`,
+        jobId: j.id,
+        when: relativeTime(j.updatedAt || j.createdAt),
+      });
+    }
+    for (const j of attention.accepted.slice(0, 3)) {
+      items.push({
+        id: `ac-${j.id}`,
+        title: "Homeowner accepted",
+        body: `${jobBookingLabel(j)} · ready to dispatch`,
+        jobId: j.id,
+        when: relativeTime(j.updatedAt || j.createdAt),
+      });
+    }
+    for (const j of attention.payouts.slice(0, 3)) {
+      items.push({
+        id: `po-${j.id}`,
+        title: "Payout ready",
+        body: `${jobBookingLabel(j)} · contractor payable`,
+        jobId: j.id,
+        when: relativeTime(j.updatedAt || j.createdAt),
+      });
+    }
+    return items.slice(0, 10);
+  }, [attention]);
+
+  const commandActions: CommandAction[] = useMemo(
+    () => [
+      { id: "wq", label: "Open Work Queue", group: "Navigate", run: () => setTab("work-queue") },
+      { id: "ov", label: "Open Overview", group: "Navigate", run: () => setTab("overview") },
+      { id: "dispatch", label: "Open Dispatch", group: "Navigate", run: () => setTab("dispatch") },
+      { id: "quotes", label: "Open Quote Queue", group: "Navigate", run: () => setTab("proposals") },
+      { id: "payouts", label: "Open Payouts", group: "Navigate", run: () => setTab("contractor-payouts") },
+      { id: "payments", label: "Open Payments", group: "Navigate", run: () => setTab("payments") },
+      { id: "pricing", label: "Pricing Controls", group: "Navigate", run: () => setTab("pricing") },
+      { id: "contractors", label: "Find Contractors", group: "Navigate", run: () => setTab("contractors") },
+      {
+        id: "ready",
+        label: "Quotes ready to send",
+        group: "Attention",
+        hint: `${attention.quotes_ready.length} waiting`,
+        run: () => openAttention("quotes_ready"),
+      },
+      {
+        id: "emerg",
+        label: "Emergency requests",
+        group: "Attention",
+        hint: `${attention.emergency.length} open`,
+        run: () => openAttention("emergency"),
+      },
+      {
+        id: "accept",
+        label: "Accepted · ready to dispatch",
+        group: "Attention",
+        run: () => openAttention("accepted"),
+      },
+    ],
+    [attention],
+  );
+
+  const globalSearchHits = useMemo(() => {
+    const q = globalSearch.trim().toLowerCase();
+    if (q.length < 2) return [] as ManagedJob[];
+    return jobs
+      .filter((j) =>
+        `${j.bookingId} ${j.id} ${j.title} ${j.contactName} ${j.contactPhone} ${j.cityStateZip} ${j.fullAddress} ${j.category}`
+          .toLowerCase()
+          .includes(q),
+      )
+      .slice(0, 8);
+  }, [jobs, globalSearch]);
+
+  async function handleInviteAndAssign() {
+    if (!selectedJob || !inviteContractorId) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const invite = await adminInvite(selectedJob.id, Number(inviteContractorId), {
+        requestType: inviteRequestType,
+      });
+      if (!invite.ok) {
+        setMessage(invite.message || "Invite failed.");
+        return;
+      }
+      const assign = await adminAssign(selectedJob.id, Number(inviteContractorId));
+      if (!assign.ok) {
+        setMessage(assign.message || "Invite saved, but assign failed.");
+        await refreshJobs();
+        return;
+      }
+      const name = contractors.find((c) => Number(c.id) === Number(inviteContractorId))?.name || "Contractor";
+      setMessage(
+        `${name} invited (${inviteRequestType === "site_visit" ? "site visit" : "remote quote"}) and assigned.`,
+      );
+      await refreshJobs();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Invite & assign failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -698,6 +915,103 @@ export default function AdminPanel({
         </aside>
 
         <main className="min-w-0 flex-1 space-y-4 bg-muted px-4 py-6 lg:px-8">
+          {/* Desktop ops top bar */}
+          <div className="hidden items-center gap-3 lg:flex">
+            <label className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                className="w-full rounded-xl border border-border bg-card py-2.5 pl-9 pr-3 text-sm outline-none transition focus:border-[#FF4D1C]/50 focus:ring-2 focus:ring-[#FF4D1C]/15"
+                placeholder="Search FixBridge… jobs, homeowners, ZIP, booking ID"
+                value={globalSearch}
+                onChange={(e) => setGlobalSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && globalSearchHits[0]) {
+                    openJobDrawer(globalSearchHits[0].id);
+                    setGlobalSearch("");
+                  }
+                }}
+              />
+              {globalSearchHits.length > 0 && (
+                <div className="absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden rounded-xl border border-border bg-card shadow-lg">
+                  {globalSearchHits.map((j) => (
+                    <button
+                      key={j.id}
+                      type="button"
+                      className="flex w-full flex-col gap-0.5 px-3 py-2.5 text-left text-sm hover:bg-muted"
+                      onClick={() => {
+                        openJobDrawer(j.id);
+                        setGlobalSearch("");
+                        setTab("work-queue");
+                      }}
+                    >
+                      <span className="font-mono text-xs text-[#FF4D1C]">{jobBookingLabel(j)}</span>
+                      <span className="font-medium">{j.title || j.category}</span>
+                      <span className="text-xs text-muted-foreground">{jobQueueHeadline(j)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </label>
+            <button
+              type="button"
+              onClick={() => setCmdOpen(true)}
+              className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2.5 text-xs text-muted-foreground hover:bg-muted"
+            >
+              <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px]">Ctrl</kbd>
+              <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px]">K</kbd>
+            </button>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setNotifOpen((v) => !v)}
+                className="relative rounded-xl border border-border bg-card p-2.5 hover:bg-muted"
+                aria-label="Notifications"
+              >
+                <Bell className="h-4 w-4" />
+                {notifications.length > 0 && (
+                  <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#FF4D1C] px-1 text-[10px] font-bold text-white">
+                    {notifications.length}
+                  </span>
+                )}
+              </button>
+              {notifOpen && (
+                <div className="absolute right-0 z-40 mt-2 w-80 overflow-hidden rounded-2xl border border-border bg-card shadow-xl">
+                  <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                    <p className="text-sm font-semibold">Notifications</p>
+                    <button type="button" className="text-xs text-muted-foreground" onClick={() => setNotifOpen(false)}>
+                      Close
+                    </button>
+                  </div>
+                  <ul className="max-h-80 overflow-y-auto">
+                    {notifications.length === 0 ? (
+                      <li className="px-3 py-8 text-center text-sm text-muted-foreground">You're caught up</li>
+                    ) : (
+                      notifications.map((n) => (
+                        <li key={n.id}>
+                          <button
+                            type="button"
+                            className="flex w-full flex-col gap-0.5 px-3 py-2.5 text-left hover:bg-muted"
+                            onClick={() => {
+                              if (n.jobId) {
+                                setTab("work-queue");
+                                openJobDrawer(n.jobId);
+                              }
+                              setNotifOpen(false);
+                            }}
+                          >
+                            <span className="text-sm font-medium">{n.title}</span>
+                            <span className="text-xs text-muted-foreground">{n.body}</span>
+                            {n.when && <span className="text-[10px] text-muted-foreground">{n.when}</span>}
+                          </button>
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+
           {isReadOnly && (
             <div className="flex items-center gap-2 rounded-xl border border-red-300 bg-red-50 dark:border-red-900/60 dark:bg-red-950/20 px-4 py-3 text-sm text-red-800 dark:text-red-300 shadow-sm">
               <Shield className="h-4 w-4 text-red-500 shrink-0" />
@@ -729,13 +1043,45 @@ export default function AdminPanel({
 
         <TabFade tabKey={tab}>
         {tab === "overview" && (
-          report ? (
-            <AdminOverview report={report} onOpenDispatch={() => setTab("dispatch")} />
-          ) : (
+          jobs.length === 0 && !report ? (
             <div className={`${cardClass} flex items-center gap-2 px-4 py-10 text-sm text-muted-foreground`}>
-              <Loader2 className="h-4 w-4 animate-spin" /> Loading dashboard…
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading operations…
             </div>
+          ) : (
+            <>
+              <AdminAttentionOverview
+                jobs={jobs}
+                reportPayments={report?.revenueCollected}
+                onOpenAttention={openAttention}
+                onOpenWorkQueue={() => setTab("work-queue")}
+              />
+              {report && (
+                <div className="mt-8">
+                  <details className="group rounded-2xl border border-border/70 bg-card shadow-sm">
+                    <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-muted-foreground marker:content-none [&::-webkit-details-marker]:hidden">
+                      <span className="group-open:hidden">Show analytics charts</span>
+                      <span className="hidden group-open:inline">Hide analytics charts</span>
+                    </summary>
+                    <div className="border-t border-border px-2 pb-4 pt-2">
+                      <AdminOverview report={report} onOpenDispatch={() => setTab("work-queue")} />
+                    </div>
+                  </details>
+                </div>
+              )}
+            </>
           )
+        )}
+
+        {tab === "work-queue" && (
+          <AdminWorkQueue
+            jobs={jobs}
+            filter={queueFilter}
+            search={queueSearch}
+            selectedJobId={selectedJobId}
+            onFilterChange={setQueueFilter}
+            onSearchChange={setQueueSearch}
+            onSelectJob={openJobDrawer}
+          />
         )}
 
         {tab === "dispatch" && (
@@ -896,6 +1242,81 @@ export default function AdminPanel({
                     </div>
                   )}
                   <div className="space-y-3 border-t border-border pt-4">
+                    <p className="text-sm font-medium">Get estimate</p>
+                    <p className="text-xs text-muted-foreground">How should contractors evaluate this request?</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => setInviteRequestType("remote_quote")}
+                        className={`rounded-xl border p-3 text-left text-sm transition ${
+                          inviteRequestType === "remote_quote"
+                            ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                            : "border-border hover:bg-muted/40"
+                        }`}
+                      >
+                        <p className="font-semibold">Remote quote</p>
+                        <p className="mt-1 text-xs text-muted-foreground">Send photos, videos, and job details for an off-site estimate.</p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setInviteRequestType("site_visit")}
+                        className={`rounded-xl border p-3 text-left text-sm transition ${
+                          inviteRequestType === "site_visit"
+                            ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                            : "border-border hover:bg-muted/40"
+                        }`}
+                      >
+                        <p className="font-semibold">Site visit</p>
+                        <p className="mt-1 text-xs text-muted-foreground">Schedule an on-site inspection before quoting.</p>
+                      </button>
+                    </div>
+                    <div className="rounded-xl border border-dashed border-border bg-muted/20 p-4 space-y-3">
+                      <p className="text-sm font-medium">Coupon / discount</p>
+                      {selectedJob.discountCode ? (
+                        <p className="text-sm text-teal-700 dark:text-teal-400">
+                          Active: <span className="font-semibold">{selectedJob.discountCode}</span>
+                          {selectedJob.discountLabel ? ` · ${selectedJob.discountLabel}` : ""}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">No coupon on this job yet.</p>
+                      )}
+                      <div className="flex flex-wrap gap-2">
+                        <input
+                          type="text"
+                          className={`${fieldClass} max-w-xs uppercase`}
+                          placeholder="PROMO2026"
+                          value={dispatchCouponCode}
+                          onChange={(e) => setDispatchCouponCode(e.target.value.toUpperCase())}
+                          disabled={isReadOnly}
+                        />
+                        <button
+                          type="button"
+                          disabled={busy || isReadOnly || !dispatchCouponCode.trim()}
+                          className={btnSecondary}
+                          onClick={async () => {
+                            if (!dispatchCouponCode.trim()) return;
+                            setBusy(true);
+                            setMessage(null);
+                            try {
+                              const r = await adminApplyJobDiscount(selectedJob.id, dispatchCouponCode.trim());
+                              if (!r.ok) {
+                                setMessage(r.message || "Could not apply coupon.");
+                              } else {
+                                setMessage(`Coupon ${dispatchCouponCode.trim()} applied to job.`);
+                                setDispatchCouponCode("");
+                                await refreshJobs();
+                              }
+                            } catch (err) {
+                              setMessage(err instanceof Error ? err.message : "Could not apply coupon.");
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                        >
+                          Apply coupon
+                        </button>
+                      </div>
+                    </div>
                     <p className="text-sm font-medium">Invite contractor</p>
                     {selectedJob.assignedContractorUserId ? (
                       <p className="rounded-xl bg-teal-500/10 px-3 py-2 text-sm text-teal-800">
@@ -934,7 +1355,9 @@ export default function AdminPanel({
                           setBusy(true);
                           setMessage(null);
                           try {
-                            const invite = await adminInvite(selectedJob.id, Number(inviteContractorId));
+                            const invite = await adminInvite(selectedJob.id, Number(inviteContractorId), {
+                              requestType: inviteRequestType,
+                            });
                             if (!invite.ok) {
                               setMessage(invite.message || "Invite failed.");
                               return;
@@ -948,7 +1371,7 @@ export default function AdminPanel({
                             const name =
                               contractors.find((c) => Number(c.id) === Number(inviteContractorId))?.name ||
                               "Contractor";
-                            setMessage(`${name} invited and assigned. Status is now awaiting bid.`);
+                            setMessage(`${name} invited (${inviteRequestType === "site_visit" ? "site visit" : "remote quote"}) and assigned.`);
                             await refreshJobs();
                           } catch (err) {
                             setMessage(err instanceof Error ? err.message : "Invite & assign failed.");
@@ -1000,7 +1423,7 @@ export default function AdminPanel({
                     )}
                     <div className="flex flex-wrap items-end gap-2 pt-1">
                       <label className="grid gap-1 text-sm">
-                        <span className="text-xs font-medium text-muted-foreground">Payout amount (optional)</span>
+                        <span className="text-xs font-medium text-muted-foreground">Payout amount ($)</span>
                         <input
                           type="number"
                           min={1}
@@ -1013,28 +1436,43 @@ export default function AdminPanel({
                           }
                           value={payoutAmount}
                           onChange={(e) => setPayoutAmount(e.target.value ? Number(e.target.value) : "")}
+                          disabled={isReadOnly}
+                        />
+                      </label>
+                      <label className="grid gap-1 text-sm">
+                        <span className="text-xs font-medium text-muted-foreground">Bonus / adj. (¢)</span>
+                        <input
+                          type="number"
+                          step={100}
+                          className={`${fieldClass} w-32`}
+                          placeholder="0"
+                          value={payoutBonus}
+                          onChange={(e) => setPayoutBonus(e.target.value ? Number(e.target.value) : "")}
+                          disabled={isReadOnly}
                         />
                       </label>
                       <button
                         type="button"
                         disabled={
                           busy ||
+                          isReadOnly ||
                           !selectedJob.assignedContractorUserId ||
                           ["paid_out", "closed", "canceled", "refunded"].includes(String(selectedJob.status))
                         }
                         className={btnSecondary}
                         title={
                           selectedJob.assignedContractorUserId
-                            ? "Release contractor payout"
+                            ? "Create payout record and wire transfer"
                             : "Assign a contractor first"
                         }
                         onClick={async () => {
                           setBusy(true);
                           setMessage(null);
                           try {
-                            const r = await adminPayout(
+                            const r = await adminPayoutV2(
                               selectedJob.id,
-                              payoutAmount === "" ? undefined : Number(payoutAmount)
+                              payoutAmount === "" ? undefined : Number(payoutAmount),
+                              payoutBonus === "" ? undefined : { adjustmentsCents: Number(payoutBonus) }
                             );
                             if (!r.ok) {
                               setMessage(r.message || "Payout failed.");
@@ -1046,6 +1484,7 @@ export default function AdminPanel({
                                   }.`
                               );
                               setPayoutAmount("");
+                              setPayoutBonus("");
                               await refreshJobs();
                             }
                           } catch (err) {
@@ -1060,6 +1499,15 @@ export default function AdminPanel({
                       {!selectedJob.assignedContractorUserId && (
                         <p className="w-full text-xs text-muted-foreground">Assign a contractor before releasing payout.</p>
                       )}
+                    </div>
+                    <div className="border-t border-border pt-4">
+                      <p className="mb-3 text-sm font-medium">Homeowner invoice</p>
+                      <AdminHomeownerInvoicePanel
+                        jobId={selectedJob.id}
+                        readOnly={isReadOnly}
+                        compact
+                        onMessage={setMessage}
+                      />
                     </div>
                   </div>
                 </motion.div>
@@ -1093,53 +1541,23 @@ export default function AdminPanel({
             ) : bids.length === 0 ? (
               <EmptyState title="No bids yet" hint="Invite a contractor from Dispatch first." />
             ) : (
-              <div className="grid gap-3">
+              <div className="grid gap-4">
                 {bids.map((b, i) => (
                   <motion.div
                     key={b.id}
                     initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: i * 0.05 }}
-                    className={`${cardClass} p-5`}
                   >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Confidential net bid</p>
-                        <p className="mt-1 text-2xl font-semibold tabular-nums">{formatMoney(b.netTotal)}</p>
-                      </div>
-                      <StatusBadge status={String(b.status || "received")} />
-                    </div>
-                    <div className="mt-4 grid gap-2 sm:grid-cols-3">
-                      <div className="rounded-xl bg-muted/50 px-3 py-2 text-sm">
-                        <p className="text-xs text-muted-foreground">Labor</p>
-                        <p className="font-medium tabular-nums">{formatMoney(b.labor)}</p>
-                      </div>
-                      <div className="rounded-xl bg-muted/50 px-3 py-2 text-sm">
-                        <p className="text-xs text-muted-foreground">Materials</p>
-                        <p className="font-medium tabular-nums">{formatMoney(b.materials)}</p>
-                      </div>
-                      <div className="rounded-xl bg-muted/50 px-3 py-2 text-sm">
-                        <p className="text-xs text-muted-foreground">Travel</p>
-                        <p className="font-medium tabular-nums">{formatMoney(b.travelDiagnostic)}</p>
-                      </div>
-                    </div>
-                    {b.warranty && <p className="mt-3 text-sm text-muted-foreground">{b.warranty}</p>}
-                    <button
-                      type="button"
-                      disabled={busy}
-                      className={`${btnPrimary} mt-4`}
-                      onClick={async () => {
-                        if (!selectedJobId) return;
-                        setBusy(true);
-                        const r = await adminCreateProposal(selectedJobId, b.id);
-                        setMessage(r.ok ? `Proposal published at ${formatMoney(r.proposal?.retailAmount)}` : r.message || "Failed");
+                    <AdminQuoteBuilderPanel
+                      job={jobs.find((j) => j.id === selectedJobId)!}
+                      bid={b}
+                      busy={busy}
+                      onMessage={setMessage}
+                      onPublished={async () => {
                         await refreshJobs();
-                        setBusy(false);
                       }}
-                    >
-                      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <DollarSign className="h-4 w-4" />}
-                      Create retail proposal from bid
-                    </button>
+                    />
                   </motion.div>
                 ))}
               </div>
@@ -1349,7 +1767,7 @@ export default function AdminPanel({
           <section className="space-y-4">
             <SectionHeader
               title="Contractors"
-              subtitle="Search any contractor and open their full application. Approve or suspend for invite eligibility."
+              subtitle="360° contractor profiles — verification, Stripe Connect status, jobs, performance, and financials. Banking details stay with Stripe."
               action={
                 <div className="rounded-xl border border-border bg-card px-3 py-2 text-sm shadow-sm">
                   <span className="tabular-nums font-semibold">{contractors.length}</span>
@@ -1477,7 +1895,36 @@ export default function AdminPanel({
                           )}
                         </div>
                       </div>
-                      {expanded && <ContractorApplicationAdminView user={c} onViewDocument={viewDocument} />}
+                      {expanded && (
+                        <div className="mt-4 border-t border-border pt-4">
+                          <Contractor360Profile
+                            contractor={c}
+                            jobs={jobs}
+                            busy={complianceBusyId === id}
+                            onViewDocument={viewDocument}
+                            onOpenJob={(jobId) => {
+                              setTab("work-queue");
+                              openJobDrawer(jobId);
+                            }}
+                            onApprove={async () => {
+                              if (!c.id) return;
+                              setComplianceBusyId(Number(c.id));
+                              await adminSetCompliance(Number(c.id), "approved");
+                              setMessage(`${c.name} approved.`);
+                              await refreshContractors();
+                              setComplianceBusyId(null);
+                            }}
+                            onSuspend={async () => {
+                              if (!c.id) return;
+                              setComplianceBusyId(Number(c.id));
+                              await adminSetCompliance(Number(c.id), "suspended");
+                              setMessage(`${c.name} suspended.`);
+                              await refreshContractors();
+                              setComplianceBusyId(null);
+                            }}
+                          />
+                        </div>
+                      )}
                     </motion.div>
                   );
                 })}
@@ -2390,6 +2837,28 @@ export default function AdminPanel({
                             })}
                           </td>
                           <td className="px-6 py-4 text-right">
+                            <div className="flex flex-wrap items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  setInvoiceModalHomeowner({ id: c.id, name: c.name, email: c.email });
+                                  setInvoiceModalJobId("");
+                                  setInvoiceModalJobs([]);
+                                  setInvoiceModalLoading(true);
+                                  try {
+                                    const r = await adminHomeownerJobs(c.id);
+                                    if (r.ok) {
+                                      setInvoiceModalJobs(r.jobs || []);
+                                      if (r.jobs?.length === 1) setInvoiceModalJobId(r.jobs[0].id);
+                                    }
+                                  } finally {
+                                    setInvoiceModalLoading(false);
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1 rounded border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted/40 transition"
+                              >
+                                Send invoice
+                              </button>
                             {c.planCode !== "pro_membership" ? (
                               <button
                                 type="button"
@@ -2405,6 +2874,7 @@ export default function AdminPanel({
                             ) : (
                               <span className="text-xs text-muted-foreground italic">Already Pro</span>
                             )}
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -2422,26 +2892,137 @@ export default function AdminPanel({
           </section>
         )}
 
+        {tab === "audit-logs" && <AdminAuditLogsPanel />}
+
         {tab === "access" && (
           <section className="space-y-6">
             <SectionHeader
-              title="Access Control Management"
-              subtitle="Manage permissions and access hierarchy for staff admin accounts."
+              title="Team & Roles"
+              subtitle="Staff accounts with permission-based access. Roles are collections of permissions — not hardcoded pages."
             />
 
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {Object.entries(ROLE_PRESETS).map(([id, preset]) => (
+                <div key={id} className="rounded-2xl border border-border/70 bg-card p-4 shadow-sm">
+                  <p className="font-semibold">{preset.label}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{preset.description}</p>
+                  <p className="mt-2 text-[11px] font-medium text-muted-foreground">
+                    {preset.permissions.length} permissions
+                  </p>
+                </div>
+              ))}
+            </div>
+
             <div className="rounded-xl border border-border bg-card shadow-sm overflow-hidden">
-              <div className="p-5 border-b border-border/60 flex items-center justify-between">
-                <h3 className="font-semibold text-sm uppercase tracking-wider text-foreground">🛡️ Staff Accounts & Permissions</h3>
-                <button
-                  type="button"
-                  onClick={() => void refreshStaff()}
-                  disabled={busy}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-semibold hover:bg-muted/40 transition disabled:opacity-60"
-                >
-                  {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-                  Refresh List
-                </button>
+              <div className="p-5 border-b border-border/60 flex flex-wrap items-center justify-between gap-3">
+                <h3 className="font-semibold text-sm uppercase tracking-wider text-foreground">Staff Accounts & Permissions</h3>
+                <div className="flex items-center gap-2">
+                  {!isReadOnly && (
+                    <button
+                      type="button"
+                      onClick={() => setStaffCreateOpen((v) => !v)}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-[#FF4D1C] px-3 py-1.5 text-xs font-semibold text-white hover:brightness-105"
+                    >
+                      Add staff user
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void refreshStaff()}
+                    disabled={busy}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-semibold hover:bg-muted/40 transition disabled:opacity-60"
+                  >
+                    {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                    Refresh List
+                  </button>
+                </div>
               </div>
+
+              {staffCreateOpen && !isReadOnly && (
+                <form
+                  className="border-b border-border/60 bg-muted/10 p-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5"
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    if (!newStaffName.trim() || !newStaffEmail.trim() || !newStaffPassword) return;
+                    setStaffCreateBusy(true);
+                    try {
+                      const r = await createStaffAdmin({
+                        name: newStaffName.trim(),
+                        email: newStaffEmail.trim(),
+                        password: newStaffPassword,
+                        accessLevel: newStaffAccess,
+                      });
+                      if (!r.ok) {
+                        alert(r.message || "Could not create staff account.");
+                      } else {
+                        setNewStaffName("");
+                        setNewStaffEmail("");
+                        setNewStaffPassword("");
+                        setNewStaffAccess("read-write");
+                        setStaffCreateOpen(false);
+                        await refreshStaff();
+                        setMessage(`Staff account created for ${r.user?.email || newStaffEmail}.`);
+                      }
+                    } catch (err) {
+                      alert(err instanceof Error ? err.message : "Could not create staff account.");
+                    } finally {
+                      setStaffCreateBusy(false);
+                    }
+                  }}
+                >
+                  <label className="grid gap-1 text-sm">
+                    <span className="text-xs font-medium text-muted-foreground">Name</span>
+                    <input
+                      required
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                      value={newStaffName}
+                      onChange={(e) => setNewStaffName(e.target.value)}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm">
+                    <span className="text-xs font-medium text-muted-foreground">Email</span>
+                    <input
+                      required
+                      type="email"
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                      value={newStaffEmail}
+                      onChange={(e) => setNewStaffEmail(e.target.value)}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm">
+                    <span className="text-xs font-medium text-muted-foreground">Password</span>
+                    <input
+                      required
+                      type="password"
+                      minLength={8}
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                      value={newStaffPassword}
+                      onChange={(e) => setNewStaffPassword(e.target.value)}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm">
+                    <span className="text-xs font-medium text-muted-foreground">Access level</span>
+                    <select
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                      value={newStaffAccess}
+                      onChange={(e) => setNewStaffAccess(e.target.value as "read" | "write" | "read-write")}
+                    >
+                      <option value="read">Read only (view)</option>
+                      <option value="write">Write only</option>
+                      <option value="read-write">Read + Write (full)</option>
+                    </select>
+                  </label>
+                  <div className="flex items-end">
+                    <button
+                      type="submit"
+                      disabled={staffCreateBusy}
+                      className="w-full rounded-lg bg-[#FF4D1C] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                    >
+                      {staffCreateBusy ? "Creating…" : "Create account"}
+                    </button>
+                  </div>
+                </form>
+              )}
 
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm border-collapse">
@@ -2499,9 +3080,9 @@ export default function AdminPanel({
                                 }
                               }}
                             >
-                              <option value="read">Read-Only</option>
-                              <option value="write">Write-Only</option>
-                              <option value="read-write">Read-Write (Full)</option>
+                              <option value="read">Read only (view)</option>
+                              <option value="write">Write only</option>
+                              <option value="read-write">Read + Write (full)</option>
                             </select>
                           </td>
                         </tr>
@@ -2579,6 +3160,151 @@ export default function AdminPanel({
           </div>
         )}
       </AnimatePresence>
+
+      <AnimatePresence>
+        {invoiceModalHomeowner && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
+            >
+              <div className="flex items-center justify-between border-b border-border/60 px-5 py-4">
+                <div>
+                  <h3 className="text-lg font-bold">Send invoice</h3>
+                  <p className="text-sm text-muted-foreground">
+                    {invoiceModalHomeowner.name} · {invoiceModalHomeowner.email}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setInvoiceModalHomeowner(null)}
+                  className="rounded p-1 hover:bg-muted"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-5 space-y-4">
+                {invoiceModalLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" /> Loading jobs…
+                  </div>
+                ) : invoiceModalJobs.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No service jobs found for this homeowner.</p>
+                ) : (
+                  <>
+                    <label className="grid gap-1 text-sm">
+                      <span className="text-xs font-medium text-muted-foreground">Select job</span>
+                      <select
+                        className={fieldClass}
+                        value={invoiceModalJobId}
+                        onChange={(e) => setInvoiceModalJobId(e.target.value ? Number(e.target.value) : "")}
+                      >
+                        <option value="">Choose a job…</option>
+                        {invoiceModalJobs.map((j) => (
+                          <option key={j.id} value={j.id}>
+                            #{j.id} {j.title} · {STATUS_LABELS[j.status] || j.status}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {invoiceModalJobId !== "" ? (
+                      <AdminHomeownerInvoicePanel
+                        jobId={Number(invoiceModalJobId)}
+                        readOnly={isReadOnly}
+                        compact
+                        onMessage={setMessage}
+                      />
+                    ) : null}
+                  </>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AdminJobDrawer
+        job={selectedJob}
+        bids={bids}
+        contractors={contractors}
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        busy={busy}
+        inviteContractorId={inviteContractorId}
+        inviteRequestType={inviteRequestType}
+        onInviteContractorId={setInviteContractorId}
+        onInviteRequestType={setInviteRequestType}
+        onInviteAndAssign={handleInviteAndAssign}
+        onMatch={async () => {
+          if (!selectedJob) return;
+          setBusy(true);
+          const r = await matchContractors(selectedJob.id);
+          setBusy(false);
+          setMessage(r.ok ? "Auto-match complete." : r.message || "Match failed.");
+          await refreshJobs();
+        }}
+        onOpenProposalsTab={() => {
+          setDrawerOpen(false);
+          setTab("proposals");
+        }}
+        onOpenContractor={(contractorId) => {
+          setDrawerOpen(false);
+          setTab("contractors");
+          const c = contractors.find((x) => Number(x.id) === contractorId);
+          if (c) {
+            if (expandedContractorId !== contractorId) {
+              void openContractorDetail(c);
+            }
+          } else {
+            setExpandedContractorId(contractorId);
+          }
+        }}
+        onOpenHomeowner={() => {
+          setDrawerOpen(false);
+          setTab("subscriptions");
+          setMessage(
+            selectedJob?.contactName
+              ? `Homeowner for ${jobBookingLabel(selectedJob)}: ${selectedJob.contactName}${selectedJob.contactPhone ? ` · ${selectedJob.contactPhone}` : ""}`
+              : "Open Homeowners to manage customer accounts.",
+          );
+        }}
+        onOpenPayments={() => {
+          setDrawerOpen(false);
+          setTab("payments");
+        }}
+        onOpenPayouts={() => {
+          setDrawerOpen(false);
+          setTab("contractor-payouts");
+        }}
+        onOpenAiEstimate={() => {
+          setDrawerOpen(false);
+          setTab("ai");
+        }}
+        dispatchCouponCode={dispatchCouponCode}
+        onDispatchCouponCodeChange={setDispatchCouponCode}
+        readOnly={isReadOnly}
+        onApplyCoupon={async () => {
+          if (!selectedJob || !dispatchCouponCode.trim()) return;
+          setBusy(true);
+          try {
+            const r = await adminApplyJobDiscount(selectedJob.id, dispatchCouponCode.trim());
+            if (!r.ok) setMessage(r.message || "Could not apply coupon.");
+            else {
+              setMessage(`Coupon applied to ${jobBookingLabel(selectedJob)}.`);
+              setDispatchCouponCode("");
+              await refreshJobs();
+            }
+          } finally {
+            setBusy(false);
+          }
+        }}
+        onMessage={setMessage}
+        onRefresh={refreshJobs}
+      />
+
+      <AdminCommandPalette open={cmdOpen} onOpenChange={setCmdOpen} actions={commandActions} />
       </div>
     </div>
   );

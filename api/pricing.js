@@ -310,6 +310,62 @@ export function retailFromBid(netTotal, rules = DEFAULT_PRICING_RULES, opts = {}
   };
 }
 
+/**
+ * Admin quote builder — derive customer quote from contractor net + adjustments.
+ */
+export function computeCustomerQuoteFromBid(contractorNet, rules = DEFAULT_PRICING_RULES, opts = {}) {
+  const priced = retailFromBid(contractorNet, rules, opts);
+  const baseRetail = priced.customer_final_retail_amount;
+  const serviceCharge = num(opts.serviceCharge, 25);
+
+  let adjustmentTotal = 0;
+  for (const adj of opts.adjustments || []) {
+    const amt = num(adj.amount, 0);
+    if (String(adj.calculation || 'fixed').toLowerCase() === 'percent') {
+      adjustmentTotal += Math.round(baseRetail * (amt / 100));
+    } else {
+      adjustmentTotal += amt;
+    }
+  }
+
+  const subtotal = baseRetail + adjustmentTotal + serviceCharge;
+
+  let adminDiscount = 0;
+  if (opts.adminDiscount) {
+    const d = num(opts.adminDiscount.amount, 0);
+    if (String(opts.adminDiscount.type || 'fixed').toLowerCase() === 'percent') {
+      adminDiscount = Math.round(subtotal * (d / 100));
+    } else {
+      adminDiscount = d;
+    }
+  }
+
+  const couponAmount = num(opts.couponAmount, 0);
+  const customerQuote = Math.max(0, Math.round(subtotal - adminDiscount - couponAmount));
+  const feeRate = num(rules.variable_payment_fee_rate, 0.029);
+  const fixedPay = num(rules.fixed_payment_fee, 0.3);
+  const processing = Math.round(customerQuote * feeRate + fixedPay);
+  const fixedPlatform = num(rules.fixed_platform_cost, 75);
+  const grossDiff = customerQuote - priced.contractor_final_net_amount;
+  const netContribution = grossDiff - processing - fixedPlatform;
+  const marginPct = customerQuote > 0 ? (netContribution / customerQuote) * 100 : 0;
+
+  return {
+    contractorNet: priced.contractor_final_net_amount,
+    baseRetail,
+    pricingAdjustment: adjustmentTotal,
+    serviceCharge,
+    adminDiscount,
+    couponAmount,
+    customerQuote,
+    processingCost: processing,
+    grossDifference: grossDiff,
+    netContribution,
+    expectedMarginPct: Math.round(marginPct * 100) / 100,
+    priced,
+  };
+}
+
 export function getDispatchFee(serviceTiming, rules = DEFAULT_PRICING_RULES) {
   const fees = rules.dispatch_fees || DEFAULT_PRICING_RULES.dispatch_fees;
   const t = String(serviceTiming || '').toLowerCase();
