@@ -35,6 +35,7 @@ import {
   type HomeownerArea,
   type HomeownerService,
 } from "./homeownerCategories";
+import { isValidUsZip, normalizeZip, zipInputProps } from "./zipCode";
 
 type ReportStep = 0 | 1 | 2 | 3;
 
@@ -76,7 +77,6 @@ export default function HomeownerLogin({
   const [reportCity, setReportCity] = useState("");
   const [reportState, setReportState] = useState("");
   const [reportZip, setReportZip] = useState("");
-  const [reportCountry, setReportCountry] = useState("US");
   const [reportPhone, setReportPhone] = useState("");
   const [reportName, setReportName] = useState("");
   const [reportEmail, setReportEmail] = useState("");
@@ -130,6 +130,10 @@ export default function HomeownerLogin({
         setError("Fill in the service address to continue.");
         return;
       }
+      if (!isValidUsZip(reportZip)) {
+        setError("Enter a valid 5-digit US ZIP code (or ZIP+4).");
+        return;
+      }
     }
     setReportStep((s) => Math.min(3, s + 1) as ReportStep);
   };
@@ -170,6 +174,11 @@ export default function HomeownerLogin({
           setLoading(false);
           return;
         }
+        if (!isValidUsZip(reportZip)) {
+          setError("Enter a valid 5-digit US ZIP code (or ZIP+4).");
+          setLoading(false);
+          return;
+        }
         const result = await createPublicGuestJob({
           category: reportCategory,
           title: jobTitleForHomeowner(reportArea, reportCategory),
@@ -179,8 +188,8 @@ export default function HomeownerLogin({
           streetAddress: reportStreet,
           city: reportCity,
           state: reportState,
-          zip: reportZip,
-          country: reportCountry,
+          zip: normalizeZip(reportZip),
+          country: "US",
           contactName: reportName,
           contactPhone: reportPhone,
           email: reportEmail,
@@ -540,19 +549,9 @@ export default function HomeownerLogin({
                           <AuthFieldLabel>ZIP</AuthFieldLabel>
                           <input
                             type="text"
-                            placeholder="11201"
+                            {...zipInputProps()}
                             value={reportZip}
-                            onChange={(e) => setReportZip(e.target.value)}
-                            className={authInputClass}
-                          />
-                        </div>
-                        <div>
-                          <AuthFieldLabel>Country</AuthFieldLabel>
-                          <input
-                            type="text"
-                            placeholder="US"
-                            value={reportCountry}
-                            onChange={(e) => setReportCountry(e.target.value)}
+                            onChange={(e) => setReportZip(normalizeZip(e.target.value))}
                             className={authInputClass}
                           />
                         </div>

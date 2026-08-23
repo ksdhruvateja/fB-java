@@ -1075,9 +1075,13 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
   });
 
   // ── Places proxy ─────────────────────────────────────────────────────────
+  function mapsApiKey() {
+    return process.env.GOOGLE_PLACES_API_KEY?.trim() || process.env.GOOGLE_MAPS_API_KEY?.trim() || '';
+  }
+
   app.get('/api/places/autocomplete', requireAuth, async (req, res) => {
     try {
-      const key = process.env.GOOGLE_PLACES_API_KEY?.trim() || process.env.GOOGLE_MAPS_API_KEY?.trim();
+      const key = mapsApiKey();
       const input = String(req.query.input || '').trim();
       if (!input) return res.status(400).json({ ok: false, message: 'input required' });
       if (!key) {
@@ -1087,11 +1091,107 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
           predictions: [{ description: input, place_id: 'sim_place' }],
         });
       }
-      const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&key=${key}&types=address`;
+      const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&key=${key}&types=address&components=country:us`;
       const data = await fetch(url).then((r) => r.json());
       res.json({ ok: true, simulated: false, predictions: data.predictions || [] });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Places lookup failed.' });
+    }
+  });
+
+  app.get('/api/places/reverse-geocode', requireAuth, async (req, res) => {
+    try {
+      const key = mapsApiKey();
+      const address = String(req.query.address || '').trim();
+      const lat = req.query.lat != null ? Number(req.query.lat) : null;
+      const lng = req.query.lng != null ? Number(req.query.lng) : null;
+
+      if (!key) {
+        const fakeZip = address.match(/\b(\d{5})\b/)?.[1] || '10001';
+        return res.json({ ok: true, simulated: true, lat: 40.75, lng: -73.99, zip: fakeZip });
+      }
+
+      let url;
+      if (address) {
+        url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${key}&components=country:US`;
+      } else if (lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)) {
+        url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${key}`;
+      } else {
+        return res.status(400).json({ ok: false, message: 'address or lat/lng required' });
+      }
+
+      const data = await fetch(url).then((r) => r.json());
+      const result = data.results?.[0];
+      if (!result) return res.json({ ok: false, message: 'No results' });
+
+      const loc = result.geometry?.location;
+      const zipComp = (result.address_components || []).find((c) => c.types?.includes('postal_code'));
+      const zip = zipComp?.long_name?.slice(0, 5) || zipComp?.short_name?.slice(0, 5) || null;
+
+      res.json({
+        ok: true,
+        simulated: false,
+        lat: loc?.lat ?? null,
+        lng: loc?.lng ?? null,
+        zip,
+        formattedAddress: result.formatted_address || null,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, message: 'Geocode failed.' });
+    }
+  });
+
+  app.post('/api/places/scan-zips', requireAuth, async (req, res) => {
+    try {
+      const key = mapsApiKey();
+      const lat = Number(req.body?.lat);
+      const lng = Number(req.body?.lng);
+      const radiusMiles = Math.min(100, Math.max(5, Number(req.body?.radiusMiles) || 35));
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        return res.status(400).json({ ok: false, message: 'lat and lng required' });
+      }
+
+      const latDeg = radiusMiles / 69;
+      const lngScale = Math.cos((lat * Math.PI) / 180) || 1;
+      const lngDeg = radiusMiles / (69 * lngScale);
+      const points = [{ lat, lng }];
+      for (let ring = 1; ring <= 2; ring += 1) {
+        const frac = ring / 2;
+        const count = ring === 1 ? 6 : 10;
+        for (let i = 0; i < count; i += 1) {
+          const angle = (i / count) * 2 * Math.PI;
+          points.push({
+            lat: lat + latDeg * frac * Math.sin(angle),
+            lng: lng + lngDeg * frac * Math.cos(angle),
+          });
+        }
+      }
+
+      const zips = new Set();
+      if (!key) {
+        zips.add('10001');
+        zips.add('11201');
+        return res.json({ ok: true, simulated: true, zips: [...zips] });
+      }
+
+      await Promise.all(
+        points.map(async (p) => {
+          try {
+            const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${p.lat},${p.lng}&key=${key}`;
+            const data = await fetch(url).then((r) => r.json());
+            const result = data.results?.[0];
+            const zipComp = (result?.address_components || []).find((c) => c.types?.includes('postal_code'));
+            const zip = zipComp?.long_name?.slice(0, 5) || zipComp?.short_name?.slice(0, 5);
+            if (zip && /^\d{5}$/.test(zip)) zips.add(zip);
+          } catch {
+            /* ignore individual point failures */
+          }
+        })
+      );
+
+      res.json({ ok: true, simulated: false, zips: [...zips].sort() });
+    } catch (e) {
+      res.status(500).json({ ok: false, message: 'ZIP scan failed.' });
     }
   });
 

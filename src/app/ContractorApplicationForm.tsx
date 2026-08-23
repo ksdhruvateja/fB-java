@@ -226,7 +226,7 @@ export default function ContractorApplicationForm({
   const set = <K extends keyof ContractorApplication>(key: K, v: ContractorApplication[K]) =>
     onChange({ ...value, [key]: v });
 
-  const toggleIn = (key: "primaryServices" | "serviceStates", item: string) => {
+  const toggleIn = (key: "primaryServices", item: string) => {
     const list = value[key];
     const has = list.includes(item);
     set(key, has ? list.filter((s) => s !== item) : [...list, item]);
@@ -593,23 +593,8 @@ export default function ContractorApplicationForm({
       <div className={sectionClass}>
         <SectionTitle icon={SECTION_ICONS.serviceAreas}>7. Service areas</SectionTitle>
         <p className={helpClass}>
-          Which states do you actively service? Pick at least one — then add ZIP codes and radius for job matching.
+          Add the ZIP codes you cover and your max travel radius. Job matching uses ZIP coverage — no statewide map needed.
         </p>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 max-h-56 overflow-y-auto rounded-xl border border-border p-2.5 bg-muted/10">
-          {US_STATES.map((s) => (
-            <label key={s.code} className="flex items-center gap-2 text-xs cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={value.serviceStates.includes(s.code)}
-                onChange={() => toggleIn("serviceStates", s.code)}
-                className="accent-primary"
-              />
-              <span>
-                {s.code} — {s.name}
-              </span>
-            </label>
-          ))}
-        </div>
         <div className="grid gap-3 sm:grid-cols-2 pt-1">
           <Field label="Primary ZIP codes" required className="sm:col-span-2">
             <input
@@ -619,6 +604,7 @@ export default function ContractorApplicationForm({
               onChange={(e) => set("serviceZips", e.target.value)}
               required
             />
+            <p className="mt-1 text-[11px] text-muted-foreground">Comma-separated 5-digit US ZIP codes.</p>
           </Field>
           <Field label="Maximum service radius (miles)" required>
             <input

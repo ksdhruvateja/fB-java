@@ -112,7 +112,6 @@ export function ContractorApplicationAdminView({
         <div className="space-y-1.5 rounded-lg border border-border/70 bg-muted/20 p-3">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Trades & area</p>
           <Row label="Trades" value={(app.primaryServices || []).join(", ") || user.trade} />
-          <Row label="States" value={(app.serviceStates || []).join(", ")} />
           <Row label="ZIPs" value={app.serviceZips || (Array.isArray(user.serviceZips) ? user.serviceZips.join(", ") : "")} />
           <Row label="Radius (mi)" value={app.maxServiceRadius || user.travelRadiusMiles} />
           <Row label="Available days" value={app.availableDays} />

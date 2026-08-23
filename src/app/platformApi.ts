@@ -166,6 +166,29 @@ export async function placesAutocomplete(input: string) {
   );
 }
 
+export async function reverseGeocode(address?: string, lat?: number, lng?: number) {
+  const params = new URLSearchParams();
+  if (address) params.set("address", address);
+  if (lat != null) params.set("lat", String(lat));
+  if (lng != null) params.set("lng", String(lng));
+  return api<{
+    ok: boolean;
+    simulated?: boolean;
+    lat?: number | null;
+    lng?: number | null;
+    zip?: string | null;
+    formattedAddress?: string | null;
+    message?: string;
+  }>(`/api/places/reverse-geocode?${params.toString()}`);
+}
+
+export async function scanZipsInRadius(lat: number, lng: number, radiusMiles: number) {
+  return api<{ ok: boolean; simulated?: boolean; zips?: string[]; message?: string }>("/api/places/scan-zips", {
+    method: "POST",
+    body: JSON.stringify({ lat, lng, radiusMiles }),
+  });
+}
+
 export async function startAdminMfa() {
   return api<{ ok: boolean; demoCode?: string }>("/api/auth/mfa/start", { method: "POST", body: "{}" });
 }

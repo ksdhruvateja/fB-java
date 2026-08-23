@@ -54,6 +54,7 @@ import ServiceTrackingCard from "./ServiceTrackingCard";
 import HomeownerPropertyPage, { DEFAULT_HOME_SYSTEMS } from "./HomeownerPropertyPage";
 import HomeownerMaintenanceTimeline from "./HomeownerMaintenanceTimeline";
 import HomeownerServiceHistory from "./HomeownerServiceHistory";
+import { isValidUsZip, normalizeZip, zipInputProps } from "./zipCode";
 
 function formatChatMessage(text: string): string {
   if (!text) return "";
@@ -318,7 +319,6 @@ export default function HomeownerDashboard({
   const [modalCity, setModalCity] = useState("");
   const [modalState, setModalState] = useState("");
   const [modalZip, setModalZip] = useState("");
-  const [modalCountry, setModalCountry] = useState("US");
   const [modalActionAfterSave, setModalActionAfterSave] = useState<"ai" | "experts" | null>(null);
   const [speakingText, setSpeakingText] = useState<string | null>(null);
 
@@ -386,7 +386,6 @@ export default function HomeownerDashboard({
   const [newCity, setNewCity] = useState("");
   const [newState, setNewState] = useState("NY");
   const [newZip, setNewZip] = useState("");
-  const [newCountry, setNewCountry] = useState("US");
   const [completionRating, setCompletionRating] = useState(5);
   const [completionReview, setCompletionReview] = useState("");
   const [completionLocation, setCompletionLocation] = useState("");
@@ -501,8 +500,8 @@ export default function HomeownerDashboard({
   }
 
   async function handleSaveZipAndProceed() {
-    if (!showZipPromptPropertyId || !zipPromptInput.trim()) {
-      alert("Please enter a valid ZIP code.");
+    if (!showZipPromptPropertyId || !isValidUsZip(zipPromptInput)) {
+      alert("Please enter a valid 5-digit US ZIP code.");
       return;
     }
     setBusy(true);
@@ -514,7 +513,7 @@ export default function HomeownerDashboard({
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ zip: zipPromptInput.trim() }),
+        body: JSON.stringify({ zip: normalizeZip(zipPromptInput) }),
       });
       const data = await res.json();
       if (!data.ok) {
@@ -544,6 +543,10 @@ export default function HomeownerDashboard({
       alert("Please fill in all required address fields.");
       return;
     }
+    if (!isValidUsZip(addressPromptZip)) {
+      alert("Please enter a valid 5-digit US ZIP code.");
+      return;
+    }
     setBusy(true);
     try {
       const token = localStorage.getItem("fixbridge-token");
@@ -558,7 +561,7 @@ export default function HomeownerDashboard({
           addressLine2: addressPromptLine2.trim() || undefined,
           city: addressPromptCity.trim(),
           state: addressPromptState.trim(),
-          zip: addressPromptZip.trim(),
+          zip: normalizeZip(addressPromptZip),
         }),
       });
       const data = await res.json();
@@ -595,14 +598,18 @@ export default function HomeownerDashboard({
       alert("Please fill in all address details.");
       return;
     }
+    if (!isValidUsZip(modalZip)) {
+      alert("Please enter a valid 5-digit US ZIP code.");
+      return;
+    }
     setBusy(true);
     try {
       const r = await createProperty({
         addressLine1: modalAddressLine1.trim(),
         city: modalCity.trim(),
         state: modalState.trim(),
-        zip: modalZip.trim(),
-        country: modalCountry.trim() || "US",
+        zip: normalizeZip(modalZip),
+        country: "US",
         streetAddress: modalAddressLine1.trim(),
         label: modalAddressLine1.trim(),
         homeSystems: DEFAULT_HOME_SYSTEMS,
@@ -973,14 +980,18 @@ export default function HomeownerDashboard({
 
   async function addProperty(e: FormEvent) {
     e.preventDefault();
+    if (!isValidUsZip(newZip)) {
+      setError("Enter a valid 5-digit US ZIP code.");
+      return;
+    }
     setBusy(true);
     try {
       const r = await createProperty({
         addressLine1: newAddress,
         city: newCity,
         state: newState,
-        zip: newZip,
-        country: newCountry,
+        zip: normalizeZip(newZip),
+        country: "US",
         streetAddress: newAddress,
         label: newAddress,
         homeSystems: DEFAULT_HOME_SYSTEMS,
@@ -989,7 +1000,6 @@ export default function HomeownerDashboard({
         setNewAddress("");
         setNewCity("");
         setNewZip("");
-        setNewCountry("US");
         await refresh();
       } else {
         setError(r.message || "Could not save property.");
@@ -3482,10 +3492,10 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                   <input
                     type="text"
                     required
-                    placeholder="e.g. 10001"
+                    {...zipInputProps()}
                     className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#FF4D1C] focus:ring-1 focus:ring-[#FF4D1C]/20 text-foreground"
                     value={zipPromptInput}
-                    onChange={(e) => setZipPromptInput(e.target.value)}
+                    onChange={(e) => setZipPromptInput(normalizeZip(e.target.value))}
                   />
                 </label>
               </div>
@@ -3500,7 +3510,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                 </button>
                 <button
                   type="button"
-                  disabled={busy || !zipPromptInput.trim()}
+                  disabled={busy || !isValidUsZip(zipPromptInput)}
                   onClick={() => void handleSaveZipAndProceed()}
                   className="rounded-lg bg-[#FF4D1C] px-4 py-2 font-semibold text-white transition hover:brightness-105 disabled:opacity-60"
                 >
@@ -3588,10 +3598,10 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                   <input
                     type="text"
                     required
-                    placeholder="e.g. 11201"
+                    {...zipInputProps()}
                     className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#FF4D1C] text-foreground"
                     value={addressPromptZip}
-                    onChange={(e) => setAddressPromptZip(e.target.value)}
+                    onChange={(e) => setAddressPromptZip(normalizeZip(e.target.value))}
                   />
                 </label>
               </div>
@@ -3606,7 +3616,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                 </button>
                 <button
                   type="button"
-                  disabled={busy || !addressPromptLine1.trim() || !addressPromptCity.trim() || !addressPromptState.trim() || !addressPromptZip.trim()}
+                  disabled={busy || !addressPromptLine1.trim() || !addressPromptCity.trim() || !addressPromptState.trim() || !isValidUsZip(addressPromptZip)}
                   onClick={() => void handleSaveAddressAndProceed()}
                   className="rounded-lg bg-[#FF4D1C] px-4 py-2 font-semibold text-white transition hover:brightness-105 disabled:opacity-60"
                 >
@@ -3684,10 +3694,10 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                   <input
                     type="text"
                     required
-                    placeholder="e.g. 11201"
+                    {...zipInputProps()}
                     className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#FF4D1C] text-foreground"
                     value={modalZip}
-                    onChange={(e) => setModalZip(e.target.value)}
+                    onChange={(e) => setModalZip(normalizeZip(e.target.value))}
                   />
                 </label>
               </div>
@@ -3702,7 +3712,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                 </button>
                 <button
                   type="button"
-                  disabled={busy || !modalAddressLine1.trim() || !modalCity.trim() || !modalState.trim() || !modalZip.trim()}
+                  disabled={busy || !modalAddressLine1.trim() || !modalCity.trim() || !modalState.trim() || !isValidUsZip(modalZip)}
                   onClick={() => void handleSaveAddressModal()}
                   className="rounded-lg bg-[#FF4D1C] px-4 py-2 font-semibold text-white transition hover:brightness-105 disabled:opacity-60"
                 >

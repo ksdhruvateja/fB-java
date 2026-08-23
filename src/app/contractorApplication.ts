@@ -321,8 +321,16 @@ export function validateContractorApplication(
     req(app.contactPhone, "Contact phone"),
     req(app.contactPhoneType, "Phone type"),
     app.primaryServices.length ? null : "Select at least one trade.",
-    app.serviceStates.length ? null : "Select at least one service state.",
     req(app.serviceZips, "Primary service ZIP codes"),
+    (() => {
+      const zips = app.serviceZips
+        .split(/[,;\s]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (!zips.length) return "Add at least one service ZIP code.";
+      const bad = zips.find((z) => !/^\d{5}(-\d{4})?$/.test(z));
+      return bad ? `Invalid ZIP code: ${bad}` : null;
+    })(),
     req(app.maxServiceRadius, "Maximum service radius"),
     req(app.generalLiability, "General liability insurance status"),
     app.generalLiability === "yes" ? req(app.coverageAmount, "Coverage amount") : null,
@@ -360,6 +368,13 @@ export function applicationToProfileFields(app: ContractorApplication) {
     .map((s) => s.trim())
     .filter(Boolean);
   const street = [app.businessAddress, app.businessSuite].filter(Boolean).join(", ");
+  // Prefer business state when the old statewide picker is unused
+  const states =
+    app.serviceStates?.length > 0
+      ? app.serviceStates
+      : app.businessState
+        ? [app.businessState]
+        : [];
   return {
     name: app.contactName.trim(),
     phone: app.contactPhone.trim() || app.companyPhone.trim(),
@@ -373,7 +388,7 @@ export function applicationToProfileFields(app: ContractorApplication) {
       app.unionStatus && `Labor: ${app.unionStatus}`,
       app.diversityClassifications && `Diversity: ${app.diversityClassifications}`,
       app.yearsInBusiness && `Years: ${app.yearsInBusiness}`,
-      app.serviceStates?.length && `States: ${app.serviceStates.join(", ")}`,
+      states.length && `States: ${states.join(", ")}`,
       app.website && `Web: ${app.website}`,
     ]
       .filter(Boolean)

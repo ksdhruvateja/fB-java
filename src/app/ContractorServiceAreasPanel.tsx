@@ -1,5 +1,7 @@
-import { useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { MapPin, Plus, Trash2 } from "lucide-react";
+import ServiceAreaMap from "./ServiceAreaMap";
+import { isValidUsZip, normalizeZip, zipInputProps } from "./zipCode";
 
 export default function ContractorServiceAreasPanel({
   primaryCity,
@@ -24,101 +26,141 @@ export default function ContractorServiceAreasPanel({
 }) {
   const [radius, setRadius] = useState(String(radiusMiles || 35));
   const [zipInput, setZipInput] = useState("");
+  const [zipError, setZipError] = useState<string | null>(null);
   const location = [primaryCity, primaryState, primaryZip].filter(Boolean).join(", ") || "Set in compliance profile";
 
-  const ring = useMemo(() => {
-    const r = Math.min(80, Math.max(12, Number(radius) || 35));
-    return r;
-  }, [radius]);
+  const previewRadius = Math.min(100, Math.max(5, Number(radius) || radiusMiles || 35));
+
+  const toggleZip = useCallback(
+    (zip: string) => {
+      const key = normalizeZip(zip).slice(0, 5);
+      if (!isValidUsZip(key)) return;
+      if (zips.some((z) => z.slice(0, 5) === key)) {
+        onSaveZips(zips.filter((z) => z.slice(0, 5) !== key));
+      } else {
+        onSaveZips([...zips, key]);
+      }
+    },
+    [zips, onSaveZips]
+  );
+
+  const addZips = useCallback(
+    (incoming: string[]) => {
+      const seen = new Set(zips.map((z) => z.slice(0, 5)));
+      const merged = [...zips];
+      for (const raw of incoming) {
+        const key = normalizeZip(raw).slice(0, 5);
+        if (!isValidUsZip(key) || seen.has(key)) continue;
+        seen.add(key);
+        merged.push(key);
+      }
+      onSaveZips(merged);
+    },
+    [zips, onSaveZips]
+  );
 
   const addZip = () => {
-    const z = zipInput.trim().replace(/\D/g, "").slice(0, 5);
-    if (z.length < 5) return;
-    if (zips.includes(z)) {
-      setZipInput("");
+    const z = normalizeZip(zipInput);
+    if (!isValidUsZip(z)) {
+      setZipError("Enter a valid 5-digit US ZIP code.");
       return;
     }
-    onSaveZips([...zips, z]);
+    const key = z.slice(0, 5);
+    if (zips.some((existing) => existing.slice(0, 5) === key)) {
+      setZipInput("");
+      setZipError(null);
+      return;
+    }
+    onSaveZips([...zips, key]);
     setZipInput("");
+    setZipError(null);
   };
 
   return (
-    <section className="mx-auto max-w-3xl space-y-5">
+    <section className="mx-auto max-w-4xl space-y-5">
       <div>
         <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase">Service area</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Primary location, travel radius, and ZIP coverage.</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Set your travel radius on the map, click to select ZIPs, or scan the circle for nearby coverage.
+        </p>
       </div>
 
       <div className="rounded-[1.5rem] border border-border bg-card p-5 space-y-4">
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Primary location</p>
-          <p className="mt-2 flex items-center gap-2 text-base font-semibold">
-            <MapPin className="h-4 w-4 text-primary" /> {location}
-          </p>
-        </div>
-
-        <label className="grid gap-1.5 text-sm">
-          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-            Maximum travel radius
-          </span>
-          <div className="flex gap-2">
-            <input
-              className="w-32 rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-              value={radius}
-              onChange={(e) => setRadius(e.target.value)}
-              inputMode="numeric"
-            />
-            <span className="self-center text-sm text-muted-foreground">miles</span>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Primary location</p>
+            <p className="mt-2 flex items-center gap-2 text-base font-semibold">
+              <MapPin className="h-4 w-4 text-primary" /> {location}
+            </p>
+          </div>
+          <label className="grid gap-1.5 text-sm min-w-[200px]">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              Travel radius (miles)
+            </span>
+            <div className="flex gap-2">
+              <input
+                type="range"
+                min={5}
+                max={100}
+                step={1}
+                value={previewRadius}
+                onChange={(e) => setRadius(e.target.value)}
+                className="w-full accent-primary"
+              />
+              <input
+                className="w-16 rounded-xl border border-border bg-background px-2 py-1.5 text-sm text-center"
+                value={radius}
+                onChange={(e) => setRadius(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                inputMode="numeric"
+              />
+            </div>
             <button
               type="button"
-              className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white"
-              onClick={() => onSaveRadius(Number(radius) || 35)}
+              className="mt-1 self-start rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white"
+              onClick={() => onSaveRadius(previewRadius)}
             >
-              Save
+              Save radius
             </button>
-          </div>
-        </label>
-
-        {/* Simple radius map visualization */}
-        <div className="relative mx-auto aspect-square max-w-sm overflow-hidden rounded-2xl border border-border bg-[radial-gradient(circle_at_center,#e8f0fe_0%,#f8fafc_55%,#e2e8f0_100%)] dark:bg-[radial-gradient(circle_at_center,#1e293b_0%,#0f172a_60%,#020617_100%)]">
-          <div
-            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-primary/50 bg-primary/10"
-            style={{ width: `${ring}%`, height: `${ring}%` }}
-          />
-          <div className="absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow" />
-          <p className="absolute bottom-3 left-0 right-0 text-center text-xs font-semibold text-muted-foreground">
-            {Number(radius) || 35} mile service radius
-          </p>
+          </label>
         </div>
+
+        <ServiceAreaMap
+          primaryCity={primaryCity}
+          primaryState={primaryState}
+          primaryZip={primaryZip}
+          radiusMiles={previewRadius}
+          selectedZips={zips}
+          onToggleZip={toggleZip}
+          onAddZips={addZips}
+        />
       </div>
 
       <div className="rounded-[1.5rem] border border-border bg-card p-5">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Service ZIP codes</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Selected ZIP codes</p>
+        <p className="mt-1 text-sm text-muted-foreground">{zips.length} area{zips.length === 1 ? "" : "s"} selected for job matching.</p>
         <div className="mt-3 flex flex-wrap gap-2">
           {zips.map((z) => (
-            <span
+            <button
               key={z}
-              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-3 py-1.5 text-sm font-medium"
+              type="button"
+              onClick={() => toggleZip(z)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5 text-sm font-medium text-foreground"
             >
               {z}
-              <button
-                type="button"
-                aria-label={`Remove ${z}`}
-                onClick={() => onSaveZips(zips.filter((x) => x !== z))}
-                className="text-muted-foreground hover:text-red-600"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </span>
+              <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+            </button>
           ))}
-          {zips.length === 0 && <p className="text-sm text-muted-foreground">No ZIP codes yet.</p>}
+          {zips.length === 0 && <p className="text-sm text-muted-foreground">Click the map or scan the radius to add ZIP codes.</p>}
         </div>
         <div className="mt-4 flex gap-2">
           <input
             className="w-36 rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-            placeholder="ZIP"
+            {...zipInputProps()}
             value={zipInput}
-            onChange={(e) => setZipInput(e.target.value)}
+            onChange={(e) => {
+              setZipInput(normalizeZip(e.target.value));
+              setZipError(null);
+            }}
             onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addZip())}
           />
           <button
@@ -126,9 +168,10 @@ export default function ContractorServiceAreasPanel({
             onClick={addZip}
             className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2.5 text-sm font-semibold"
           >
-            <Plus className="h-4 w-4" /> Add ZIP Code
+            <Plus className="h-4 w-4" /> Add ZIP
           </button>
         </div>
+        {zipError && <p className="mt-2 text-xs text-red-600">{zipError}</p>}
       </div>
 
       <label className="flex items-center gap-3 rounded-[1.5rem] border border-border bg-card p-5 text-sm">

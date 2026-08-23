@@ -510,7 +510,10 @@ export default function HomeownerHealthPanel({
               className="rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
               placeholder="ZIP"
               value={newZip}
-              onChange={(e) => setNewZip(e.target.value)}
+              onChange={(e) => setNewZip(e.target.value.replace(/[^\d-]/g, "").slice(0, 10))}
+              inputMode="numeric"
+              maxLength={10}
+              autoComplete="postal-code"
             />
           </div>
           <div className="sm:col-span-2 flex gap-2">

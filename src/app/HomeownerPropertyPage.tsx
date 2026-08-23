@@ -21,6 +21,7 @@ import {
   type Property,
   type PropertyDocument,
 } from "./managedJobs";
+import { isValidUsZip, normalizeZip } from "./zipCode";
 
 const DOC_CATEGORIES: { id: string; label: string }[] = [
   { id: "receipt", label: "Receipt" },
@@ -191,6 +192,10 @@ export default function HomeownerPropertyPage({
   async function addHome(e: FormEvent) {
     e.preventDefault();
     if (!newAddress.trim()) return;
+    if (newZip.trim() && !isValidUsZip(newZip)) {
+      onError("Enter a valid 5-digit US ZIP code.");
+      return;
+    }
     onBusy(true);
     onError(null);
     try {
@@ -198,7 +203,8 @@ export default function HomeownerPropertyPage({
         addressLine1: newAddress.trim(),
         city: newCity.trim() || undefined,
         state: newState.trim() || undefined,
-        zip: newZip.trim() || undefined,
+        zip: newZip.trim() ? normalizeZip(newZip) : undefined,
+        country: "US",
         label: newLabel.trim() || undefined,
         homeSystems: DEFAULT_HOME_SYSTEMS,
       });
@@ -327,7 +333,10 @@ export default function HomeownerPropertyPage({
               className="rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
               placeholder="ZIP"
               value={newZip}
-              onChange={(e) => setNewZip(e.target.value)}
+              onChange={(e) => setNewZip(e.target.value.replace(/[^\d-]/g, "").slice(0, 10))}
+              inputMode="numeric"
+              maxLength={10}
+              autoComplete="postal-code"
             />
           </div>
           <div className="sm:col-span-2 flex gap-2">
@@ -446,8 +455,11 @@ export default function HomeownerPropertyPage({
                       <input
                         className="rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
                         value={zip}
-                        onChange={(e) => setZip(e.target.value)}
+                        onChange={(e) => setZip(e.target.value.replace(/[^\d-]/g, "").slice(0, 10))}
                         placeholder="ZIP"
+                        inputMode="numeric"
+                        maxLength={10}
+                        autoComplete="postal-code"
                       />
                     </div>
                     <input
