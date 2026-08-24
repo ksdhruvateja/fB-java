@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import {
   addPropertyDocument,
-  createProperty,
   deletePropertyDocument,
   updateProperty,
   type HomeSystemRecord,
@@ -73,12 +72,29 @@ export default function HomeownerPropertyPage({
   onBusy,
   onError,
   onRefresh,
+  onCreateProperty,
+  onPropertyUpdated,
+  onReloadProperty,
 }: {
   properties: Property[];
   busy?: boolean;
   onBusy: (v: boolean) => void;
   onError: (msg: string | null) => void;
   onRefresh: () => Promise<void>;
+  onCreateProperty?: (
+    body: {
+      addressLine1: string;
+      city?: string;
+      state?: string;
+      zip?: string;
+      country?: string;
+      label?: string;
+      homeSystems?: HomeSystemRecord[];
+    },
+    opts?: { makePrimary?: boolean; forReport?: boolean; analyzeHealth?: boolean }
+  ) => Promise<{ ok: true; property: Property } | { ok: false; message?: string }>;
+  onPropertyUpdated?: (property: Property) => Promise<void> | void;
+  onReloadProperty?: (propertyId: number) => Promise<void> | void;
 }) {
   const [selectedId, setSelectedId] = useState<number | null>(properties[0]?.id ?? null);
   const [editingFacts, setEditingFacts] = useState(false);
@@ -166,7 +182,11 @@ export default function HomeownerPropertyPage({
         return;
       }
       setEditingFacts(false);
-      await onRefresh();
+      if (r.property && onPropertyUpdated) {
+        await onPropertyUpdated(r.property);
+      } else {
+        await onRefresh();
+      }
     } finally {
       onBusy(false);
     }
@@ -183,7 +203,11 @@ export default function HomeownerPropertyPage({
         return;
       }
       setEditingSystems(false);
-      await onRefresh();
+      if (r.property && onPropertyUpdated) {
+        await onPropertyUpdated(r.property);
+      } else {
+        await onRefresh();
+      }
     } finally {
       onBusy(false);
     }
@@ -199,16 +223,23 @@ export default function HomeownerPropertyPage({
     onBusy(true);
     onError(null);
     try {
-      const r = await createProperty({
-        addressLine1: newAddress.trim(),
-        city: newCity.trim() || undefined,
-        state: newState.trim() || undefined,
-        zip: newZip.trim() ? normalizeZip(newZip) : undefined,
-        country: "US",
-        label: newLabel.trim() || undefined,
-        homeSystems: DEFAULT_HOME_SYSTEMS,
-      });
-      if (!r.ok || !r.property) {
+      if (!onCreateProperty) {
+        onError("Property creation is unavailable.");
+        return;
+      }
+      const r = await onCreateProperty(
+        {
+          addressLine1: newAddress.trim(),
+          city: newCity.trim() || undefined,
+          state: newState.trim() || undefined,
+          zip: newZip.trim() ? normalizeZip(newZip) : undefined,
+          country: "US",
+          label: newLabel.trim() || undefined,
+          homeSystems: DEFAULT_HOME_SYSTEMS,
+        },
+        { analyzeHealth: true }
+      );
+      if (!r.ok) {
         onError(r.message || "Could not add home.");
         return;
       }
@@ -218,7 +249,6 @@ export default function HomeownerPropertyPage({
       setNewState("");
       setNewZip("");
       setNewLabel("");
-      await onRefresh();
       setSelectedId(r.property.id);
     } finally {
       onBusy(false);
@@ -244,7 +274,8 @@ export default function HomeownerPropertyPage({
         return;
       }
       setDocTitle("");
-      await onRefresh();
+      if (onReloadProperty) await onReloadProperty(selected.id);
+      else await onRefresh();
     } catch (err) {
       onError(err instanceof Error ? err.message : "Upload failed.");
     } finally {
@@ -263,7 +294,8 @@ export default function HomeownerPropertyPage({
         onError(r.message || "Could not delete document.");
         return;
       }
-      await onRefresh();
+      if (onReloadProperty) await onReloadProperty(selected.id);
+      else await onRefresh();
     } finally {
       onBusy(false);
     }

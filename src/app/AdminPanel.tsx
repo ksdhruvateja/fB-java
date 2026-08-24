@@ -24,6 +24,7 @@ import AdminQuoteBuilderPanel from "./AdminQuoteBuilderPanel";
 import AdminQuotesWorkspace from "./AdminQuotesWorkspace";
 import AdminMarketIntelligencePanel from "./AdminMarketIntelligencePanel";
 import AdminAuditLogsPanel from "./AdminAuditLogsPanel";
+import AdminSupportTicketsPanel from "./AdminSupportTicketsPanel";
 import AdminHomeownerInvoicePanel from "./AdminHomeownerInvoicePanel";
 import AdminContractorEditPanel from "./AdminContractorEditPanel";
 import Contractor360Profile from "./Contractor360Profile";
@@ -105,7 +106,8 @@ type Tab =
   | "platform"
   | "subscriptions"
   | "access"
-  | "audit-logs";
+  | "audit-logs"
+  | "support-tickets";
 
 const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React.ElementType }[] }[] = [
   {
@@ -142,6 +144,7 @@ const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React
   {
     label: "Administration",
     items: [
+      { id: "support-tickets", label: "Support Tickets", icon: Mail },
       { id: "access", label: "Team & Roles", icon: Shield },
       { id: "audit-logs", label: "Audit Logs", icon: ScrollText },
       { id: "platform", label: "Settings", icon: Settings2 },
@@ -3097,6 +3100,8 @@ export default function AdminPanel({
         )}
 
         {tab === "audit-logs" && <AdminAuditLogsPanel />}
+
+        {tab === "support-tickets" && <AdminSupportTicketsPanel />}
 
         {tab === "access" && (
           <section className="space-y-6">

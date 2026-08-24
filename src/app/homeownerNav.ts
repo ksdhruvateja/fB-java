@@ -137,6 +137,11 @@ export function countQuotesWaiting(jobs: ManagedJob[]): number {
   ).length;
 }
 
+export function jobsForProperty(jobs: ManagedJob[], propertyId?: number | null): ManagedJob[] {
+  if (propertyId == null) return jobs;
+  return jobs.filter((j) => !j.propertyId || Number(j.propertyId) === Number(propertyId));
+}
+
 export const MORE_MENU_SECTIONS: {
   title: string;
   items: { tab: DashTab; label: string; description?: string }[];
@@ -171,7 +176,7 @@ export const MORE_MENU_SECTIONS: {
     items: [
       { tab: "profile", label: "Profile" },
       { tab: "profile", label: "Notifications", description: "Coming soon" },
-      { tab: "profile", label: "Security", description: "Password & sign-in" },
+      { tab: "profile", label: "Security", description: "Coming soon" },
     ],
   },
 ];

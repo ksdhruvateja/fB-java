@@ -11,6 +11,7 @@ import { Resend } from 'resend';
 import crypto from 'crypto';
 import { analyzeRepairStructured, chatWithCustomer, getAiStatus } from './ai.js';
 import { initManagedSchema } from './schema-managed.js';
+import { initSupportTicketSchema, registerSupportTicketRoutes } from './support-tickets.js';
 import { registerManagedRoutes } from './managed-routes.js';
 import { registerPlatformRoutes } from './platform-routes.js';
 import { registerPayoutRoutes } from './payout-routes.js';
@@ -150,6 +151,7 @@ export async function initDb() {
     if (check.rows.length > 0) {
       console.log('[FixBridge API] DB already initialized, running managed schema checks...');
       await initManagedSchema(pool);
+      await initSupportTicketSchema(pool);
       return;
     }
   } catch (e) {
@@ -452,6 +454,7 @@ export async function initDb() {
   }
 
   await initManagedSchema(pool);
+  await initSupportTicketSchema(pool);
 
   console.log('[FixBridge API] DB ready ✓');
 }
@@ -2322,41 +2325,6 @@ app.put('/api/lifecycle/:jobId/invoice', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/support/messages', requireAuth, async (req, res) => {
-  try {
-    const subject = typeof req.body?.subject === 'string' ? req.body.subject.trim() : '';
-    const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
-    const relatedJob = typeof req.body?.relatedJob === 'string' ? req.body.relatedJob.trim() : '';
-    if (!subject || !message) {
-      return res.status(400).json({ ok: false, message: 'Subject and message are required.' });
-    }
-    const { rows: userRows } = await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id]);
-    const u = userRows[0];
-    const { rows } = await pool.query(
-      `INSERT INTO support_messages (user_id, user_role, user_name, user_email, subject, related_job, message)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
-       RETURNING id, created_at`,
-      [
-        String(req.authUser.id),
-        req.authUser.role || null,
-        u?.name || req.authUser.email || null,
-        u?.email || req.authUser.email || null,
-        subject,
-        relatedJob || null,
-        message,
-      ]
-    );
-    return res.json({
-      ok: true,
-      id: Number(rows[0].id),
-      createdAt: rows[0].created_at instanceof Date ? rows[0].created_at.toISOString() : rows[0].created_at,
-      supportEmail: 'Services@omnipronetwork.com',
-    });
-  } catch (e) {
-    console.error('support message:', e);
-    return res.status(500).json({ ok: false, message: 'Could not save support message.' });
-  }
-});
 
 app.put('/api/lifecycle/:jobId/rating', requireAuth, async (req, res) => {
   try {
@@ -2697,6 +2665,7 @@ app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
 });
 
   registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, makeToken, rowToUser });
+registerSupportTicketRoutes(app, { pool, requireAuth, requireAdmin });
 registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 

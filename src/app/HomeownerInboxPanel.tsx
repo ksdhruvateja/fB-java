@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Bell, MessageSquare, PlusCircle } from "lucide-react";
-import type { InboxSegment } from "./homeownerNav";
+import type { InboxSegment, JobsSegment } from "./homeownerNav";
 import type { ManagedJob } from "./managedJobs";
 import { STATUS_LABELS } from "./managedJobs";
 
@@ -15,7 +15,7 @@ export default function HomeownerInboxPanel({
   onRequestService,
 }: {
   jobs: ManagedJob[];
-  onOpenJob: (jobId: number) => void;
+  onOpenJob: (jobId: number, segment?: JobsSegment) => void;
   onRequestService: () => void;
 }) {
   const [segment, setSegment] = useState<InboxSegment>("messages");
@@ -54,6 +54,12 @@ export default function HomeownerInboxPanel({
     }
     return items;
   });
+
+  function segmentForType(type: string): JobsSegment {
+    if (type === "QUOTE") return "quotes";
+    if (type === "PAYMENT") return "history";
+    return "active";
+  }
 
   return (
     <section className="mx-auto max-w-lg space-y-4">
@@ -146,7 +152,7 @@ export default function HomeownerInboxPanel({
                     <p className="mt-0.5 text-xs text-muted-foreground">{n.body}</p>
                     <button
                       type="button"
-                      onClick={() => onOpenJob(n.jobId)}
+                      onClick={() => onOpenJob(n.jobId, segmentForType(n.type))}
                       className="mt-3 text-sm font-semibold text-primary hover:underline"
                     >
                       {n.action} →

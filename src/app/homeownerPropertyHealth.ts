@@ -470,3 +470,203 @@ export function applyHealthUpdate(
     ),
   };
 }
+
+const HOME_SYSTEM_TO_PROPERTY: Record<string, PropertySystem> = {
+  hvac: "HVAC",
+  water_heater: "Plumbing",
+  roof: "Roof",
+  refrigerator: "Appliances",
+  dishwasher: "Appliances",
+};
+
+const SYSTEM_LIFESPAN_YEARS: Partial<Record<PropertySystem, number>> = {
+  HVAC: 15,
+  Plumbing: 12,
+  Roof: 25,
+  Appliances: 10,
+  Electrical: 30,
+  Pest: 1,
+  Safety: 10,
+};
+
+function parseInstallYear(value: string | number | null | undefined): number | null {
+  const n = Number(value);
+  const year = new Date().getFullYear();
+  if (!Number.isFinite(n) || n < 1850 || n > year) return null;
+  return Math.floor(n);
+}
+
+function statusFromAge(installedYear: number | null, lifespan: number): SystemHealthStatus {
+  if (!installedYear) return "due_soon";
+  const age = new Date().getFullYear() - installedYear;
+  if (age >= lifespan) return "attention";
+  if (age >= Math.round(lifespan * 0.75)) return "due_soon";
+  return "good";
+}
+
+function statusFromWarranty(warrantyUntil?: string | null): SystemHealthStatus | null {
+  if (!warrantyUntil?.trim()) return null;
+  const expiry = new Date(warrantyUntil);
+  if (Number.isNaN(expiry.getTime())) return null;
+  const daysLeft = (expiry.getTime() - Date.now()) / 86400000;
+  if (daysLeft < 0) return "attention";
+  if (daysLeft < 120) return "due_soon";
+  return "good";
+}
+
+function mergeStatus(current: SystemHealthStatus, incoming: SystemHealthStatus): SystemHealthStatus {
+  const rank: Record<SystemHealthStatus, number> = {
+    good: 0,
+    due_soon: 1,
+    attention: 2,
+    critical: 3,
+  };
+  return rank[incoming] > rank[current] ? incoming : current;
+}
+
+function systemDetailLine(parts: Array<string | null | undefined>): string {
+  const line = parts.filter(Boolean).join(" · ");
+  return line || "Details recorded — review recommended service interval";
+}
+
+export function isDefaultHealthProfile(profile: PropertyHealthProfile): boolean {
+  const placeholder = /no issues logged|add service history|request inspection|test smoke/i;
+  const systemsUntouched = profile.systems.every(
+    (s) => s.status === "good" && placeholder.test(s.nextAction || "")
+  );
+  return (
+    systemsUntouched &&
+    !(profile.previousServices || []).length &&
+    !(profile.aiSuggestions || []).length
+  );
+}
+
+export function propertyHasHealthInputs(property?: Property | null): boolean {
+  if (!property) return false;
+  if (property.yearBuilt != null && Number.isFinite(Number(property.yearBuilt))) return true;
+  if (property.beds != null || property.baths != null || property.sqft != null) return true;
+  return (property.homeSystems || []).some(
+    (s) =>
+      Boolean(s.brand?.trim()) ||
+      Boolean(s.installedYear) ||
+      Boolean(s.lastService?.trim()) ||
+      Boolean(s.warrantyUntil?.trim()) ||
+      Boolean(s.notes?.trim())
+  );
+}
+
+export function needsHealthAnalysis(profile: PropertyHealthProfile, property?: Property | null): boolean {
+  if ((profile.aiSuggestions || []).length > 0 && !isDefaultHealthProfile(profile)) return false;
+  if ((profile.previousServices || []).length > 0 && profile.onboardingComplete) return false;
+  if (!propertyHasHealthInputs(property) && !(profile.previousServices || []).length) return false;
+  return isDefaultHealthProfile(profile) || !(profile.aiSuggestions || []).length;
+}
+
+/** Derive system statuses from property facts + home system passport fields. */
+export function buildHealthFromProperty(
+  property: Property,
+  profile: PropertyHealthProfile
+): PropertyHealthProfile {
+  let next: PropertyHealthProfile = {
+    ...profile,
+    beds: property.beds ?? profile.beds ?? null,
+    baths: property.baths ?? profile.baths ?? null,
+    sqft: property.sqft ?? profile.sqft ?? null,
+    systems: profile.systems.map((s) => ({ ...s })),
+  };
+
+  const yearBuilt = parseInstallYear(property.yearBuilt);
+  const touchedSystems = new Set<PropertySystem>();
+
+  for (const sys of property.homeSystems || []) {
+    const mapped =
+      HOME_SYSTEM_TO_PROPERTY[String(sys.key || "").toLowerCase()] || serviceToSystem(sys.name, sys.name);
+    if (!mapped) continue;
+
+    touchedSystems.add(mapped);
+    const installedYear = parseInstallYear(sys.installedYear) || yearBuilt;
+    const lifespan = SYSTEM_LIFESPAN_YEARS[mapped] || 15;
+    let status = statusFromAge(installedYear, lifespan);
+    const warrantyStatus = statusFromWarranty(sys.warrantyUntil);
+    if (warrantyStatus) status = mergeStatus(status, warrantyStatus);
+
+    const nextAction = systemDetailLine([
+      sys.brand?.trim() || null,
+      installedYear ? `Installed ${installedYear}` : yearBuilt ? `Home built ${yearBuilt}` : null,
+      sys.lastService?.trim() ? `Last service ${sys.lastService.trim()}` : null,
+      sys.warrantyUntil?.trim() ? `Warranty until ${sys.warrantyUntil.trim()}` : null,
+    ]);
+
+    next = applyHealthUpdate(next, {
+      system: mapped,
+      status,
+      nextAction,
+      notes: sys.notes?.trim() || undefined,
+      updatedBy: "system",
+    });
+  }
+
+  if (yearBuilt) {
+    for (const system of ["Roof", "Electrical", "Safety"] as PropertySystem[]) {
+      if (touchedSystems.has(system)) continue;
+      const lifespan = SYSTEM_LIFESPAN_YEARS[system] || 20;
+      next = applyHealthUpdate(next, {
+        system,
+        status: statusFromAge(yearBuilt, lifespan),
+        nextAction: `Home built ${yearBuilt} — baseline ${system.toLowerCase()} inspection recommended`,
+        updatedBy: "system",
+      });
+    }
+  }
+
+  if ((property.beds != null || property.sqft != null) && !touchedSystems.size && !yearBuilt) {
+    next = applyHealthUpdate(next, {
+      system: "Safety",
+      status: "due_soon",
+      nextAction: "Property details saved — complete home systems for a fuller health score",
+      updatedBy: "system",
+    });
+  }
+
+  return next;
+}
+
+export function analyzePropertyHealthProfile(
+  property: Property,
+  rawProfile?: Partial<PropertyHealthProfile> | null
+): PropertyHealthProfile {
+  const base = normalizeHealthProfile(rawProfile || (property.healthProfile as PropertyHealthProfile | null));
+  let next = buildHealthFromProperty(property, base);
+  if (base.previousServices?.length) {
+    next = applyPreviousServicesToSystems(next, base.previousServices);
+  }
+  const suggestions = suggestServicesFromHistory(base.previousServices || [], next);
+  return {
+    ...next,
+    aiSuggestions: suggestions,
+    previousServices: base.previousServices || [],
+    maintenance: base.maintenance || [],
+    onboardingComplete: base.onboardingComplete,
+  };
+}
+
+export function propertyHealthContext(property?: Property | null): string {
+  if (!property) return "";
+  const lines: string[] = [];
+  if (property.yearBuilt != null) lines.push(`Year built: ${property.yearBuilt}`);
+  if (property.beds != null) lines.push(`Beds: ${property.beds}`);
+  if (property.baths != null) lines.push(`Baths: ${property.baths}`);
+  if (property.sqft != null) lines.push(`Sq ft: ${property.sqft}`);
+  for (const sys of property.homeSystems || []) {
+    const bits = [
+      sys.name || sys.key,
+      sys.brand?.trim(),
+      sys.installedYear ? `installed ${sys.installedYear}` : null,
+      sys.lastService?.trim() ? `last service ${sys.lastService.trim()}` : null,
+      sys.warrantyUntil?.trim() ? `warranty until ${sys.warrantyUntil.trim()}` : null,
+      sys.notes?.trim(),
+    ].filter(Boolean);
+    if (bits.length) lines.push(`- ${bits.join(", ")}`);
+  }
+  return lines.join("\n");
+}

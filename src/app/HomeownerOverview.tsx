@@ -1,4 +1,5 @@
 import { motion } from "motion/react";
+import { useMemo } from "react";
 import {
   ArrowRight,
   CalendarDays,
@@ -96,10 +97,18 @@ export default function HomeownerOverview({
   onOpenQuotes?: () => void;
   quotesWaiting?: number;
 }) {
-  const merged = mergeHealthWithJobs(health, jobs, property?.id);
+  const propertyJobs = useMemo(
+    () =>
+      property?.id != null
+        ? jobs.filter((j) => !j.propertyId || Number(j.propertyId) === property.id)
+        : jobs,
+    [jobs, property?.id]
+  );
+
+  const merged = mergeHealthWithJobs(health, propertyJobs, property?.id);
   const score = healthScore(merged);
-  const stats = jobStats(jobs);
-  const active = activeServiceJob(jobs);
+  const stats = jobStats(propertyJobs);
+  const active = activeServiceJob(propertyJobs);
   const firstName = String(userName || "there").split(" ")[0];
   const ring = scoreRingColor(score);
   const radius = 54;

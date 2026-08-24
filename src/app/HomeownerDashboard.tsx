@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import type { AuthUser } from "./auth";
+import { getStoredToken } from "./auth";
 import { chatWithAi, type ChatMessage } from "./geminiAssessment";
 import { brand } from "../config/brand";
 import { BrandLogo } from "./BrandLogo";
@@ -41,6 +42,7 @@ import {
 } from "./homeownerCategories";
 import {
   REQUEST_SYSTEM_OPTIONS,
+  analyzePropertyHealthProfile,
   normalizeHealthProfile,
   type PropertyHealthProfile,
 } from "./homeownerPropertyHealth";
@@ -57,6 +59,7 @@ import HomeownerPropertySheet from "./HomeownerPropertySheet";
 import HomeownerJobDetailPanel from "./HomeownerJobDetailPanel";
 import HomeownerPaymentsPanel from "./HomeownerPaymentsPanel";
 import HomeownerDocumentsPanel from "./HomeownerDocumentsPanel";
+import HomeownerSupportPanel from "./HomeownerSupportPanel";
 import { useIsMobile } from "./components/ui/use-mobile";
 import {
   type DashTab,
@@ -65,9 +68,9 @@ import {
   FOOTER_NAV,
   resolveNavTab,
   jobsForSegment,
+  jobsForProperty,
   countQuotesWaiting,
   mobileHeaderTitle,
-  isMoreAreaTab,
 } from "./homeownerNav";
 import { isValidUsZip, normalizeZip, zipInputProps } from "./zipCode";
 
@@ -226,7 +229,6 @@ export default function HomeownerDashboard({
   onUserUpdated?: (u: AuthUser) => void;
 }) {
   const [tab, setTab] = useState<DashTab>("overview");
-  const [mobileNav, setMobileNav] = useState(false);
   const [jobsSegment, setJobsSegment] = useState<JobsSegment>("active");
   const [propertyPickerOpen, setPropertyPickerOpen] = useState(false);
   const [primaryPropertyId, setPrimaryPropertyId] = useState<number | null>(null);
@@ -348,12 +350,6 @@ export default function HomeownerDashboard({
     }
   }, [activeJob]);
 
-  // New property form
-  const [newAddress, setNewAddress] = useState("");
-  const [newCity, setNewCity] = useState("");
-  const [newState, setNewState] = useState("NY");
-  const [newZip, setNewZip] = useState("");
-
   const selectedJob = useMemo(
     () => jobs.find((j) => j.id === selectedJobId) || null,
     [jobs, selectedJobId]
@@ -374,22 +370,42 @@ export default function HomeownerDashboard({
     return properties[0] || null;
   }, [properties, primaryPropertyId]);
 
+  const primaryPropertyJobs = useMemo(
+    () => jobsForProperty(jobs, primaryProperty?.id),
+    [jobs, primaryProperty?.id]
+  );
+
   useEffect(() => {
     if (properties.length && primaryPropertyId == null) {
       setPrimaryPropertyId(properties[0].id);
     }
+    if (
+      primaryPropertyId != null &&
+      properties.length > 0 &&
+      !properties.some((p) => p.id === primaryPropertyId)
+    ) {
+      setPrimaryPropertyId(properties[0].id);
+    }
   }, [properties, primaryPropertyId]);
+
+  useEffect(() => {
+    if (!properties.length || propertyId !== "") return;
+    setPropertyId(primaryPropertyId ?? properties[0].id);
+  }, [properties, propertyId, primaryPropertyId]);
 
   function navigateTab(next: DashTab) {
     setTab(resolveNavTab(next));
-    setMobileNav(false);
+  }
+
+  function selectPrimaryProperty(id: number) {
+    setPrimaryPropertyId(id);
+    setPropertyId(id);
   }
 
   function openJobsSegment(segment: JobsSegment, jobId?: number) {
     setJobsSegment(segment);
     setTab("jobs");
     if (jobId != null) setSelectedJobId(jobId);
-    setMobileNav(false);
   }
   const healthProfile = useMemo(() => {
     const base = normalizeHealthProfile(primaryProperty?.healthProfile as PropertyHealthProfile | null);
@@ -426,13 +442,85 @@ export default function HomeownerDashboard({
         return;
       }
       if (r.property) {
-        setProperties((prev) => prev.map((p) => (p.id === propertyId ? { ...p, ...r.property! } : p)));
+        upsertPropertyInState(r.property, { makePrimary: false });
       } else {
         await refresh();
       }
     } finally {
       setBusy(false);
     }
+  }
+
+  function upsertPropertyInState(
+    property: Property,
+    opts?: { makePrimary?: boolean; forReport?: boolean }
+  ) {
+    setProperties((prev) => {
+      const idx = prev.findIndex((p) => p.id === property.id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], ...property };
+        return next;
+      }
+      return [...prev, property];
+    });
+    if (opts?.makePrimary) setPrimaryPropertyId(property.id);
+    if (opts?.forReport) setPropertyId(property.id);
+  }
+
+  async function adoptProperty(
+    property: Property,
+    opts?: { makePrimary?: boolean; forReport?: boolean; analyzeHealth?: boolean }
+  ) {
+    upsertPropertyInState(property, {
+      makePrimary: opts?.makePrimary === true,
+      forReport: opts?.forReport,
+    });
+    if (opts?.analyzeHealth !== false) {
+      await syncHealthFromProperty(property.id, property);
+    }
+  }
+
+  async function createAndAdoptProperty(
+    body: Parameters<typeof createProperty>[0],
+    opts?: { makePrimary?: boolean; forReport?: boolean; analyzeHealth?: boolean }
+  ) {
+    const r = await createProperty(body);
+    if (!r.ok || !r.property) {
+      return { ok: false as const, message: r.message || "Could not add property." };
+    }
+    await adoptProperty(r.property, {
+      makePrimary: opts?.makePrimary ?? properties.length === 0,
+      forReport: opts?.forReport,
+      analyzeHealth: opts?.analyzeHealth,
+    });
+    return { ok: true as const, property: r.property };
+  }
+
+  async function syncHealthFromProperty(propertyId: number, propertyOverride?: Property) {
+    const listed = propertyOverride ? null : await listProperties();
+    const prop =
+      propertyOverride ||
+      listed?.properties?.find((p) => p.id === propertyId) ||
+      properties.find((p) => p.id === propertyId);
+    if (!prop) return;
+    const analyzed = analyzePropertyHealthProfile(prop, prop.healthProfile as PropertyHealthProfile | null);
+    await saveHealthProfile(propertyId, analyzed);
+  }
+
+  async function applyPropertyUpdate(property: Property) {
+    upsertPropertyInState(property, { makePrimary: false });
+    await syncHealthFromProperty(property.id, property);
+  }
+
+  async function reloadProperty(propertyId: number) {
+    const listed = await listProperties();
+    const prop =
+      listed.properties?.find((p) => p.id === propertyId) ||
+      properties.find((p) => p.id === propertyId);
+    if (!prop) return null;
+    upsertPropertyInState(prop, { makePrimary: false });
+    return prop;
   }
 
   async function addHealthProperty(input: {
@@ -445,19 +533,21 @@ export default function HomeownerDashboard({
     setBusy(true);
     setError(null);
     try {
-      const r = await createProperty({
-        addressLine1: input.addressLine1,
-        city: input.city,
-        state: input.state,
-        zip: input.zip,
-        label: input.label,
-        homeSystems: DEFAULT_HOME_SYSTEMS,
-      });
-      if (!r.ok || !r.property) {
+      const r = await createAndAdoptProperty(
+        {
+          addressLine1: input.addressLine1,
+          city: input.city,
+          state: input.state,
+          zip: input.zip,
+          label: input.label,
+          homeSystems: DEFAULT_HOME_SYSTEMS,
+        },
+        { analyzeHealth: true }
+      );
+      if (!r.ok) {
         setError(r.message || "Could not add address.");
         return null;
       }
-      await refresh();
       return r.property;
     } finally {
       setBusy(false);
@@ -468,7 +558,6 @@ export default function HomeownerDashboard({
     setTab("report");
     setStep("intake");
     setIntakePhase("whats");
-    setMobileNav(false);
   }
 
   async function refresh() {
@@ -492,7 +581,11 @@ export default function HomeownerDashboard({
     }
     setBusy(true);
     try {
-      const token = localStorage.getItem("fixbridge-token");
+      const token = getStoredToken();
+      if (!token) {
+        alert("Please sign in again.");
+        return;
+      }
       const res = await fetch(`/api/properties/${showZipPromptPropertyId}/zip`, {
         method: "PUT",
         headers: {
@@ -507,12 +600,19 @@ export default function HomeownerDashboard({
         return;
       }
       
-      await refresh();
-      
+      const zipPropertyId = showZipPromptPropertyId;
       const action = zipPromptAction;
       setShowZipPromptPropertyId(null);
       setZipPromptInput("");
       setZipPromptAction(null);
+
+      const reloaded = zipPropertyId ? await reloadProperty(zipPropertyId) : null;
+      if (reloaded) {
+        await syncHealthFromProperty(reloaded.id, reloaded);
+      } else {
+        await refresh();
+      }
+
       if (action) {
         await submitIssue(action);
       }
@@ -535,7 +635,11 @@ export default function HomeownerDashboard({
     }
     setBusy(true);
     try {
-      const token = localStorage.getItem("fixbridge-token");
+      const token = getStoredToken();
+      if (!token) {
+        alert("Please sign in again.");
+        return;
+      }
       const res = await fetch(`/api/properties/${showAddressPromptPropertyId}/address`, {
         method: "PUT",
         headers: {
@@ -556,12 +660,18 @@ export default function HomeownerDashboard({
         return;
       }
       
-      await refresh();
-      
+      const propertyIdForAddress = showAddressPromptPropertyId;
       const jobId = addressPromptJobId;
       setShowAddressPromptPropertyId(null);
       setAddressPromptJobId(null);
-      
+
+      const reloaded = propertyIdForAddress ? await reloadProperty(propertyIdForAddress) : null;
+      if (reloaded) {
+        await syncHealthFromProperty(reloaded.id, reloaded);
+      } else {
+        await refresh();
+      }
+
       if (jobId) {
         const r = await payDispatchFee(jobId);
         if (r.ok && r.url) {
@@ -590,23 +700,20 @@ export default function HomeownerDashboard({
     }
     setBusy(true);
     try {
-      const r = await createProperty({
-        addressLine1: modalAddressLine1.trim(),
-        city: modalCity.trim(),
-        state: modalState.trim(),
-        zip: normalizeZip(modalZip),
-        country: "US",
-        streetAddress: modalAddressLine1.trim(),
-        label: modalAddressLine1.trim(),
-        homeSystems: DEFAULT_HOME_SYSTEMS,
-      });
-      if (r.ok && r.property) {
-        // Select the newly added property
-        const newPropId = r.property.id;
-        setPropertyId(newPropId);
-        
-        await refresh();
-        
+      const r = await createAndAdoptProperty(
+        {
+          addressLine1: modalAddressLine1.trim(),
+          city: modalCity.trim(),
+          state: modalState.trim(),
+          zip: normalizeZip(modalZip),
+          country: "US",
+          streetAddress: modalAddressLine1.trim(),
+          label: modalAddressLine1.trim(),
+          homeSystems: DEFAULT_HOME_SYSTEMS,
+        },
+        { makePrimary: true, forReport: true, analyzeHealth: true }
+      );
+      if (r.ok) {
         const action = modalActionAfterSave;
         setShowAddAddressModal(false);
         setModalActionAfterSave(null);
@@ -964,37 +1071,6 @@ export default function HomeownerDashboard({
     }
   }
 
-  async function addProperty(e: FormEvent) {
-    e.preventDefault();
-    if (!isValidUsZip(newZip)) {
-      setError("Enter a valid 5-digit US ZIP code.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const r = await createProperty({
-        addressLine1: newAddress,
-        city: newCity,
-        state: newState,
-        zip: normalizeZip(newZip),
-        country: "US",
-        streetAddress: newAddress,
-        label: newAddress,
-        homeSystems: DEFAULT_HOME_SYSTEMS,
-      });
-      if (r.ok) {
-        setNewAddress("");
-        setNewCity("");
-        setNewZip("");
-        await refresh();
-      } else {
-        setError(r.message || "Could not save property.");
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function sendDiyChatMessage() {
     if (!diyChatInput.trim() || !activeJob) return;
     const text = diyChatInput.trim();
@@ -1147,7 +1223,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
       <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-background/95 px-4 py-3 backdrop-blur lg:hidden">
         <div className="min-w-0">
           <p className="[font-family:'Barlow_Condensed',sans-serif] text-xl font-black uppercase tracking-tight">
-            {mobileHeaderTitle(isMoreAreaTab(tab) ? "more" : tab)}
+            {mobileHeaderTitle(tab)}
           </p>
           <p className="truncate text-[10px] text-muted-foreground">{user.name}</p>
         </div>
@@ -1174,28 +1250,6 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
           )}
         </div>
       </header>
-
-      {/* Desktop-style drawer — tablet fallback & legacy */}
-      {mobileNav && (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          <button type="button" className="absolute inset-0 bg-black/40" aria-label="Close menu" onClick={() => setMobileNav(false)} />
-          <aside className="absolute inset-y-0 left-0 flex w-72 flex-col border-r border-border bg-background shadow-xl">
-            <div className="border-b border-border px-4 py-4">
-              <BrandLogo variant="auth" tone="auto" className="mb-1" />
-              <p className="text-xs text-muted-foreground">Homeowner · {user.name}</p>
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              {sidebarNav}
-              {goProPromoCard}
-            </div>
-            <div className="mt-auto border-t border-border p-3">
-              <button type="button" onClick={onLogout} className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm hover:bg-muted">
-                <LogOut className="h-4 w-4" /> Sign out
-              </button>
-            </div>
-          </aside>
-        </div>
-      )}
 
       <div className="lg:flex lg:min-h-screen">
         {/* Desktop left sidebar */}
@@ -1240,8 +1294,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
             userName={user.name || "there"}
             property={primaryProperty}
             health={healthProfile}
-            jobs={jobs}
-            quotesWaiting={countQuotesWaiting(jobs)}
+            jobs={primaryPropertyJobs}
+            quotesWaiting={countQuotesWaiting(primaryPropertyJobs)}
             onRequestService={openRequestService}
             onOpenJob={(id) => openJobsSegment("active", id)}
             onOpenHealth={() => navigateTab("health")}
@@ -1267,7 +1321,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
         {tab === "inbox" && (
           <HomeownerInboxPanel
             jobs={jobs}
-            onOpenJob={(id) => openJobsSegment("active", id)}
+            onOpenJob={(id, segment) => openJobsSegment(segment ?? "active", id)}
             onRequestService={openRequestService}
           />
         )}
@@ -1331,7 +1385,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
             </div>
             <button
               type="button"
-              onClick={() => setTab("timeline")}
+              onClick={() => navigateTab("timeline")}
               className="text-sm font-semibold text-primary hover:underline"
             >
               Open Maintenance Timeline →
@@ -1387,10 +1441,12 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
         )}
         {tab === "messages" &&
           comingSoon("Messages", "Chat with FixBridge and your assigned contractors will land here.")}
-        {tab === "assistant" &&
-          comingSoon("FixBridge Assistant", "Ask about DIY steps, scheduling, and home health — coming soon.")}
-        {tab === "help" &&
-          comingSoon("Help & Support", "Guides and contact options for homeowners will live here.")}
+        {tab === "assistant" && (
+          <HomeownerSupportPanel channel="assistant" user={user} properties={properties} jobs={jobs} />
+        )}
+        {tab === "help" && (
+          <HomeownerSupportPanel channel="help" user={user} properties={properties} jobs={jobs} />
+        )}
 
         {tab === "report" && (
           <section className="mx-auto max-w-3xl space-y-5">
@@ -2990,6 +3046,9 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
             onBusy={setBusy}
             onError={setError}
             onRefresh={refresh}
+            onCreateProperty={createAndAdoptProperty}
+            onPropertyUpdated={applyPropertyUpdate}
+            onReloadProperty={(id) => void reloadProperty(id)}
           />
         )}
 
@@ -3515,7 +3574,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
         <HomeownerPropertySheet
           properties={properties}
           selectedId={primaryProperty?.id ?? null}
-          onSelect={setPrimaryPropertyId}
+          onSelect={selectPrimaryProperty}
           onManage={() => navigateTab("properties")}
           onAdd={() => navigateTab("properties")}
           onClose={() => setPropertyPickerOpen(false)}

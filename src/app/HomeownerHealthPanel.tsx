@@ -13,14 +13,19 @@ import { chatWithAi } from "./geminiAssessment";
 import type { ManagedJob, Property } from "./managedJobs";
 import {
   PROPERTY_SYSTEMS,
+  analyzePropertyHealthProfile,
   applyHealthUpdate,
   applyPreviousServicesToSystems,
+  buildHealthFromProperty,
   formatPropertyLine,
   healthHeadline,
   healthScore,
   mergeHealthWithJobs,
+  needsHealthAnalysis,
   needsHealthOnboarding,
   normalizeHealthProfile,
+  propertyHasHealthInputs,
+  propertyHealthContext,
   statusLabel,
   statusTone,
   suggestServicesFromHistory,
@@ -94,6 +99,7 @@ export default function HomeownerHealthPanel({
   const [aiBusy, setAiBusy] = useState(false);
   const [aiNote, setAiNote] = useState<string | null>(null);
   const [showAddPast, setShowAddPast] = useState(false);
+  const autoAnalyzeKeyRef = useRef<string>("");
 
   useEffect(() => {
     if (!selectedId && properties[0]) setSelectedId(properties[0].id);
@@ -138,6 +144,36 @@ export default function HomeownerHealthPanel({
       setSuggestions((prev) => (prev.length ? prev : fromServer));
     }
   }, [property?.id, jobCount]);
+
+  useEffect(() => {
+    if (!property || aiBusy || busy) return;
+    const fingerprint = JSON.stringify({
+      id: property.id,
+      yearBuilt: property.yearBuilt,
+      beds: property.beds,
+      baths: property.baths,
+      sqft: property.sqft,
+      systems: (property.homeSystems || []).map((s) => [
+        s.key,
+        s.brand,
+        s.installedYear,
+        s.warrantyUntil,
+        s.lastService,
+      ]),
+      previous: (health.previousServices || []).length,
+      onboardingComplete: health.onboardingComplete,
+    });
+    if (fingerprint === autoAnalyzeKeyRef.current) return;
+    if (!needsHealthAnalysis(health, property)) return;
+
+    autoAnalyzeKeyRef.current = fingerprint;
+    void (async () => {
+      const analyzed = analyzePropertyHealthProfile(property, workingRef.current || health);
+      workingRef.current = analyzed;
+      setWorkingHealth(analyzed);
+      await runAiSuggestions(analyzed.previousServices || [], analyzed, property);
+    })();
+  }, [property, health, aiBusy, busy]);
 
   const [editing, setEditing] = useState<PropertySystem | null>(null);
   const [status, setStatus] = useState<SystemHealthStatus>("good");
@@ -187,12 +223,23 @@ export default function HomeownerHealthPanel({
   const saveMeta = async () => {
     if (!property) return;
     const base = workingRef.current || health;
-    await persist({
+    const withMeta = {
       ...base,
       beds: beds ? Number(beds) : null,
       baths: baths ? Number(baths) : null,
       sqft: sqft ? Number(sqft) : null,
-    });
+    };
+    const propertyDraft: Property = {
+      ...property,
+      beds: withMeta.beds ?? property.beds,
+      baths: withMeta.baths ?? property.baths,
+      sqft: withMeta.sqft ?? property.sqft,
+    };
+    const analyzed = analyzePropertyHealthProfile(propertyDraft, withMeta);
+    await persist(analyzed);
+    setSuggestions(analyzed.aiSuggestions || []);
+    autoAnalyzeKeyRef.current = "";
+    await runAiSuggestions(analyzed.previousServices || [], analyzed, propertyDraft);
   };
 
   const addHome = async (e: FormEvent) => {
@@ -221,11 +268,23 @@ export default function HomeownerHealthPanel({
     }
   };
 
-  async function runAiSuggestions(services: PreviousServiceRecord[], baseOverride?: PropertyHealthProfile) {
+  async function runAiSuggestions(
+    services: PreviousServiceRecord[],
+    baseOverride?: PropertyHealthProfile,
+    propertyOverride?: Property | null
+  ) {
     setAiBusy(true);
     setAiNote(null);
+    const prop = propertyOverride || property;
     const base = baseOverride || workingRef.current || health;
-    let next = suggestServicesFromHistory(services, base);
+    let next = prop ? buildHealthFromProperty(prop, base) : base;
+    if (services.length) {
+      next = applyPreviousServicesToSystems(next, services);
+    }
+    next = {
+      ...next,
+      aiSuggestions: suggestServicesFromHistory(services, next),
+    };
     try {
       const summary = services
         .map(
@@ -233,10 +292,14 @@ export default function HomeownerHealthPanel({
             `- ${s.title || "Service"} (${s.system})${s.company ? ` by ${s.company}` : ""}${s.date ? ` on ${s.date}` : ""}`
         )
         .join("\n");
+      const propertyContext = propertyHealthContext(prop);
+      const systemSummary = next.systems
+        .map((s) => `- ${s.system}: ${s.status} — ${s.nextAction}`)
+        .join("\n");
       const result = await chatWithAi([
         {
           role: "user",
-          content: `You are FixBridge home-care AI. Based on these past home services, suggest 3-5 additional or future maintenance services the homeowner may need. Reply ONLY with a JSON array of objects: [{"title":"...","reason":"...","system":"HVAC|Plumbing|Electrical|Roof|Appliances|Pest|Safety|Other","urgency":"soon|this_year|later"}].\n\nPast services:\n${summary || "(none listed)"}`,
+          content: `You are FixBridge home-care AI. Analyze this home's health based on property details, system statuses, and past services. Suggest 3-5 additional or future maintenance services the homeowner may need. Reply ONLY with a JSON array of objects: [{"title":"...","reason":"...","system":"HVAC|Plumbing|Electrical|Roof|Appliances|Pest|Safety|Other","urgency":"soon|this_year|later"}].\n\nProperty:\n${propertyContext || "(no property facts yet)"}\n\nSystem health:\n${systemSummary}\n\nPast services:\n${summary || "(none listed)"}`,
         },
       ]);
       if (result.reply) {
@@ -249,35 +312,45 @@ export default function HomeownerHealthPanel({
             urgency?: string;
           }>;
           if (Array.isArray(parsed) && parsed.length) {
-            next = parsed.slice(0, 6).map((p, i) => ({
-              id: `ai_${i}_${Date.now()}`,
-              title: String(p.title || "Suggested service"),
-              reason: String(p.reason || "Recommended from your home history."),
-              system: (PROPERTY_SYSTEMS.includes(p.system as PropertySystem)
-                ? p.system
-                : "Other") as PropertySystem | "Other",
-              urgency:
-                p.urgency === "soon" || p.urgency === "this_year" || p.urgency === "later"
-                  ? p.urgency
-                  : "this_year",
-            }));
-            setAiNote("Suggestions refined by FixBridge AI from your service history.");
+            next = {
+              ...next,
+              aiSuggestions: parsed.slice(0, 6).map((p, i) => ({
+                id: `ai_${i}_${Date.now()}`,
+                title: String(p.title || "Suggested service"),
+                reason: String(p.reason || "Recommended from your home history."),
+                system: (PROPERTY_SYSTEMS.includes(p.system as PropertySystem)
+                  ? p.system
+                  : "Other") as PropertySystem | "Other",
+                urgency:
+                  p.urgency === "soon" || p.urgency === "this_year" || p.urgency === "later"
+                    ? p.urgency
+                    : "this_year",
+              })),
+            };
+            setAiNote("Suggestions refined by FixBridge AI from your property details and service history.");
           }
         }
+      } else if (propertyContext || systemSummary) {
+        setAiNote("Using FixBridge smart analysis from your property details.");
       } else {
         setAiNote("Using FixBridge smart suggestions based on your history.");
       }
     } catch {
-      setAiNote("Using FixBridge smart suggestions based on your history.");
+      setAiNote(
+        propertyHasHealthInputs(prop)
+          ? "Using FixBridge smart analysis from your property details."
+          : "Using FixBridge smart suggestions based on your history."
+      );
     } finally {
-      setSuggestions(next);
+      setSuggestions(next.aiSuggestions || []);
       setAiBusy(false);
       if (property) {
-        const latest = workingRef.current || base;
+        const latest = workingRef.current || next;
         await persist({
           ...latest,
+          ...next,
           previousServices: services.length ? services : latest.previousServices || [],
-          aiSuggestions: next,
+          aiSuggestions: next.aiSuggestions || [],
         });
       }
     }
@@ -341,12 +414,19 @@ export default function HomeownerHealthPanel({
   async function completeOnboarding() {
     if (!property) return;
     const base = workingRef.current || health;
-    await persist({
+    let next: PropertyHealthProfile = {
       ...base,
       aiSuggestions: suggestions.length ? suggestions : base.aiSuggestions || [],
       onboardingComplete: true,
-    });
+    };
+    if (propertyHasHealthInputs(property)) {
+      next = analyzePropertyHealthProfile(property, next);
+    }
+    await persist(next);
     setOnboardingStep(null);
+    if (propertyHasHealthInputs(property) || (next.previousServices || []).length) {
+      await runAiSuggestions(next.previousServices || [], next, property);
+    }
   }
 
   async function savePastServicesInline() {
@@ -1093,8 +1173,11 @@ export default function HomeownerHealthPanel({
                       onClick={() => void saveMeta()}
                       className="mt-4 rounded-xl bg-foreground px-4 py-2.5 text-sm font-semibold text-background disabled:opacity-60"
                     >
-                      Save property details
+                      Save & analyze health
                     </button>
+                    {aiNote && !showOnboarding ? (
+                      <p className="mt-2 text-xs text-muted-foreground">{aiNote}</p>
+                    ) : null}
                   </div>
                 </>
               )}
