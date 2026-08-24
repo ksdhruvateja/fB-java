@@ -31,6 +31,9 @@ export type PricingRules = {
   after_hours_surcharge: number;
   subscription_discount: number;
   assessment_credit: number;
+  default_visit_fee?: number;
+  default_emergency_visit_fee?: number;
+  pro_subscription_price?: number;
   customer_display_adjustment?: {
     type?: string;
     value?: number;

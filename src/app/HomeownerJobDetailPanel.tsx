@@ -155,7 +155,7 @@ export default function HomeownerJobDetailPanel({
             <div className="text-xs space-y-1">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Contractor Visit Fee:</span>
-                <span className="font-semibold text-foreground">${job.pricing?.contractor_visit_fee || 125}</span>
+                <span className="font-semibold text-foreground">${job.visitFeeAmount ?? job.pricing?.contractor_visit_fee ?? 125}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">FixBridge Beta Fee:</span>
@@ -163,7 +163,7 @@ export default function HomeownerJobDetailPanel({
               </div>
               <div className="flex justify-between border-t border-border/40 pt-1.5 mt-1 font-bold">
                 <span className="text-foreground">Authorization Hold:</span>
-                <span className="text-primary">${job.pricing?.contractor_visit_fee || 125}</span>
+                <span className="text-primary">${job.visitFeeAmount ?? job.pricing?.contractor_visit_fee ?? 125}</span>
               </div>
             </div>
             <p className="text-[10px] leading-normal text-muted-foreground">

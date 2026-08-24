@@ -98,7 +98,14 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
   }
 
   const subtotal = lineItems.reduce((s, i) => s + (Number(i.amount) || 0), 0);
-  const paid = payments.reduce((s, p) => s + Number(p.amount || 0), 0);
+  const hasVisitCreditLine = lineItems.some((i) => /visit fee credit/i.test(String(i.label || '')));
+  const countablePayments = hasVisitCreditLine
+    ? payments.filter((p) => p.payment_type !== 'dispatch_fee')
+    : payments;
+  const paid = countablePayments.reduce((s, p) => s + Number(p.amount || 0), 0);
+  const visitFeePaid = payments
+    .filter((p) => p.payment_type === 'dispatch_fee')
+    .reduce((s, p) => s + Number(p.amount || 0), 0);
   const amountDue = Math.max(0, Math.round((subtotal - paid) * 100) / 100);
 
   const billTo = {
@@ -123,6 +130,7 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
       lineItems,
       subtotal,
       paid,
+      visitFeePaid,
       amountDue,
       payments: payments.map((p) => ({
         type: p.payment_type,
@@ -181,6 +189,9 @@ export function renderInvoiceHtml(invoice) {
   </table>
   <table style="width:100%;margin-top:16px;font-size:14px;">
     <tr><td style="padding:6px 0;color:#666;">Subtotal</td><td style="text-align:right;">${money(invoice.subtotal)}</td></tr>
+    ${invoice.visitFeePaid > 0 && !invoice.lineItems.some((i) => /visit fee credit/i.test(String(i.label || '')))
+      ? `<tr><td style="padding:6px 0;color:#666;">Visit fee paid</td><td style="text-align:right;color:#0d9488;">−${money(invoice.visitFeePaid)}</td></tr>`
+      : ''}
     ${invoice.paid > 0 ? `<tr><td style="padding:6px 0;color:#666;">Payments received</td><td style="text-align:right;color:#0d9488;">−${money(invoice.paid)}</td></tr>` : ''}
     <tr><td style="padding:12px 0;font-size:18px;font-weight:700;">Amount due</td><td style="text-align:right;font-size:18px;font-weight:700;color:${brand.primaryColor};">${money(invoice.amountDue)}</td></tr>
   </table>

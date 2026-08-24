@@ -3,7 +3,7 @@ import {
   ArrowLeft, LogOut, Loader2, Shield, DollarSign, Users, Briefcase,
   Settings2, Link2, BarChart3, Sparkles, Menu, X, LayoutDashboard,
   Search, Check, Copy, MapPin, ChevronRight, Ban, BadgeCheck,
-  Sun, Moon, ChevronDown, Bell, ListTodo, ScrollText, Mail,
+  Sun, Moon, ChevronDown, Bell, ListTodo, ScrollText, Mail, Receipt,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { loadAllUsers, type AuthUser } from "./auth";
@@ -25,6 +25,8 @@ import AdminQuotesWorkspace from "./AdminQuotesWorkspace";
 import AdminMarketIntelligencePanel from "./AdminMarketIntelligencePanel";
 import AdminAuditLogsPanel from "./AdminAuditLogsPanel";
 import AdminSupportTicketsPanel from "./AdminSupportTicketsPanel";
+import AdminSubscriptionPlansPanel from "./AdminSubscriptionPlansPanel";
+import AdminVisitFeePanel from "./AdminVisitFeePanel";
 import AdminHomeownerInvoicePanel from "./AdminHomeownerInvoicePanel";
 import AdminContractorEditPanel from "./AdminContractorEditPanel";
 import Contractor360Profile from "./Contractor360Profile";
@@ -53,6 +55,10 @@ import {
   updateStaffAccess,
   createStaffAdmin,
 } from "./platformApi";
+import {
+  listAdminSubscriptionPlans,
+  updateAdminSubscriptionPlan,
+} from "./subscriptionPlansApi";
 import {
   STATUS_LABELS,
   adminAiOverride,
@@ -107,7 +113,9 @@ type Tab =
   | "subscriptions"
   | "access"
   | "audit-logs"
-  | "support-tickets";
+  | "support-tickets"
+  | "pro-plans"
+  | "visit-fee";
 
 const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React.ElementType }[] }[] = [
   {
@@ -136,6 +144,7 @@ const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React
     items: [
       { id: "payments", label: "Payments", icon: DollarSign },
       { id: "contractor-payouts", label: "Payouts", icon: DollarSign },
+      { id: "visit-fee", label: "Visit Fee", icon: Receipt },
       { id: "pricing", label: "Pricing Rules", icon: Settings2 },
       { id: "payout-settings", label: "Payout Settings", icon: Settings2 },
       { id: "reporting", label: "Profitability", icon: BarChart3 },
@@ -144,6 +153,7 @@ const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React
   {
     label: "Administration",
     items: [
+      { id: "pro-plans", label: "Pro Plans", icon: Sparkles },
       { id: "support-tickets", label: "Support Tickets", icon: Mail },
       { id: "access", label: "Team & Roles", icon: Shield },
       { id: "audit-logs", label: "Audit Logs", icon: ScrollText },
@@ -538,7 +548,7 @@ export default function AdminPanel({
   }, [selectedJobId, jobs]);
 
   useEffect(() => {
-    if (tab === "pricing" || tab === "subscriptions" || tab === "partners") {
+    if (tab === "pricing" || tab === "subscriptions" || tab === "partners" || tab === "visit-fee") {
       void adminPricingRules().then((r) => {
         if (r.ok) setPricingRules(r.rules as PricingRules);
       });
@@ -1670,6 +1680,32 @@ export default function AdminPanel({
         )}
 
         {tab === "market-intel" && <AdminMarketIntelligencePanel />}
+
+        {tab === "visit-fee" && (
+          <AdminVisitFeePanel
+            pricingRules={pricingRules}
+            busy={busy}
+            readOnly={isReadOnly}
+            onSave={async (patch) => {
+              if (isReadOnly) {
+                alert("Read-Only Mode: Write access is required.");
+                return false;
+              }
+              if (!pricingRules) return false;
+              setBusy(true);
+              const nextRules = { ...pricingRules, ...patch };
+              const r = await adminSavePricingRules(nextRules as unknown as Record<string, unknown>);
+              setBusy(false);
+              if (r.ok) {
+                setPricingRules(r.rules as PricingRules);
+                setMessage("Visit fee updated.");
+                return true;
+              }
+              setMessage("Could not save visit fee.");
+              return false;
+            }}
+          />
+        )}
 
         {tab === "pricing" && (
           <AdminPricingPanel
@@ -2946,7 +2982,11 @@ export default function AdminPanel({
             <div className={`${cardClass} p-6`}>
               <h2 className="text-lg font-semibold mb-2">Subscription Settings</h2>
               <p className="text-sm text-muted-foreground mb-4">
-                Set the monthly cost for the Pro Membership plan. Subscriptions start with a 7-day free trial.
+                Manage plan names, prices, features, and DIY unlocks in{" "}
+                <button type="button" className="font-semibold text-[#FF4D1C] hover:underline" onClick={() => setTab("pro-plans")}>
+                  Administration → Pro Plans
+                </button>
+                . Changes appear on the homeowner Go Pro page. You can still set a quick Pro Membership price here.
               </p>
               <form
                 onSubmit={async (e) => {
@@ -2955,6 +2995,16 @@ export default function AdminPanel({
                   setBusy(true);
                   const nextRules = { ...pricingRules, pro_subscription_price: Number(proPriceInput) };
                   const r = await adminSavePricingRules(nextRules as unknown as Record<string, unknown>);
+                  // Keep managed pro_membership plan in sync when present
+                  try {
+                    const plansRes = await listAdminSubscriptionPlans();
+                    const pro = (plansRes.plans || []).find((p) => p.code === "pro_membership");
+                    if (pro?.id != null) {
+                      await updateAdminSubscriptionPlan(pro.id, { amount: Number(proPriceInput) });
+                    }
+                  } catch {
+                    // ignore sync errors; pricing rules still saved
+                  }
                   setBusy(false);
                   if (r.ok) {
                     setPricingRules(r.rules as PricingRules);
@@ -3102,6 +3152,8 @@ export default function AdminPanel({
         {tab === "audit-logs" && <AdminAuditLogsPanel />}
 
         {tab === "support-tickets" && <AdminSupportTicketsPanel />}
+
+        {tab === "pro-plans" && <AdminSubscriptionPlansPanel readOnly={isReadOnly} />}
 
         {tab === "access" && (
           <section className="space-y-6">

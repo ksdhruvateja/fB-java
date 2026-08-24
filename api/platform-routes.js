@@ -4,6 +4,7 @@
  */
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import { brand } from './brand.js';
 import {
   stripeConfigured,
@@ -14,6 +15,8 @@ import {
 } from './stripe.js';
 import { retailFromBid, mergePricingRules } from './pricing.js';
 
+const PARTNER_JWT_SECRET = process.env.SESSION_SECRET || (!process.env.NETLIFY && process.env.NODE_ENV !== 'production' ? 'local-dev-secret' : undefined);
+
 async function pushStatusLocal(pool, jobId, fromStatus, toStatus, actorUserId, note) {
   await pool.query(`UPDATE managed_jobs SET status=$1, updated_at=NOW() WHERE id=$2`, [toStatus, jobId]);
   await pool.query(
@@ -21,6 +24,46 @@ async function pushStatusLocal(pool, jobId, fromStatus, toStatus, actorUserId, n
      VALUES ($1,$2,$3,$4,$5)`,
     [jobId, fromStatus || null, toStatus, actorUserId || null, note || null]
   );
+}
+
+/** Homeowner owner, assigned/invited contractor, or admin may access a managed job. */
+async function assertManagedJobAccess(pool, jobId, authUser) {
+  const id = Number(jobId);
+  if (!Number.isFinite(id)) return { status: 400, message: 'Invalid job id.' };
+  const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [id]);
+  const job = rows[0];
+  if (!job) return { status: 404, message: 'Job not found.' };
+  if (authUser?.role === 'admin' || authUser?.isAdmin) return { job };
+  if (authUser?.role === 'homeowner' && Number(job.homeowner_user_id) === Number(authUser.id)) {
+    return { job };
+  }
+  if (authUser?.role === 'contractor') {
+    if (Number(job.assigned_contractor_user_id) === Number(authUser.id)) return { job };
+    const { rows: inv } = await pool.query(
+      `SELECT 1 FROM job_invitations WHERE job_id=$1 AND contractor_user_id=$2 LIMIT 1`,
+      [id, authUser.id]
+    );
+    if (inv[0]) return { job };
+  }
+  return { status: 403, message: 'Not allowed.' };
+}
+
+function serializeChangeOrder(row, role) {
+  const base = {
+    id: Number(row.id),
+    jobId: Number(row.job_id),
+    description: row.description,
+    status: row.status,
+    createdAt: row.created_at,
+    approvedAt: row.approved_at,
+  };
+  if (role === 'admin' || role === 'contractor') {
+    base.contractorNet = row.contractor_net != null ? Number(row.contractor_net) : null;
+  }
+  if (role === 'admin' || role === 'homeowner') {
+    base.retailAmount = row.retail_amount != null ? Number(row.retail_amount) : null;
+  }
+  return base;
 }
 
 const PLAN_CATALOG = {
@@ -37,8 +80,12 @@ const PLAN_CATALOG = {
 import { writeAudit } from './audit.js';
 import { sendEmailSafe, sendSmsSafe, notifyOps } from './notify.js';
 
-export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, pushStatus }) {
+export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, pushStatus, getSubscriptionPlanByCode }) {
   const statusPush = typeof pushStatus === 'function' ? pushStatus : pushStatusLocal;
+  const lookupManagedPlan =
+    typeof getSubscriptionPlanByCode === 'function'
+      ? getSubscriptionPlanByCode
+      : async () => null;
   // ── Catalog / health for integrations ────────────────────────────────────
   app.get('/api/platform/status', requireAuth, requireAdmin, (_req, res) => {
     res.json({
@@ -205,37 +252,76 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       const planCode = String(req.body?.planCode || '');
       let amount = 0;
       let label = '';
-      let family = '';
+      let family = 'diy';
       let trialDays = 0;
+      let unlocksDiy = false;
 
-      if (planCode === 'pro_membership') {
+      const managed = await lookupManagedPlan(pool, planCode);
+      if (managed && managed.active) {
+        amount = Number(managed.amount) || 0;
+        label = managed.name;
+        family = 'diy';
+        trialDays = Number(managed.trialDays) || 0;
+        unlocksDiy = Boolean(managed.unlocksDiy);
+
+        // First-time Pro-style trial: local trial without Stripe when trialDays > 0
+        if (trialDays > 0) {
+          const { rows: existingSubs } = await pool.query(
+            `SELECT id FROM subscriptions WHERE user_id = $1 AND plan_code = $2`,
+            [req.authUser.id, planCode]
+          );
+          if (existingSubs.length === 0) {
+            const { rows } = await pool.query(
+              `INSERT INTO subscriptions (user_id, plan_code, plan_family, status, simulated, current_period_end, meta)
+               VALUES ($1,$2,$3,'active',true, NOW() + ($4 * INTERVAL '1 day'), $5) RETURNING *`,
+              [
+                req.authUser.id,
+                planCode,
+                family,
+                trialDays,
+                JSON.stringify({
+                  planCode,
+                  amount,
+                  label,
+                  family,
+                  isLocalTrial: true,
+                  unlocksDiy,
+                }),
+              ]
+            );
+            await pool.query(`UPDATE users SET plan_code=$1 WHERE id=$2`, [planCode, req.authUser.id]);
+            await writeAudit(pool, req.authUser.id, 'subscription_started', 'subscription', rows[0].id, {
+              planCode,
+              localTrial: true,
+            });
+            return res.json({ ok: true, simulated: true, subscription: rows[0] });
+          }
+          trialDays = 0;
+        }
+      } else if (planCode === 'pro_membership') {
         const { rows: ruleRows } = await pool.query(`SELECT rules FROM pricing_rules WHERE id='default'`);
         const rules = ruleRows[0]?.rules || {};
         amount = Number(rules.pro_subscription_price != null ? rules.pro_subscription_price : 0);
         label = 'Pro Membership';
         family = 'diy';
+        unlocksDiy = true;
 
-        // Check if the user has EVER had a subscription for pro_membership
         const { rows: existingSubs } = await pool.query(
           `SELECT id FROM subscriptions WHERE user_id = $1 AND plan_code = 'pro_membership'`,
           [req.authUser.id]
         );
 
         if (existingSubs.length === 0) {
-          // This is their first time subscribing!
-          // They get a 7-day local free trial (without Stripe redirect)
           const { rows } = await pool.query(
             `INSERT INTO subscriptions (user_id, plan_code, plan_family, status, simulated, current_period_end, meta)
              VALUES ($1,$2,$3,'active',true, NOW() + INTERVAL '7 days', $4) RETURNING *`,
-            [req.authUser.id, planCode, family, JSON.stringify({ planCode, amount, label, family, isLocalTrial: true })]
+            [req.authUser.id, planCode, family, JSON.stringify({ planCode, amount, label, family, isLocalTrial: true, unlocksDiy: true })]
           );
           await pool.query(`UPDATE users SET plan_code=$1 WHERE id=$2`, [planCode, req.authUser.id]);
           await writeAudit(pool, req.authUser.id, 'subscription_started', 'subscription', rows[0].id, { planCode, localTrial: true });
           return res.json({ ok: true, simulated: true, subscription: rows[0] });
-        } else {
-          // They already had a trial, so Stripe comes now with NO trial days!
-          trialDays = 0;
         }
+        trialDays = 0;
       } else {
         const plan = PLAN_CATALOG[planCode];
         if (!plan) return res.status(400).json({ ok: false, message: 'Unknown plan.' });
@@ -250,7 +336,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
         const { rows } = await pool.query(
           `INSERT INTO subscriptions (user_id, plan_code, plan_family, status, simulated, current_period_end, meta)
            VALUES ($1,$2,$3,'active',true, NOW() + INTERVAL '30 days', $4) RETURNING *`,
-          [req.authUser.id, planCode, family, JSON.stringify({ planCode, amount, label, family })]
+          [req.authUser.id, planCode, family, JSON.stringify({ planCode, amount, label, family, unlocksDiy })]
         );
         await pool.query(`UPDATE users SET plan_code=$1 WHERE id=$2`, [planCode, req.authUser.id]);
         await writeAudit(pool, req.authUser.id, 'subscription_started', 'subscription', rows[0].id, { planCode, simulated: true });
@@ -287,7 +373,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
         const { rows } = await pool.query(
           `INSERT INTO subscriptions (user_id, plan_code, plan_family, status, simulated, current_period_end, meta)
            VALUES ($1,$2,$3,'active',true, NOW() + INTERVAL '30 days', $4) RETURNING *`,
-          [req.authUser.id, planCode, family, JSON.stringify({ planCode, amount, label, family })]
+          [req.authUser.id, planCode, family, JSON.stringify({ planCode, amount, label, family, unlocksDiy })]
         );
         await pool.query(`UPDATE users SET plan_code=$1 WHERE id=$2`, [planCode, req.authUser.id]);
         await writeAudit(pool, req.authUser.id, 'subscription_started', 'subscription', rows[0].id, { planCode, simulated: true });
@@ -462,7 +548,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       if (typeof statusPush === 'function') {
         await statusPush(pool, jobId, 'change_order_pending', 'work_started', req.authUser.id, 'Change order approved');
       }
-      res.json({ ok: true, changeOrder: rows[0] });
+      res.json({ ok: true, changeOrder: serializeChangeOrder(rows[0], req.authUser.role) });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Could not approve change order.' });
     }
@@ -470,28 +556,14 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
 
   app.get('/api/managed/jobs/:id/change-orders', requireAuth, async (req, res) => {
     try {
-      const jobId = Number(req.params.id);
+      const access = await assertManagedJobAccess(pool, req.params.id, req.authUser);
+      if (access.status) return res.status(access.status).json({ ok: false, message: access.message });
       const { rows } = await pool.query(
         `SELECT * FROM change_orders WHERE job_id=$1 ORDER BY created_at DESC`,
-        [jobId]
+        [access.job.id]
       );
       const role = req.authUser.role;
-      const mapped = rows.map((r) => {
-        const base = {
-          id: Number(r.id),
-          jobId: Number(r.job_id),
-          description: r.description,
-          status: r.status,
-          createdAt: r.created_at,
-          approvedAt: r.approved_at,
-        };
-        if (role === 'admin' || role === 'contractor') base.contractorNet = Number(r.contractor_net);
-        if (role === 'admin' || role === 'homeowner') {
-          base.retailAmount = r.retail_amount != null ? Number(r.retail_amount) : null;
-        }
-        return base;
-      });
-      res.json({ ok: true, changeOrders: mapped });
+      res.json({ ok: true, changeOrders: rows.map((r) => serializeChangeOrder(r, role)) });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Server error' });
     }
@@ -652,11 +724,27 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
 
   app.get('/api/managed/jobs/:id/payment-schedule', requireAuth, async (req, res) => {
     try {
+      const access = await assertManagedJobAccess(pool, req.params.id, req.authUser);
+      if (access.status) return res.status(access.status).json({ ok: false, message: access.message });
       const { rows } = await pool.query(
-        `SELECT * FROM payment_schedules WHERE job_id=$1 ORDER BY sort_order ASC, id ASC`,
-        [Number(req.params.id)]
+        `SELECT id, job_id, label, amount, due_at, sort_order, status, payment_id, created_at
+         FROM payment_schedules WHERE job_id=$1 ORDER BY sort_order ASC, id ASC`,
+        [access.job.id]
       );
-      res.json({ ok: true, schedule: rows });
+      res.json({
+        ok: true,
+        schedule: rows.map((r) => ({
+          id: Number(r.id),
+          jobId: Number(r.job_id),
+          label: r.label,
+          amount: Number(r.amount),
+          dueAt: r.due_at,
+          sortOrder: r.sort_order,
+          status: r.status,
+          paymentId: r.payment_id,
+          createdAt: r.created_at,
+        })),
+      });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Server error' });
     }
@@ -853,9 +941,15 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
 
   app.get('/api/properties/:id/units', requireAuth, async (req, res) => {
     try {
+      const propertyId = Number(req.params.id);
+      const { rows: props } = await pool.query(`SELECT id, owner_user_id FROM properties WHERE id=$1`, [propertyId]);
+      if (!props[0]) return res.status(404).json({ ok: false, message: 'Property not found.' });
+      if (req.authUser.role !== 'admin' && Number(props[0].owner_user_id) !== Number(req.authUser.id)) {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
       const { rows } = await pool.query(
         `SELECT * FROM property_units WHERE property_id=$1 ORDER BY id ASC`,
-        [Number(req.params.id)]
+        [propertyId]
       );
       res.json({ ok: true, units: rows });
     } catch (e) {
@@ -898,6 +992,9 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
   // ── Partner portal (login + referrals) ───────────────────────────────────
   app.post('/api/partner/login', async (req, res) => {
     try {
+      if (!PARTNER_JWT_SECRET) {
+        return res.status(503).json({ ok: false, message: 'Partner auth is not configured.' });
+      }
       const email = String(req.body?.email || '').trim().toLowerCase();
       const password = String(req.body?.password || '');
       const { rows } = await pool.query(
@@ -911,8 +1008,16 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       }
       const match = await bcrypt.compare(password, rows[0].password_hash);
       if (!match) return res.status(401).json({ ok: false, message: 'Invalid partner credentials.' });
-      const token = crypto.createHash('sha256').update(`${rows[0].id}:${Date.now()}:${password}`).digest('hex');
-      // Lightweight opaque token stored in writeAudit for pilot (JWT-style optional later)
+      const token = jwt.sign(
+        {
+          typ: 'partner',
+          partnerUserId: Number(rows[0].id),
+          partnerId: Number(rows[0].partner_id),
+          code: String(rows[0].partner_code || '').toUpperCase(),
+        },
+        PARTNER_JWT_SECRET,
+        { algorithm: 'HS256', expiresIn: '7d' }
+      );
       await writeAudit(pool, null, 'partner_login', 'partner_user', rows[0].id, { email });
       res.json({
         ok: true,
@@ -951,7 +1056,23 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
 
   app.get('/api/partner/:code/referrals', async (req, res) => {
     try {
+      if (!PARTNER_JWT_SECRET) {
+        return res.status(503).json({ ok: false, message: 'Partner auth is not configured.' });
+      }
       const code = String(req.params.code || '').toUpperCase();
+      const authHeader = String(req.headers.authorization || '');
+      if (!authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ ok: false, message: 'Partner authentication required.' });
+      }
+      let decoded;
+      try {
+        decoded = jwt.verify(authHeader.slice(7), PARTNER_JWT_SECRET, { algorithms: ['HS256'] });
+      } catch {
+        return res.status(401).json({ ok: false, message: 'Invalid or expired partner session.' });
+      }
+      if (decoded?.typ !== 'partner' || String(decoded.code || '').toUpperCase() !== code) {
+        return res.status(403).json({ ok: false, message: 'Not allowed for this partner code.' });
+      }
       const { rows } = await pool.query(
         `SELECT id, status, created_at, job_id FROM partner_referrals WHERE UPPER(partner_code)=$1 ORDER BY created_at DESC LIMIT 100`,
         [code]

@@ -30,7 +30,8 @@ import {
   type Property,
   type Proposal,
 } from "./managedJobs";
-import { listPlans, startSubscription } from "./platformApi";
+import { startSubscription } from "./platformApi";
+import { listGoProPlans } from "./subscriptionPlansApi";
 import {
   HOMEOWNER_AREA_DEFAULT_SERVICE,
   HOMEOWNER_AREA_ICONS,
@@ -60,6 +61,7 @@ import HomeownerJobDetailPanel from "./HomeownerJobDetailPanel";
 import HomeownerPaymentsPanel from "./HomeownerPaymentsPanel";
 import HomeownerDocumentsPanel from "./HomeownerDocumentsPanel";
 import HomeownerSupportPanel from "./HomeownerSupportPanel";
+import HomeownerGoProPlans, { type GoProPlanCard } from "./HomeownerGoProPlans";
 import { useIsMobile } from "./components/ui/use-mobile";
 import {
   type DashTab,
@@ -252,7 +254,7 @@ export default function HomeownerDashboard({
   const voiceBaseRef = useRef("");
   const voiceRecRef = useRef<{ stop: () => void } | null>(null);
   const [assessmentMode, setAssessmentMode] = useState<"expert" | "diy">("diy");
-  const [proPlan, setProPlan] = useState<{ amount: number } | null>(null);
+  const [diyUnlockCodes, setDiyUnlockCodes] = useState<string[]>(["pro_membership", "homecare", "property_pro"]);
 
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editName, setEditName] = useState(user.name);
@@ -771,12 +773,14 @@ export default function HomeownerDashboard({
 
   useEffect(() => {
     void refresh();
-    void listPlans().then((r) => {
-      if (r.ok && Array.isArray(r.plans)) {
-        const found = r.plans.find((p) => p.code === "pro_membership");
-        if (found) setProPlan(found);
-      }
-    });
+    void listGoProPlans()
+      .then((r) => {
+        const codes = (r.plans || []).filter((p) => p.unlocksDiy).map((p) => p.code);
+        if (codes.length) setDiyUnlockCodes(codes);
+      })
+      .catch(() => {
+        /* keep defaults */
+      });
 
     try {
       const guestJobId = localStorage.getItem("fixbridge-guest-job-id");
@@ -797,10 +801,11 @@ export default function HomeownerDashboard({
     }
   }, []);
 
-  async function handleSubscribe(jobId?: number) {
+  async function handleSubscribe(jobId?: number, planCode = "pro_membership") {
     setBusy(true);
+    setError(null);
     try {
-      const r = await startSubscription("pro_membership", jobId);
+      const r = await startSubscription(planCode, jobId);
       if (!r.ok) {
         setError(r.message || "Failed to start subscription.");
         return;
@@ -811,8 +816,9 @@ export default function HomeownerDashboard({
       }
       if (r.simulated) {
         if (onUserUpdated && user) {
-          onUserUpdated({ ...user, planCode: "pro_membership" });
+          onUserUpdated({ ...user, planCode });
         }
+        setTab("go-pro");
       }
     } catch (e: any) {
       setError(e.message || "Could not complete subscription.");
@@ -820,6 +826,15 @@ export default function HomeownerDashboard({
       setBusy(false);
     }
   }
+
+  function handleSelectGoProPlan(plan: GoProPlanCard) {
+    if (!plan.planCode) return;
+    void handleSubscribe(selectedJobId || undefined, plan.planCode);
+  }
+
+  const hasDiyAccess = Boolean(
+    user.planCode && diyUnlockCodes.includes(user.planCode)
+  );
 
   useEffect(() => {
     const code = partnerCode.trim().toUpperCase();
@@ -1195,24 +1210,21 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
     </section>
   );
 
-  const goProPromoCard = user.planCode !== "pro_membership" && (
-    <div className="mx-3.5 my-3 rounded-xl border border-amber-500/20 bg-gradient-to-br from-amber-500/10 via-amber-500/5 to-transparent p-4 text-center shadow-[0_4px_16px_-6px_rgba(245,158,11,0.25)] relative overflow-hidden">
-      <div className="absolute -right-8 -top-8 h-16 w-16 rounded-full bg-amber-500/10 blur-xl" />
-      <div className="absolute -left-8 -bottom-8 h-16 w-16 rounded-full bg-teal-500/5 blur-xl" />
-      <p className="text-xs font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider flex items-center justify-center gap-1.5">
-        <Sparkles className="h-3.5 w-3.5 text-amber-500 animate-pulse" /> Pro Member
+  const goProPromoCard = !hasDiyAccess && (
+    <div className="mx-3.5 my-3 rounded-xl border border-[#4A90D9]/25 bg-gradient-to-br from-[#4A90D9]/10 via-transparent to-[#FF6B2C]/5 p-4 text-center shadow-[0_4px_16px_-6px_rgba(74,144,217,0.25)] relative overflow-hidden">
+      <p className="text-xs font-bold text-[#4A90D9] uppercase tracking-wider flex items-center justify-center gap-1.5">
+        <Sparkles className="h-3.5 w-3.5" /> Go Pro
       </p>
       <p className="mt-1 text-[11px] text-muted-foreground leading-relaxed">
-        Unlock AI DIY Action Plans, step checklists & safety rules.
+        Compare plans — unlock DIY plans & priority support.
       </p>
       <button
         type="button"
-        disabled={busy}
-        onClick={() => void handleSubscribe(selectedJobId || undefined)}
-        className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 px-3 py-2 text-xs font-semibold text-white shadow hover:brightness-105 active:scale-[0.98] transition duration-200"
+        onClick={() => navigateTab("go-pro")}
+        className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#FF6B2C] px-3 py-2 text-xs font-semibold text-white shadow hover:brightness-105 active:scale-[0.98] transition duration-200"
       >
-        {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3 fill-current" />}
-        Upgrade Now
+        <Zap className="h-3 w-3 fill-current" />
+        View plans
       </button>
     </div>
   );
@@ -1228,14 +1240,13 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
           <p className="truncate text-[10px] text-muted-foreground">{user.name}</p>
         </div>
         <div className="flex items-center gap-1">
-          {user.planCode !== "pro_membership" && (
+          {!hasDiyAccess && (
             <button
               type="button"
-              disabled={busy}
-              onClick={() => void handleSubscribe()}
-              className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 px-2.5 py-1 text-xs font-semibold text-white shadow-sm"
+              onClick={() => navigateTab("go-pro")}
+              className="inline-flex items-center gap-1 rounded-full bg-[#FF6B2C] px-2.5 py-1 text-xs font-semibold text-white shadow-sm"
             >
-              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+              <Sparkles className="h-3 w-3" />
               Pro
             </button>
           )}
@@ -1313,8 +1324,9 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
             onNavigate={navigateTab}
             onToggleDark={onToggleDark}
             onLogout={onLogout}
-            onGoPro={() => void handleSubscribe()}
+            onGoPro={() => navigateTab("go-pro")}
             goProBusy={busy}
+            showGoPro={!hasDiyAccess}
           />
         )}
 
@@ -1446,6 +1458,22 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
         )}
         {tab === "help" && (
           <HomeownerSupportPanel channel="help" user={user} properties={properties} jobs={jobs} />
+        )}
+
+        {tab === "go-pro" && (
+          <div className="rounded-[1.75rem] bg-[#F3F4F6] px-4 py-8 dark:bg-muted/30 sm:px-6">
+            <HomeownerGoProPlans
+              currentPlanCode={user.planCode}
+              busy={busy}
+              onSelectPlan={handleSelectGoProPlan}
+              onPlansLoaded={(cards) => {
+                setDiyUnlockCodes(
+                  cards.filter((c) => c.unlocksDiy).map((c) => c.planCode)
+                );
+              }}
+            />
+            {error ? <p className="mt-4 text-center text-sm text-red-600">{error}</p> : null}
+          </div>
         )}
 
         {tab === "report" && (
@@ -2418,7 +2446,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                         <div className="flex justify-between text-sm">
                           <span className="text-muted-foreground">Contractor Visit Fee:</span>
                           <span className="font-semibold text-foreground">
-                            ${activeJob.pricing?.contractor_visit_fee || 125}
+                            ${activeJob.visitFeeAmount ?? activeJob.pricing?.contractor_visit_fee ?? 125}
                           </span>
                         </div>
                         <div className="flex justify-between text-sm">
@@ -2430,7 +2458,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                         </div>
                         <div className="border-t border-border/60 pt-2.5 flex justify-between text-sm font-bold">
                           <span className="text-foreground">Dispatch Authorization Hold:</span>
-                          <span className="text-primary">${activeJob.pricing?.contractor_visit_fee || 125}</span>
+                          <span className="text-primary">${activeJob.visitFeeAmount ?? activeJob.pricing?.contractor_visit_fee ?? 125}</span>
                         </div>
                       </div>
 
@@ -2461,64 +2489,43 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                     </div>
                   </div>
                 ) : (
-                  user.planCode !== "pro_membership" ? (
-                    <div className="relative space-y-6">
-                      {/* Blurred teaser layout of tools / materials */}
-                      <div className="grid gap-4 sm:grid-cols-2 pointer-events-none select-none opacity-20 blur-sm">
-                        <div className="rounded-xl border border-border bg-muted/20 p-4">
-                          <h4 className="font-semibold text-sm mb-3">🔧 Required Tools</h4>
-                          <div className="h-4 w-3/4 bg-muted rounded mb-2" />
-                          <div className="h-4 w-1/2 bg-muted rounded" />
-                        </div>
-                        <div className="rounded-xl border border-border bg-muted/20 p-4">
-                          <h4 className="font-semibold text-sm mb-3">📦 Materials Needed</h4>
-                          <div className="h-4 w-3/4 bg-muted rounded mb-2" />
-                          <div className="h-4 w-1/2 bg-muted rounded" />
-                        </div>
-                      </div>
-
-                      {/* Blurred teaser steps */}
-                      <div className="rounded-xl border border-border p-4 pointer-events-none select-none opacity-20 blur-[4px]">
-                        <h4 className="font-semibold text-sm mb-3">Step-by-Step Instructions</h4>
-                        <div className="space-y-3">
-                          <div className="h-8 bg-muted rounded w-full" />
-                          <div className="h-8 bg-muted rounded w-11/12" />
-                        </div>
-                      </div>
-
-                      {/* Premium Glassmorphic Lock Card Overlay */}
-                      <div className="absolute inset-0 flex items-center justify-center p-4">
-                        <div className="w-full max-w-md rounded-2xl border border-border/80 bg-background/85 p-6 text-center shadow-2xl backdrop-blur-md">
-                          <div className="mx-auto mb-3.5 flex h-12 w-12 items-center justify-center rounded-full bg-[#FF4D1C]/10 text-[#FF4D1C]">
-                            <Sparkles className="h-6 w-6 animate-pulse" />
+                  !hasDiyAccess ? (
+                    <div className="relative space-y-4">
+                      <div className="pointer-events-none select-none opacity-20 blur-sm">
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <div className="rounded-xl border border-border bg-muted/20 p-4">
+                            <h4 className="font-semibold text-sm mb-3">Required Tools</h4>
+                            <div className="h-4 w-3/4 bg-muted rounded mb-2" />
+                            <div className="h-4 w-1/2 bg-muted rounded" />
                           </div>
-                          <h3 className="font-[family-name:var(--font-display)] text-xl font-bold tracking-wide text-foreground">
+                          <div className="rounded-xl border border-border bg-muted/20 p-4">
+                            <h4 className="font-semibold text-sm mb-3">Materials Needed</h4>
+                            <div className="h-4 w-3/4 bg-muted rounded mb-2" />
+                            <div className="h-4 w-1/2 bg-muted rounded" />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="relative z-10 rounded-[1.5rem] bg-[#F3F4F6] p-4 dark:bg-muted/40 sm:p-6">
+                        <div className="mb-4 text-center">
+                          <h3 className="[font-family:'Barlow_Condensed',sans-serif] text-2xl font-black uppercase tracking-tight">
                             Unlock DIY Action Plan
                           </h3>
-                          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                            Upgrade to <strong className="text-foreground font-semibold">Pro Membership</strong> to access full step-by-step guides, required tool lists, safety checkpoints, and real-time AI guidance tailored for your repair.
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Pick a plan — Pro includes a 7-day free trial.
                           </p>
-
-                          <div className="mt-4 border-t border-border/60 pt-3.5">
-                            <div className="flex items-center justify-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-[#FF4D1C]">
-                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
-                              7-Day Free Trial Included
-                            </div>
-                            <p className="text-[11px] text-muted-foreground mt-0.5">
-                              Then just {proPlan ? formatMoney(proPlan.amount) : "$49.00"}/month. Cancel anytime.
-                            </p>
-                          </div>
-
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void handleSubscribe()}
-                            className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-5 py-3 text-sm font-semibold text-white shadow-[0_10px_20px_rgba(255,77,28,0.15)] hover:bg-[#FF4D1C]/95 active:scale-[0.98] transition-all disabled:opacity-60"
-                          >
-                            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4 fill-current" />}
-                            Start Free Trial & Unlock
-                          </button>
                         </div>
+                        <HomeownerGoProPlans
+                          compact
+                          currentPlanCode={user.planCode}
+                          busy={busy}
+                          onSelectPlan={handleSelectGoProPlan}
+                          onPlansLoaded={(cards) => {
+                            setDiyUnlockCodes(
+                              cards.filter((c) => c.unlocksDiy).map((c) => c.planCode)
+                            );
+                          }}
+                        />
                       </div>
                     </div>
                   ) : (

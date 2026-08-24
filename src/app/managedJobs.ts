@@ -106,6 +106,7 @@ export type ManagedJob = {
   pricing?: any;
   visitFeeAuthorized?: boolean;
   visitFeeCaptured?: boolean;
+  visitFeeAmount?: number | null;
   diyRiskLevel?: string;
 };
 

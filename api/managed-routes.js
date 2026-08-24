@@ -11,6 +11,8 @@ import {
   buildZipMarketProfile,
   getLocationFactorByZip,
   getZipMarketLabel,
+  resolveCustomerVisitFee,
+  applyVisitFeeCredit,
 } from './pricing.js';
 import { analyzeRepairStructured } from './ai.js';
 import {
@@ -315,6 +317,37 @@ async function loadPricingRules(pool) {
   return mergePricingRules(rows[0]?.rules);
 }
 
+/** Sum of homeowner visit/dispatch fees already authorized or paid on a job. */
+async function getVisitFeeCreditForJob(pool, jobId) {
+  const { rows } = await pool.query(
+    `SELECT amount, status FROM payments
+     WHERE job_id=$1 AND payment_type='dispatch_fee'
+       AND status IN ('succeeded','authorized','paid','captured')
+     ORDER BY id DESC LIMIT 1`,
+    [jobId]
+  );
+  if (rows[0]) {
+    return {
+      amount: Math.max(0, Number(rows[0].amount) || 0),
+      status: rows[0].status,
+      source: 'payment',
+    };
+  }
+  const { rows: jobs } = await pool.query(
+    `SELECT visit_fee_amount, visit_fee_authorized, visit_fee_captured FROM managed_jobs WHERE id=$1`,
+    [jobId]
+  );
+  const j = jobs[0];
+  if (j && (j.visit_fee_authorized || j.visit_fee_captured) && j.visit_fee_amount != null) {
+    return {
+      amount: Math.max(0, Number(j.visit_fee_amount) || 0),
+      status: j.visit_fee_captured ? 'succeeded' : 'authorized',
+      source: 'job',
+    };
+  }
+  return { amount: 0, status: null, source: null };
+}
+
 function parseJson(val, fallback = null) {
   if (val == null) return fallback;
   if (typeof val === 'object') return val;
@@ -415,6 +448,12 @@ function serializeJob(row, viewer) {
       ? Number(row.customer_retail_estimate_high) : null;
     base.visitFeeAuthorized = row.visit_fee_authorized === true;
     base.visitFeeCaptured = row.visit_fee_captured === true;
+    base.visitFeeAmount =
+      row.visit_fee_amount != null
+        ? Number(row.visit_fee_amount)
+        : parseJson(row.pricing)?.contractor_visit_fee != null
+          ? Number(parseJson(row.pricing).contractor_visit_fee)
+          : null;
     base.diyRiskLevel = row.diy_risk_level || 'green';
     base.pricingDisclaimer =
       'Estimated service range includes coordination, administration, payment handling and subcontracted delivery.';
@@ -434,11 +473,18 @@ function serializeJob(row, viewer) {
   if (isAdmin) {
     base.pricing = parseJson(row.pricing);
   } else if (isOwner) {
+    const storedPricing = parseJson(row.pricing) || {};
     base.pricing = {
       show_price: row.show_retail_price !== false,
       customer_retail_estimate_low: base.customerRetailEstimateLow,
       customer_retail_estimate_high: base.customerRetailEstimateHigh,
       disclaimer: base.pricingDisclaimer,
+      contractor_visit_fee:
+        base.visitFeeAmount != null
+          ? base.visitFeeAmount
+          : storedPricing.contractor_visit_fee != null
+            ? Number(storedPricing.contractor_visit_fee)
+            : null,
     };
   }
 
@@ -1220,36 +1266,18 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       );
 
       if (existingUsers.length > 0) {
-        user = existingUsers[0];
-        // Keep profile in sync with the latest contact details from the report wizard.
-        const nextName = name || user.name;
-        const nextPhone = phone || user.phone || null;
-        const nextAddress = fullAddress !== 'TBD' ? fullAddress : user.address || null;
-        const { rows: refreshed } = await pool.query(
-          `UPDATE users SET
-             name = $1,
-             phone = COALESCE(NULLIF($2, ''), phone),
-             address = COALESCE($3, address),
-             profile_phones = CASE
-               WHEN (profile_phones IS NULL OR profile_phones = '[]'::jsonb)
-                 AND NULLIF($2, '') IS NOT NULL
-               THEN jsonb_build_array($2::text)
-               ELSE profile_phones
-             END,
-             profile_addresses = CASE
-               WHEN (profile_addresses IS NULL OR profile_addresses = '[]'::jsonb)
-                 AND $3::text IS NOT NULL
-               THEN jsonb_build_array($3::text)
-               ELSE profile_addresses
-             END
-           WHERE id=$4
-           RETURNING *`,
-          [nextName, phone || null, fullAddress !== 'TBD' ? fullAddress : null, user.id]
-        );
-        user = refreshed[0] || user;
-      } else {
-        // Create new homeowner with a default password for the beta
-        const hashed = await bcrypt.hash('password123', 10);
+        // Do not attach guest jobs to existing accounts without proving ownership.
+        return res.status(409).json({
+          ok: false,
+          code: 'ACCOUNT_EXISTS',
+          message: 'An account with this email already exists. Please sign in to continue your request.',
+        });
+      }
+
+      // Guest intake: random password (session is via returned JWT). Prefer set-password / forgot-password later.
+      {
+        const tempPassword = crypto.randomBytes(32).toString('base64url');
+        const hashed = await bcrypt.hash(tempPassword, 10);
         const profileAddress = fullAddress !== 'TBD' ? fullAddress : null;
         const { rows: newUsers } = await pool.query(
           `INSERT INTO users (role, name, email, password, phone, address, profile_phones, profile_addresses, compliance_status)
@@ -1334,6 +1362,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         afterHours: /evening|weekend/i.test(job.service_timing || ''),
         urgency: assessment.urgency,
         zip: job.zip || zip,
+      });
+      pricing.contractor_visit_fee = resolveCustomerVisitFee(rules, {
+        emergency:
+          job.service_timing === 'emergency' ||
+          String(assessment.urgency || '').toLowerCase().includes('emerg'),
       });
 
       await pool.query(
@@ -1621,6 +1654,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         urgency: assessment.urgency,
         zip: job.zip || null,
       });
+      pricing.contractor_visit_fee = resolveCustomerVisitFee(rules, {
+        emergency:
+          job.service_timing === 'emergency' ||
+          String(assessment.urgency || '').toLowerCase().includes('emerg'),
+      });
       const discount = await resolveJobDiscount(pool, job);
       if (discount) {
         pricing = applyDiscountToPricing(pricing, discount);
@@ -1754,26 +1792,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
 
       const rules = await loadPricingRules(pool);
-      
-      // Calculate specific visit fee based on assigned/available contractor in that trade
-      let visitFee = 125;
-      if (job.assigned_contractor_user_id) {
-        const { rows: pros } = await pool.query('SELECT visit_fee, emergency_visit_fee FROM users WHERE id=$1', [job.assigned_contractor_user_id]);
-        if (pros[0]) {
-          const isEmergency = job.service_timing === 'emergency' || String(job.title).toLowerCase().includes('emerg') || String(job.description).toLowerCase().includes('emerg');
-          visitFee = Number(isEmergency ? (pros[0].emergency_visit_fee || pros[0].visit_fee || 125) : (pros[0].visit_fee || 125));
-        }
-      } else {
-        const { rows: pros } = await pool.query(
-          'SELECT visit_fee FROM users WHERE role=\'contractor\' AND compliance_status=\'approved\' AND LOWER(trade)=LOWER($1) LIMIT 1',
-          [job.category]
-        );
-        if (pros[0]) {
-          visitFee = Number(pros[0].visit_fee || 125);
-        } else {
-          visitFee = Number(rules.default_visit_fee || 125);
-        }
-      }
+
+      // Admin-configured homeowner visit fee (platform default); emergency uses emergency default when set
+      const isEmergency =
+        job.service_timing === 'emergency' ||
+        String(job.title || '').toLowerCase().includes('emerg') ||
+        String(job.description || '').toLowerCase().includes('emerg');
+      let visitFee = resolveCustomerVisitFee(rules, { emergency: isEmergency });
 
       const amountBeforeDiscount = visitFee;
       let amount = visitFee;
@@ -1801,9 +1826,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         await pool.query(
           `UPDATE managed_jobs SET
              visit_fee_authorized=true,
+             visit_fee_amount=$2,
+             pricing = CASE
+               WHEN pricing IS NULL THEN $3::jsonb
+               ELSE pricing || $3::jsonb
+             END,
              updated_at=NOW()
            WHERE id=$1`,
-          [jobId]
+          [jobId, amount, JSON.stringify({ contractor_visit_fee: amount })]
         );
         await pushStatus(pool, jobId, job.status, 'paid_for_dispatch', req.authUser.id, 'Visit fee authorized (simulated hold placed)');
         await pushStatus(pool, jobId, 'paid_for_dispatch', 'awaiting_contractor', req.authUser.id, 'Ready for dispatch');
@@ -2427,6 +2457,18 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         ...(couponAmount > 0 ? [{ label: couponCode || 'Coupon', amount: -couponAmount, visible: true }] : []),
       ];
 
+      const visitCredit = await getVisitFeeCreditForJob(pool, jobId);
+      const billed = applyVisitFeeCredit(retail, visitCredit.amount);
+      if (billed.visitFeeCredit > 0) {
+        customerLineItems.push({
+          label: 'Visit fee credit (already paid)',
+          amount: -billed.visitFeeCredit,
+          visible: true,
+        });
+      }
+      const amountDue =
+        req.body?.depositAmount != null ? Number(req.body.depositAmount) : billed.amountDue;
+
       const { rows } = await pool.query(
         `INSERT INTO proposals
           (job_id, bid_id, scope_summary, retail_amount, deposit_amount, timeline, warranty, exclusions,
@@ -2439,8 +2481,8 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           jobId,
           bidId,
           req.body?.scopeSummary || jobs[0].description || jobs[0].title,
-          retail,
-          req.body?.depositAmount != null ? Number(req.body.depositAmount) : retail,
+          billed.retail,
+          amountDue,
           req.body?.timeline || null,
           req.body?.warranty || bids[0].warranty,
           req.body?.exclusions || bids[0].exclusions,
@@ -2585,37 +2627,84 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         [jobId]
       );
       if (!props[0]) return res.status(400).json({ ok: false, message: 'No proposal.' });
-      const amount = Number(props[0].deposit_amount ?? props[0].retail_amount);
+      const retail = Number(props[0].retail_amount) || 0;
+      const visitCredit = await getVisitFeeCreditForJob(pool, jobId);
+      const billed = applyVisitFeeCredit(retail, visitCredit.amount);
+      const amount =
+        props[0].deposit_amount != null && Number(props[0].deposit_amount) >= 0
+          ? Number(props[0].deposit_amount)
+          : billed.amountDue;
       const simulate = shouldSimulatePayment(req.body?.simulate === true);
 
       if (simulate) {
         await pool.query(
-          `INSERT INTO payments (job_id, user_id, payment_type, amount, status, simulated)
-           VALUES ($1,$2,'retail_payment',$3,'succeeded',true)`,
-          [jobId, req.authUser.id, amount]
+          `INSERT INTO payments (job_id, user_id, payment_type, amount, status, simulated, meta)
+           VALUES ($1,$2,'retail_payment',$3,'succeeded',true,$4)`,
+          [
+            jobId,
+            req.authUser.id,
+            amount,
+            JSON.stringify({
+              retail,
+              visitFeeCredit: billed.visitFeeCredit,
+              amountDue: amount,
+            }),
+          ]
         );
         await pushStatus(pool, jobId, job.status, 'scheduled', req.authUser.id, 'Retail payment received (simulated)');
-        await audit(pool, req.authUser.id, 'retail_paid', 'managed_job', jobId, { amount, simulated: true });
+        await audit(pool, req.authUser.id, 'retail_paid', 'managed_job', jobId, {
+          amount,
+          retail,
+          visitFeeCredit: billed.visitFeeCredit,
+          simulated: true,
+        });
         const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
-        return res.json({ ok: true, simulated: true, amount, job: serializeJob(fresh[0], req.authUser) });
+        return res.json({
+          ok: true,
+          simulated: true,
+          amount,
+          retail,
+          visitFeeCredit: billed.visitFeeCredit,
+          job: serializeJob(fresh[0], req.authUser),
+        });
       }
 
       const origin = req.get('origin') || req.get('referer');
       const checkout = await createCheckoutSession({
         amountCents: Math.round(amount * 100),
         customerEmail: req.authUser.email,
-        description: `${brand.productName} repair payment`,
+        description: `${brand.productName} repair payment${
+          billed.visitFeeCredit > 0 ? ` (visit fee credit −$${billed.visitFeeCredit.toFixed(2)})` : ''
+        }`,
         successPath: `/?paid=retail&job=${jobId}`,
         cancelPath: `/?canceled=retail&job=${jobId}`,
         origin,
-        metadata: { jobId: String(jobId), paymentType: 'retail_payment', userId: String(req.authUser.id) },
+        metadata: {
+          jobId: String(jobId),
+          paymentType: 'retail_payment',
+          userId: String(req.authUser.id),
+          visitFeeCredit: String(billed.visitFeeCredit),
+        },
       });
       await pool.query(
-        `INSERT INTO payments (job_id, user_id, payment_type, amount, status, stripe_session_id, simulated)
-         VALUES ($1,$2,'retail_payment',$3,'pending',$4,false)`,
-        [jobId, req.authUser.id, amount, checkout.sessionId]
+        `INSERT INTO payments (job_id, user_id, payment_type, amount, status, stripe_session_id, simulated, meta)
+         VALUES ($1,$2,'retail_payment',$3,'pending',$4,false,$5)`,
+        [
+          jobId,
+          req.authUser.id,
+          amount,
+          checkout.sessionId,
+          JSON.stringify({ retail, visitFeeCredit: billed.visitFeeCredit, amountDue: amount }),
+        ]
       );
-      res.json({ ok: true, simulated: false, url: checkout.url, amount });
+      res.json({
+        ok: true,
+        simulated: false,
+        url: checkout.url,
+        amount,
+        retail,
+        visitFeeCredit: billed.visitFeeCredit,
+      });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Server error' });
     }
@@ -4151,13 +4240,20 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           let paymentStatus = 'succeeded';
           if (paymentType === 'dispatch_fee') {
             paymentStatus = 'authorized';
+            const paidAmt = session.amount_total != null ? Number(session.amount_total) / 100 : null;
             await pool.query(
               `UPDATE managed_jobs SET
                  visit_fee_authorized=true,
-                 stripe_payment_intent_id=$1,
+                 visit_fee_amount=COALESCE($1, visit_fee_amount),
+                 stripe_payment_intent_id=$2,
+                 pricing = CASE
+                   WHEN $1::numeric IS NULL THEN pricing
+                   WHEN pricing IS NULL THEN jsonb_build_object('contractor_visit_fee', $1::numeric)
+                   ELSE pricing || jsonb_build_object('contractor_visit_fee', $1::numeric)
+                 END,
                  updated_at=NOW()
-               WHERE id=$2`,
-              [session.payment_intent || null, jobId]
+               WHERE id=$3`,
+              [paidAmt, session.payment_intent || null, jobId]
             );
           }
           await pool.query(

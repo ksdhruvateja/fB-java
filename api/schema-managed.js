@@ -340,6 +340,7 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS diy_risk_level TEXT DEFAULT 'green'`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS visit_fee_authorized BOOLEAN DEFAULT FALSE`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS visit_fee_captured BOOLEAN DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS visit_fee_amount NUMERIC`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS stripe_payment_intent_id TEXT`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS cancellation_reason TEXT`);
 

@@ -444,7 +444,7 @@ export function registerSupportTicketRoutes(app, { pool, requireAuth, requireAdm
     }
   });
 
-  app.get('/api/admin/support/tickets', requireAdmin, async (req, res) => {
+  app.get('/api/admin/support/tickets', requireAuth, requireAdmin, async (req, res) => {
     try {
       const status = typeof req.query?.status === 'string' ? req.query.status.trim() : '';
       const params = [];
@@ -464,7 +464,7 @@ export function registerSupportTicketRoutes(app, { pool, requireAuth, requireAdm
     }
   });
 
-  app.get('/api/admin/support/tickets/:ticketNumber', requireAdmin, async (req, res) => {
+  app.get('/api/admin/support/tickets/:ticketNumber', requireAuth, requireAdmin, async (req, res) => {
     try {
       const ticketNumber = String(req.params.ticketNumber || '').trim();
       const { rows } = await pool.query(`SELECT * FROM support_tickets WHERE ticket_number=$1`, [ticketNumber]);
@@ -480,7 +480,7 @@ export function registerSupportTicketRoutes(app, { pool, requireAuth, requireAdm
     }
   });
 
-  app.patch('/api/admin/support/tickets/:ticketNumber', requireAdmin, async (req, res) => {
+  app.patch('/api/admin/support/tickets/:ticketNumber', requireAuth, requireAdmin, async (req, res) => {
     try {
       const ticketNumber = String(req.params.ticketNumber || '').trim();
       const status = typeof req.body?.status === 'string' ? req.body.status.trim() : '';

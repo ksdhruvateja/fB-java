@@ -29,7 +29,7 @@ function propertyLabel(prop: Property | undefined): string {
 }
 
 function dispatchFee(job: ManagedJob): number {
-  const fee = job.pricing?.contractor_visit_fee;
+  const fee = job.visitFeeAmount ?? job.pricing?.contractor_visit_fee;
   return Number.isFinite(Number(fee)) ? Number(fee) : 125;
 }
 

@@ -44,6 +44,9 @@ export const DEFAULT_PRICING_RULES = {
   subscription_discount: 0,
   assessment_credit: 0,
   pro_subscription_price: 0,
+  /** Flat homeowner visit / dispatch fee charged before a pro is sent. Credited on the final bill. */
+  default_visit_fee: 125,
+  default_emergency_visit_fee: 125,
   /**
    * Stage A — applied to AI-generated recommended retail before homeowner sees it.
    * Homeowners never see the raw AI amount or this markup; only the final estimate.
@@ -485,6 +488,24 @@ export function getDispatchFee(serviceTiming, rules = DEFAULT_PRICING_RULES) {
   }
   if (t.includes('same') || t.includes('priority') || t.includes('same-day')) return fees.same_day;
   return fees.weekday;
+}
+
+/** Admin-configured homeowner visit fee (what the customer authorizes for dispatch). */
+export function resolveCustomerVisitFee(rules = DEFAULT_PRICING_RULES, { emergency = false } = {}) {
+  const key = emergency ? 'default_emergency_visit_fee' : 'default_visit_fee';
+  const raw = num(rules?.[key], num(rules?.default_visit_fee, 125));
+  return Math.max(0, Math.round(raw * 100) / 100);
+}
+
+/** Final amount due after applying a previously paid/authorized visit fee credit. */
+export function applyVisitFeeCredit(retailAmount, visitFeePaid) {
+  const retail = Math.max(0, num(retailAmount, 0));
+  const credit = Math.max(0, num(visitFeePaid, 0));
+  return {
+    retail,
+    visitFeeCredit: Math.min(credit, retail),
+    amountDue: Math.max(0, Math.round((retail - credit) * 100) / 100),
+  };
 }
 
 export function mergePricingRules(stored) {

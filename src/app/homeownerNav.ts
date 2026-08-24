@@ -36,7 +36,8 @@ export type DashTab =
   | "properties"
   | "profile"
   | "inbox"
-  | "more";
+  | "more"
+  | "go-pro";
 
 export type BottomNavId = "home" | "jobs" | "request" | "inbox" | "more";
 export type JobsSegment = "active" | "quotes" | "upcoming" | "history";
@@ -238,6 +239,8 @@ export function mobileHeaderTitle(tab: DashTab): string {
       return "Help & Support";
     case "protection":
       return "Home Protection";
+    case "go-pro":
+      return "Go Pro";
     default:
       return "FixBridge";
   }

@@ -12,6 +12,11 @@ import crypto from 'crypto';
 import { analyzeRepairStructured, chatWithCustomer, getAiStatus } from './ai.js';
 import { initManagedSchema } from './schema-managed.js';
 import { initSupportTicketSchema, registerSupportTicketRoutes } from './support-tickets.js';
+import {
+  initSubscriptionPlansSchema,
+  registerSubscriptionPlanRoutes,
+  getSubscriptionPlanByCode,
+} from './subscription-plans.js';
 import { registerManagedRoutes } from './managed-routes.js';
 import { registerPlatformRoutes } from './platform-routes.js';
 import { registerPayoutRoutes } from './payout-routes.js';
@@ -152,6 +157,7 @@ export async function initDb() {
       console.log('[FixBridge API] DB already initialized, running managed schema checks...');
       await initManagedSchema(pool);
       await initSupportTicketSchema(pool);
+      await initSubscriptionPlansSchema(pool);
       return;
     }
   } catch (e) {
@@ -455,6 +461,7 @@ export async function initDb() {
 
   await initManagedSchema(pool);
   await initSupportTicketSchema(pool);
+  await initSubscriptionPlansSchema(pool);
 
   console.log('[FixBridge API] DB ready ✓');
 }
@@ -839,7 +846,7 @@ const apiLimiter = rateLimit({
 
 const signInLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 min
-  max: 15,
+  max: Number(process.env.SIGNIN_RATE_LIMIT_MAX || (process.env.NODE_ENV === 'production' ? 15 : 200)),
   standardHeaders: true,
   legacyHeaders: false,
   handler: (_req, res) =>
@@ -2666,7 +2673,14 @@ app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
 
   registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, makeToken, rowToUser });
 registerSupportTicketRoutes(app, { pool, requireAuth, requireAdmin });
-registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
+registerSubscriptionPlanRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
+registerPlatformRoutes(app, {
+  pool,
+  requireAuth,
+  requireAdmin,
+  requireAdminWrite,
+  getSubscriptionPlanByCode,
+});
 registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 
 app.post('/api/ai/chat', requireAuth, aiLimiter, async (req, res) => {

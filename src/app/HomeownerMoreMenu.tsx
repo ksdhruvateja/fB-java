@@ -10,6 +10,7 @@ export default function HomeownerMoreMenu({
   onLogout,
   onGoPro,
   goProBusy,
+  showGoPro,
 }: {
   userName: string;
   planCode?: string | null;
@@ -19,6 +20,7 @@ export default function HomeownerMoreMenu({
   onLogout: () => void;
   onGoPro?: () => void;
   goProBusy?: boolean;
+  showGoPro?: boolean;
 }) {
   return (
     <section className="mx-auto max-w-lg space-y-6 pb-4">
@@ -29,19 +31,19 @@ export default function HomeownerMoreMenu({
         <p className="mt-1 text-sm text-muted-foreground">{userName}</p>
       </div>
 
-      {planCode !== "pro_membership" && onGoPro && (
+      {(showGoPro ?? true) && onGoPro && (
         <button
           type="button"
           disabled={goProBusy}
           onClick={onGoPro}
-          className="flex w-full items-center gap-3 rounded-2xl border border-amber-500/30 bg-gradient-to-br from-amber-500/10 to-transparent p-4 text-left"
+          className="flex w-full items-center gap-3 rounded-2xl border border-[#4A90D9]/30 bg-gradient-to-br from-[#4A90D9]/10 via-white to-[#FF6B2C]/10 p-4 text-left dark:from-[#4A90D9]/15 dark:via-transparent dark:to-[#FF6B2C]/10"
         >
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/15 text-amber-600">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#FF6B2C]/15 text-[#FF6B2C]">
             <Sparkles size={18} />
           </span>
           <span className="min-w-0 flex-1">
-            <p className="text-sm font-semibold">FixBridge Pro</p>
-            <p className="text-xs text-muted-foreground">AI assistant, insights & priority support</p>
+            <p className="text-sm font-semibold">Go Pro</p>
+            <p className="text-xs text-muted-foreground">Compare subscription plans</p>
           </span>
           <ChevronRight size={18} className="text-muted-foreground" />
         </button>
