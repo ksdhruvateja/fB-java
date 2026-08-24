@@ -80,6 +80,9 @@ export default function HomeownerOverview({
   onOpenJob,
   onOpenHealth,
   onOpenProperty,
+  onOpenPropertyPicker,
+  onOpenQuotes,
+  quotesWaiting = 0,
 }: {
   userName: string;
   property?: Property | null;
@@ -89,6 +92,9 @@ export default function HomeownerOverview({
   onOpenJob: (jobId: number) => void;
   onOpenHealth: () => void;
   onOpenProperty: () => void;
+  onOpenPropertyPicker?: () => void;
+  onOpenQuotes?: () => void;
+  quotesWaiting?: number;
 }) {
   const merged = mergeHealthWithJobs(health, jobs, property?.id);
   const score = healthScore(merged);
@@ -105,23 +111,86 @@ export default function HomeownerOverview({
     return rank[a.status] - rank[b.status];
   });
 
+  const upcomingMaint = (merged.maintenance || []).slice(0, 3);
+
   return (
     <section className="mx-auto max-w-5xl space-y-5">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
+      {/* Mobile-first header */}
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
           <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight sm:text-4xl">
             {greetingForNow()}, {firstName}
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">{formatPropertyLine(property)}</p>
+          <button
+            type="button"
+            onClick={onOpenPropertyPicker || onOpenProperty}
+            className="mt-1 inline-flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground lg:pointer-events-none lg:cursor-default"
+          >
+            <span className="truncate">{formatPropertyLine(property)}</span>
+            {onOpenPropertyPicker ? (
+              <span className="text-xs text-primary lg:hidden">▼</span>
+            ) : null}
+          </button>
         </div>
         <button
           type="button"
           onClick={onRequestService}
-          className="inline-flex items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-semibold text-white shadow-[0_12px_28px_rgba(255,77,28,0.25)] transition hover:bg-primary/90"
+          className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3.5 text-sm font-semibold text-white shadow-[0_12px_28px_rgba(255,77,28,0.25)] transition hover:bg-primary/90 lg:w-auto lg:py-3"
         >
           <Plus size={16} /> Request Service
         </button>
       </div>
+
+      {/* Mobile order: active → quotes → upcoming → health → stats */}
+      <div className="order-1 lg:order-none">
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+          Active Service
+        </p>
+        {active ? (
+          <ServiceTrackingCard
+            job={active}
+            compact
+            onOpenDetails={() => onOpenJob(active.id)}
+            onMessage={() => onOpenJob(active.id)}
+          />
+        ) : (
+          <div className="rounded-[1.5rem] border border-dashed border-border bg-card px-4 py-8 text-center shadow-sm">
+            <Sparkles className="mx-auto h-6 w-6 text-primary" />
+            <p className="mt-2 text-sm font-medium">No active service right now</p>
+            <p className="mt-1 text-xs text-muted-foreground">Request help when something needs attention.</p>
+          </div>
+        )}
+      </div>
+
+      {quotesWaiting > 0 && onOpenQuotes && (
+        <button
+          type="button"
+          onClick={onOpenQuotes}
+          className="flex w-full items-center justify-between gap-3 rounded-2xl border border-primary/25 bg-primary/5 px-4 py-4 text-left lg:hidden"
+        >
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">Quotes</p>
+            <p className="mt-1 text-sm font-semibold">
+              {quotesWaiting} quote{quotesWaiting === 1 ? "" : "s"} waiting for approval
+            </p>
+          </div>
+          <span className="text-sm font-semibold text-primary">Review →</span>
+        </button>
+      )}
+
+      {upcomingMaint.length > 0 && (
+        <div className="rounded-[1.5rem] border border-border/70 bg-card p-4 shadow-sm lg:hidden">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Upcoming</p>
+          <ul className="mt-3 space-y-2">
+            {upcomingMaint.map((m) => (
+              <li key={`${m.label}-${m.dueDate}`} className="flex items-center justify-between gap-3 text-sm">
+                <span className="font-medium">{m.label}</span>
+                <span className="text-muted-foreground">{fmtMaintDate(m.dueDate)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <motion.button
         type="button"
@@ -130,7 +199,7 @@ export default function HomeownerOverview({
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4 }}
         whileHover={{ y: -2 }}
-        className="group relative w-full overflow-hidden rounded-[1.75rem] border border-border/60 bg-card text-left shadow-[0_18px_50px_rgba(10,10,10,0.06)]"
+        className="group relative w-full overflow-hidden rounded-[1.75rem] border border-border/60 bg-card text-left shadow-[0_18px_50px_rgba(10,10,10,0.06)] lg:block"
       >
         <div
           className="pointer-events-none absolute inset-0 opacity-90"
@@ -236,7 +305,7 @@ export default function HomeownerOverview({
         </div>
       </motion.button>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="hidden grid-cols-2 gap-3 lg:grid lg:grid-cols-4">
         {[
           { label: "Open Requests", value: String(stats.open) },
           { label: "In Progress", value: String(stats.inProgress) },
@@ -252,7 +321,7 @@ export default function HomeownerOverview({
         ))}
       </div>
 
-      <div>
+      <div className="hidden lg:block">
         <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
           Active Service
         </p>

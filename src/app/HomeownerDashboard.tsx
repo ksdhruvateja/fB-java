@@ -11,12 +11,9 @@ import type { AuthUser } from "./auth";
 import { chatWithAi, type ChatMessage } from "./geminiAssessment";
 import { brand } from "../config/brand";
 import { BrandLogo } from "./BrandLogo";
-import { StarRating, fileToReviewImage, MAX_REVIEW_IMAGES } from "./StarRating";
 import {
   STATUS_LABELS,
   assessManagedJob,
-  approveProposal,
-  confirmCompletion,
   createManagedJob,
   createProperty,
   formatMoney,
@@ -26,7 +23,6 @@ import {
   lookupPartner,
   lookupDiscount,
   payDispatchFee,
-  payRetail,
   retailRangeLabel,
   updatePropertyHealth,
   type ManagedJob,
@@ -54,6 +50,25 @@ import ServiceTrackingCard from "./ServiceTrackingCard";
 import HomeownerPropertyPage, { DEFAULT_HOME_SYSTEMS } from "./HomeownerPropertyPage";
 import HomeownerMaintenanceTimeline from "./HomeownerMaintenanceTimeline";
 import HomeownerServiceHistory from "./HomeownerServiceHistory";
+import HomeownerBottomNav from "./HomeownerBottomNav";
+import HomeownerMoreMenu from "./HomeownerMoreMenu";
+import HomeownerInboxPanel from "./HomeownerInboxPanel";
+import HomeownerPropertySheet from "./HomeownerPropertySheet";
+import HomeownerJobDetailPanel from "./HomeownerJobDetailPanel";
+import HomeownerPaymentsPanel from "./HomeownerPaymentsPanel";
+import HomeownerDocumentsPanel from "./HomeownerDocumentsPanel";
+import { useIsMobile } from "./components/ui/use-mobile";
+import {
+  type DashTab,
+  type JobsSegment,
+  NAV_SECTIONS,
+  FOOTER_NAV,
+  resolveNavTab,
+  jobsForSegment,
+  countQuotesWaiting,
+  mobileHeaderTitle,
+  isMoreAreaTab,
+} from "./homeownerNav";
 import { isValidUsZip, normalizeZip, zipInputProps } from "./zipCode";
 
 function formatChatMessage(text: string): string {
@@ -63,66 +78,14 @@ function formatChatMessage(text: string): string {
     .replace(/\*\*/g, "");   // strip markdown bolding
 }
 
-type DashTab =
-  | "overview"
-  | "property"
-  | "report"
-  | "jobs"
-  | "maintenance"
-  | "timeline"
-  | "protection"
-  | "health"
-  | "documents"
-  | "payments"
-  | "history"
-  | "messages"
-  | "assistant"
-  | "settings"
-  | "help"
-  | "properties"
-  | "profile";
-
 type ReportStep = "intake" | "experts" | "assessment";
 type IntakePhase = "whats" | "details";
 
-const NAV_SECTIONS: {
-  label?: string;
-  items: { id: DashTab; label: string; icon: React.ElementType }[];
-}[] = [
-  {
-    items: [{ id: "overview", label: "Overview", icon: LayoutDashboard }],
-  },
-  {
-    label: "Home",
-    items: [
-      { id: "property", label: "My Property", icon: Home },
-      { id: "jobs", label: "Service Requests", icon: Wrench },
-      { id: "maintenance", label: "Maintenance", icon: CalendarDays },
-      { id: "timeline", label: "Maintenance Timeline", icon: History },
-      { id: "protection", label: "Home Protection", icon: Shield },
-      { id: "health", label: "Property Health", icon: Sparkles },
-    ],
-  },
-  {
-    label: "Manage",
-    items: [
-      { id: "documents", label: "Documents", icon: FileText },
-      { id: "payments", label: "Payments", icon: CreditCard },
-      { id: "history", label: "Service History", icon: History },
-    ],
-  },
-  {
-    label: "Support",
-    items: [
-      { id: "messages", label: "Messages", icon: MessageSquare },
-      { id: "assistant", label: "FixBridge Assistant", icon: Headphones },
-    ],
-  },
-];
-
-const FOOTER_NAV: { id: DashTab; label: string; icon: React.ElementType }[] = [
-  { id: "settings", label: "Settings", icon: Settings },
-  { id: "help", label: "Help & Support", icon: HelpCircle },
+const JOBS_SEGMENTS: { id: JobsSegment; label: string }[] = [
+  { id: "active", label: "Active" },
+  { id: "quotes", label: "Quotes" },
+  { id: "upcoming", label: "Upcoming" },
+  { id: "history", label: "History" },
 ];
 
 const REQUEST_ICONS: Record<string, React.ElementType> = {
@@ -264,6 +227,10 @@ export default function HomeownerDashboard({
 }) {
   const [tab, setTab] = useState<DashTab>("overview");
   const [mobileNav, setMobileNav] = useState(false);
+  const [jobsSegment, setJobsSegment] = useState<JobsSegment>("active");
+  const [propertyPickerOpen, setPropertyPickerOpen] = useState(false);
+  const [primaryPropertyId, setPrimaryPropertyId] = useState<number | null>(null);
+  const isMobile = useIsMobile();
   const [jobs, setJobs] = useState<ManagedJob[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
@@ -386,25 +353,44 @@ export default function HomeownerDashboard({
   const [newCity, setNewCity] = useState("");
   const [newState, setNewState] = useState("NY");
   const [newZip, setNewZip] = useState("");
-  const [completionRating, setCompletionRating] = useState(5);
-  const [completionReview, setCompletionReview] = useState("");
-  const [completionLocation, setCompletionLocation] = useState("");
-  const [completionImages, setCompletionImages] = useState<string[]>([]);
-  const [completionImageBusy, setCompletionImageBusy] = useState(false);
-  const completionFileRef = useRef<HTMLInputElement>(null);
 
   const selectedJob = useMemo(
     () => jobs.find((j) => j.id === selectedJobId) || null,
     [jobs, selectedJobId]
   );
 
-  useEffect(() => {
-    if (tab === "jobs" && jobs.length && selectedJobId == null) {
-      setSelectedJobId(jobs[0].id);
-    }
-  }, [tab, jobs, selectedJobId]);
+  const filteredJobs = useMemo(() => jobsForSegment(jobs, jobsSegment), [jobs, jobsSegment]);
 
-  const primaryProperty = useMemo(() => properties[0] || null, [properties]);
+  useEffect(() => {
+    if (tab === "jobs" && filteredJobs.length && selectedJobId == null) {
+      setSelectedJobId(filteredJobs[0].id);
+    }
+  }, [tab, filteredJobs, selectedJobId, jobsSegment]);
+
+  const primaryProperty = useMemo(() => {
+    if (primaryPropertyId != null) {
+      return properties.find((p) => p.id === primaryPropertyId) || properties[0] || null;
+    }
+    return properties[0] || null;
+  }, [properties, primaryPropertyId]);
+
+  useEffect(() => {
+    if (properties.length && primaryPropertyId == null) {
+      setPrimaryPropertyId(properties[0].id);
+    }
+  }, [properties, primaryPropertyId]);
+
+  function navigateTab(next: DashTab) {
+    setTab(resolveNavTab(next));
+    setMobileNav(false);
+  }
+
+  function openJobsSegment(segment: JobsSegment, jobId?: number) {
+    setJobsSegment(segment);
+    setTab("jobs");
+    if (jobId != null) setSelectedJobId(jobId);
+    setMobileNav(false);
+  }
   const healthProfile = useMemo(() => {
     const base = normalizeHealthProfile(primaryProperty?.healthProfile as PropertyHealthProfile | null);
     return {
@@ -1081,12 +1067,11 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
               key={item.id}
               type="button"
               onClick={() => {
-                if (item.id === "property") setTab("properties");
-                else setTab(item.id);
-                setMobileNav(false);
+                navigateTab(item.id);
               }}
               className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors ${
-                tab === item.id || (item.id === "property" && (tab === "properties" || tab === "property"))
+                tab === resolveNavTab(item.id) ||
+                (item.id === "property" && (tab === "properties" || tab === "property"))
                   ? "bg-[#FF4D1C] text-white shadow-sm"
                   : "text-foreground hover:bg-muted"
               }`}
@@ -1104,12 +1089,10 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
             key={item.id}
             type="button"
             onClick={() => {
-              if (item.id === "settings") setTab("profile");
-              else setTab(item.id);
-              setMobileNav(false);
+              navigateTab(item.id);
             }}
             className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors ${
-              tab === item.id || (item.id === "settings" && tab === "profile")
+              tab === resolveNavTab(item.id) || (item.id === "settings" && tab === "profile")
                 ? "bg-[#FF4D1C] text-white"
                 : "text-foreground hover:bg-muted"
             }`}
@@ -1160,43 +1143,39 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      {/* Mobile top bar */}
+      {/* Mobile top bar — title + quick actions; full nav lives in bottom bar */}
       <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-background/95 px-4 py-3 backdrop-blur lg:hidden">
-        <div className="flex items-center gap-2.5">
-          {user.photoDataUrl ? (
-            <img src={user.photoDataUrl} alt="Avatar" className="h-9 w-9 rounded-full object-cover border border-border" />
-          ) : (
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-secondary text-foreground text-sm font-bold border border-border">
-              {String(user.name || "U").slice(0, 1).toUpperCase()}
-            </div>
-          )}
-          <div>
-            <BrandLogo variant="auth" tone="auto" className="mb-0.5" />
-            <p className="text-[10px] text-muted-foreground leading-none">Homeowner · {user.name}</p>
-          </div>
+        <div className="min-w-0">
+          <p className="[font-family:'Barlow_Condensed',sans-serif] text-xl font-black uppercase tracking-tight">
+            {mobileHeaderTitle(isMoreAreaTab(tab) ? "more" : tab)}
+          </p>
+          <p className="truncate text-[10px] text-muted-foreground">{user.name}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           {user.planCode !== "pro_membership" && (
             <button
               type="button"
               disabled={busy}
               onClick={() => void handleSubscribe()}
-              className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 px-2.5 py-1 text-xs font-semibold text-white shadow-sm hover:brightness-105 active:scale-[0.98] transition shrink-0"
+              className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 px-2.5 py-1 text-xs font-semibold text-white shadow-sm"
             >
               {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
-              Go Pro
+              Pro
             </button>
           )}
-          <button type="button" onClick={onToggleDark} className="rounded-md p-2 hover:bg-muted" aria-label="Toggle theme">
-            {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </button>
-          <button type="button" className="rounded-md p-2 hover:bg-muted" onClick={() => setMobileNav((v) => !v)} aria-label="Menu">
-            {mobileNav ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </button>
+          {tab !== "overview" && (
+            <button
+              type="button"
+              onClick={() => navigateTab("overview")}
+              className="rounded-md p-2 text-sm font-medium text-primary hover:bg-muted"
+            >
+              Home
+            </button>
+          )}
         </div>
       </header>
 
-      {/* Mobile drawer */}
+      {/* Desktop-style drawer — tablet fallback & legacy */}
       {mobileNav && (
         <div className="fixed inset-0 z-50 lg:hidden">
           <button type="button" className="absolute inset-0 bg-black/40" aria-label="Close menu" onClick={() => setMobileNav(false)} />
@@ -1249,7 +1228,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
           </div>
         </aside>
 
-        <main className="min-w-0 flex-1 px-4 py-6 lg:px-8">
+        <main className="min-w-0 flex-1 px-4 py-6 pb-24 lg:px-8 lg:pb-6">
           {error && (
             <div className="mb-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
               {error}
@@ -1262,13 +1241,34 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
             property={primaryProperty}
             health={healthProfile}
             jobs={jobs}
+            quotesWaiting={countQuotesWaiting(jobs)}
             onRequestService={openRequestService}
-            onOpenJob={(id) => {
-              setSelectedJobId(id);
-              setTab("jobs");
-            }}
-            onOpenHealth={() => setTab("health")}
-            onOpenProperty={() => setTab("properties")}
+            onOpenJob={(id) => openJobsSegment("active", id)}
+            onOpenHealth={() => navigateTab("health")}
+            onOpenProperty={() => navigateTab("properties")}
+            onOpenPropertyPicker={() => setPropertyPickerOpen(true)}
+            onOpenQuotes={() => openJobsSegment("quotes")}
+          />
+        )}
+
+        {tab === "more" && (
+          <HomeownerMoreMenu
+            userName={user.name || "Homeowner"}
+            planCode={user.planCode}
+            isDark={isDark}
+            onNavigate={navigateTab}
+            onToggleDark={onToggleDark}
+            onLogout={onLogout}
+            onGoPro={() => void handleSubscribe()}
+            goProBusy={busy}
+          />
+        )}
+
+        {tab === "inbox" && (
+          <HomeownerInboxPanel
+            jobs={jobs}
+            onOpenJob={(id) => openJobsSegment("active", id)}
+            onRequestService={openRequestService}
           />
         )}
 
@@ -1355,10 +1355,26 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
             "Home Protection",
             "Warranty coverage and FixBridge protection plans will appear here as jobs are completed."
           )}
-        {tab === "documents" &&
-          comingSoon("Documents", "Invoices, warranties, and completion reports will be collected here.")}
-        {tab === "payments" &&
-          comingSoon("Payments", "Dispatch holds, invoices, and home spend history will show here.")}
+        {tab === "documents" && (
+          <HomeownerDocumentsPanel
+            jobs={jobs}
+            properties={properties}
+            onOpenJob={(id) => {
+              setSelectedJobId(id);
+              setTab("jobs");
+            }}
+          />
+        )}
+        {tab === "payments" && (
+          <HomeownerPaymentsPanel
+            jobs={jobs}
+            properties={properties}
+            onOpenJob={(id) => {
+              setSelectedJobId(id);
+              setTab("jobs");
+            }}
+          />
+        )}
         {tab === "history" && (
           <HomeownerServiceHistory
             jobs={jobs}
@@ -2796,20 +2812,39 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight">
-                  Service Tracking
+                  Jobs
                 </h1>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Follow your request like a delivery — from submission to completion.
+                <p className="mt-1 text-sm text-muted-foreground hidden sm:block">
+                  Active work, quotes, appointments, and history — same as desktop, organized for mobile.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={openRequestService}
-                className="inline-flex items-center gap-2 rounded-2xl bg-primary px-4 py-2.5 text-sm font-semibold text-white"
+                className="hidden sm:inline-flex items-center gap-2 rounded-2xl bg-primary px-4 py-2.5 text-sm font-semibold text-white"
               >
                 <PlusCircle size={16} /> New request
               </button>
             </div>
+
+            <div className="flex gap-1 overflow-x-auto rounded-xl border border-border bg-muted/40 p-1">
+              {JOBS_SEGMENTS.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => {
+                    setJobsSegment(s.id);
+                    setSelectedJobId(null);
+                  }}
+                  className={`shrink-0 rounded-lg px-3 py-2 text-sm font-semibold transition ${
+                    jobsSegment === s.id ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
+                  }`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+
             {loading ? (
               <p className="text-sm text-muted-foreground">Loading…</p>
             ) : jobs.length === 0 ? (
@@ -2823,10 +2858,14 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                   Request Service
                 </button>
               </div>
+            ) : filteredJobs.length === 0 ? (
+              <div className="rounded-[1.5rem] border border-dashed border-border bg-card px-6 py-10 text-center">
+                <p className="text-sm text-muted-foreground">Nothing in {jobsSegment} right now.</p>
+              </div>
             ) : (
               <div className="grid gap-4 lg:grid-cols-[0.9fr_1.2fr]">
-                <div className="space-y-2">
-                  {jobs.map((job) => (
+                <div className={`space-y-2 ${isMobile && selectedJobId ? "hidden" : ""}`}>
+                  {filteredJobs.map((job) => (
                     <button
                       key={job.id}
                       type="button"
@@ -2836,7 +2875,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                         setTechMessageSent(false);
                       }}
                       className={`w-full rounded-2xl border p-3.5 text-left transition ${
-                        (selectedJobId ?? jobs[0]?.id) === job.id
+                        (selectedJobId ?? filteredJobs[0]?.id) === job.id
                           ? "border-primary bg-primary/5 shadow-sm"
                           : "border-border bg-card hover:border-primary/30"
                       }`}
@@ -2850,10 +2889,19 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                     </button>
                   ))}
                 </div>
-                {(selectedJob || jobs[0]) && (
-                  <div className="space-y-3">
+                {(selectedJob || filteredJobs[0]) && (
+                  <div className={`space-y-3 ${isMobile && !selectedJobId ? "hidden" : ""}`}>
+                    {isMobile && selectedJobId && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedJobId(null)}
+                        className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary"
+                      >
+                        <ArrowLeft size={16} /> Back to Jobs
+                      </button>
+                    )}
                     <ServiceTrackingCard
-                      job={selectedJob || jobs[0]}
+                      job={selectedJob || filteredJobs[0]}
                       onMessage={() => {
                         setShowTechMessage(true);
                         setTechMessageSent(false);
@@ -2899,294 +2947,33 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                         )}
                       </div>
                     )}
-                  <div className="space-y-3 rounded-[1.5rem] border border-border bg-card p-4">
-                    <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Request details</h2>
-                    <p className="text-sm text-muted-foreground">{(selectedJob || jobs[0]).description}</p>
-                    <p className="text-sm tabular-nums">Estimate: {moneyRange(selectedJob || jobs[0])}</p>
-                    {["awaiting_service_payment", "ai_review_complete"].includes((selectedJob || jobs[0]).status) && (
-                      <div className="mt-3 space-y-3 rounded-lg border border-primary/20 bg-primary/5 p-4">
-                        <div className="text-xs space-y-1">
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Contractor Visit Fee:</span>
-                            <span className="font-semibold text-foreground">${selectedJob.pricing?.contractor_visit_fee || 125}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">FixBridge Beta Fee:</span>
-                            <span className="font-semibold text-emerald-600">$0.00 (Waived)</span>
-                          </div>
-                          <div className="flex justify-between font-bold border-t border-border/40 pt-1.5 mt-1">
-                            <span className="text-foreground">Authorization Hold:</span>
-                            <span className="text-primary">${selectedJob.pricing?.contractor_visit_fee || 125}</span>
-                          </div>
-                        </div>
-                        <p className="text-[10px] text-muted-foreground leading-normal">
-                          🔒 Card hold placed now. Only charged when contractor checks in on-site. Released if cancelled.
-                        </p>
-                        <button
-                          type="button"
-                          className="w-full rounded-md bg-[#FF4D1C] px-3 py-2 text-xs font-semibold text-white hover:bg-[#FF4D1C]/90 transition-colors"
-                          disabled={busy}
-                          onClick={async () => {
-                            const prop = properties.find((p) => p.id === selectedJob.propertyId);
-                            if (prop) {
-                              const isMissingAddress = !prop.addressLine1?.trim() || !prop.city?.trim() || !prop.state?.trim() || !prop.zip?.trim();
-                              if (isMissingAddress) {
-                                setShowAddressPromptPropertyId(prop.id);
-                                setAddressPromptLine1(prop.addressLine1 || "");
-                                setAddressPromptLine2(prop.addressLine2 || "");
-                                setAddressPromptCity(prop.city || "");
-                                setAddressPromptState(prop.state || "");
-                                setAddressPromptZip(prop.zip || "");
-                                setAddressPromptJobId(selectedJob.id);
-                                return;
-                              }
-                            }
-                            setBusy(true);
-                            const r = await payDispatchFee(selectedJob.id);
-                            if (r.ok && r.url) {
-                              window.location.href = r.url;
-                            } else {
-                              await refresh();
-                            }
-                            setBusy(false);
-                          }}
-                        >
-                          Authorize Dispatch &amp; Hold Card
-                        </button>
-                      </div>
-                    )}
-
-                    {proposal && ["proposal_sent", "awaiting_customer_approval", "approved"].includes(selectedJob.status) && (
-                      <div className="rounded-md border border-border p-3 text-sm">
-                        <p className="font-medium">Retail proposal</p>
-                        <p className="mt-1 tabular-nums text-lg font-semibold">{formatMoney(proposal.retailAmount)}</p>
-                        <p className="mt-1 text-muted-foreground">{proposal.scopeSummary}</p>
-                        {proposal.status !== "approved" && (
-                          <button
-                            type="button"
-                            className="mt-3 rounded-md bg-[#FF4D1C] px-3 py-2 text-white"
-                            disabled={busy}
-                            onClick={async () => {
-                              setBusy(true);
-                              const r = await approveProposal(selectedJob.id);
-                              if (r.ok) {
-                                setProposal(r.proposal || null);
-                                await refresh();
-                              }
-                              setBusy(false);
-                            }}
-                          >
-                            Approve proposal
-                          </button>
-                        )}
-                        {["approved", "awaiting_customer_approval", "proposal_sent"].includes(selectedJob.status) && proposal.status === "approved" && (
-                          <button
-                            type="button"
-                            className="mt-3 ml-2 rounded-md border border-border px-3 py-2 bg-[#FF4D1C] text-white hover:brightness-105"
-                            disabled={busy}
-                            onClick={async () => {
-                              setBusy(true);
-                              setError(null);
-                              try {
-                                const r = await payRetail(selectedJob.id);
-                                if (r.ok) {
-                                  if (r.url) {
-                                    window.location.href = r.url;
-                                    return;
-                                  }
-                                  await refresh();
-                                } else {
-                                  setError(r.message || "Payment failed.");
-                                }
-                              } catch (err: any) {
-                                setError(err.message || "Payment request failed.");
-                              } finally {
-                                setBusy(false);
-                              }
-                            }}
-                          >
-                            Pay now
-                          </button>
-                        )}
-                      </div>
-                    )}
-
-                    {selectedJob.status === "completed" && (
-                      <button
-                        type="button"
-                        className="rounded-md bg-[#FF4D1C] px-3 py-2 text-sm text-white disabled:opacity-60"
-                        disabled={busy}
-                        onClick={async () => {
-                          setBusy(true);
-                          const r = await confirmCompletion(selectedJob.id);
-                          if (r.ok) {
-                            await refresh();
-                          }
-                          setBusy(false);
-                        }}
-                      >
-                        Confirm completion &amp; pay balance
-                      </button>
-                    )}
-
-                    {/* Completion proof — shown whenever report exists */}
-                    {selectedJob.completionReport && (
-                      <div className="rounded-xl border border-border bg-secondary/30 p-4 space-y-3">
-                        <p className="text-sm font-semibold flex items-center gap-2">
-                          <HardHat className="h-4 w-4 text-[#FF4D1C]" /> Completion report
-                        </p>
-                        {(selectedJob.completionReport as Record<string,unknown>).summary && (
-                          <p className="text-sm text-muted-foreground">{String((selectedJob.completionReport as Record<string,unknown>).summary)}</p>
-                        )}
-                        {((selectedJob.completionReport as Record<string,unknown>).beforePhotoUrl || (selectedJob.completionReport as Record<string,unknown>).afterPhotoUrl) && (
-                          <div className="grid grid-cols-2 gap-3">
-                            {(selectedJob.completionReport as Record<string,unknown>).beforePhotoUrl && (
-                              <div className="space-y-1">
-                                <p className="text-xs text-muted-foreground font-medium">Before</p>
-                                <img
-                                  src={String((selectedJob.completionReport as Record<string,unknown>).beforePhotoUrl)}
-                                  alt="Before work"
-                                  className="h-32 w-full rounded-lg object-cover border border-border"
-                                />
-                              </div>
-                            )}
-                            {(selectedJob.completionReport as Record<string,unknown>).afterPhotoUrl && (
-                              <div className="space-y-1">
-                                <p className="text-xs text-muted-foreground font-medium">After</p>
-                                <img
-                                  src={String((selectedJob.completionReport as Record<string,unknown>).afterPhotoUrl)}
-                                  alt="After work"
-                                  className="h-32 w-full rounded-lg object-cover border border-border"
-                                />
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {selectedJob.status === "customer_review_pending" && (
-                      <div className="rounded-xl border border-border bg-card p-4 space-y-3">
-                        <p className="text-sm font-semibold">Confirm completion & leave a review</p>
-                        <p className="text-xs text-muted-foreground">
-                          Your rating publishes on the public Customer Trust page as soon as you submit.
-                        </p>
-                        <div>
-                          <p className="text-xs text-muted-foreground mb-1.5">Your rating</p>
-                          <StarRating
-                            value={completionRating}
-                            onChange={setCompletionRating}
-                            size={24}
-                            interactive
-                            tone="coral"
-                          />
-                        </div>
-                        <input
-                          value={completionLocation}
-                          onChange={(e) => setCompletionLocation(e.target.value)}
-                          placeholder="Neighborhood (e.g. Astoria, Queens)"
-                          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-                        />
-                        <textarea
-                          value={completionReview}
-                          onChange={(e) => setCompletionReview(e.target.value)}
-                          placeholder="How did the job go? (optional but publishes live if 20+ characters)"
-                          rows={3}
-                          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-                        />
-                        <div>
-                          <p className="text-xs text-muted-foreground mb-1.5">Photos (optional)</p>
-                          <input
-                            ref={completionFileRef}
-                            type="file"
-                            accept="image/*"
-                            multiple
-                            className="sr-only"
-                            onChange={async (e) => {
-                              const files = e.target.files;
-                              if (!files?.length) return;
-                              setCompletionImageBusy(true);
-                              setError(null);
-                              try {
-                                const next = [...completionImages];
-                                for (const file of Array.from(files)) {
-                                  if (next.length >= MAX_REVIEW_IMAGES) break;
-                                  next.push(await fileToReviewImage(file));
-                                }
-                                setCompletionImages(next.slice(0, MAX_REVIEW_IMAGES));
-                              } catch (err) {
-                                setError(err instanceof Error ? err.message : "Could not add image.");
-                              } finally {
-                                setCompletionImageBusy(false);
-                                if (completionFileRef.current) completionFileRef.current.value = "";
-                              }
-                            }}
-                          />
-                          <div className="flex flex-wrap gap-2">
-                            {completionImages.map((src, i) => (
-                              <div key={i} className="relative h-16 w-16 overflow-hidden rounded-lg border border-border">
-                                <img src={src} alt="" className="h-full w-full object-cover" />
-                                <button
-                                  type="button"
-                                  className="absolute right-0.5 top-0.5 rounded-full bg-black/70 p-0.5 text-white"
-                                  onClick={() => setCompletionImages((prev) => prev.filter((_, idx) => idx !== i))}
-                                  aria-label="Remove photo"
-                                >
-                                  <X className="h-3 w-3" />
-                                </button>
-                              </div>
-                            ))}
-                            {completionImages.length < MAX_REVIEW_IMAGES && (
-                              <button
-                                type="button"
-                                disabled={completionImageBusy}
-                                onClick={() => completionFileRef.current?.click()}
-                                className="flex h-16 w-16 flex-col items-center justify-center gap-0.5 rounded-lg border border-dashed border-border text-muted-foreground hover:border-[#FF4D1C]/40 disabled:opacity-60"
-                              >
-                                {completionImageBusy ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <ImagePlus className="h-4 w-4" />
-                                )}
-                                <span className="text-[9px] uppercase tracking-wide">Add</span>
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-2 rounded-md bg-[#FF4D1C] px-3 py-2 text-sm text-white disabled:opacity-60"
-                          disabled={busy}
-                          onClick={async () => {
-                            setBusy(true);
-                            setError(null);
-                            const payload =
-                              completionReview.trim().length >= 20
-                                ? {
-                                    rating: Math.round(completionRating),
-                                    review: completionReview.trim(),
-                                    location: completionLocation.trim() || undefined,
-                                    images: completionImages.length ? completionImages : undefined,
-                                  }
-                                : undefined;
-                            const r = await confirmCompletion(selectedJob.id, payload);
-                            if (r.ok) {
-                              setCompletionReview("");
-                              setCompletionLocation("");
-                              setCompletionRating(5);
-                              setCompletionImages([]);
-                              await refresh();
-                            } else {
-                              setError((r as { message?: string }).message || "Could not confirm completion.");
-                            }
-                            setBusy(false);
-                          }}
-                        >
-                          <CheckCircle className="h-4 w-4" /> Confirm completion
-                        </button>
-                      </div>
-                    )}
-                  </div>
+                    <HomeownerJobDetailPanel
+                      job={selectedJob || filteredJobs[0]}
+                      proposal={proposal}
+                      properties={properties}
+                      busy={busy}
+                      estimateLabel={moneyRange(selectedJob || filteredJobs[0])}
+                      onBusy={setBusy}
+                      onError={setError}
+                      onRefresh={refresh}
+                      onNeedAddress={({
+                        propertyId,
+                        jobId,
+                        line1,
+                        line2,
+                        city,
+                        state,
+                        zip,
+                      }) => {
+                        setShowAddressPromptPropertyId(propertyId);
+                        setAddressPromptLine1(line1);
+                        setAddressPromptLine2(line2);
+                        setAddressPromptCity(city);
+                        setAddressPromptState(state);
+                        setAddressPromptZip(zip);
+                        setAddressPromptJobId(jobId);
+                      }}
+                    />
                   </div>
                 )}
               </div>
@@ -3723,6 +3510,26 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
           </div>
         )}
       </AnimatePresence>
+
+      {propertyPickerOpen && (
+        <HomeownerPropertySheet
+          properties={properties}
+          selectedId={primaryProperty?.id ?? null}
+          onSelect={setPrimaryPropertyId}
+          onManage={() => navigateTab("properties")}
+          onAdd={() => navigateTab("properties")}
+          onClose={() => setPropertyPickerOpen(false)}
+        />
+      )}
+
+      <HomeownerBottomNav
+        tab={tab}
+        onHome={() => navigateTab("overview")}
+        onJobs={() => openJobsSegment("active")}
+        onRequest={openRequestService}
+        onInbox={() => navigateTab("inbox")}
+        onMore={() => navigateTab("more")}
+      />
     </div>
   );
 }
