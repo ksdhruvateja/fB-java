@@ -8,16 +8,21 @@ import {
   getDispatchFee,
   applyAdminPriceAdjustment,
   DEFAULT_PRICING_RULES,
-  buildZipMarketProfile,
   getLocationFactorByZip,
   getZipMarketLabel,
   resolveCustomerVisitFee,
   applyVisitFeeCredit,
 } from './pricing.js';
+import {
+  buildLocalMarketProfile,
+  loadMarketData,
+  saveMarketSnapshot,
+} from './market-intelligence.js';
 import { analyzeRepairStructured } from './ai.js';
 import {
   stripeConfigured,
   shouldSimulatePayment,
+  assertPaymentsAvailable,
   createCheckoutSession,
   createExpressAccount,
   createConnectAccountLink,
@@ -52,7 +57,8 @@ import {
   renderInvoiceSms,
   normalizePhone,
 } from './invoices.js';
-import { sendEmailSafe, sendSmsSafe } from './notify.js';
+import { sendEmailSafe, sendSmsSafe, notifyOps } from './notify.js';
+import { lookupZipPlace, formatLocationContext } from './zip-market.js';
 
 async function ensureUserReferralCodeInline(pool, r) {
   if (r.referral_code) return r.referral_code;
@@ -455,7 +461,13 @@ function serializeJob(row, viewer) {
           ? Number(parseJson(row.pricing).contractor_visit_fee)
           : null;
     base.diyRiskLevel = row.diy_risk_level || 'green';
+    const storedPricingOwner = parseJson(row.pricing) || {};
+    base.estimateContext =
+      storedPricingOwner.estimate_context ||
+      (row.zip ? String(row.zip).slice(0, 5) : null);
+    base.estimateConfidence = row.estimate_confidence || storedPricingOwner.estimate_confidence || null;
     base.pricingDisclaimer =
+      storedPricingOwner.disclaimer ||
       'Estimated service range includes coordination, administration, payment handling and subcontracted delivery.';
     if (row.discount_code) {
       base.discountSummary =
@@ -562,6 +574,282 @@ async function persistJobDiscountFields(pool, jobId, discount, pricing) {
   );
 }
 
+async function hasSucceededRetailPayment(pool, jobId) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM payments WHERE job_id=$1 AND payment_type='retail_payment' AND status='succeeded' LIMIT 1`,
+    [jobId]
+  );
+  return rows.length > 0;
+}
+
+async function notifyAdminsNewJobForQuote(pool, { job, homeowner }) {
+  const bookingId = job.booking_id || `FB-${job.id}`;
+  const estimateLow = job.customer_retail_estimate_low;
+  const estimateHigh = job.customer_retail_estimate_high;
+  const estimate =
+    estimateLow != null && estimateHigh != null
+      ? `$${Math.round(Number(estimateLow))}–$${Math.round(Number(estimateHigh))}`
+      : 'see job details';
+  const msg =
+    `${brand.productName}: New job ${bookingId} ready for contractor quote — ` +
+    `"${job.title || job.category}" (${job.category || 'repair'}). ` +
+    `Homeowner: ${homeowner?.name || 'Customer'} (${homeowner?.email || '—'}). AI estimate: ${estimate}.`;
+
+  notifyOps(msg);
+
+  try {
+    const { rows: admins } = await pool.query(
+      `SELECT email, name FROM users WHERE role='admin' AND COALESCE(is_blocked,false)=false AND email IS NOT NULL`
+    );
+    for (const admin of admins) {
+      await sendEmailSafe({
+        to: admin.email,
+        subject: `${brand.productName} — New job for contractor quote ${bookingId}`,
+        html: `<p>${msg}</p><p>Open <strong>Admin → Dispatch</strong> to invite a contractor and share the AI assessment.</p>`,
+      });
+    }
+  } catch (e) {
+    console.error('notify new job admins:', e.message);
+  }
+}
+
+async function notifyAdminsHomeownerApprovedQuote(pool, { job, homeowner, proposal }) {
+  const bookingId = job.booking_id || `FB-${job.id}`;
+  const amount = proposal?.retail_amount != null ? `$${Math.round(Number(proposal.retail_amount))}` : 'see proposal';
+  const msg =
+    `${brand.productName}: Homeowner approved quote ${bookingId} — ` +
+    `"${job.title || job.category}" for ${amount}. ` +
+    `${homeowner?.name || 'Customer'} (${homeowner?.email || '—'}). Request contractor dispatch when ready.`;
+
+  notifyOps(msg);
+
+  try {
+    const { rows: admins } = await pool.query(
+      `SELECT email, name FROM users WHERE role='admin' AND COALESCE(is_blocked,false)=false AND email IS NOT NULL`
+    );
+    for (const admin of admins) {
+      await sendEmailSafe({
+        to: admin.email,
+        subject: `${brand.productName} — Homeowner approved quote ${bookingId}`,
+        html: `<p>${msg}</p><p>Open <strong>Admin → Dispatch</strong> to request contractor dispatch.</p>`,
+      });
+    }
+  } catch (e) {
+    console.error('notify approval admins:', e.message);
+  }
+}
+
+async function notifyAdminsDispatchServiceRequest(pool, { job, homeowner, amount, discountCode }) {
+  const bookingId = job.booking_id || `FB-${job.id}`;
+  const estimateLow = job.customer_retail_estimate_low;
+  const estimateHigh = job.customer_retail_estimate_high;
+  const estimate =
+    estimateLow != null && estimateHigh != null
+      ? `$${Math.round(Number(estimateLow))}–$${Math.round(Number(estimateHigh))}`
+      : 'see job details';
+  const couponNote = discountCode ? ` Coupon: ${discountCode}.` : '';
+  const msg =
+    `${brand.productName}: Homeowner ${homeowner?.name || 'Customer'} (${homeowner?.email || '—'}) ` +
+    `authorized dispatch hold $${Math.round(Number(amount) || 0)} for quote ${bookingId} — ` +
+    `"${job.title || job.category}" (${job.category || 'repair'}). Estimate: ${estimate}.${couponNote} Ready for dispatch.`;
+
+  notifyOps(msg);
+
+  try {
+    const { rows: admins } = await pool.query(
+      `SELECT email, name FROM users WHERE role='admin' AND COALESCE(is_blocked,false)=false AND email IS NOT NULL`
+    );
+    for (const admin of admins) {
+      await sendEmailSafe({
+        to: admin.email,
+        subject: `${brand.productName} — Dispatch request ${bookingId}`,
+        html: `<p>${msg}</p><p>Open <strong>Admin → Dispatch</strong> to assign a contractor.</p>`,
+      });
+    }
+  } catch (e) {
+    console.error('notify dispatch admins:', e.message);
+  }
+}
+
+async function applyValidatedCouponToJob(pool, jobId, discount) {
+  const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+  const job = rows[0];
+  if (!job) return null;
+  const pricing = applyDiscountToPricing(
+    {
+      customer_retail_estimate_low: job.customer_retail_estimate_low,
+      customer_retail_estimate_high: job.customer_retail_estimate_high,
+      show_price: job.show_retail_price !== false,
+    },
+    discount
+  );
+  await persistJobDiscountFields(pool, jobId, discount, pricing);
+  return discount;
+}
+
+/** Gather ZIP, property, postal data, and automatic local market intelligence for AI + pricing. */
+async function loadAssessContext(pool, job, rules, assessment = null) {
+  const zip = job.zip ? String(job.zip).trim().slice(0, 5) : null;
+  let property = null;
+  if (job.property_id) {
+    const { rows } = await pool.query(`SELECT * FROM properties WHERE id=$1`, [job.property_id]);
+    property = rows[0] || null;
+  }
+
+  const { jobs: localJobs, bids, completedPayments, zipPlace } = await loadMarketData(pool, {
+    zip,
+    trade: assessment?.category || job.category,
+    jobId: job.id,
+  });
+
+  const marketProfile = await buildLocalMarketProfile({
+    zip,
+    trade: assessment?.category || job.category,
+    serviceType: assessment?.service_type,
+    rules: rules || DEFAULT_PRICING_RULES,
+    jobs: localJobs,
+    bids,
+    completedPayments,
+    zipPlace,
+    city: job.city || property?.city,
+    state: job.state || property?.state,
+    assessment,
+  });
+
+  const marketLabel = getZipMarketLabel(zip);
+  const locationFactor = getLocationFactorByZip(zip) || Number(rules?.location_factor) || 1;
+
+  const locationContext = formatLocationContext({
+    zip,
+    city: job.city || property?.city,
+    state: job.state || property?.state,
+    zipPlace,
+    marketLabel,
+    locationFactor,
+    marketProfile,
+    property,
+    serviceTiming: job.service_timing,
+  });
+
+  return {
+    zip,
+    city: job.city || property?.city || zipPlace?.place,
+    state: job.state || property?.state || zipPlace?.state,
+    zipPlace,
+    marketLabel,
+    locationFactor,
+    marketProfile,
+    property,
+    locationContext,
+  };
+}
+
+async function runManagedJobAssessment(pool, job, viewer) {
+  const rules = await loadPricingRules(pool);
+
+  // Phase 1: preliminary context for AI (ZIP + property + coarse market)
+  const preCtx = await loadAssessContext(pool, job, rules, null);
+
+  const result = await analyzeRepairStructured({
+    category: job.category,
+    description: job.description,
+    imageDataUrl: job.media_data_url,
+    locationContext: preCtx.locationContext,
+    zip: preCtx.zip,
+    city: preCtx.city,
+    state: preCtx.state,
+  });
+
+  const assessment = result.assessment;
+  if (!assessment) {
+    return { ok: false, error: result.error || 'Assessment failed.' };
+  }
+
+  // Phase 2: refine market profile with AI service classification
+  const ctx = await loadAssessContext(pool, job, rules, assessment);
+
+  const afterHours = /evening|weekend|night|holiday/i.test(job.service_timing || '');
+  let pricing = computePreliminaryRetail(assessment, rules, {
+    afterHours,
+    urgency: assessment.urgency,
+    zip: ctx.zip || job.zip || null,
+    marketProfile: ctx.marketProfile,
+  });
+  pricing.contractor_visit_fee = resolveCustomerVisitFee(rules, {
+    emergency:
+      job.service_timing === 'emergency' ||
+      String(assessment.urgency || '').toLowerCase().includes('emerg'),
+  });
+
+  const discount = await resolveJobDiscount(pool, job);
+  if (discount) {
+    pricing = applyDiscountToPricing(pricing, discount);
+  }
+
+  const snapshotId = await saveMarketSnapshot(pool, {
+    jobId: job.id,
+    profile: ctx.marketProfile,
+    pricing,
+    propertyZip: ctx.zip,
+    city: ctx.city,
+    state: ctx.state,
+    serviceCategory: assessment.category,
+    serviceSubcategory: assessment.service_subcategory,
+  });
+
+  await pool.query(
+    `UPDATE managed_jobs SET
+       ai_assessment=$1,
+       pricing=$2,
+       show_retail_price=$3,
+       customer_retail_estimate_low=$4,
+       customer_retail_estimate_high=$5,
+       estimated_contractor_net_low=$6,
+       estimated_contractor_net_high=$7,
+       category=COALESCE($8, category),
+       discount_amount_low=$9,
+       discount_amount_high=$10,
+       diy_risk_level=$11,
+       estimate_confidence=$12,
+       similar_jobs_count=$13,
+       market_snapshot_id=COALESCE($14, market_snapshot_id),
+       city=COALESCE(city, $15),
+       state=COALESCE(state, $16),
+       updated_at=NOW()
+     WHERE id=$17`,
+    [
+      JSON.stringify(assessment),
+      JSON.stringify(pricing),
+      pricing.show_price,
+      pricing.customer_retail_estimate_low,
+      pricing.customer_retail_estimate_high,
+      pricing.estimated_contractor_net_low,
+      pricing.estimated_contractor_net_high,
+      assessment.category || null,
+      pricing.discount?.amountLow ?? null,
+      pricing.discount?.amountHigh ?? null,
+      assessment.diy_risk_level || 'green',
+      pricing.estimate_confidence || confidenceLabel(assessment.confidence),
+      ctx.marketProfile?.jobsAnalyzed || 0,
+      snapshotId,
+      ctx.city || null,
+      ctx.state || null,
+      job.id,
+    ]
+  );
+
+  return {
+    ok: true,
+    assessment,
+    pricing,
+    result,
+    ctx,
+    viewer,
+    jobId: job.id,
+    marketSnapshotId: snapshotId,
+  };
+}
+
 function addressUnlocked(status) {
   return [
     'approved', 'scheduled', 'contractor_en_route', 'work_started',
@@ -618,16 +906,18 @@ function serializeProposal(row, viewer) {
     base.platformGross = row.platform_gross != null ? Number(row.platform_gross) : null;
     base.processingCost = row.processing_cost != null ? Number(row.processing_cost) : null;
     base.bidId = row.bid_id;
-    base.lineItems = row.line_items;
-    base.pricingAdjustments = row.pricing_adjustments;
+    base.lineItems = parseJson(row.line_items);
+    base.pricingAdjustments = parseJson(row.pricing_adjustments);
     base.adminDiscount = row.admin_discount != null ? Number(row.admin_discount) : null;
     base.adminDiscountReason = row.admin_discount_reason;
     base.couponCode = row.coupon_code;
     base.couponFundedBy = row.coupon_funded_by;
     base.quoteValidUntil = row.quote_valid_until;
-    base.customerLineItems = row.customer_line_items;
+    base.customerLineItems = parseJson(row.customer_line_items);
     base.serviceCharge = row.service_charge != null ? Number(row.service_charge) : null;
     base.expectedMarginPct = row.expected_margin_pct != null ? Number(row.expected_margin_pct) : null;
+    base.createdByName = row.created_by_name || null;
+    base.createdById = row.created_by != null ? Number(row.created_by) : null;
     base.bookingId = row.booking_id || null;
     base.jobTitle = row.job_title || null;
     base.jobCategory = row.job_category || null;
@@ -637,6 +927,16 @@ function serializeProposal(row, viewer) {
     base.contractorName = row.contractor_name || null;
     base.aiEstimateLow = row.ai_estimate_low != null ? Number(row.ai_estimate_low) : null;
     base.aiEstimateHigh = row.ai_estimate_high != null ? Number(row.ai_estimate_high) : null;
+    if (row.linked_invoice_id) {
+      base.invoiceId = Number(row.linked_invoice_id);
+      base.invoiceNumber = row.linked_invoice_number || null;
+      base.invoiceStatus = row.linked_invoice_status || null;
+      base.invoiceAmountDue =
+        row.linked_invoice_amount_due != null ? Number(row.linked_invoice_amount_due) : null;
+    }
+    base.homeownerPhone = row.homeowner_phone || row.job_contact_phone || null;
+    base.discountType = row.discount_type || null;
+    base.shippingAmount = row.shipping_amount != null ? Number(row.shipping_amount) : null;
   }
   if (isCustomer) {
     base.customerLineItems = row.customer_line_items;
@@ -651,6 +951,49 @@ function serializeProposal(row, viewer) {
   return base;
 }
 
+function resolveContractorNetForQuote(bid, body = {}) {
+  if (body.contractorNetOverride != null && Number.isFinite(Number(body.contractorNetOverride))) {
+    return Math.max(0, Number(body.contractorNetOverride));
+  }
+  const lines = body.contractorLines || {};
+  const hasLines = ['labor', 'materials', 'equipment', 'travelDiagnostic', 'permitCost', 'disposal'].some(
+    (k) => lines[k] != null
+  );
+  if (hasLines) {
+    return Math.max(
+      0,
+      Number(lines.labor || 0) +
+        Number(lines.materials || 0) +
+        Number(lines.equipment || 0) +
+        Number(lines.travelDiagnostic || 0) +
+        Number(lines.permitCost || 0) +
+        Number(lines.disposal || 0)
+    );
+  }
+  return Number(bid.net_total) || 0;
+}
+
+function buildDefaultCustomerLineItems(quote, { adjustments = [], serviceCharge = 0, couponCode, couponAmount = 0, visitFeeCredit = 0 } = {}) {
+  const items = [
+    { label: 'Service & Labor', amount: quote.baseRetail, visible: true },
+    ...adjustments
+      .filter((a) => a.includeInDisplay !== false)
+      .map((a) => ({
+        label: a.label || a.type || 'Adjustment',
+        amount:
+          String(a.calculation || 'fixed').toLowerCase() === 'percent'
+            ? Math.round(quote.baseRetail * (Number(a.amount) / 100))
+            : Number(a.amount),
+        visible: true,
+      })),
+    ...(serviceCharge > 0 ? [{ label: 'Service charge', amount: serviceCharge, visible: true }] : []),
+    ...(quote.adminDiscount > 0 ? [{ label: 'Discount', amount: -quote.adminDiscount, visible: true }] : []),
+    ...(couponAmount > 0 ? [{ label: couponCode || 'Coupon', amount: -couponAmount, visible: true }] : []),
+    ...(visitFeeCredit > 0 ? [{ label: 'Visit fee credit', amount: -visitFeeCredit, visible: true }] : []),
+  ];
+  return items;
+}
+
 async function ensureQuoteNumber(pool, proposalId) {
   const quoteNumber = `FBQ-${String(proposalId).padStart(5, '0')}`;
   await pool.query(
@@ -660,14 +1003,18 @@ async function ensureQuoteNumber(pool, proposalId) {
   return quoteNumber;
 }
 
-export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, makeToken, rowToUser }) {
+export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser }) {
+  const need = typeof requirePermission === 'function'
+    ? requirePermission
+    : () => (_req, _res, next) => next();
+
   // ── Brand ──────────────────────────────────────────────────────────────────
   app.get('/api/brand', (_req, res) => {
     res.json({ ok: true, brand });
   });
 
   // ── Pricing rules ──────────────────────────────────────────────────────────
-  app.get('/api/pricing/rules', requireAuth, requireAdmin, async (_req, res) => {
+  app.get('/api/pricing/rules', requireAuth, requireAdmin, need('pricing.view'), async (_req, res) => {
     try {
       const rules = await loadPricingRules(pool);
       res.json({ ok: true, rules });
@@ -676,7 +1023,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
-  app.put('/api/pricing/rules', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+  app.put('/api/pricing/rules', requireAuth, requireAdmin, requireAdminWrite, need('pricing.edit'), async (req, res) => {
     try {
       const rules = mergePricingRules(req.body?.rules || req.body);
       await pool.query(
@@ -708,15 +1055,19 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         const i = params.length;
         where.push(`(
           LOWER(COALESCE(p.quote_number,'')) LIKE $${i}
+          OR LOWER(COALESCE(inv.invoice_number,'')) LIKE $${i}
           OR LOWER(COALESCE(j.booking_id,'')) LIKE $${i}
           OR LOWER(COALESCE(j.title,'')) LIKE $${i}
           OR LOWER(COALESCE(j.category,'')) LIKE $${i}
           OR LOWER(COALESCE(j.zip,'')) LIKE $${i}
+          OR LOWER(COALESCE(j.contact_phone,'')) LIKE $${i}
           OR LOWER(COALESCE(hw.name,'')) LIKE $${i}
           OR LOWER(COALESCE(hw.email,'')) LIKE $${i}
+          OR LOWER(COALESCE(hw.phone,'')) LIKE $${i}
           OR LOWER(COALESCE(ct.name,'')) LIKE $${i}
           OR CAST(p.retail_amount AS TEXT) LIKE $${i}
           OR CAST(p.id AS TEXT) LIKE $${i}
+          OR CAST(j.id AS TEXT) LIKE $${i}
         )`);
       }
       const sql = `
@@ -727,14 +1078,23 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
                j.zip AS job_zip,
                j.customer_retail_estimate_low AS ai_estimate_low,
                j.customer_retail_estimate_high AS ai_estimate_high,
+               j.contact_phone AS job_contact_phone,
                hw.name AS homeowner_name,
                hw.email AS homeowner_email,
-               ct.name AS contractor_name
+               hw.phone AS homeowner_phone,
+               ct.name AS contractor_name,
+               cr.name AS created_by_name,
+               inv.id AS linked_invoice_id,
+               inv.invoice_number AS linked_invoice_number,
+               inv.status AS linked_invoice_status,
+               inv.amount_due AS linked_invoice_amount_due
         FROM proposals p
         JOIN managed_jobs j ON j.id = p.job_id
         LEFT JOIN users hw ON hw.id = j.homeowner_user_id
         LEFT JOIN bids b ON b.id = p.bid_id
-        LEFT JOIN users ct ON ct.id = b.contractor_user_id
+        LEFT JOIN users ct ON ct.id = COALESCE(j.assigned_contractor_user_id, b.contractor_user_id)
+        LEFT JOIN users cr ON cr.id = p.created_by
+        LEFT JOIN homeowner_invoices inv ON inv.id = p.converted_invoice_id
         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
         ORDER BY p.created_at DESC NULLS LAST, p.id DESC
         LIMIT 100
@@ -772,12 +1132,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
                 hw.email AS homeowner_email,
                 hw.phone AS homeowner_phone,
                 ct.name AS contractor_name,
-                ct.email AS contractor_email
+                ct.email AS contractor_email,
+                cr.name AS created_by_name
          FROM proposals p
          JOIN managed_jobs j ON j.id = p.job_id
          LEFT JOIN users hw ON hw.id = j.homeowner_user_id
          LEFT JOIN bids b ON b.id = p.bid_id
          LEFT JOIN users ct ON ct.id = b.contractor_user_id
+         LEFT JOIN users cr ON cr.id = p.created_by
          WHERE p.id::text = $1 OR LOWER(COALESCE(p.quote_number,'')) = LOWER($1)
          LIMIT 1`,
         [idOrNum]
@@ -792,50 +1154,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
-  /** ZIP + trade market intelligence for Admin. */
-  app.get('/api/admin/market-intelligence', requireAuth, requireAdmin, async (req, res) => {
-    try {
-      const zip = String(req.query.zip || '').trim();
-      const trade = String(req.query.trade || 'hvac').trim();
-      if (!zip || zip.length < 3) {
-        return res.status(400).json({ ok: false, message: 'Enter a ZIP code to analyze.' });
-      }
-      const rules = await loadPricingRules(pool);
-      const prefix = zip.slice(0, 3);
-      const { rows: jobs } = await pool.query(
-        `SELECT id, zip, category, title, customer_retail_estimate_low, customer_retail_estimate_high, status, created_at
-         FROM managed_jobs
-         WHERE zip IS NOT NULL AND (zip = $1 OR zip LIKE $2)
-         ORDER BY created_at DESC
-         LIMIT 80`,
-        [zip, `${prefix}%`]
-      );
-      const jobIds = jobs.map((j) => j.id);
-      let bids = [];
-      if (jobIds.length) {
-        const { rows: bidRows } = await pool.query(
-          `SELECT job_id, net_total, labor, materials, travel_diagnostic, created_at
-           FROM bids
-           WHERE job_id = ANY($1::bigint[])
-           ORDER BY created_at DESC
-           LIMIT 80`,
-          [jobIds]
-        );
-        bids = bidRows;
-      }
-      const profile = buildZipMarketProfile({ zip, trade, rules, jobs, bids });
-      res.json({
-        ok: true,
-        profile: {
-          ...profile,
-          locationFactor: getLocationFactorByZip(zip) || profile.locationFactor,
-          market: getZipMarketLabel(zip),
-        },
-      });
-    } catch (e) {
-      console.error(e);
-      res.status(500).json({ ok: false, message: 'Could not analyze market.' });
-    }
+  /** Market intelligence runs automatically during AI assessment — no manual admin lookup. */
+  app.get('/api/admin/market-intelligence', requireAuth, requireAdmin, async (_req, res) => {
+    res.status(410).json({
+      ok: false,
+      message: 'Market Intelligence runs automatically during AI assessment. Review job pricing details instead.',
+    });
   });
 
   // ── Properties ─────────────────────────────────────────────────────────────
@@ -1349,52 +1673,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       await pool.query(`UPDATE managed_jobs SET booking_id=$1 WHERE id=$2`, [bookingId, job.id]);
       job.booking_id = bookingId;
 
-      // 4. Run structured AI assessment
-      const result = await analyzeRepairStructured({
-        category: job.category,
-        description: job.description,
-        imageDataUrl: job.media_data_url,
-      });
-
-      const assessment = result.assessment;
-      const rules = await loadPricingRules(pool);
-      const pricing = computePreliminaryRetail(assessment, rules, {
-        afterHours: /evening|weekend/i.test(job.service_timing || ''),
-        urgency: assessment.urgency,
-        zip: job.zip || zip,
-      });
-      pricing.contractor_visit_fee = resolveCustomerVisitFee(rules, {
-        emergency:
-          job.service_timing === 'emergency' ||
-          String(assessment.urgency || '').toLowerCase().includes('emerg'),
-      });
-
-      await pool.query(
-        `UPDATE managed_jobs SET
-           ai_assessment=$1,
-           pricing=$2,
-           show_retail_price=$3,
-           customer_retail_estimate_low=$4,
-           customer_retail_estimate_high=$5,
-           estimated_contractor_net_low=$6,
-           estimated_contractor_net_high=$7,
-           category=COALESCE($8, category),
-           diy_risk_level=$9,
-           updated_at=NOW()
-         WHERE id=$10`,
-        [
-          JSON.stringify(assessment),
-          JSON.stringify(pricing),
-          pricing.show_price,
-          pricing.customer_retail_estimate_low,
-          pricing.customer_retail_estimate_high,
-          pricing.estimated_contractor_net_low,
-          pricing.estimated_contractor_net_high,
-          assessment.category || null,
-          assessment.diy_risk_level || 'green',
-          job.id,
-        ]
-      );
+      // 4. Run structured AI assessment with ZIP + local market context
+      const ran = await runManagedJobAssessment(pool, job, rowToUser(user));
+      if (!ran.ok) {
+        console.warn('public job assess failed:', ran.error);
+        // Job still created — homeowner can retry assess from dashboard
+      }
 
       const partnerCode = (b.partnerCode || '').trim();
       if (partnerCode) {
@@ -1448,8 +1732,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
       // Create timeline logs
       await pushStatus(pool, job.id, null, 'draft', user.id, 'Issue reported (Public Guest)');
-      await pushStatus(pool, job.id, 'draft', 'ai_review_complete', user.id, 'AI assessment complete');
-      await pushStatus(pool, job.id, 'ai_review_complete', 'awaiting_service_payment', user.id, 'Awaiting dispatch fee');
+      if (ran.ok) {
+        await pushStatus(pool, job.id, 'draft', 'ai_review_complete', user.id, 'AI assessment complete');
+        await notifyAdminsNewJobForQuote(pool, { job: { ...job, ...ran.pricing ? {
+          customer_retail_estimate_low: ran.pricing.customer_retail_estimate_low,
+          customer_retail_estimate_high: ran.pricing.customer_retail_estimate_high,
+        } : {} }, homeowner: rowToUser(user) });
+      }
 
       // Fetch fresh job
       const { rows: freshJobs } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [job.id]);
@@ -1640,82 +1929,50 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
 
-      const result = await analyzeRepairStructured({
-        category: job.category,
-        description: job.description,
-        imageDataUrl: job.media_data_url,
-      });
-
-      const assessment = result.assessment;
-      const rules = await loadPricingRules(pool);
-      const afterHours = /evening|weekend/i.test(job.service_timing || '');
-      let pricing = computePreliminaryRetail(assessment, rules, {
-        afterHours,
-        urgency: assessment.urgency,
-        zip: job.zip || null,
-      });
-      pricing.contractor_visit_fee = resolveCustomerVisitFee(rules, {
-        emergency:
-          job.service_timing === 'emergency' ||
-          String(assessment.urgency || '').toLowerCase().includes('emerg'),
-      });
-      const discount = await resolveJobDiscount(pool, job);
-      if (discount) {
-        pricing = applyDiscountToPricing(pricing, discount);
+      const ran = await runManagedJobAssessment(pool, job, req.authUser);
+      if (!ran.ok) {
+        return res.status(502).json({
+          ok: false,
+          message: ran.error || 'Assessment failed. Please retry or request a professional.',
+        });
       }
 
-      await pool.query(
-        `UPDATE managed_jobs SET
-           ai_assessment=$1,
-           pricing=$2,
-           show_retail_price=$3,
-           customer_retail_estimate_low=$4,
-           customer_retail_estimate_high=$5,
-           estimated_contractor_net_low=$6,
-           estimated_contractor_net_high=$7,
-           category=COALESCE($8, category),
-           discount_amount_low=$9,
-           discount_amount_high=$10,
-           diy_risk_level=$11,
-           estimate_confidence=$12,
-           updated_at=NOW()
-         WHERE id=$13`,
-        [
-          JSON.stringify(assessment),
-          JSON.stringify(pricing),
-          pricing.show_price,
-          pricing.customer_retail_estimate_low,
-          pricing.customer_retail_estimate_high,
-          pricing.estimated_contractor_net_low,
-          pricing.estimated_contractor_net_high,
-          assessment.category || null,
-          pricing.discount?.amountLow ?? null,
-          pricing.discount?.amountHigh ?? null,
-          assessment.diy_risk_level || 'green',
-          confidenceLabel(assessment.confidence),
-          jobId,
-        ]
-      );
       await pushStatus(pool, jobId, job.status, 'ai_review_complete', req.authUser.id, 'AI assessment complete');
-      await pushStatus(pool, jobId, 'ai_review_complete', 'awaiting_service_payment', req.authUser.id, 'Awaiting dispatch fee');
+
+      const { rows: freshAfterAssess } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      await notifyAdminsNewJobForQuote(pool, {
+        job: freshAfterAssess[0] || job,
+        homeowner: req.authUser,
+      });
 
       const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       res.json({
         ok: true,
         job: serializeJob(fresh[0], req.authUser),
-        assessment,
+        assessment: ran.assessment,
         pricing: {
-          showPrice: pricing.show_price,
-          message: pricing.message,
-          customerRetailEstimateLow: pricing.customer_retail_estimate_low,
-          customerRetailEstimateHigh: pricing.customer_retail_estimate_high,
-          disclaimer: pricing.disclaimer,
+          showPrice: ran.pricing.show_price,
+          message: ran.pricing.message,
+          customerRetailEstimateLow: ran.pricing.customer_retail_estimate_low,
+          customerRetailEstimateHigh: ran.pricing.customer_retail_estimate_high,
+          disclaimer: ran.pricing.disclaimer,
+          estimateContext: ran.pricing.estimate_context || ran.ctx.zip,
+          zipMarket: ran.ctx.zip,
+          estimateConfidence: ran.pricing.estimate_confidence || ran.ctx.marketProfile?.aiConfidence,
         },
-        source: result.source,
+        source: ran.result.source,
+        model: ran.result.model || null,
+        warning: ran.result.error || null,
       });
     } catch (e) {
-      console.error(e);
-      res.status(500).json({ ok: false, message: 'Assessment failed. Please retry or request a professional.' });
+      console.error('assess:', e);
+      const timedOut = e?.code === 'AI_TIMEOUT' || /timed out/i.test(String(e?.message || ''));
+      res.status(timedOut ? 504 : 500).json({
+        ok: false,
+        message: timedOut
+          ? 'AI assessment timed out. Try a smaller/clearer photo, or hire a professional.'
+          : 'Assessment failed. Please retry or request a professional.',
+      });
     }
   });
 
@@ -1777,18 +2034,141 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
-  // ── Dispatch fee payment ───────────────────────────────────────────────────
-  app.post('/api/managed/jobs/:id/pay-dispatch', requireAuth, async (req, res) => {
+  app.post('/api/managed/jobs/:id/request-professional', requireAuth, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
       const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
-      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
       const job = rows[0];
+      if (Number(job.homeowner_user_id) !== Number(req.authUser.id) && !req.authUser.isAdmin) {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      if (!['ai_review_complete', 'awaiting_service_payment'].includes(job.status)) {
+        return res.status(400).json({
+          ok: false,
+          message: 'Professional dispatch is not available for this job status.',
+        });
+      }
+
+      const b = req.body || {};
+      const serviceTiming = b.serviceTiming || job.service_timing || 'weekday';
+      const preferredDate = b.preferredDate || null;
+      const preferredTimeSlot = b.preferredTimeSlot || job.preferred_time_slot || '9-11';
+      const propertyPurpose = b.propertyPurpose || job.property_purpose || 'current_homeowner';
+      const transactionStage = b.transactionStage || job.transaction_stage || 'ongoing_maintenance';
+
+      if (b.discountCode) {
+        const codeRaw = normalizeDiscountCode(String(b.discountCode));
+        if (codeRaw) {
+          const row = await lookupDiscountByCode(pool, codeRaw);
+          const checked = validateDiscountRow(row);
+          if (!checked.ok) {
+            return res.status(400).json({ ok: false, message: checked.message });
+          }
+          await applyValidatedCouponToJob(pool, jobId, checked.discount);
+        }
+      }
+
+      await pool.query(
+        `UPDATE managed_jobs SET
+           service_timing=$2,
+           preferred_date=$3,
+           preferred_time_slot=$4,
+           property_purpose=$5,
+           transaction_stage=$6,
+           job_mode='managed',
+           updated_at=NOW()
+         WHERE id=$1`,
+        [jobId, serviceTiming, preferredDate, preferredTimeSlot, propertyPurpose, transactionStage]
+      );
+
+      if (job.status === 'ai_review_complete') {
+        await pushStatus(
+          pool,
+          jobId,
+          job.status,
+          'awaiting_service_payment',
+          req.authUser.id,
+          'Homeowner requested professional dispatch'
+        );
+      }
+
+      const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      res.json({ ok: true, job: serializeJob(fresh[0], req.authUser) });
+    } catch (e) {
+      console.error('request-professional:', e);
+      res.status(500).json({ ok: false, message: 'Could not save dispatch request.' });
+    }
+  });
+
+  // ── Dispatch fee payment ───────────────────────────────────────────────────
+  app.post('/api/managed/jobs/:id/apply-coupon', requireAuth, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      const codeRaw = String(req.body?.code || '').trim();
+      if (!codeRaw) return res.status(400).json({ ok: false, message: 'Coupon code is required.' });
+
+      const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
+      const job = rows[0];
+      if (Number(job.homeowner_user_id) !== Number(req.authUser.id) && !req.authUser.isAdmin) {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+
+      const row = await lookupDiscountByCode(pool, codeRaw);
+      const checked = validateDiscountRow(row);
+      if (!checked.ok) {
+        return res.status(400).json({ ok: false, message: checked.message });
+      }
+
+      await applyValidatedCouponToJob(pool, jobId, checked.discount);
+
+      const rules = await loadPricingRules(pool);
+      const isEmergency =
+        job.service_timing === 'emergency' ||
+        String(job.title || '').toLowerCase().includes('emerg') ||
+        String(job.description || '').toLowerCase().includes('emerg');
+      const visitFeeOriginal = resolveCustomerVisitFee(rules, { emergency: isEmergency });
+      const applied = applyDiscountToAmount(visitFeeOriginal, checked.discount);
+
+      const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      res.json({
+        ok: true,
+        discount: publicDiscountView(checked.discount),
+        visitFeeOriginal,
+        visitFeeAfterDiscount: applied.retail,
+        discountAmount: applied.discountAmount,
+        job: serializeJob(fresh[0], req.authUser),
+      });
+    } catch (e) {
+      console.error('apply-coupon:', e);
+      res.status(500).json({ ok: false, message: 'Could not apply coupon.' });
+    }
+  });
+
+  app.post('/api/managed/jobs/:id/pay-dispatch', requireAuth, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      let { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
+      let job = rows[0];
       if (Number(job.homeowner_user_id) !== Number(req.authUser.id) && !req.authUser.isAdmin) {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
       if (!['awaiting_service_payment', 'ai_review_complete'].includes(job.status)) {
         return res.status(400).json({ ok: false, message: 'Dispatch authorization not due for this status.' });
+      }
+
+      const codeFromBody = req.body?.discountCode ? normalizeDiscountCode(String(req.body.discountCode)) : '';
+      if (codeFromBody) {
+        const row = await lookupDiscountByCode(pool, codeFromBody);
+        const checked = validateDiscountRow(row);
+        if (!checked.ok) {
+          return res.status(400).json({ ok: false, message: checked.message });
+        }
+        await applyValidatedCouponToJob(pool, jobId, checked.discount);
+        const refreshed = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+        job = refreshed.rows[0];
       }
 
       const rules = await loadPricingRules(pool);
@@ -1805,65 +2185,51 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       let dispatchDiscount = null;
       const discount = await resolveJobDiscount(pool, job);
       if (discount) {
-        const applied = applyDiscountToAmount(amount, discount);
+        const row = await lookupDiscountByCode(pool, discount.code);
+        const checked = validateDiscountRow(row);
+        if (!checked.ok) {
+          return res.status(400).json({ ok: false, message: checked.message || 'Coupon on this job is no longer valid.' });
+        }
+        const applied = applyDiscountToAmount(amount, checked.discount);
         amount = applied.retail;
         dispatchDiscount = {
-          code: discount.code,
+          code: checked.discount.code,
           discountAmount: applied.discountAmount,
           originalAmount: amountBeforeDiscount,
         };
       }
       amount = Math.max(0, Math.round(amount * 100) / 100);
 
-      const simulate = shouldSimulatePayment(req.body?.simulate === true);
-
-      if (simulate) {
-        await pool.query(
-          `INSERT INTO payments (job_id, user_id, payment_type, amount, status, simulated, meta)
-           VALUES ($1,$2,'dispatch_fee',$3,'authorized',true,$4)`,
-          [jobId, req.authUser.id, amount, JSON.stringify({ contractorVisitPayout: amount, dispatchDiscount })]
-        );
-        await pool.query(
-          `UPDATE managed_jobs SET
-             visit_fee_authorized=true,
-             visit_fee_amount=$2,
-             pricing = CASE
-               WHEN pricing IS NULL THEN $3::jsonb
-               ELSE pricing || $3::jsonb
-             END,
-             updated_at=NOW()
-           WHERE id=$1`,
-          [jobId, amount, JSON.stringify({ contractor_visit_fee: amount })]
-        );
-        await pushStatus(pool, jobId, job.status, 'paid_for_dispatch', req.authUser.id, 'Visit fee authorized (simulated hold placed)');
-        await pushStatus(pool, jobId, 'paid_for_dispatch', 'awaiting_contractor', req.authUser.id, 'Ready for dispatch');
-        await audit(pool, req.authUser.id, 'dispatch_fee_authorized', 'managed_job', jobId, {
-          amount,
-          originalAmount: amountBeforeDiscount,
-          dispatchDiscount,
-          simulated: true,
-        });
-        await triggerReferralBookingReward(pool, jobId);
-        
-        const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
-        return res.json({
-          ok: true,
-          simulated: true,
-          amount,
-          job: serializeJob(fresh[0], req.authUser),
+      try {
+        assertPaymentsAvailable();
+      } catch (payErr) {
+        return res.status(payErr.status || 503).json({
+          ok: false,
+          code: payErr.code || 'STRIPE_NOT_CONFIGURED',
+          message: payErr.message || 'Payments are not configured.',
         });
       }
 
       const origin = req.get('origin') || req.get('referer');
-      const checkout = await createCheckoutSession({
-        amountCents: Math.round(amount * 100),
-        customerEmail: req.authUser.email,
-        description: `${brand.productName} Contractor Visit Pre-Authorization Hold`,
-        successPath: `/?paid=dispatch&job=${jobId}`,
-        cancelPath: `/?canceled=dispatch&job=${jobId}`,
-        origin,
-        metadata: { jobId: String(jobId), paymentType: 'dispatch_fee', userId: String(req.authUser.id), captureMethod: 'manual' },
-      });
+      let checkout;
+      try {
+        checkout = await createCheckoutSession({
+          amountCents: Math.round(amount * 100),
+          customerEmail: req.authUser.email,
+          description: `${brand.productName} Contractor Visit Pre-Authorization Hold`,
+          successPath: `/?paid=dispatch&job=${jobId}`,
+          cancelPath: `/?canceled=dispatch&job=${jobId}`,
+          origin,
+          metadata: { jobId: String(jobId), paymentType: 'dispatch_fee', userId: String(req.authUser.id), captureMethod: 'manual' },
+        });
+      } catch (payErr) {
+        console.error('pay-dispatch checkout:', payErr);
+        return res.status(payErr.status || 502).json({
+          ok: false,
+          code: payErr.code || 'STRIPE_CHECKOUT_FAILED',
+          message: payErr.message || 'Could not start Stripe checkout.',
+        });
+      }
 
       await pool.query(
         `INSERT INTO payments (job_id, user_id, payment_type, amount, status, stripe_session_id, simulated, meta)
@@ -1871,7 +2237,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
          [jobId, req.authUser.id, amount, checkout.sessionId, JSON.stringify({ contractorVisitPayout: amount, dispatchDiscount })]
       );
 
-      res.json({ ok: true, simulated: false, url: checkout.url, amount });
+      res.json({ ok: true, url: checkout.url, amount });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, message: 'Server error' });
@@ -2362,7 +2728,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const rules = await loadPricingRules(pool);
       const assessment = parseJson(job.ai_assessment);
       const afterHours = /evening|weekend/i.test(job.service_timing || '');
-      const quote = computeCustomerQuoteFromBid(Number(bids[0].net_total), rules, {
+      const quote = computeCustomerQuoteFromBid(resolveContractorNetForQuote(bids[0], req.body), rules, {
         urgency: assessment?.urgency,
         afterHours,
         zip: job.zip,
@@ -2421,7 +2787,8 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         if (discount) couponAmount = Number(discount.value) || 0;
       }
 
-      const quote = computeCustomerQuoteFromBid(Number(bids[0].net_total), rules, {
+      const contractorNet = resolveContractorNetForQuote(bids[0], req.body);
+      const quote = computeCustomerQuoteFromBid(contractorNet, rules, {
         urgency: assessment?.urgency,
         afterHours,
         zip: jobs[0].zip,
@@ -2443,23 +2810,19 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         ? new Date(req.body.quoteValidUntil)
         : new Date(Date.now() + validHours * 3600 * 1000);
 
-      const customerLineItems = [
-        { label: 'Service & Labor', amount: quote.baseRetail, visible: true },
-        ...(adjustments.filter((a) => a.includeInDisplay !== false).map((a) => ({
-          label: a.label || a.type || 'Adjustment',
-          amount: a.calculation === 'percent'
-            ? Math.round(quote.baseRetail * (Number(a.amount) / 100))
-            : Number(a.amount),
-          visible: true,
-        }))),
-        ...(serviceCharge > 0 ? [{ label: 'Service charge', amount: serviceCharge, visible: true }] : []),
-        ...(quote.adminDiscount > 0 ? [{ label: 'Discount', amount: -quote.adminDiscount, visible: true }] : []),
-        ...(couponAmount > 0 ? [{ label: couponCode || 'Coupon', amount: -couponAmount, visible: true }] : []),
-      ];
+      const customerLineItems = Array.isArray(req.body?.customerLineItems) && req.body.customerLineItems.length
+        ? req.body.customerLineItems
+        : buildDefaultCustomerLineItems(quote, {
+            adjustments,
+            serviceCharge,
+            couponCode,
+            couponAmount,
+            visitFeeCredit: 0,
+          });
 
       const visitCredit = await getVisitFeeCreditForJob(pool, jobId);
       const billed = applyVisitFeeCredit(retail, visitCredit.amount);
-      if (billed.visitFeeCredit > 0) {
+      if (billed.visitFeeCredit > 0 && !req.body?.customerLineItems?.length) {
         customerLineItems.push({
           label: 'Visit fee credit (already paid)',
           amount: -billed.visitFeeCredit,
@@ -2474,8 +2837,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           (job_id, bid_id, scope_summary, retail_amount, deposit_amount, timeline, warranty, exclusions,
            contractor_net, platform_gross, processing_cost, status, created_by, published_at,
            line_items, pricing_adjustments, admin_discount, admin_discount_reason, coupon_code, coupon_funded_by,
-           quote_valid_until, customer_line_items, service_charge, expected_margin_pct)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'sent',$12,NOW(),$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+           quote_valid_until, customer_line_items, service_charge, expected_margin_pct,
+           customer_notes, terms_conditions, contractor_quote_amount)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'sent',$12,NOW(),$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
          RETURNING *`,
         [
           jobId,
@@ -2500,6 +2864,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           JSON.stringify(customerLineItems),
           serviceCharge,
           quote.expectedMarginPct,
+          req.body?.customerNotes || null,
+          req.body?.termsConditions || null,
+          quote.contractorNet,
         ]
       );
 
@@ -2527,7 +2894,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           fixbridgeNetContribution: quote.netContribution,
           contractorPayout: quote.contractorNet,
           lineItems: customerLineItems,
-          metadata: { bidId, proposalId: rows[0].id },
+          metadata: { bidId, proposalId: rows[0].id, createdByName: req.authUser.name || req.authUser.email },
         },
       });
 
@@ -2606,10 +2973,56 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       await pool.query(`UPDATE proposals SET status='approved', approved_at=NOW() WHERE id=$1`, [props[0].id]);
       await pushStatus(pool, jobId, jobs[0].status, 'approved', req.authUser.id, 'Customer approved proposal');
 
-      // Auto-charge path: pay retail next
+      await notifyAdminsHomeownerApprovedQuote(pool, {
+        job: jobs[0],
+        homeowner: req.authUser,
+        proposal: props[0],
+      });
+
       res.json({ ok: true, proposal: serializeProposal({ ...props[0], status: 'approved' }, req.authUser) });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Server error' });
+    }
+  });
+
+  app.post('/api/admin/managed/jobs/:id/request-dispatch', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
+      const job = rows[0];
+      if (job.status !== 'approved') {
+        return res.status(400).json({
+          ok: false,
+          message: 'Dispatch can only be requested after the homeowner approves the final quote.',
+        });
+      }
+      if (!job.assigned_contractor_user_id) {
+        return res.status(400).json({ ok: false, message: 'Assign a contractor before requesting dispatch.' });
+      }
+
+      await pushStatus(pool, jobId, job.status, 'scheduled', req.authUser.id, 'Admin requested contractor dispatch');
+
+      try {
+        const { rows: contractors } = await pool.query(`SELECT email, name FROM users WHERE id=$1`, [
+          job.assigned_contractor_user_id,
+        ]);
+        if (contractors[0]?.email) {
+          await sendNotificationEmail({
+            to: contractors[0].email,
+            subject: `${brand.productName} — Dispatch approved for ${job.booking_id || `Job #${jobId}`}`,
+            html: `<p>Hi ${contractors[0].name || 'there'},</p><p>The homeowner approved the quote for <strong>${job.title || job.category}</strong>. FixBridge has requested dispatch — please proceed to the job site when scheduled.</p>`,
+          });
+        }
+      } catch (_e) {
+        /* non-fatal */
+      }
+
+      const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      res.json({ ok: true, job: serializeJob(fresh[0], req.authUser) });
+    } catch (e) {
+      console.error('request-dispatch:', e);
+      res.status(500).json({ ok: false, message: 'Could not request dispatch.' });
     }
   });
 
@@ -2621,6 +3034,15 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const job = jobs[0];
       if (Number(job.homeowner_user_id) !== Number(req.authUser.id) && !req.authUser.isAdmin) {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      if (!['customer_review_pending', 'work_completed'].includes(job.status)) {
+        return res.status(400).json({
+          ok: false,
+          message: 'Payment is available after the contractor marks the job complete.',
+        });
+      }
+      if (await hasSucceededRetailPayment(pool, jobId)) {
+        return res.status(400).json({ ok: false, message: 'This job has already been paid.' });
       }
       const { rows: props } = await pool.query(
         `SELECT * FROM proposals WHERE job_id=$1 ORDER BY created_at DESC LIMIT 1`,
@@ -2634,58 +3056,44 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         props[0].deposit_amount != null && Number(props[0].deposit_amount) >= 0
           ? Number(props[0].deposit_amount)
           : billed.amountDue;
-      const simulate = shouldSimulatePayment(req.body?.simulate === true);
-
-      if (simulate) {
-        await pool.query(
-          `INSERT INTO payments (job_id, user_id, payment_type, amount, status, simulated, meta)
-           VALUES ($1,$2,'retail_payment',$3,'succeeded',true,$4)`,
-          [
-            jobId,
-            req.authUser.id,
-            amount,
-            JSON.stringify({
-              retail,
-              visitFeeCredit: billed.visitFeeCredit,
-              amountDue: amount,
-            }),
-          ]
-        );
-        await pushStatus(pool, jobId, job.status, 'scheduled', req.authUser.id, 'Retail payment received (simulated)');
-        await audit(pool, req.authUser.id, 'retail_paid', 'managed_job', jobId, {
-          amount,
-          retail,
-          visitFeeCredit: billed.visitFeeCredit,
-          simulated: true,
-        });
-        const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
-        return res.json({
-          ok: true,
-          simulated: true,
-          amount,
-          retail,
-          visitFeeCredit: billed.visitFeeCredit,
-          job: serializeJob(fresh[0], req.authUser),
+      try {
+        assertPaymentsAvailable();
+      } catch (payErr) {
+        return res.status(payErr.status || 503).json({
+          ok: false,
+          code: payErr.code || 'STRIPE_NOT_CONFIGURED',
+          message: payErr.message || 'Payments are not configured.',
         });
       }
 
       const origin = req.get('origin') || req.get('referer');
-      const checkout = await createCheckoutSession({
-        amountCents: Math.round(amount * 100),
-        customerEmail: req.authUser.email,
-        description: `${brand.productName} repair payment${
-          billed.visitFeeCredit > 0 ? ` (visit fee credit −$${billed.visitFeeCredit.toFixed(2)})` : ''
-        }`,
-        successPath: `/?paid=retail&job=${jobId}`,
-        cancelPath: `/?canceled=retail&job=${jobId}`,
-        origin,
-        metadata: {
-          jobId: String(jobId),
-          paymentType: 'retail_payment',
-          userId: String(req.authUser.id),
-          visitFeeCredit: String(billed.visitFeeCredit),
-        },
-      });
+      let checkout;
+      try {
+        checkout = await createCheckoutSession({
+          amountCents: Math.round(amount * 100),
+          customerEmail: req.authUser.email,
+          description: `${brand.productName} repair payment${
+            billed.visitFeeCredit > 0 ? ` (visit fee credit −$${billed.visitFeeCredit.toFixed(2)})` : ''
+          }`,
+          successPath: `/?paid=retail&job=${jobId}`,
+          cancelPath: `/?canceled=retail&job=${jobId}`,
+          origin,
+          metadata: {
+            jobId: String(jobId),
+            paymentType: 'retail_payment',
+            userId: String(req.authUser.id),
+            visitFeeCredit: String(billed.visitFeeCredit),
+          },
+        });
+      } catch (payErr) {
+        console.error('pay-retail checkout:', payErr);
+        return res.status(payErr.status || 502).json({
+          ok: false,
+          code: payErr.code || 'STRIPE_CHECKOUT_FAILED',
+          message: payErr.message || 'Could not start Stripe checkout.',
+        });
+      }
+
       await pool.query(
         `INSERT INTO payments (job_id, user_id, payment_type, amount, status, stripe_session_id, simulated, meta)
          VALUES ($1,$2,'retail_payment',$3,'pending',$4,false,$5)`,
@@ -2699,7 +3107,6 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       );
       res.json({
         ok: true,
-        simulated: false,
         url: checkout.url,
         amount,
         retail,
@@ -2893,19 +3300,10 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           await sendNotificationEmail({
             to: hw[0].email,
             subject: `Work complete — please confirm your ${brand.productName} job`,
-            html: `<p>Hi ${hw[0].name || 'there'},</p><p>Your contractor has marked <strong>${job.title}</strong> as complete${rpt.summary ? ': ' + rpt.summary : ''}.</p><p>Log in to review the before/after photos and confirm completion.</p>`,
+            html: `<p>Hi ${hw[0].name || 'there'},</p><p>Your contractor has marked <strong>${job.title}</strong> as complete${rpt.summary ? ': ' + rpt.summary : ''}.</p><p>Log in to review the work and pay FixBridge to finalize your job.</p>`,
           });
         }
       } catch (_e) { /* non-fatal */ }
-
-      try {
-        await ensurePayoutRecordForJob(pool, jobId, {
-          initialStatus: PAYOUT_STATUS.PENDING_APPROVAL,
-          actorUserId: req.authUser.id,
-        });
-      } catch (_payoutErr) {
-        console.warn('[payout] create on complete:', _payoutErr.message);
-      }
 
       const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       res.json({ ok: true, job: serializeJob(fresh[0], req.authUser) });
@@ -2923,16 +3321,18 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
       await pool.query(`UPDATE managed_jobs SET customer_confirmed_at=NOW() WHERE id=$1`, [jobId]);
-      await pushStatus(pool, jobId, rows[0].status, 'admin_review_pending', req.authUser.id, 'Customer confirmed completion');
-      await pushStatus(pool, jobId, 'admin_review_pending', 'payout_pending', req.authUser.id, 'Ready for payout');
 
-      try {
-        await ensurePayoutRecordForJob(pool, jobId, {
-          initialStatus: PAYOUT_STATUS.PENDING_APPROVAL,
-          actorUserId: req.authUser.id,
-        });
-      } catch (_payoutErr) {
-        console.warn('[payout] create on confirm:', _payoutErr.message);
+      if (await hasSucceededRetailPayment(pool, jobId)) {
+        await pushStatus(pool, jobId, rows[0].status, 'admin_review_pending', req.authUser.id, 'Customer confirmed completion');
+        await pushStatus(pool, jobId, 'admin_review_pending', 'payout_pending', req.authUser.id, 'Ready for payout');
+        try {
+          await ensurePayoutRecordForJob(pool, jobId, {
+            initialStatus: PAYOUT_STATUS.PENDING_APPROVAL,
+            actorUserId: req.authUser.id,
+          });
+        } catch (_payoutErr) {
+          console.warn('[payout] create on confirm:', _payoutErr.message);
+        }
       }
 
       // Optional public review — published immediately on the marketing site
@@ -2976,7 +3376,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
   });
 
   // ── Admin payout ───────────────────────────────────────────────────────────
-  app.post('/api/admin/managed/jobs/:id/payout', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/admin/managed/jobs/:id/payout', requireAuth, requireAdmin, need('payouts.approve'), async (req, res) => {
     try {
       const jobId = Number(req.params.id);
       if (!Number.isFinite(jobId) || jobId <= 0) {
@@ -3026,6 +3426,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const simulate =
         shouldSimulatePayment(req.body?.simulate === true) ||
         (!contractor?.stripe_account_id && shouldSimulatePayment(true));
+      if (process.env.NODE_ENV === 'production' && !stripeConfigured()) {
+        return res.status(503).json({
+          ok: false,
+          code: 'STRIPE_NOT_CONFIGURED',
+          message: 'Payouts require Stripe in production.',
+        });
+      }
       if (!simulate && !contractor?.stripe_account_id) {
         return res.status(400).json({
           ok: false,
@@ -3190,22 +3597,18 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         accountId = created.accountId;
         await pool.query(
           `UPDATE users SET stripe_account_id=$1, stripe_onboarding_status=$2 WHERE id=$3`,
-          [accountId, created.simulated ? 'simulated' : 'pending', req.authUser.id]
+          [accountId, 'pending', req.authUser.id]
         );
-      }
-      if (!stripeConfigured()) {
-        await pool.query(
-          `UPDATE users SET stripe_onboarding_status='simulated', stripe_payouts_enabled=true WHERE id=$1`,
-          [req.authUser.id]
-        );
-        return res.json({ ok: true, simulated: true, accountId });
       }
       const link = await createConnectAccountLink(
         accountId,
         '/?stripe=refresh',
         '/?stripe=return'
       );
-      res.json({ ok: true, simulated: false, url: link.url, accountId });
+      if (!link.url) {
+        return res.status(502).json({ ok: false, message: 'Could not create Stripe onboarding link.' });
+      }
+      res.json({ ok: true, url: link.url, accountId });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Server error' });
     }
@@ -4200,6 +4603,295 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
+  /** Unified order ledger — quotes, payments, payouts, profits, creator attribution. */
+  app.get('/api/admin/order-ledger', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const q = String(req.query.q || '').trim().toLowerCase();
+      const params = [];
+      let where = `WHERE j.status NOT IN ('draft')`;
+      if (q) {
+        params.push(`%${q}%`);
+        const i = params.length;
+        where += ` AND (
+          LOWER(COALESCE(p.quote_number,'')) LIKE $${i}
+          OR LOWER(COALESCE(j.booking_id,'')) LIKE $${i}
+          OR LOWER(COALESCE(hw.name,'')) LIKE $${i}
+          OR LOWER(COALESCE(ct.name,'')) LIKE $${i}
+          OR LOWER(COALESCE(cr.name,'')) LIKE $${i}
+        )`;
+      }
+
+      const { rows: jobs } = await pool.query(
+        `SELECT j.id AS job_id, j.booking_id, j.status AS job_status, j.category, j.title,
+                j.customer_retail_estimate_low AS ai_low, j.customer_retail_estimate_high AS ai_high,
+                hw.name AS homeowner_name, hw.email AS homeowner_email,
+                p.id AS proposal_id, p.quote_number, p.retail_amount, p.contractor_net, p.platform_gross,
+                p.processing_cost, p.expected_margin_pct, p.published_at, p.approved_at, p.status AS quote_status,
+                p.scope_summary, p.timeline, p.service_charge, p.admin_discount,
+                cr.name AS created_by_name, cr.email AS created_by_email,
+                ct.name AS contractor_name
+         FROM managed_jobs j
+         LEFT JOIN LATERAL (
+           SELECT * FROM proposals WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1
+         ) p ON TRUE
+         LEFT JOIN users hw ON hw.id = j.homeowner_user_id
+         LEFT JOIN users cr ON cr.id = p.created_by
+         LEFT JOIN bids b ON b.id = p.bid_id
+         LEFT JOIN users ct ON ct.id = COALESCE(b.contractor_user_id, j.assigned_contractor_user_id)
+         ${where}
+         ORDER BY COALESCE(p.published_at, j.created_at) DESC NULLS LAST
+         LIMIT 120`,
+        params
+      );
+
+      const jobIds = jobs.map((j) => j.job_id);
+      let payments = [];
+      let payouts = [];
+      if (jobIds.length) {
+        const { rows: payRows } = await pool.query(
+          `SELECT id, job_id, payment_type, amount, status, simulated, created_at, stripe_session_id
+           FROM payments WHERE job_id = ANY($1::bigint[]) ORDER BY created_at DESC`,
+          [jobIds]
+        );
+        payments = payRows;
+        const { rows: payoutRows } = await pool.query(
+          `SELECT id, job_id, contractor_id, status, gross_amount_cents, net_amount_cents, fee_amount_cents,
+                  created_at, approved_at, paid_at, stripe_transfer_id
+           FROM contractor_payouts WHERE job_id = ANY($1::bigint[]) ORDER BY created_at DESC`,
+          [jobIds]
+        );
+        payouts = payoutRows;
+      }
+
+      const paymentsByJob = new Map();
+      for (const p of payments) {
+        if (!paymentsByJob.has(p.job_id)) paymentsByJob.set(p.job_id, []);
+        paymentsByJob.get(p.job_id).push(p);
+      }
+      const payoutsByJob = new Map();
+      for (const p of payouts) {
+        if (!payoutsByJob.has(p.job_id)) payoutsByJob.set(p.job_id, []);
+        payoutsByJob.get(p.job_id).push(p);
+      }
+
+      const ledger = [];
+      let totalIncoming = 0;
+      let totalPending = 0;
+      let totalPaidOut = 0;
+      let totalQuotedProfit = 0;
+
+      for (const row of jobs) {
+        const quoteNumber = row.quote_number || (row.proposal_id ? `FBQ-${String(row.proposal_id).padStart(5, '0')}` : null);
+        const jobPayments = paymentsByJob.get(row.job_id) || [];
+        const jobPayouts = payoutsByJob.get(row.job_id) || [];
+        const incoming = jobPayments
+          .filter((p) => p.status === 'succeeded')
+          .reduce((s, p) => s + Number(p.amount || 0), 0);
+        const pending = jobPayments
+          .filter((p) => ['pending', 'authorized'].includes(String(p.status)))
+          .reduce((s, p) => s + Number(p.amount || 0), 0);
+        const paidOut = jobPayouts
+          .filter((p) => ['paid', 'processing'].includes(String(p.status)))
+          .reduce((s, p) => s + Number(p.net_amount_cents || 0) / 100, 0);
+
+        totalIncoming += incoming;
+        totalPending += pending;
+        totalPaidOut += paidOut;
+        if (row.platform_gross != null) totalQuotedProfit += Number(row.platform_gross);
+
+        if (row.proposal_id) {
+          ledger.push({
+            kind: 'quote',
+            date: row.published_at,
+            jobId: row.job_id,
+            bookingId: row.booking_id,
+            quoteNumber,
+            quoteStatus: row.quote_status,
+            jobStatus: row.job_status,
+            homeownerName: row.homeowner_name,
+            contractorName: row.contractor_name,
+            createdByName: row.created_by_name || row.created_by_email || '—',
+            aiEstimateLow: row.ai_low != null ? Number(row.ai_low) : null,
+            aiEstimateHigh: row.ai_high != null ? Number(row.ai_high) : null,
+            contractorQuote: row.contractor_net != null ? Number(row.contractor_net) : null,
+            customerQuote: row.retail_amount != null ? Number(row.retail_amount) : null,
+            platformMargin: row.platform_gross != null ? Number(row.platform_gross) : null,
+            expectedMarginPct: row.expected_margin_pct != null ? Number(row.expected_margin_pct) : null,
+            processingCost: row.processing_cost != null ? Number(row.processing_cost) : null,
+            amount: row.retail_amount != null ? Number(row.retail_amount) : null,
+            description: `Quote published — ${row.scope_summary || row.title || row.category || 'Repair'}`,
+          });
+        }
+
+        for (const p of jobPayments) {
+          ledger.push({
+            kind: 'payment',
+            date: p.created_at,
+            jobId: row.job_id,
+            bookingId: row.booking_id,
+            quoteNumber,
+            paymentType: p.payment_type,
+            status: p.status,
+            amount: Number(p.amount || 0),
+            simulated: p.simulated === true,
+            description: `${p.payment_type} — ${p.status}`,
+          });
+        }
+
+        for (const p of jobPayouts) {
+          ledger.push({
+            kind: 'payout',
+            date: p.paid_at || p.approved_at || p.created_at,
+            jobId: row.job_id,
+            bookingId: row.booking_id,
+            quoteNumber,
+            status: p.status,
+            amount: Number(p.net_amount_cents || 0) / 100,
+            grossAmount: Number(p.gross_amount_cents || 0) / 100,
+            feeAmount: Number(p.fee_amount_cents || 0) / 100,
+            contractorName: row.contractor_name,
+            description: `Contractor payout — ${p.status}`,
+          });
+        }
+      }
+
+      ledger.sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
+
+      res.json({
+        ok: true,
+        summary: {
+          totalIncoming: Math.round(totalIncoming * 100) / 100,
+          totalPending: Math.round(totalPending * 100) / 100,
+          totalPaidOut: Math.round(totalPaidOut * 100) / 100,
+          totalQuotedProfit: Math.round(totalQuotedProfit * 100) / 100,
+          netPosition: Math.round((totalIncoming - totalPaidOut) * 100) / 100,
+          orderCount: jobs.length,
+          ledgerEventCount: ledger.length,
+        },
+        orders: jobs.map((row) => ({
+          jobId: row.job_id,
+          bookingId: row.booking_id,
+          quoteNumber: row.quote_number || (row.proposal_id ? `FBQ-${String(row.proposal_id).padStart(5, '0')}` : null),
+          jobStatus: row.job_status,
+          quoteStatus: row.quote_status,
+          homeownerName: row.homeowner_name,
+          contractorName: row.contractor_name,
+          createdByName: row.created_by_name,
+          publishedAt: row.published_at,
+          approvedAt: row.approved_at,
+          aiEstimateLow: row.ai_low != null ? Number(row.ai_low) : null,
+          aiEstimateHigh: row.ai_high != null ? Number(row.ai_high) : null,
+          contractorQuote: row.contractor_net != null ? Number(row.contractor_net) : null,
+          customerQuote: row.retail_amount != null ? Number(row.retail_amount) : null,
+          platformMargin: row.platform_gross != null ? Number(row.platform_gross) : null,
+          expectedMarginPct: row.expected_margin_pct != null ? Number(row.expected_margin_pct) : null,
+          moneyReceived: (paymentsByJob.get(row.job_id) || [])
+            .filter((p) => p.status === 'succeeded')
+            .reduce((s, p) => s + Number(p.amount || 0), 0),
+          moneyPending: (paymentsByJob.get(row.job_id) || [])
+            .filter((p) => ['pending', 'authorized'].includes(String(p.status)))
+            .reduce((s, p) => s + Number(p.amount || 0), 0),
+          contractorPaidOut: (payoutsByJob.get(row.job_id) || [])
+            .filter((p) => ['paid', 'processing'].includes(String(p.status)))
+            .reduce((s, p) => s + Number(p.net_amount_cents || 0) / 100, 0),
+        })),
+        ledger,
+      });
+    } catch (e) {
+      console.error('order-ledger:', e);
+      res.status(500).json({ ok: false, message: 'Could not load order ledger.' });
+    }
+  });
+
+  /** Server-calculated profitability — admin only; never expose to homeowners. */
+  app.get('/api/admin/profitability', requireAuth, requireAdmin, async (_req, res) => {
+    try {
+      const { rows: pay } = await pool.query(
+        `SELECT
+           COALESCE(SUM(CASE WHEN status='succeeded' THEN ROUND(amount::numeric * 100) ELSE 0 END),0)::bigint AS revenue_cents,
+           COALESCE(SUM(CASE WHEN status='refunded' THEN ROUND(amount::numeric * 100) ELSE 0 END),0)::bigint AS refunded_cents,
+           COALESCE(SUM(CASE WHEN status='succeeded' AND COALESCE(simulated,false)=true THEN ROUND(amount::numeric * 100) ELSE 0 END),0)::bigint AS simulated_revenue_cents
+         FROM payments`
+      );
+      const { rows: transfers } = await pool.query(
+        `SELECT
+           COALESCE(SUM(CASE WHEN status IN ('paid','succeeded','transferred') THEN ROUND(amount::numeric * 100) ELSE 0 END),0)::bigint AS contractor_paid_cents
+         FROM transfers`
+      );
+      const { rows: props } = await pool.query(
+        `SELECT
+           COALESCE(SUM(ROUND(retail_amount::numeric * 100)),0)::bigint AS retail_cents,
+           COALESCE(SUM(ROUND(contractor_net::numeric * 100)),0)::bigint AS contractor_net_cents,
+           COALESCE(SUM(ROUND(COALESCE(platform_gross,0)::numeric * 100)),0)::bigint AS platform_gross_cents
+         FROM proposals WHERE status IN ('sent','approved','accepted','paid') OR published_at IS NOT NULL`
+      );
+      const { rows: visit } = await pool.query(
+        `SELECT COALESCE(SUM(ROUND(COALESCE(visit_fee_amount,0)::numeric * 100)),0)::bigint AS visit_fee_cents
+         FROM managed_jobs WHERE visit_fee_authorized=true`
+      );
+      const { rows: jobs } = await pool.query(
+        `SELECT
+           j.id,
+           j.status,
+           j.category,
+           ROUND(COALESCE(p.retail_amount,0)::numeric * 100)::bigint AS retail_cents,
+           ROUND(COALESCE(p.contractor_net,0)::numeric * 100)::bigint AS contractor_net_cents,
+           ROUND(COALESCE(p.platform_gross,0)::numeric * 100)::bigint AS platform_gross_cents,
+           ROUND(COALESCE(j.visit_fee_amount,0)::numeric * 100)::bigint AS visit_fee_cents
+         FROM managed_jobs j
+         LEFT JOIN LATERAL (
+           SELECT retail_amount, contractor_net, platform_gross
+           FROM proposals WHERE job_id=j.id ORDER BY created_at DESC LIMIT 1
+         ) p ON TRUE
+         WHERE j.status NOT IN ('draft','canceled')
+         ORDER BY j.id DESC
+         LIMIT 50`
+      );
+
+      const revenueCents = Number(pay[0]?.revenue_cents || 0);
+      const refundedCents = Number(pay[0]?.refunded_cents || 0);
+      const contractorPaidCents = Number(transfers[0]?.contractor_paid_cents || 0);
+      const platformGrossCents = Number(props[0]?.platform_gross_cents || 0);
+      const retailCents = Number(props[0]?.retail_cents || 0);
+      const contractorNetCents = Number(props[0]?.contractor_net_cents || 0);
+      const visitFeeCents = Number(visit[0]?.visit_fee_cents || 0);
+      // Approximate processing at 2.9% + $0.30 per succeeded payment count is heavy; use 2.9% of revenue.
+      const processingFeeCents = Math.round(revenueCents * 0.029);
+      const netPlatformCents =
+        revenueCents - refundedCents - contractorPaidCents - processingFeeCents;
+
+      const centsToDollars = (c) => Math.round(Number(c) || 0) / 100;
+
+      res.json({
+        ok: true,
+        summary: {
+          homeownerCharged: centsToDollars(revenueCents),
+          refunds: centsToDollars(refundedCents),
+          contractorCost: centsToDollars(contractorNetCents),
+          contractorPaidOut: centsToDollars(contractorPaidCents),
+          platformGrossMargin: centsToDollars(platformGrossCents || retailCents - contractorNetCents),
+          paymentProcessingFeesEst: centsToDollars(processingFeeCents),
+          visitFeesAuthorized: centsToDollars(visitFeeCents),
+          netPlatformRevenue: centsToDollars(netPlatformCents),
+          simulatedRevenue: centsToDollars(pay[0]?.simulated_revenue_cents || 0),
+          stripeConfigured: stripeConfigured(),
+        },
+        jobs: (jobs || []).map((j) => ({
+          id: Number(j.id),
+          status: j.status,
+          category: j.category,
+          homeownerCharged: centsToDollars(j.retail_cents),
+          contractorCost: centsToDollars(j.contractor_net_cents),
+          platformMargin: centsToDollars(j.platform_gross_cents),
+          visitFee: centsToDollars(j.visit_fee_cents),
+        })),
+      });
+    } catch (e) {
+      console.error('profitability:', e);
+      res.status(500).json({ ok: false, message: 'Could not load profitability.' });
+    }
+  });
+
   // ── Stripe webhook (signature required when Stripe is configured) ──────────
   app.post('/api/stripe/webhook', async (req, res) => {
     try {
@@ -4266,9 +4958,68 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
             await pushStatus(pool, jobId, jobs[0]?.status, 'paid_for_dispatch', null, 'Stripe visit fee authorized (hold placed)');
             await pushStatus(pool, jobId, 'paid_for_dispatch', 'awaiting_contractor', null, 'Ready for dispatch');
             await triggerReferralBookingReward(pool, jobId);
+            try {
+              const { rows: jobRows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+              const { rows: userRows } = userId
+                ? await pool.query(`SELECT id, name, email FROM users WHERE id=$1`, [userId])
+                : { rows: [] };
+              const paidAmt =
+                session.amount_total != null ? Number(session.amount_total) / 100 : jobRows[0]?.visit_fee_amount;
+              if (jobRows[0]) {
+                const metaRaw = await pool.query(
+                  `SELECT meta FROM payments WHERE stripe_session_id=$1 LIMIT 1`,
+                  [session.id]
+                );
+                let discountCode = jobRows[0].discount_code || null;
+                try {
+                  const meta = metaRaw.rows[0]?.meta;
+                  const parsed = typeof meta === 'string' ? JSON.parse(meta) : meta;
+                  if (parsed?.dispatchDiscount?.code) discountCode = parsed.dispatchDiscount.code;
+                } catch {
+                  // ignore
+                }
+                if (discountCode) {
+                  const dRow = await lookupDiscountByCode(pool, discountCode);
+                  if (dRow?.id) await incrementDiscountUse(pool, dRow.id);
+                }
+                await notifyAdminsDispatchServiceRequest(pool, {
+                  job: jobRows[0],
+                  homeowner: userRows[0] || { name: session.customer_email, email: session.customer_email },
+                  amount: paidAmt,
+                  discountCode,
+                });
+              }
+            } catch (notifyErr) {
+              console.error('dispatch webhook notify:', notifyErr.message);
+            }
           }
           if (paymentType === 'retail_payment') {
-            await pushStatus(pool, jobId, jobs[0]?.status, 'scheduled', null, 'Stripe retail payment');
+            await pushStatus(pool, jobId, jobs[0]?.status, 'admin_review_pending', null, 'Stripe retail payment received');
+            await pushStatus(pool, jobId, 'admin_review_pending', 'payout_pending', null, 'Ready for contractor payout');
+            try {
+              await ensurePayoutRecordForJob(pool, jobId, {
+                initialStatus: PAYOUT_STATUS.PENDING_APPROVAL,
+                actorUserId: userId || null,
+              });
+            } catch (_payoutErr) {
+              console.warn('[payout] create on retail webhook:', _payoutErr.message);
+            }
+          }
+          if (paymentType === 'invoice_payment') {
+            const invoiceId = Number(session.metadata?.invoiceId);
+            const paidAmt = session.amount_total != null ? Number(session.amount_total) / 100 : null;
+            try {
+              const { markInvoicePaidFromStripe } = await import('./quote-workspace-routes.js');
+              await markInvoicePaidFromStripe(pool, {
+                invoiceId,
+                amount: paidAmt,
+                paymentIntentId: session.payment_intent || null,
+                sessionId: session.id,
+                method: 'card',
+              });
+            } catch (invErr) {
+              console.warn('[invoice] stripe paid mark failed:', invErr.message);
+            }
           }
           if (paymentType === 'lead_unlock' && userId) {
             await pool.query(

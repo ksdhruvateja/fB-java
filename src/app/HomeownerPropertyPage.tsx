@@ -21,6 +21,7 @@ import {
   type PropertyDocument,
 } from "./managedJobs";
 import { isValidUsZip, normalizeZip } from "./zipCode";
+import { UsLocationFields, normalizeUsStateCode } from "./UsLocationFields";
 
 const DOC_CATEGORIES: { id: string; label: string }[] = [
   { id: "receipt", label: "Receipt" },
@@ -169,7 +170,7 @@ export default function HomeownerPropertyPage({
         label: label.trim() || selected.label || undefined,
         addressLine1: addressLine1.trim(),
         city: city.trim(),
-        state: state.trim(),
+        state: normalizeUsStateCode(state),
         zip: zip.trim(),
         yearBuilt: yearBuilt ? Number(yearBuilt) : null,
         beds: beds ? Number(beds) : null,
@@ -231,7 +232,7 @@ export default function HomeownerPropertyPage({
         {
           addressLine1: newAddress.trim(),
           city: newCity.trim() || undefined,
-          state: newState.trim() || undefined,
+          state: newState.trim() ? normalizeUsStateCode(newState) : undefined,
           zip: newZip.trim() ? normalizeZip(newZip) : undefined,
           country: "US",
           label: newLabel.trim() || undefined,
@@ -348,27 +349,16 @@ export default function HomeownerPropertyPage({
             value={newAddress}
             onChange={(e) => setNewAddress(e.target.value)}
           />
-          <input
-            className="rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-            placeholder="City"
-            value={newCity}
-            onChange={(e) => setNewCity(e.target.value)}
-          />
-          <div className="grid grid-cols-2 gap-3">
-            <input
-              className="rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-              placeholder="State"
-              value={newState}
-              onChange={(e) => setNewState(e.target.value)}
-            />
-            <input
-              className="rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-              placeholder="ZIP"
-              value={newZip}
-              onChange={(e) => setNewZip(e.target.value.replace(/[^\d-]/g, "").slice(0, 10))}
-              inputMode="numeric"
-              maxLength={10}
-              autoComplete="postal-code"
+          <div className="sm:col-span-2">
+            <UsLocationFields
+              city={newCity}
+              state={newState}
+              zip={newZip}
+              onCityChange={setNewCity}
+              onStateChange={setNewState}
+              onZipChange={setNewZip}
+              disabled={busy}
+              zipRequired={false}
             />
           </div>
           <div className="sm:col-span-2 flex gap-2">
@@ -471,27 +461,16 @@ export default function HomeownerPropertyPage({
                       onChange={(e) => setAddressLine1(e.target.value)}
                       placeholder="Street"
                     />
-                    <input
-                      className="rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-                      value={city}
-                      onChange={(e) => setCity(e.target.value)}
-                      placeholder="City"
-                    />
-                    <div className="grid grid-cols-2 gap-3">
-                      <input
-                        className="rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-                        value={state}
-                        onChange={(e) => setState(e.target.value)}
-                        placeholder="State"
-                      />
-                      <input
-                        className="rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-                        value={zip}
-                        onChange={(e) => setZip(e.target.value.replace(/[^\d-]/g, "").slice(0, 10))}
-                        placeholder="ZIP"
-                        inputMode="numeric"
-                        maxLength={10}
-                        autoComplete="postal-code"
+                    <div className="sm:col-span-2">
+                      <UsLocationFields
+                        city={city}
+                        state={state}
+                        zip={zip}
+                        onCityChange={setCity}
+                        onStateChange={setState}
+                        onZipChange={setZip}
+                        disabled={busy}
+                        zipRequired={false}
                       />
                     </div>
                     <input

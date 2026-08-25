@@ -34,7 +34,27 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export async function listGoProPlans() {
-  return api<{ ok: boolean; plans: ManagedSubscriptionPlan[] }>("/api/platform/go-pro-plans");
+  return api<{ ok: boolean; plans: ManagedSubscriptionPlan[]; pricingRevision?: string }>(
+    "/api/platform/go-pro-plans"
+  );
+}
+
+const PRICING_REVISION_KEY = "fixbridge-pricing-revision";
+
+export function getStoredPricingRevision(): string | null {
+  try {
+    return localStorage.getItem(PRICING_REVISION_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function storePricingRevision(revision: string) {
+  try {
+    localStorage.setItem(PRICING_REVISION_KEY, revision);
+  } catch {
+    // ignore
+  }
 }
 
 export async function listAdminSubscriptionPlans() {

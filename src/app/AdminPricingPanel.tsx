@@ -135,6 +135,33 @@ function estimateNet(rules: PricingRules, trade: string, hoursMin: number, hours
   return { low, high };
 }
 
+/** Client mirror of overall Stage A display adjustment (midpoint-based). */
+function previewOverallCustomerRange(rawLow: number, rawHigh: number, rules: PricingRules) {
+  const orderedLow = Math.max(0, Math.round(Math.min(rawLow, rawHigh)));
+  const orderedHigh = Math.max(orderedLow, Math.round(Math.max(rawLow, rawHigh)));
+  const mid = Math.round((orderedLow + orderedHigh) / 2);
+  const halfSpread = Math.round((orderedHigh - orderedLow) / 2);
+  const adj = rules.customer_display_adjustment || { type: "percentage", value: 0, min_dollars: 0 };
+  let delta =
+    String(adj.type) === "fixed"
+      ? Number(adj.value || 0)
+      : Math.round(mid * (Number(adj.value || 0) / 100));
+  delta = Math.max(delta, Number(adj.min_dollars || 0));
+  if (adj.max_dollars != null) delta = Math.min(delta, Number(adj.max_dollars));
+
+  if (String(adj.type) === "fixed") {
+    const adjustedMid = Math.max(0, mid + delta);
+    return {
+      low: Math.max(0, adjustedMid - halfSpread),
+      high: adjustedMid + halfSpread,
+    };
+  }
+  return {
+    low: Math.max(0, Math.round(orderedLow + delta)),
+    high: Math.max(orderedLow, Math.round(orderedHigh + delta)),
+  };
+}
+
 const fieldClass =
   "w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm transition focus:border-[#FF4D1C] focus:outline-none focus:ring-2 focus:ring-[#FF4D1C]/20";
 const btnPrimary =
@@ -292,11 +319,14 @@ export default function AdminPricingPanel({
     const net = estimateNet(pricingRules, previewTrade, previewHoursMin, Math.max(previewHoursMin, previewHoursMax));
     const low = previewRetail(net.low, pricingRules, previewUrgency, previewAfterHours);
     const high = previewRetail(net.high, pricingRules, previewUrgency, previewAfterHours);
+    const rawLow = Math.round(low.retail * 0.92);
+    const rawHigh = Math.round(Math.max(low.retail * 0.92, high.retail * 1.08));
+    const customer = previewOverallCustomerRange(rawLow, rawHigh, pricingRules);
     return {
       netLow: net.low,
       netHigh: Math.max(net.low, net.high),
-      retailLow: Math.round(low.retail * 0.92),
-      retailHigh: Math.round(Math.max(low.retail * 0.92, high.retail * 1.08)),
+      retailLow: customer.low,
+      retailHigh: customer.high,
       grossLow: low.gross,
       grossHigh: high.gross,
       fee: low.feeRate,
@@ -430,11 +460,11 @@ export default function AdminPricingPanel({
           {section === "display" && (
             <div className="space-y-4">
               <div className="rounded-2xl border border-[#FF4D1C]/25 bg-[#FF4D1C]/5 p-5 shadow-sm">
-                <h2 className="font-semibold">Default customer pricing rule</h2>
+                <h2 className="font-semibold">Overall AI estimate markup</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Applied to the <strong>AI-generated recommended value</strong> (Stage A) before the homeowner sees an
-                  estimate. Later, Stage B uses the contractor&apos;s actual quote as the base instead. Homeowners never
-                  see AI raw amount or this markup.
+                  One global rule applied to the <strong>entire AI estimate range</strong> (Stage A) before the homeowner
+                  sees it. Saved here applies to <strong>all future AI estimates</strong>. Homeowners never see the raw
+                  engine amount or this markup — only the final range.
                 </p>
                 <div className="mt-4 grid gap-3 sm:grid-cols-2">
                   <label className="grid gap-1 text-sm">
@@ -517,30 +547,43 @@ export default function AdminPricingPanel({
                 <div className="mt-4 rounded-xl border border-border/70 bg-background/80 p-3 text-sm">
                   <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Example</p>
                   <p className="mt-1 tabular-nums text-muted-foreground">
-                    AI recommended $485 → customer sees{" "}
+                    AI range $420–$560 (mid $490) → customer sees{" "}
                     <span className="font-semibold text-foreground">
-                      {formatMoney(
-                        (() => {
-                          const raw = 485;
-                          const adj = pricingRules.customer_display_adjustment || { type: "percentage", value: 15, min_dollars: 25 };
-                          let delta =
-                            String(adj.type) === "fixed"
-                              ? Number(adj.value || 0)
-                              : Math.round(raw * (Number(adj.value || 0) / 100));
-                          delta = Math.max(delta, Number(adj.min_dollars || 0));
-                          if (adj.max_dollars != null) delta = Math.min(delta, Number(adj.max_dollars));
-                          return raw + delta;
-                        })()
-                      )}
+                      {(() => {
+                        const rawLow = 420;
+                        const rawHigh = 560;
+                        const mid = Math.round((rawLow + rawHigh) / 2);
+                        const halfSpread = Math.round((rawHigh - rawLow) / 2);
+                        const adj = pricingRules.customer_display_adjustment || {
+                          type: "percentage",
+                          value: 15,
+                          min_dollars: 25,
+                        };
+                        let delta =
+                          String(adj.type) === "fixed"
+                            ? Number(adj.value || 0)
+                            : Math.round(mid * (Number(adj.value || 0) / 100));
+                        delta = Math.max(delta, Number(adj.min_dollars || 0));
+                        if (adj.max_dollars != null) delta = Math.min(delta, Number(adj.max_dollars));
+                        const customerLow =
+                          String(adj.type) === "fixed"
+                            ? Math.max(0, mid + delta - halfSpread)
+                            : rawLow + delta;
+                        const customerHigh =
+                          String(adj.type) === "fixed"
+                            ? mid + delta + halfSpread
+                            : rawHigh + delta;
+                        return `${formatMoney(customerLow)}–${formatMoney(Math.max(customerLow, customerHigh))}`;
+                      })()}
                     </span>
                   </p>
                 </div>
               </div>
               <div className="rounded-2xl border border-border bg-card p-5 text-sm text-muted-foreground">
-                <p className="font-medium text-foreground">Hierarchy (coming into full use)</p>
+                <p className="font-medium text-foreground">How this applies</p>
                 <p className="mt-1">
-                  Overrides resolve as ZIP prefix → trade → global. Configure trade/ZIP overrides under saved rules JSON
-                  via <code className="text-xs">pricing_overrides</code> — UI editors for those layers can expand next.
+                  Markup is calculated once from the estimate midpoint and shifts the whole range — not separately on
+                  low, high, or line items. Change it here and save; every new AI assessment picks it up automatically.
                 </p>
               </div>
             </div>

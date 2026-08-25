@@ -1,10 +1,15 @@
-import { useEffect, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Check, Loader2, Minus } from "lucide-react";
 import {
   formatPlanPrice,
+  getStoredPricingRevision,
   listGoProPlans,
+  storePricingRevision,
   type ManagedSubscriptionPlan,
 } from "./subscriptionPlansApi";
+import GoProSubscribeModal from "./GoProSubscribeModal";
+import PricingUpdatedModal from "./PricingUpdatedModal";
+import type { AuthUser } from "./auth";
 
 export type GoProPlanCard = {
   id: string;
@@ -86,7 +91,7 @@ function PlanCard({
       </p>
       {plan.trialDays && plan.trialDays > 0 ? (
         <p className={`mt-2 text-xs font-semibold ${isLight ? "text-[#FF6B2C]" : "text-white/90"}`}>
-          {plan.trialDays}-day free trial
+          {plan.trialDays}-day free trial on Stripe checkout
         </p>
       ) : null}
       <div className={`mt-5 border-t ${ruleColor}`} />
@@ -119,22 +124,83 @@ function PlanCard({
   );
 }
 
+function FeatureComparisonMatrix({ plans }: { plans: GoProPlanCard[] }) {
+  const allFeatures = useMemo(() => {
+    const labels = new Set<string>();
+    for (const p of plans) {
+      for (const f of p.features) labels.add(f.label);
+    }
+    return Array.from(labels);
+  }, [plans]);
+
+  if (plans.length === 0 || allFeatures.length === 0) return null;
+
+  return (
+    <div className="overflow-x-auto rounded-2xl border border-border bg-card">
+      <table className="w-full min-w-[520px] text-sm">
+        <thead>
+          <tr className="border-b border-border bg-muted/40">
+            <th className="px-4 py-3 text-left font-semibold">Feature</th>
+            {plans.map((p) => (
+              <th key={p.planCode} className="px-4 py-3 text-center font-semibold">
+                {p.name}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {allFeatures.map((label) => (
+            <tr key={label} className="border-b border-border/60 last:border-0">
+              <td className="px-4 py-3 text-muted-foreground">{label}</td>
+              {plans.map((p) => {
+                const feat = p.features.find((f) => f.label === label);
+                const included = feat?.included === true;
+                return (
+                  <td key={p.planCode} className="px-4 py-3 text-center">
+                    {included ? (
+                      <Check className="mx-auto h-5 w-5 text-emerald-600" strokeWidth={2.5} />
+                    ) : (
+                      <Minus className="mx-auto h-5 w-5 text-muted-foreground/40" />
+                    )}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function HomeownerGoProPlans({
   currentPlanCode,
   busy,
   compact,
+  isAuthenticated,
   onSelectPlan,
   onPlansLoaded,
+  onAuthenticatedCheckout,
+  onSubscribeSuccess,
+  showFeatureMatrix = true,
+  checkPricingUpdates = true,
 }: {
   currentPlanCode?: string | null;
   busy?: boolean;
   compact?: boolean;
-  onSelectPlan: (plan: GoProPlanCard) => void;
+  isAuthenticated?: boolean;
+  onSelectPlan?: (plan: GoProPlanCard) => void;
   onPlansLoaded?: (plans: GoProPlanCard[]) => void;
+  onAuthenticatedCheckout?: (planCode: string) => Promise<void>;
+  onSubscribeSuccess?: (user: AuthUser) => void;
+  showFeatureMatrix?: boolean;
+  checkPricingUpdates?: boolean;
 }) {
   const [plans, setPlans] = useState<GoProPlanCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedPlan, setSelectedPlan] = useState<GoProPlanCard | null>(null);
+  const [showPricingUpdated, setShowPricingUpdated] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -145,6 +211,16 @@ export default function HomeownerGoProPlans({
         const cards = (r.plans || []).map(toCard);
         setPlans(cards);
         onPlansLoaded?.(cards);
+
+        if (checkPricingUpdates && r.pricingRevision) {
+          const prev = getStoredPricingRevision();
+          if (prev && prev !== r.pricingRevision) {
+            setShowPricingUpdated(true);
+          }
+          storePricingRevision(r.pricingRevision);
+        } else if (r.pricingRevision) {
+          storePricingRevision(r.pricingRevision);
+        }
       })
       .catch((e) => {
         if (cancelled) return;
@@ -157,7 +233,19 @@ export default function HomeownerGoProPlans({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [checkPricingUpdates]);
+
+  function handlePlanSelect(plan: GoProPlanCard) {
+    if (onSelectPlan && isAuthenticated) {
+      onSelectPlan(plan);
+      return;
+    }
+    if (onAuthenticatedCheckout || !isAuthenticated) {
+      setSelectedPlan(plan);
+      return;
+    }
+    onSelectPlan?.(plan);
+  }
 
   if (loading) {
     return (
@@ -180,41 +268,72 @@ export default function HomeownerGoProPlans({
   }
 
   return (
-    <section className={compact ? "space-y-4" : "mx-auto max-w-5xl space-y-6"}>
-      {!compact && (
-        <div className="text-center sm:text-left">
-          <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight sm:text-4xl">
-            Go Pro
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Choose the plan that fits your home — unlock DIY plans, health insights, and priority support.
-          </p>
+    <>
+      <PricingUpdatedModal open={showPricingUpdated} onClose={() => setShowPricingUpdated(false)} />
+
+      <GoProSubscribeModal
+        plan={selectedPlan}
+        open={Boolean(selectedPlan)}
+        busy={busy}
+        isAuthenticated={isAuthenticated}
+        onClose={() => setSelectedPlan(null)}
+        onAuthenticatedCheckout={
+          onAuthenticatedCheckout ||
+          (async (planCode) => {
+            onSelectPlan?.(plans.find((p) => p.planCode === planCode) || selectedPlan!);
+          })
+        }
+        onSuccess={(user) => {
+          setSelectedPlan(null);
+          onSubscribeSuccess?.(user);
+        }}
+      />
+
+      <section className={compact ? "space-y-4" : "mx-auto max-w-5xl space-y-6"}>
+        {!compact && (
+          <div className="text-center sm:text-left">
+            <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight sm:text-4xl">
+              Go Pro
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Choose the plan that fits your home — unlock DIY plans, health insights, and priority support.
+            </p>
+          </div>
+        )}
+
+        <div
+          className={`grid gap-5 ${
+            compact
+              ? "grid-cols-1 sm:grid-cols-3"
+              : "grid-cols-1 md:grid-cols-3 md:items-stretch md:gap-6"
+          }`}
+        >
+          {plans.map((plan) => (
+            <PlanCard
+              key={plan.planCode}
+              plan={plan}
+              busy={busy}
+              currentPlanCode={currentPlanCode}
+              onSelect={handlePlanSelect}
+            />
+          ))}
         </div>
-      )}
 
-      <div
-        className={`grid gap-5 ${
-          compact
-            ? "grid-cols-1 sm:grid-cols-3"
-            : "grid-cols-1 md:grid-cols-3 md:items-stretch md:gap-6"
-        }`}
-      >
-        {plans.map((plan) => (
-          <PlanCard
-            key={plan.planCode}
-            plan={plan}
-            busy={busy}
-            currentPlanCode={currentPlanCode}
-            onSelect={onSelectPlan}
-          />
-        ))}
-      </div>
+        {showFeatureMatrix && !compact && (
+          <div className="space-y-3 pt-2">
+            <h2 className="text-center text-sm font-semibold uppercase tracking-wider text-muted-foreground sm:text-left">
+              Compare all features
+            </h2>
+            <FeatureComparisonMatrix plans={plans} />
+          </div>
+        )}
 
-      {!compact && plans.some((p) => (p.trialDays || 0) > 0) && (
-        <p className="text-center text-xs text-muted-foreground">
-          Plans with a free trial activate immediately on first signup. Cancel anytime.
-        </p>
-      )}
-    </section>
+        {!compact && plans.some((p) => (p.trialDays || 0) > 0) && (
+          <p className="text-center text-xs text-muted-foreground">
+            Free trials are applied at Stripe checkout. Cancel anytime.
+          </p>
+        )}
+      </section>
+    </>
   );
 }

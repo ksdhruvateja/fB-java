@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Check,
   Circle,
@@ -6,14 +6,15 @@ import {
   Send,
   UserPlus,
   X,
-  ExternalLink,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import AdminQuoteBuilderPanel from "./AdminQuoteBuilderPanel";
+import { AdminQuoteDocumentPanel } from "./AdminQuotesWorkspace";
 import AdminHomeownerInvoicePanel from "./AdminHomeownerInvoicePanel";
 import {
   STATUS_LABELS,
   formatMoney,
+  getProposal,
   retailRangeLabel,
   type Bid,
   type ManagedJob,
@@ -27,6 +28,7 @@ import {
 import type { AuthUser } from "./auth";
 
 type DrawerTab = "overview" | "quotes" | "dispatch" | "invoice";
+type QuoteSubMode = "document" | "build";
 
 export default function AdminJobDrawer({
   job,
@@ -41,7 +43,6 @@ export default function AdminJobDrawer({
   onInviteRequestType,
   onInviteAndAssign,
   onMatch,
-  onOpenProposalsTab,
   onOpenContractor,
   onOpenHomeowner,
   onOpenPayments,
@@ -66,7 +67,6 @@ export default function AdminJobDrawer({
   onInviteRequestType: (t: "remote_quote" | "site_visit") => void;
   onInviteAndAssign: () => void | Promise<void>;
   onMatch: () => void | Promise<void>;
-  onOpenProposalsTab?: () => void;
   onOpenContractor?: (contractorId: number) => void;
   onOpenHomeowner?: () => void;
   onOpenPayments?: () => void;
@@ -81,6 +81,9 @@ export default function AdminJobDrawer({
 }) {
   const [tab, setTab] = useState<DrawerTab>("overview");
   const [selectedBidId, setSelectedBidId] = useState<number | null>(null);
+  const [proposalId, setProposalId] = useState<number | null>(null);
+  const [quoteMode, setQuoteMode] = useState<QuoteSubMode>("build");
+  const [proposalLoading, setProposalLoading] = useState(false);
 
   const lifecycle = useMemo(() => (job ? lifecycleForJob(job) : []), [job]);
   const latestBid = bids[0] || null;
@@ -89,7 +92,25 @@ export default function AdminJobDrawer({
     ? contractors.find((c) => Number(c.id) === Number(job.assignedContractorUserId))
     : null;
 
+  useEffect(() => {
+    if (!open || !job) return;
+    setProposalLoading(true);
+    void getProposal(job.id)
+      .then((r) => {
+        const id = r.proposal?.id ?? job.activeProposalId ?? null;
+        setProposalId(id != null ? Number(id) : null);
+        if (id != null) {
+          setQuoteMode("document");
+        } else if (bids.length > 0) {
+          setQuoteMode("build");
+        }
+      })
+      .finally(() => setProposalLoading(false));
+  }, [open, job?.id, job?.activeProposalId, bids.length]);
+
   if (!open || !job) return null;
+
+  const wide = tab === "quotes";
 
   return (
     <AnimatePresence>
@@ -105,7 +126,9 @@ export default function AdminJobDrawer({
           animate={{ x: 0, opacity: 1 }}
           exit={{ x: 40, opacity: 0 }}
           transition={{ type: "spring", stiffness: 320, damping: 32 }}
-          className="relative flex h-full w-full max-w-xl flex-col border-l border-border bg-background shadow-2xl"
+          className={`relative flex h-full w-full flex-col border-l border-border bg-background shadow-2xl ${
+            wide ? "max-w-4xl" : "max-w-xl"
+          }`}
         >
           <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
             <div className="min-w-0">
@@ -120,7 +143,6 @@ export default function AdminJobDrawer({
             </button>
           </div>
 
-          {/* Lifecycle strip */}
           <div className="overflow-x-auto border-b border-border bg-muted/30 px-4 py-3">
             <div className="flex min-w-max items-center gap-1">
               {lifecycle.map((step, i) => (
@@ -212,16 +234,11 @@ export default function AdminJobDrawer({
                   )}
                 </div>
 
-                {/* Cross-link hub — job is the central entity */}
                 <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Jump to</p>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {[
-                      {
-                        label: "Homeowner",
-                        show: true,
-                        onClick: onOpenHomeowner,
-                      },
+                      { label: "Homeowner", show: true, onClick: onOpenHomeowner },
                       {
                         label: assignedContractor?.name || "Contractor",
                         show: Boolean(job.assignedContractorUserId),
@@ -256,16 +273,17 @@ export default function AdminJobDrawer({
                 )}
 
                 <div className="grid gap-2 pt-2">
-                  {job.status === "bid_received" && latestBid && (
+                  {(job.status === "bid_received" || !!latestBid) && (
                     <button
                       type="button"
                       onClick={() => {
-                        setSelectedBidId(latestBid.id);
+                        if (latestBid) setSelectedBidId(latestBid.id);
+                        setQuoteMode(proposalId ? "document" : "build");
                         setTab("quotes");
                       }}
                       className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-2.5 text-sm font-semibold text-white"
                     >
-                      <Send className="h-4 w-4" /> Build quote
+                      <Send className="h-4 w-4" /> {proposalId ? "Edit quote" : "Build quote"}
                     </button>
                   )}
                   <button
@@ -282,28 +300,64 @@ export default function AdminJobDrawer({
                   >
                     <MessageSquare className="h-4 w-4" /> Message contractor
                   </button>
-                  {onOpenProposalsTab && (
-                    <button
-                      type="button"
-                      onClick={onOpenProposalsTab}
-                      className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border px-4 py-2.5 text-sm font-medium text-muted-foreground hover:bg-muted"
-                    >
-                      <ExternalLink className="h-4 w-4" /> Open in Bids & Proposals
-                    </button>
-                  )}
                 </div>
               </div>
             )}
 
             {tab === "quotes" && (
               <div className="space-y-4">
-                {bids.length === 0 ? (
+                {(proposalId || bids.length > 0) && (
+                  <div className="flex gap-1 rounded-xl border border-border bg-muted/30 p-1">
+                    <button
+                      type="button"
+                      disabled={!proposalId}
+                      onClick={() => setQuoteMode("document")}
+                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition disabled:opacity-40 ${
+                        quoteMode === "document"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      Edit quote
+                    </button>
+                    <button
+                      type="button"
+                      disabled={bids.length === 0}
+                      onClick={() => setQuoteMode("build")}
+                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition disabled:opacity-40 ${
+                        quoteMode === "build"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {proposalId ? "Build new from bid" : "Build from bid"}
+                    </button>
+                  </div>
+                )}
+
+                {proposalLoading ? (
+                  <p className="py-10 text-center text-sm text-muted-foreground">Loading quote…</p>
+                ) : quoteMode === "document" && proposalId ? (
+                  <AdminQuoteDocumentPanel
+                    quoteId={proposalId}
+                    embedded
+                    onMessage={onMessage}
+                    onChanged={async () => {
+                      await onRefresh();
+                      const r = await getProposal(job.id);
+                      if (r.proposal?.id) setProposalId(Number(r.proposal.id));
+                    }}
+                  />
+                ) : bids.length === 0 ? (
                   <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-                    No contractor quotes yet. Invite contractors from Dispatch.
+                    No contractor bids yet. Invite contractors from Dispatch, then build a professional FixBridge quote here.
                   </p>
                 ) : (
                   <>
                     <div className="space-y-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        Contractor bids
+                      </p>
                       {bids.map((b) => (
                         <button
                           key={b.id}
@@ -326,7 +380,14 @@ export default function AdminJobDrawer({
                         bid={activeBid}
                         busy={busy}
                         onMessage={onMessage}
-                        onPublished={onRefresh}
+                        onPublished={async () => {
+                          await onRefresh();
+                          const r = await getProposal(job.id);
+                          if (r.proposal?.id) {
+                            setProposalId(Number(r.proposal.id));
+                            setQuoteMode("document");
+                          }
+                        }}
                       />
                     )}
                   </>

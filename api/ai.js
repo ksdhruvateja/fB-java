@@ -22,6 +22,46 @@ const DEFAULT_OPENROUTER_MODEL = 'nvidia/nemotron-nano-12b-v2-vl:free';
 const OPENAI_BASE = 'https://api.openai.com/v1';
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
+/** Hard cap so OpenRouter/Gemini calls cannot hang the assess UI forever. */
+const AI_FETCH_TIMEOUT_MS = Number(process.env.AI_FETCH_TIMEOUT_MS || 55000);
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = AI_FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      const e = new Error(`AI request timed out after ${Math.round(timeoutMs / 1000)}s`);
+      e.code = 'AI_TIMEOUT';
+      throw e;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Vision models choke / hang on multi‑MB phone photos. Prefer a smaller JPEG
+ * data URL when the payload is huge (client should compress first; this is a
+ * server-side safety net that drops the image rather than blocking forever).
+ */
+function prepareImageForAi(imageDataUrl) {
+  if (typeof imageDataUrl !== 'string' || !imageDataUrl.startsWith('data:')) {
+    return { imageDataUrl: null, dropped: false };
+  }
+  // ~700KB raw ≈ safer for free vision models + serverless body limits
+  const MAX_CHARS = Number(process.env.AI_MAX_IMAGE_CHARS || 700000);
+  if (imageDataUrl.length <= MAX_CHARS) {
+    return { imageDataUrl, dropped: false };
+  }
+  console.warn(
+    `[AI] Image payload too large (${Math.round(imageDataUrl.length / 1024)}KB chars); assessing from description only.`
+  );
+  return { imageDataUrl: null, dropped: true };
+}
+
 /** Structured assessment — NO prices. Pricing engine owns retail ranges. */
 export const STRUCTURED_PROMPT = `You are a property-repair assessment engine. Analyze the issue and photo if attached.
 Return ONLY valid JSON with this exact schema (no prices, no dollar amounts, no markdown):
@@ -38,6 +78,9 @@ Return ONLY valid JSON with this exact schema (no prices, no dollar amounts, no 
   "estimated_labor_hours_min": 1,
   "estimated_labor_hours_max": 3,
   "complexity": "low|medium|high",
+  "service_type": "diagnostic|minor_repair|standard_repair|major_repair|replacement|installation|maintenance|emergency",
+  "service_subcategory": "e.g. cooling_repair, drain_clog, panel_upgrade",
+  "problem_classification": "short label of the specific issue",
   "questions_needed": [],
   "diy_difficulty": "easy|moderate|hard|blocked",
   "tools_required": ["tool"],
@@ -48,6 +91,8 @@ Return ONLY valid JSON with this exact schema (no prices, no dollar amounts, no 
 }
 Rules:
 - Never invent prices or cost ranges.
+- Classify service_type from the actual problem — diagnostic/troubleshoot vs minor repair vs replacement/installation are different scopes.
+- replacement/installation implies full unit or system work; do not classify a simple repair as replacement.
 - Set safe_diy_allowed=false for gas, major electrical, flooding, sewage, fire/smoke/CO, structural, dangerous roof, asbestos/lead/hazmat, or low confidence.
 - Active leaks / flooding / gas smell => urgency high or emergency and professional_required true.
 - CATEGORY MATCHING & DETECTING MISMATCHES:
@@ -179,6 +224,9 @@ export function parseStructuredAssessment(text) {
       estimated_labor_hours_min: Number(parsed.estimated_labor_hours_min) || 1,
       estimated_labor_hours_max: Number(parsed.estimated_labor_hours_max) || 3,
       complexity: asString(parsed.complexity, 'medium').toLowerCase(),
+      service_type: asString(parsed.service_type, 'standard_repair').toLowerCase(),
+      service_subcategory: asString(parsed.service_subcategory, ''),
+      problem_classification: asString(parsed.problem_classification, ''),
       questions_needed: asStringArray(parsed.questions_needed),
       diy_difficulty: asString(parsed.diy_difficulty, 'blocked'),
       tools_required: asStringArray(parsed.tools_required).length
@@ -404,13 +452,16 @@ export function parseAssessment(text) {
   return null;
 }
 
-function userPromptText({ category, description, imageDataUrl, mode = 'summary' }) {
+function userPromptText({ category, description, imageDataUrl, mode = 'summary', locationContext }) {
   const prompt = mode === 'detail' ? DETAIL_PROMPT : SUMMARY_PROMPT;
+  const locationBlock = locationContext
+    ? `\n\nLocation & property context (use for complexity/urgency — NEVER output dollar amounts):\n${locationContext}`
+    : '';
   return `${prompt}
 
 Category: ${category}
 Homeowner description: ${description}
-Photo attached: ${imageDataUrl ? 'YES — analyze the image' : 'NO — use description only'}`;
+Photo attached: ${imageDataUrl ? 'YES — analyze the image' : 'NO — use description only'}${locationBlock}`;
 }
 
 // ── Key / provider resolution ────────────────────────────────────────────────
@@ -672,7 +723,7 @@ async function postGeminiGenerate(url, apiKey, body) {
   let lastBody = '';
 
   for (const attempt of attempts) {
-    const response = await fetch(attempt.url, {
+    const response = await fetchWithTimeout(attempt.url, {
       method: 'POST',
       headers: attempt.headers,
       body: JSON.stringify(body),
@@ -698,7 +749,16 @@ async function callGeminiModel(apiKey, model, input) {
   let lastError = `Gemini API error for ${model}`;
 
   for (const url of geminiEndpointCandidates(model)) {
-    const result = await postGeminiGenerate(url, apiKey, body);
+    let result;
+    try {
+      result = await postGeminiGenerate(url, apiKey, body);
+    } catch (err) {
+      if (err?.code === 'AI_TIMEOUT' || /timed out/i.test(String(err?.message || ''))) {
+        return { assessment: null, error: err.message || 'AI request timed out' };
+      }
+      lastError = err instanceof Error ? err.message : 'Network error calling Gemini';
+      continue;
+    }
     if (!result.ok) {
       const err = parseGeminiApiError(result.body, result.status);
       lastError = err;
@@ -754,12 +814,14 @@ async function analyzeWithGemini(apiKey, input, preferredModel) {
         lastError.includes('rejected this API key') ||
         lastError.includes('not allowed to call Gemini') ||
         lastError.includes('referrer restrictions') ||
-        lastError.includes('permission')
+        lastError.includes('permission') ||
+        /timed out/i.test(lastError)
       ) {
         break;
       }
     } catch (err) {
       lastError = err instanceof Error ? err.message : 'Network error calling Gemini';
+      if (err?.code === 'AI_TIMEOUT' || /timed out/i.test(lastError)) break;
     }
   }
 
@@ -870,7 +932,8 @@ async function analyzeWithOpenAiCompatible(config, input) {
     const body = {
       model,
       temperature: 0.15,
-      max_tokens: mode === 'detail' ? 700 : 350,
+      // Vision + DIY steps need more room than a tiny summary budget
+      max_tokens: mode === 'detail' ? 900 : 700,
       messages,
     };
     // Many free/reasoning models reject response_format — optional.
@@ -888,7 +951,7 @@ async function analyzeWithOpenAiCompatible(config, input) {
   for (const useJsonFormat of attempts) {
     let response;
     try {
-      response = await fetch(`${baseUrl}/chat/completions`, {
+      response = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers,
         body: JSON.stringify(buildBody(useJsonFormat)),
@@ -953,16 +1016,28 @@ export async function analyzeRepair(input) {
     };
   }
 
+  const prepared = prepareImageForAi(input.imageDataUrl);
   const payload = {
     ...input,
+    imageDataUrl: prepared.imageDataUrl,
+    description: prepared.dropped
+      ? `${input.description || ''}\n\n(Note: photo was too large to send to the model; rely on this description.)`
+      : input.description,
     mode: input.mode === 'detail' ? 'detail' : 'summary',
   };
 
-  if (resolved.provider === 'gemini') {
-    return analyzeWithGemini(resolved.apiKey, payload, resolved.model);
+  try {
+    if (resolved.provider === 'gemini') {
+      return await analyzeWithGemini(resolved.apiKey, payload, resolved.model);
+    }
+    return await analyzeWithOpenAiCompatible(resolved, payload);
+  } catch (err) {
+    return {
+      assessment: null,
+      source: 'error',
+      error: err instanceof Error ? err.message : 'AI assessment failed',
+    };
   }
-
-  return analyzeWithOpenAiCompatible(resolved, payload);
 }
 
 /**

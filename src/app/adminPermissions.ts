@@ -31,7 +31,8 @@ export type AdminPermission =
   | "staff.disable"
   | "audit.view"
   | "ai.view"
-  | "ai.override";
+  | "ai.override"
+  | "profitability.view";
 
 export type AdminRolePreset =
   | "super_admin"
@@ -71,6 +72,7 @@ export const ALL_PERMISSIONS: AdminPermission[] = [
   "audit.view",
   "ai.view",
   "ai.override",
+  "profitability.view",
 ];
 
 const WORK_OPS: AdminPermission[] = [
@@ -124,6 +126,7 @@ export const ROLE_PRESETS: Record<
       "payouts.view",
       "payouts.approve",
       "pricing.view",
+      "profitability.view",
       "audit.view",
       "homeowners.view",
       "contractors.view",
@@ -172,14 +175,20 @@ export const ROLE_PRESETS: Record<
       "audit.view",
       "staff.view",
       "settings.view",
+      "profitability.view",
     ],
   },
 };
 
-/** Map legacy access levels until full RBAC is stored on staff accounts. */
-export function permissionsForAccessLevel(level?: string | null): Set<AdminPermission> {
+/** Map legacy access levels / stored presets until all staff have admin_role_preset. */
+export function permissionsForAccessLevel(level?: string | null, rolePreset?: string | null): Set<AdminPermission> {
+  const preset = String(rolePreset || "").toLowerCase();
+  if (preset && preset in ROLE_PRESETS) {
+    return new Set(ROLE_PRESETS[preset as AdminRolePreset].permissions);
+  }
   const l = String(level || "read-write").toLowerCase();
   if (l === "read") return new Set(ROLE_PRESETS.read_only.permissions);
+  if (l in ROLE_PRESETS) return new Set(ROLE_PRESETS[l as AdminRolePreset].permissions);
   return new Set(ROLE_PRESETS.super_admin.permissions);
 }
 

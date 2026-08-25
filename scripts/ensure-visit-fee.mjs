@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { mergePricingRules } from '../api/pricing.js';
+import { postgresSslOptions } from '../api/db-ssl.js';
 
 const url = process.env.NEON_DATABASE_URL;
 if (!url) {
@@ -12,7 +13,7 @@ const connectionString = url.includes('uselibpqcompat=')
 
 const pool = new pg.Pool({
   connectionString,
-  ssl: { rejectUnauthorized: false },
+  ssl: postgresSslOptions(),
 });
 
 const { rows } = await pool.query(`SELECT rules FROM pricing_rules WHERE id='default'`);

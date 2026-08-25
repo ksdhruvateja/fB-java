@@ -8,6 +8,7 @@ import jwt from 'jsonwebtoken';
 import { brand } from './brand.js';
 import {
   stripeConfigured,
+  assertPaymentsAvailable,
   shouldSimulatePayment,
   createCheckoutSession,
   createTransfer,
@@ -77,11 +78,102 @@ const PLAN_CATALOG = {
   contractor_growth: { family: 'contractor', label: 'Contractor Growth', amount: 249, interval: 'month' },
 };
 
+async function resolveSubscriptionPlan(pool, planCode, lookupManagedPlan) {
+  const managed = await lookupManagedPlan(pool, planCode);
+  if (managed && managed.active) {
+    return {
+      amount: Number(managed.amount) || 0,
+      label: managed.name,
+      family: 'diy',
+      trialDays: Number(managed.trialDays) || 0,
+      unlocksDiy: Boolean(managed.unlocksDiy),
+      interval: managed.interval === 'year' ? 'year' : 'month',
+    };
+  }
+  if (planCode === 'pro_membership') {
+    const { rows: ruleRows } = await pool.query(`SELECT rules FROM pricing_rules WHERE id='default'`);
+    const rules = ruleRows[0]?.rules || {};
+    return {
+      amount: Number(rules.pro_subscription_price != null ? rules.pro_subscription_price : 0),
+      label: 'Pro Membership',
+      family: 'diy',
+      trialDays: 7,
+      unlocksDiy: true,
+      interval: 'month',
+    };
+  }
+  const plan = PLAN_CATALOG[planCode];
+  if (!plan) return null;
+  return {
+    amount: plan.amount,
+    label: plan.label,
+    family: plan.family,
+    trialDays: 0,
+    unlocksDiy: false,
+    interval: plan.interval === 'year' ? 'year' : 'month',
+  };
+}
+
+async function startSubscriptionCheckout(pool, {
+  userId,
+  userEmail,
+  planCode,
+  jobId,
+  origin,
+  lookupManagedPlan,
+  auditUserId,
+}) {
+  const plan = await resolveSubscriptionPlan(pool, planCode, lookupManagedPlan);
+  if (!plan) {
+    const err = new Error('Unknown plan.');
+    err.status = 400;
+    throw err;
+  }
+
+  let { amount, label, family, trialDays, unlocksDiy, interval } = plan;
+  assertPaymentsAvailable();
+
+  const successPath = jobId
+    ? `/?paid=subscription&plan=${encodeURIComponent(planCode)}&jobId=${jobId}`
+    : `/?paid=subscription&plan=${encodeURIComponent(planCode)}`;
+  const cancelPath = jobId
+    ? `/?canceled=subscription&plan=${encodeURIComponent(planCode)}&jobId=${jobId}`
+    : `/?canceled=subscription&plan=${encodeURIComponent(planCode)}`;
+
+  const checkout = await createCheckoutSession({
+    amountCents: Math.round(amount * 100),
+    customerEmail: userEmail,
+    description: `${brand.productName} ${label}`,
+    successPath,
+    cancelPath,
+    mode: 'subscription',
+    trialDays,
+    interval,
+    origin,
+    metadata: {
+      paymentType: 'subscription',
+      planCode,
+      userId: String(userId),
+      jobId: jobId ? String(jobId) : '',
+    },
+  });
+
+  await pool.query(
+    `INSERT INTO payments (user_id, payment_type, amount, status, stripe_session_id, simulated, meta)
+     VALUES ($1,'subscription',$2,'pending',$3,false,$4)`,
+    [userId, amount, checkout.sessionId, JSON.stringify({ planCode })]
+  );
+  return { simulated: false, url: checkout.url };
+}
+
 import { writeAudit } from './audit.js';
 import { sendEmailSafe, sendSmsSafe, notifyOps } from './notify.js';
 
-export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, pushStatus, getSubscriptionPlanByCode }) {
+export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, pushStatus, getSubscriptionPlanByCode, makeToken, rowToUser }) {
   const statusPush = typeof pushStatus === 'function' ? pushStatus : pushStatusLocal;
+  const need = typeof requirePermission === 'function'
+    ? requirePermission
+    : () => (_req, _res, next) => next();
   const lookupManagedPlan =
     typeof getSubscriptionPlanByCode === 'function'
       ? getSubscriptionPlanByCode
@@ -250,145 +342,90 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
   app.post('/api/subscriptions/checkout', requireAuth, async (req, res) => {
     try {
       const planCode = String(req.body?.planCode || '');
-      let amount = 0;
-      let label = '';
-      let family = 'diy';
-      let trialDays = 0;
-      let unlocksDiy = false;
-
-      const managed = await lookupManagedPlan(pool, planCode);
-      if (managed && managed.active) {
-        amount = Number(managed.amount) || 0;
-        label = managed.name;
-        family = 'diy';
-        trialDays = Number(managed.trialDays) || 0;
-        unlocksDiy = Boolean(managed.unlocksDiy);
-
-        // First-time Pro-style trial: local trial without Stripe when trialDays > 0
-        if (trialDays > 0) {
-          const { rows: existingSubs } = await pool.query(
-            `SELECT id FROM subscriptions WHERE user_id = $1 AND plan_code = $2`,
-            [req.authUser.id, planCode]
-          );
-          if (existingSubs.length === 0) {
-            const { rows } = await pool.query(
-              `INSERT INTO subscriptions (user_id, plan_code, plan_family, status, simulated, current_period_end, meta)
-               VALUES ($1,$2,$3,'active',true, NOW() + ($4 * INTERVAL '1 day'), $5) RETURNING *`,
-              [
-                req.authUser.id,
-                planCode,
-                family,
-                trialDays,
-                JSON.stringify({
-                  planCode,
-                  amount,
-                  label,
-                  family,
-                  isLocalTrial: true,
-                  unlocksDiy,
-                }),
-              ]
-            );
-            await pool.query(`UPDATE users SET plan_code=$1 WHERE id=$2`, [planCode, req.authUser.id]);
-            await writeAudit(pool, req.authUser.id, 'subscription_started', 'subscription', rows[0].id, {
-              planCode,
-              localTrial: true,
-            });
-            return res.json({ ok: true, simulated: true, subscription: rows[0] });
-          }
-          trialDays = 0;
-        }
-      } else if (planCode === 'pro_membership') {
-        const { rows: ruleRows } = await pool.query(`SELECT rules FROM pricing_rules WHERE id='default'`);
-        const rules = ruleRows[0]?.rules || {};
-        amount = Number(rules.pro_subscription_price != null ? rules.pro_subscription_price : 0);
-        label = 'Pro Membership';
-        family = 'diy';
-        unlocksDiy = true;
-
-        const { rows: existingSubs } = await pool.query(
-          `SELECT id FROM subscriptions WHERE user_id = $1 AND plan_code = 'pro_membership'`,
-          [req.authUser.id]
-        );
-
-        if (existingSubs.length === 0) {
-          const { rows } = await pool.query(
-            `INSERT INTO subscriptions (user_id, plan_code, plan_family, status, simulated, current_period_end, meta)
-             VALUES ($1,$2,$3,'active',true, NOW() + INTERVAL '7 days', $4) RETURNING *`,
-            [req.authUser.id, planCode, family, JSON.stringify({ planCode, amount, label, family, isLocalTrial: true, unlocksDiy: true })]
-          );
-          await pool.query(`UPDATE users SET plan_code=$1 WHERE id=$2`, [planCode, req.authUser.id]);
-          await writeAudit(pool, req.authUser.id, 'subscription_started', 'subscription', rows[0].id, { planCode, localTrial: true });
-          return res.json({ ok: true, simulated: true, subscription: rows[0] });
-        }
-        trialDays = 0;
-      } else {
-        const plan = PLAN_CATALOG[planCode];
-        if (!plan) return res.status(400).json({ ok: false, message: 'Unknown plan.' });
-        amount = plan.amount;
-        label = plan.label;
-        family = plan.family;
-        trialDays = 0;
-      }
-
-      const simulate = shouldSimulatePayment(req.body?.simulate === true);
-      if (simulate) {
-        const { rows } = await pool.query(
-          `INSERT INTO subscriptions (user_id, plan_code, plan_family, status, simulated, current_period_end, meta)
-           VALUES ($1,$2,$3,'active',true, NOW() + INTERVAL '30 days', $4) RETURNING *`,
-          [req.authUser.id, planCode, family, JSON.stringify({ planCode, amount, label, family, unlocksDiy })]
-        );
-        await pool.query(`UPDATE users SET plan_code=$1 WHERE id=$2`, [planCode, req.authUser.id]);
-        await writeAudit(pool, req.authUser.id, 'subscription_started', 'subscription', rows[0].id, { planCode, simulated: true });
-        return res.json({ ok: true, simulated: true, subscription: rows[0] });
-      }
-
+      if (!planCode) return res.status(400).json({ ok: false, message: 'Plan code is required.' });
       const jobId = req.body?.jobId ? Number(req.body.jobId) : null;
-      const successPath = jobId
-        ? `/?paid=subscription&plan=${planCode}&jobId=${jobId}`
-        : `/?paid=subscription&plan=${planCode}`;
-      const cancelPath = jobId
-        ? `/?canceled=subscription&jobId=${jobId}`
-        : `/?canceled=subscription`;
-
       const origin = req.get('origin') || req.get('referer');
-      const checkout = await createCheckoutSession({
-        amountCents: Math.round(amount * 100),
-        customerEmail: req.authUser.email,
-        description: `${brand.productName} ${label}`,
-        successPath,
-        cancelPath,
-        mode: 'subscription',
-        trialDays,
+      const result = await startSubscriptionCheckout(pool, {
+        userId: req.authUser.id,
+        userEmail: req.authUser.email,
+        planCode,
+        jobId,
         origin,
-        metadata: {
-          paymentType: 'subscription',
-          planCode,
-          userId: String(req.authUser.id),
-          jobId: jobId ? String(jobId) : '',
-        },
+        lookupManagedPlan,
+        auditUserId: req.authUser.id,
       });
-
-      if (checkout.simulated) {
-        const { rows } = await pool.query(
-          `INSERT INTO subscriptions (user_id, plan_code, plan_family, status, simulated, current_period_end, meta)
-           VALUES ($1,$2,$3,'active',true, NOW() + INTERVAL '30 days', $4) RETURNING *`,
-          [req.authUser.id, planCode, family, JSON.stringify({ planCode, amount, label, family, unlocksDiy })]
-        );
-        await pool.query(`UPDATE users SET plan_code=$1 WHERE id=$2`, [planCode, req.authUser.id]);
-        await writeAudit(pool, req.authUser.id, 'subscription_started', 'subscription', rows[0].id, { planCode, simulated: true });
-        return res.json({ ok: true, simulated: true, subscription: rows[0] });
-      }
-
-      await pool.query(
-        `INSERT INTO payments (user_id, payment_type, amount, status, stripe_session_id, simulated, meta)
-         VALUES ($1,'subscription',$2,'pending',$3,false,$4)`,
-        [req.authUser.id, amount, checkout.sessionId, JSON.stringify({ planCode })]
-      );
-      res.json({ ok: true, simulated: false, url: checkout.url });
+      if (result.url) return res.json({ ok: true, url: result.url });
+      return res.status(502).json({ ok: false, message: 'Stripe checkout URL missing.' });
     } catch (e) {
       console.error(e);
-      res.status(500).json({ ok: false, message: 'Could not start subscription.' });
+      return res.status(e.status || 500).json({ ok: false, message: e.message || 'Could not start subscription.' });
+    }
+  });
+
+  /** Pre-sign-in checkout: create/login homeowner then redirect to Stripe. */
+  app.post('/api/subscriptions/guest-checkout', async (req, res) => {
+    try {
+      const planCode = String(req.body?.planCode || '');
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      const name = String(req.body?.name || '').trim();
+      const password = String(req.body?.password || '');
+      if (!planCode) return res.status(400).json({ ok: false, message: 'Plan code is required.' });
+      if (!email || !email.includes('@')) {
+        return res.status(400).json({ ok: false, message: 'A valid email is required.' });
+      }
+
+      const plan = await resolveSubscriptionPlan(pool, planCode, lookupManagedPlan);
+      if (!plan) return res.status(400).json({ ok: false, message: 'Unknown plan.' });
+
+      let userRow;
+      let token = null;
+      const { rows: existing } = await pool.query(`SELECT * FROM users WHERE LOWER(email)=LOWER($1)`, [email]);
+      if (existing[0]) {
+        if (!password) {
+          return res.status(400).json({ ok: false, message: 'Enter your password to continue to payment.' });
+        }
+        const ok = await bcrypt.compare(password, existing[0].password);
+        if (!ok) return res.status(401).json({ ok: false, message: 'Incorrect password for this email.' });
+        if (existing[0].role !== 'homeowner') {
+          return res.status(403).json({ ok: false, message: 'This email belongs to a non-homeowner account.' });
+        }
+        userRow = existing[0];
+      } else {
+        if (!name) return res.status(400).json({ ok: false, message: 'Name is required to create your account.' });
+        if (!password || password.length < 6) {
+          return res.status(400).json({ ok: false, message: 'Password must be at least 6 characters.' });
+        }
+        const hashed = await bcrypt.hash(password, 10);
+        const { rows: created } = await pool.query(
+          `INSERT INTO users (role, name, email, password, compliance_status)
+           VALUES ('homeowner', $1, $2, $3, 'approved') RETURNING *`,
+          [name, email, hashed]
+        );
+        userRow = created[0];
+      }
+
+      if (typeof makeToken === 'function' && typeof rowToUser === 'function') {
+        token = makeToken(rowToUser(userRow));
+      }
+
+      const origin = req.get('origin') || req.get('referer');
+      const result = await startSubscriptionCheckout(pool, {
+        userId: userRow.id,
+        userEmail: userRow.email,
+        planCode,
+        jobId: null,
+        origin,
+        lookupManagedPlan,
+        auditUserId: userRow.id,
+      });
+
+      if (result.url) {
+        return res.json({ ok: true, url: result.url, token, user: rowToUser ? rowToUser(userRow) : undefined });
+      }
+      return res.status(502).json({ ok: false, message: 'Stripe checkout URL missing.' });
+    } catch (e) {
+      console.error('guest-checkout:', e);
+      return res.status(e.status || 500).json({ ok: false, message: e.message || 'Could not start subscription.' });
     }
   });
 
@@ -570,7 +607,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
   });
 
   // ── Refunds / disputes / payout holds ────────────────────────────────────
-  app.post('/api/admin/payments/:id/refund', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/admin/payments/:id/refund', requireAuth, requireAdmin, need('payments.refund'), async (req, res) => {
     try {
       const paymentId = Number(req.params.id);
       const { rows } = await pool.query(`SELECT * FROM payments WHERE id=$1`, [paymentId]);
@@ -578,7 +615,20 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       const amount = Number(req.body?.amount ?? rows[0].amount);
       const reason = String(req.body?.reason || 'admin_refund').slice(0, 500);
       const simulate = shouldSimulatePayment(true) || !rows[0].stripe_payment_intent;
-      
+      if (process.env.NODE_ENV === 'production' && !stripeConfigured()) {
+        return res.status(503).json({
+          ok: false,
+          code: 'STRIPE_NOT_CONFIGURED',
+          message: 'Refunds require Stripe in production.',
+        });
+      }
+      if (process.env.NODE_ENV === 'production' && simulate) {
+        return res.status(400).json({
+          ok: false,
+          code: 'REFUND_REQUIRES_STRIPE_INTENT',
+          message: 'Cannot refund a payment that has no Stripe payment intent in production.',
+        });
+      }
       let stripeRefundId = null;
       if (!simulate && rows[0].stripe_payment_intent) {
         const stripe = await getStripe();
@@ -663,6 +713,13 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       const { rows } = await pool.query(`SELECT * FROM transfers WHERE id=$1`, [id]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Transfer not found.' });
       const amount = Number(req.body?.amount ?? rows[0].amount);
+      if (process.env.NODE_ENV === 'production' && !stripeConfigured()) {
+        return res.status(503).json({
+          ok: false,
+          code: 'STRIPE_NOT_CONFIGURED',
+          message: 'Payout release requires Stripe in production.',
+        });
+      }
       const simulate = shouldSimulatePayment(true) || !stripeConfigured();
       let transferId = rows[0].stripe_transfer_id;
       if (!simulate && req.body?.destinationAccountId) {
@@ -1260,31 +1317,67 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
   });
 
   // ── MFA (email OTP pilot) ────────────────────────────────────────────────
+  async function ensureMfaSchema() {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS mfa_challenges (
+        id SERIAL PRIMARY KEY,
+        user_id INT NOT NULL,
+        code_hash TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        consumed BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN DEFAULT FALSE`);
+  }
+
   app.post('/api/auth/mfa/start', requireAuth, async (req, res) => {
     try {
       if (req.authUser.role !== 'admin' && !req.body?.force) {
         return res.status(403).json({ ok: false, message: 'Admin MFA only in pilot.' });
       }
+      await ensureMfaSchema();
+
       const code = String(Math.floor(100000 + Math.random() * 900000));
       const hash = await bcrypt.hash(code, 8);
       await pool.query(
         `INSERT INTO mfa_challenges (user_id, code_hash, expires_at) VALUES ($1,$2, NOW() + INTERVAL '10 minutes')`,
         [req.authUser.id, hash]
       );
+
+      // Email is best-effort — never block admin login if Resend is missing/misconfigured.
       await sendEmailSafe({
         to: req.authUser.email,
         subject: `${brand.productName} admin verification code`,
         html: `<p>Your verification code is <strong>${code}</strong>. It expires in 10 minutes.</p>`,
       });
-      await pool.query(`UPDATE users SET mfa_enabled=true WHERE id=$1`, [req.authUser.id]);
-      res.json({ ok: true, sent: true, demoCode: process.env.NODE_ENV === 'production' ? undefined : code });
+
+      try {
+        await pool.query(`UPDATE users SET mfa_enabled=true WHERE id=$1`, [req.authUser.id]);
+      } catch (e) {
+        console.warn('[MFA] mfa_enabled update skipped:', e.message);
+      }
+
+      const isProd = process.env.NODE_ENV === 'production';
+      res.json({
+        ok: true,
+        sent: true,
+        // Always surface the code outside production so local/demo login works without email.
+        demoCode: isProd ? undefined : code,
+      });
     } catch (e) {
-      res.status(500).json({ ok: false, message: 'Could not start MFA.' });
+      console.error('[MFA start]', e);
+      res.status(500).json({
+        ok: false,
+        message: 'Could not start MFA.',
+        detail: process.env.NODE_ENV === 'production' ? undefined : String(e?.message || e),
+      });
     }
   });
 
   app.post('/api/auth/mfa/verify', requireAuth, async (req, res) => {
     try {
+      await ensureMfaSchema();
       const code = String(req.body?.code || '');
       const { rows } = await pool.query(
         `SELECT * FROM mfa_challenges WHERE user_id=$1 AND consumed=false AND expires_at > NOW()
@@ -1297,6 +1390,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       await pool.query(`UPDATE mfa_challenges SET consumed=true WHERE id=$1`, [rows[0].id]);
       res.json({ ok: true, verified: true });
     } catch (e) {
+      console.error('[MFA verify]', e);
       res.status(500).json({ ok: false, message: 'Verify failed.' });
     }
   });

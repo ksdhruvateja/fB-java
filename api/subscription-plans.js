@@ -145,11 +145,18 @@ export async function initSubscriptionPlansSchema(pool) {
   }
 }
 
+function computePricingRevision(plans) {
+  return plans
+    .map((p) => `${p.code}:${Number(p.amount).toFixed(2)}:${p.updatedAt || ''}`)
+    .join('|');
+}
+
 export async function listActiveSubscriptionPlans(pool) {
   const { rows } = await pool.query(
     `SELECT * FROM subscription_plans WHERE active=TRUE ORDER BY sort_order ASC, id ASC`
   );
-  return rows.map(rowToPlan);
+  const plans = rows.map(rowToPlan);
+  return { plans, pricingRevision: computePricingRevision(plans) };
 }
 
 export async function listAllSubscriptionPlans(pool) {
@@ -242,8 +249,8 @@ function parsePlanBody(body, { partial = false } = {}) {
 export function registerSubscriptionPlanRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite }) {
   app.get('/api/platform/go-pro-plans', async (_req, res) => {
     try {
-      const plans = await listActiveSubscriptionPlans(pool);
-      return res.json({ ok: true, plans });
+      const { plans, pricingRevision } = await listActiveSubscriptionPlans(pool);
+      return res.json({ ok: true, plans, pricingRevision });
     } catch (e) {
       console.error('list go-pro plans:', e);
       return res.status(500).json({ ok: false, message: 'Could not load plans.' });

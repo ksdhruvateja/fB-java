@@ -167,6 +167,14 @@ export default function HomeownerLogin({
     setReportStep((s) => Math.max(0, s - 1) as ReportStep);
   };
 
+  const handleShellBack = () => {
+    if (tab === "report" && reportStep > 0) {
+      goBackReport();
+      return;
+    }
+    onBack();
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (loading) return;
@@ -272,7 +280,8 @@ export default function HomeownerLogin({
       {showForgot && <ForgotPasswordModal role="homeowner" onClose={() => setShowForgot(false)} />}
 
       <AuthShell
-        onBack={onBack}
+        onBack={handleShellBack}
+        backLabel={tab === "report" && reportStep > 0 ? "Back" : "Back to site"}
         loading={loading}
         error={Boolean(error)}
         mascot={{

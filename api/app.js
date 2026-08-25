@@ -20,8 +20,9 @@ import {
 import { registerManagedRoutes } from './managed-routes.js';
 import { registerPlatformRoutes } from './platform-routes.js';
 import { registerPayoutRoutes } from './payout-routes.js';
+import { registerQuoteWorkspaceRoutes } from './quote-workspace-routes.js';
 import { writeAudit } from './audit.js';
-import { getStripe } from './stripe.js';
+import { getStripe, stripeConfigured } from './stripe.js';
 import {
   corsOriginDelegate,
   securityHeaders,
@@ -29,6 +30,15 @@ import {
   clampString,
   isPositiveInt,
 } from './security.js';
+import { postgresSslOptions } from './db-ssl.js';
+import {
+  requirePermission,
+  resolveAdminPreset,
+  canAssignPreset,
+  presetToAccessLevel,
+  VALID_ROLE_PRESETS,
+  permissionsForUser,
+} from './rbac.js';
 
 const isProduction = process.env.NODE_ENV === 'production';
 const useInMemoryDb = !process.env.NEON_DATABASE_URL;
@@ -47,6 +57,18 @@ if (!process.env.SESSION_SECRET && !isProduction) {
   console.warn('[FixBridge API] SESSION_SECRET not set; using local development default.');
 }
 
+if (isProduction && useInMemoryDb) {
+  throw new Error(
+    '[FATAL] NEON_DATABASE_URL is required in production. In-memory database is not allowed.'
+  );
+}
+
+if (isProduction && !stripeConfigured()) {
+  console.warn(
+    '[FixBridge API] STRIPE_SECRET_KEY is not set. Payment endpoints will return 503 (no simulation in production).'
+  );
+}
+
 const { Pool } = pg;
 
 function createPool() {
@@ -63,7 +85,7 @@ function createPool() {
       : `${process.env.NEON_DATABASE_URL}${process.env.NEON_DATABASE_URL.includes('?') ? '&' : '?'}uselibpqcompat=true`;
     return new Pool({
       connectionString,
-      ssl: { rejectUnauthorized: false },
+      ssl: postgresSslOptions(),
       max: 10,
     });
   }
@@ -72,6 +94,13 @@ function createPool() {
   const { Pool: MemoryPool } = db.adapters.createPg();
   console.warn('[FixBridge API] NEON_DATABASE_URL not set; using in-memory local database.');
   return new MemoryPool();
+}
+
+/** Demo accounts only outside production, and only when explicitly enabled (default on in non-prod). */
+function allowDemoSeed() {
+  if (isProduction) return false;
+  const flag = String(process.env.ENABLE_DEMO_SEED ?? 'true').toLowerCase();
+  return flag === 'true' || flag === '1' || flag === 'yes';
 }
 
 export const pool = createPool();
@@ -150,6 +179,123 @@ const DEMO_USERS = [
 
 // ── Schema init ───────────────────────────────────────────────────────────────
 
+async function ensureDemoUsers() {
+  // Seed / repair demo users — NEVER in production; non-prod requires ENABLE_DEMO_SEED (default true).
+  if (!allowDemoSeed()) {
+    if (isProduction) {
+      console.log('[FixBridge API] Demo seed disabled (production).');
+    } else {
+      console.log('[FixBridge API] Demo seed disabled (ENABLE_DEMO_SEED=false).');
+    }
+    return;
+  }
+
+  for (const u of DEMO_USERS) {
+    const hashed = await bcrypt.hash(u.plainPassword, 10);
+    const existing = await pool.query(
+      'SELECT id, password, is_admin FROM users WHERE role=$1 AND LOWER(email)=LOWER($2)',
+      [u.role, u.email]
+    );
+    const DEMO_DOC =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+    if (existing.rows.length === 0) {
+      if (u.role === 'contractor') {
+        await pool.query(
+          `INSERT INTO users (
+             role,name,email,password,trade,license_number,is_admin,compliance_status,
+             license_document_name,license_document_data,insurance_document_name,insurance_document_data,
+             company_name,phone
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT DO NOTHING`,
+          [
+            u.role,
+            u.name,
+            u.email,
+            hashed,
+            u.trade,
+            u.license_number,
+            u.is_admin,
+            'approved',
+            'demo-license.png',
+            DEMO_DOC,
+            'demo-insurance.png',
+            DEMO_DOC,
+            'ABC Heating & Air',
+            '(555) 204-8800',
+          ]
+        );
+      } else {
+        await pool.query(
+          `INSERT INTO users (role,name,email,password,trade,license_number,is_admin,compliance_status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`,
+          [
+            u.role,
+            u.name,
+            u.email,
+            hashed,
+            u.trade,
+            u.license_number,
+            u.is_admin,
+            'draft',
+          ]
+        );
+      }
+      console.log(`[FixBridge API] Seeded demo ${u.role}: ${u.email}`);
+      continue;
+    }
+
+    const row = existing.rows[0];
+    const pw = row.password;
+    let passwordOk = false;
+    if (pw && pw.startsWith('$2')) {
+      try {
+        passwordOk = await bcrypt.compare(u.plainPassword, pw);
+      } catch {
+        passwordOk = false;
+      }
+    }
+
+    // Restore known demo password when missing, plaintext, or out of sync.
+    if (!passwordOk && pw !== 'GOOGLE_OAUTH' && pw !== 'APPLE_OAUTH' && pw !== 'AUTH0_OAUTH') {
+      await pool.query(
+        'UPDATE users SET password=$1, name=$2, trade=$3, license_number=$4 WHERE role=$5 AND LOWER(email)=LOWER($6)',
+        [hashed, u.name, u.trade, u.license_number, u.role, u.email]
+      );
+      console.log(`[FixBridge API] Reset demo password for ${u.email}`);
+    }
+
+    if (u.is_admin && row.is_admin !== true) {
+      await pool.query(
+        'UPDATE users SET is_admin=true WHERE role=$1 AND LOWER(email)=LOWER($2)',
+        [u.role, u.email]
+      );
+    }
+    // Ensure contractor demo is never treated as admin
+    if (u.role === 'contractor' && u.is_admin === false && row.is_admin === true) {
+      await pool.query(
+        'UPDATE users SET is_admin=false WHERE role=$1 AND LOWER(email)=LOWER($2)',
+        [u.role, u.email]
+      );
+    }
+    // Demo contractor must be invite-ready (include placeholder docs so compliance gates pass)
+    if (u.role === 'contractor') {
+      await pool.query(
+        `UPDATE users SET compliance_status='approved',
+           trade=COALESCE(NULLIF(trade,''), $1),
+           license_number=COALESCE(NULLIF(license_number,''), $2),
+           license_document_name=COALESCE(license_document_name, 'demo-license.png'),
+           license_document_data=COALESCE(license_document_data, $3),
+           insurance_document_name=COALESCE(insurance_document_name, 'demo-insurance.png'),
+           insurance_document_data=COALESCE(insurance_document_data, $3),
+           company_name=COALESCE(NULLIF(company_name,''), 'ABC Heating & Air'),
+           phone=COALESCE(NULLIF(phone,''), '(555) 204-8800')
+         WHERE role=$4 AND LOWER(email)=LOWER($5)`,
+        [u.trade, u.license_number, DEMO_DOC, u.role, u.email]
+      );
+    }
+  }
+}
+
 export async function initDb() {
   try {
     const check = await pool.query("SELECT id FROM users LIMIT 1");
@@ -158,6 +304,7 @@ export async function initDb() {
       await initManagedSchema(pool);
       await initSupportTicketSchema(pool);
       await initSubscriptionPlansSchema(pool);
+      await ensureDemoUsers();
       return;
     }
   } catch (e) {
@@ -320,112 +467,7 @@ export async function initDb() {
     )
   `);
 
-  // Seed / repair demo users so UI credentials always work (even if Neon was
-  // created before seeding, or a demo password was changed).
-  for (const u of DEMO_USERS) {
-    const hashed = await bcrypt.hash(u.plainPassword, 10);
-    const existing = await pool.query(
-      'SELECT id, password, is_admin FROM users WHERE role=$1 AND LOWER(email)=LOWER($2)',
-      [u.role, u.email]
-    );
-    const DEMO_DOC =
-      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
-
-    if (existing.rows.length === 0) {
-      if (u.role === 'contractor') {
-        await pool.query(
-          `INSERT INTO users (
-             role,name,email,password,trade,license_number,is_admin,compliance_status,
-             license_document_name,license_document_data,insurance_document_name,insurance_document_data,
-             company_name,phone
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT DO NOTHING`,
-          [
-            u.role,
-            u.name,
-            u.email,
-            hashed,
-            u.trade,
-            u.license_number,
-            u.is_admin,
-            'approved',
-            'demo-license.png',
-            DEMO_DOC,
-            'demo-insurance.png',
-            DEMO_DOC,
-            'ABC Heating & Air',
-            '(555) 204-8800',
-          ]
-        );
-      } else {
-        await pool.query(
-          `INSERT INTO users (role,name,email,password,trade,license_number,is_admin,compliance_status)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`,
-          [
-            u.role,
-            u.name,
-            u.email,
-            hashed,
-            u.trade,
-            u.license_number,
-            u.is_admin,
-            'draft',
-          ]
-        );
-      }
-      continue;
-    }
-
-    const row = existing.rows[0];
-    const pw = row.password;
-    let passwordOk = false;
-    if (pw && pw.startsWith('$2')) {
-      try {
-        passwordOk = await bcrypt.compare(u.plainPassword, pw);
-      } catch {
-        passwordOk = false;
-      }
-    }
-
-    // Restore known demo password when missing, plaintext, or out of sync.
-    if (!passwordOk && pw !== 'GOOGLE_OAUTH' && pw !== 'APPLE_OAUTH' && pw !== 'AUTH0_OAUTH') {
-      await pool.query(
-        'UPDATE users SET password=$1, name=$2, trade=$3, license_number=$4 WHERE role=$5 AND LOWER(email)=LOWER($6)',
-        [hashed, u.name, u.trade, u.license_number, u.role, u.email]
-      );
-    }
-
-    if (u.is_admin && row.is_admin !== true) {
-      await pool.query(
-        'UPDATE users SET is_admin=true WHERE role=$1 AND LOWER(email)=LOWER($2)',
-        [u.role, u.email]
-      );
-    }
-    // Ensure contractor demo is never treated as admin
-    if (u.role === 'contractor' && u.is_admin === false && row.is_admin === true) {
-      await pool.query(
-        'UPDATE users SET is_admin=false WHERE role=$1 AND LOWER(email)=LOWER($2)',
-        [u.role, u.email]
-      );
-    }
-    // Demo contractor must be invite-ready (include placeholder docs so compliance gates pass)
-    if (u.role === 'contractor') {
-      // Tiny 1x1 transparent PNG as a stand-in document for demo purposes
-      const DEMO_DOC = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
-      await pool.query(
-        `UPDATE users SET compliance_status='approved',
-           trade=COALESCE(NULLIF(trade,''), $1),
-           license_number=COALESCE(NULLIF(license_number,''), $2),
-           license_document_name=COALESCE(license_document_name, 'demo-license.png'),
-           license_document_data=COALESCE(license_document_data, $3),
-           insurance_document_name=COALESCE(insurance_document_name, 'demo-insurance.png'),
-           insurance_document_data=COALESCE(insurance_document_data, $3),
-           company_name=COALESCE(NULLIF(company_name,''), 'ABC Heating & Air'),
-           phone=COALESCE(NULLIF(phone,''), '(555) 204-8800')
-         WHERE role=$4 AND LOWER(email)=LOWER($5)`,
-        [u.trade, u.license_number, DEMO_DOC, u.role, u.email]
-      );
-    }
-  }
+  await ensureDemoUsers();
 
   // Migrate any remaining plaintext passwords for other users
   const { rows: allUsers } = await pool.query(
@@ -519,6 +561,7 @@ async function requireAuth(req, res, next) {
       isAdmin: rows[0].role === 'admin' || rows[0].is_admin === true,
       isBlocked: rows[0].is_blocked === true,
       adminAccessLevel: rows[0].admin_access_level || 'read-write',
+      adminRolePreset: rows[0].admin_role_preset || null,
     };
     next();
   } catch {
@@ -712,6 +755,18 @@ function rowToUser(r, { includeDocumentData = true } = {}) {
     gender: r.gender || null,
     dob: r.dob || null,
     adminAccessLevel: r.admin_access_level || 'read-write',
+    adminRolePreset: r.admin_role_preset || resolveAdminPreset({
+      role: r.role,
+      adminAccessLevel: r.admin_access_level,
+      adminRolePreset: r.admin_role_preset,
+    }),
+    permissions: r.role === 'admin'
+      ? [...permissionsForUser({
+          role: 'admin',
+          adminAccessLevel: r.admin_access_level,
+          adminRolePreset: r.admin_role_preset,
+        })]
+      : undefined,
   };
 }
 
@@ -1932,7 +1987,7 @@ app.put('/api/admin/users/:userId/block', requireAuth, requireAdmin, requireAdmi
   }
 });
 
-app.get('/api/admin/staff', requireAuth, requireAdmin, async (_req, res) => {
+app.get('/api/admin/staff', requireAuth, requireAdmin, requirePermission('staff.view'), async (_req, res) => {
   try {
     const { rows } = await pool.query("SELECT * FROM users WHERE role='admin' ORDER BY name ASC");
     return res.json({ ok: true, staff: rows.map(rowToUser) });
@@ -1942,27 +1997,88 @@ app.get('/api/admin/staff', requireAuth, requireAdmin, async (_req, res) => {
   }
 });
 
-app.post('/api/admin/staff/access', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+app.post('/api/admin/staff/access', requireAuth, requireAdmin, requirePermission('staff.edit'), async (req, res) => {
   try {
-    const { userId, accessLevel } = req.body;
-    if (!userId || !accessLevel) {
-      return res.status(400).json({ ok: false, message: 'userId and accessLevel are required.' });
+    const { userId } = req.body;
+    let accessLevel = String(req.body?.accessLevel || '').toLowerCase();
+    let rolePreset = String(req.body?.rolePreset || req.body?.adminRolePreset || '').toLowerCase();
+
+    if (!userId) {
+      return res.status(400).json({ ok: false, message: 'userId is required.' });
     }
-    if (!['read', 'write', 'read-write'].includes(accessLevel)) {
-      return res.status(400).json({ ok: false, message: 'Invalid accessLevel. Choose read, write, or read-write.' });
+
+    // Prefer explicit preset; map legacy access levels.
+    if (!rolePreset || !VALID_ROLE_PRESETS.includes(rolePreset)) {
+      if (['read', 'write', 'read-write'].includes(accessLevel)) {
+        rolePreset = accessLevel === 'read' ? 'read_only' : accessLevel === 'write' ? 'operations_admin' : 'super_admin';
+      } else {
+        return res.status(400).json({ ok: false, message: 'Invalid rolePreset or accessLevel.' });
+      }
     }
+    accessLevel = presetToAccessLevel(rolePreset);
+
+    if (!canAssignPreset(req.authUser, rolePreset)) {
+      return res.status(403).json({
+        ok: false,
+        code: 'CANNOT_ASSIGN_ROLE',
+        message: 'You cannot assign that role or elevate privileges.',
+      });
+    }
+
+    // Prevent self-elevation
+    if (Number(userId) === Number(req.authUser.id)) {
+      const current = resolveAdminPreset(req.authUser);
+      const rank = (p) => (p === 'super_admin' ? 3 : p === 'read_only' ? 0 : 1);
+      if (rank(rolePreset) > rank(current)) {
+        return res.status(403).json({
+          ok: false,
+          code: 'SELF_ELEVATION',
+          message: 'You cannot increase your own privileges.',
+        });
+      }
+    }
+
     const { rows: prevRows } = await pool.query(`SELECT * FROM users WHERE id=$1 AND role='admin'`, [userId]);
     if (!prevRows.length) {
       return res.status(404).json({ ok: false, message: 'Staff member not found.' });
     }
+
+    const prevPreset = resolveAdminPreset({
+      role: 'admin',
+      adminAccessLevel: prevRows[0].admin_access_level,
+      adminRolePreset: prevRows[0].admin_role_preset,
+    });
+
+    // Do not demote the last super admin
+    if (prevPreset === 'super_admin' && rolePreset !== 'super_admin') {
+      const { rows: supers } = await pool.query(
+        `SELECT COUNT(*)::int AS c FROM users
+         WHERE role='admin' AND COALESCE(is_blocked,false)=false
+           AND (
+             LOWER(COALESCE(admin_role_preset,''))='super_admin'
+             OR (admin_role_preset IS NULL AND COALESCE(admin_access_level,'read-write')='read-write')
+           )`
+      );
+      if ((supers[0]?.c || 0) <= 1) {
+        return res.status(400).json({
+          ok: false,
+          code: 'LAST_SUPER_ADMIN',
+          message: 'Cannot demote the last Super Admin account.',
+        });
+      }
+    }
+
     const { rows } = await pool.query(
-      'UPDATE users SET admin_access_level=$1 WHERE id=$2 AND role=\'admin\' RETURNING *',
-      [accessLevel, userId]
+      `UPDATE users SET admin_access_level=$1, admin_role_preset=$2
+       WHERE id=$3 AND role='admin' RETURNING *`,
+      [accessLevel, rolePreset, userId]
     );
     await writeAudit(pool, req.authUser.id, 'staff_access_updated', 'user', userId, {
       email: rows[0].email,
       previousLevel: prevRows[0].admin_access_level || 'read-write',
+      previousPreset: prevPreset,
       accessLevel,
+      rolePreset,
     });
     return res.json({ ok: true, user: rowToUser(rows[0]) });
   } catch (e) {
@@ -1971,12 +2087,13 @@ app.post('/api/admin/staff/access', requireAuth, requireAdmin, requireAdminWrite
   }
 });
 
-app.post('/api/admin/staff/create', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+app.post('/api/admin/staff/create', requireAuth, requireAdmin, requirePermission('staff.create'), async (req, res) => {
   try {
     const name = String(req.body?.name || '').trim();
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
-    const accessLevel = String(req.body?.accessLevel || 'read-write').toLowerCase();
+    let rolePreset = String(req.body?.rolePreset || req.body?.adminRolePreset || '').toLowerCase();
+    let accessLevel = String(req.body?.accessLevel || '').toLowerCase();
 
     if (!name || !email || !password) {
       return res.status(400).json({ ok: false, message: 'Name, email, and password are required.' });
@@ -1984,9 +2101,30 @@ app.post('/api/admin/staff/create', requireAuth, requireAdmin, requireAdminWrite
     if (password.length < 8) {
       return res.status(400).json({ ok: false, message: 'Password must be at least 8 characters.' });
     }
-    if (!['read', 'write', 'read-write'].includes(accessLevel)) {
-      return res.status(400).json({ ok: false, message: 'Invalid accessLevel. Choose read, write, or read-write.' });
+
+    if (!rolePreset || !VALID_ROLE_PRESETS.includes(rolePreset)) {
+      if (['read', 'write', 'read-write'].includes(accessLevel)) {
+        rolePreset = accessLevel === 'read' ? 'read_only' : accessLevel === 'write' ? 'operations_admin' : 'operations_admin';
+      } else {
+        rolePreset = 'operations_admin';
+      }
     }
+    // Never allow creating super_admin unless actor is super_admin
+    if (rolePreset === 'super_admin' && resolveAdminPreset(req.authUser) !== 'super_admin') {
+      return res.status(403).json({
+        ok: false,
+        code: 'CANNOT_ASSIGN_ROLE',
+        message: 'Only a Super Admin can create another Super Admin.',
+      });
+    }
+    if (!canAssignPreset(req.authUser, rolePreset)) {
+      return res.status(403).json({
+        ok: false,
+        code: 'CANNOT_ASSIGN_ROLE',
+        message: 'You cannot assign that role.',
+      });
+    }
+    accessLevel = presetToAccessLevel(rolePreset);
 
     const { rows: existing } = await pool.query(
       `SELECT id FROM users WHERE role='admin' AND LOWER(email)=LOWER($1)`,
@@ -1998,16 +2136,17 @@ app.post('/api/admin/staff/create', requireAuth, requireAdmin, requireAdminWrite
 
     const hashed = await bcrypt.hash(password, 10);
     const { rows } = await pool.query(
-      `INSERT INTO users (role, name, email, password, is_admin, admin_access_level, compliance_status)
-       VALUES ('admin', $1, $2, $3, true, $4, 'approved')
+      `INSERT INTO users (role, name, email, password, is_admin, admin_access_level, admin_role_preset, compliance_status)
+       VALUES ('admin', $1, $2, $3, true, $4, $5, 'approved')
        RETURNING *`,
-      [name, email, hashed, accessLevel]
+      [name, email, hashed, accessLevel, rolePreset]
     );
 
     await writeAudit(pool, req.authUser.id, 'staff_created', 'user', rows[0].id, {
       email,
       name,
       accessLevel,
+      rolePreset,
     });
 
     return res.json({ ok: true, user: rowToUser(rows[0]) });
@@ -2438,7 +2577,8 @@ function rowToSiteReview(r) {
 app.get('/api/reviews', async (_req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT * FROM site_reviews
+      `SELECT id, author_name, location, service_type, rating, body, verified, published, images, created_at, job_id
+       FROM site_reviews
        WHERE published = TRUE
        ORDER BY created_at DESC
        LIMIT 60`
@@ -2456,11 +2596,36 @@ app.get('/api/reviews', async (_req, res) => {
   }
 });
 
-app.post('/api/reviews', reviewLimiter, async (req, res) => {
+const REVIEWABLE_STATUSES = new Set([
+  'work_completed',
+  'customer_review_pending',
+  'admin_review_pending',
+  'payout_pending',
+  'paid_out',
+  'closed',
+]);
+
+/** Verified job reviews only — identity from JWT; job must be owned + completed-ish. */
+app.post('/api/reviews', requireAuth, reviewLimiter, async (req, res) => {
   try {
-    const name = clampString(req.body?.name, 80);
-    const location = clampString(req.body?.location, 80);
-    const serviceType = clampString(req.body?.serviceType || 'Home repair', 60);
+    if (req.authUser.role !== 'homeowner') {
+      return res.status(403).json({
+        ok: false,
+        code: 'HOMEOWNER_ONLY',
+        message: 'Only homeowners can submit job reviews.',
+      });
+    }
+
+    const jobId = Number(req.body?.jobId);
+    if (!Number.isFinite(jobId) || jobId <= 0) {
+      return res.status(400).json({
+        ok: false,
+        code: 'JOB_REQUIRED',
+        message: 'A completed job is required to leave a review.',
+      });
+    }
+
+    const location = clampString(req.body?.location, 80) || 'Local area';
     const body = clampString(req.body?.text || req.body?.body || req.body?.review, 2000);
     const rating = Math.round(Number(req.body?.rating));
     let images = [];
@@ -2470,12 +2635,6 @@ app.post('/api/reviews', reviewLimiter, async (req, res) => {
       return res.status(imgErr.status || 400).json({ ok: false, message: imgErr.message || 'Invalid images.' });
     }
 
-    if (!name || name.length < 2) {
-      return res.status(400).json({ ok: false, message: 'Please enter your name.' });
-    }
-    if (!location || location.length < 2) {
-      return res.status(400).json({ ok: false, message: 'Please enter your city / neighborhood.' });
-    }
     if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
       return res.status(400).json({ ok: false, message: 'Rating must be 1–5 stars.' });
     }
@@ -2483,37 +2642,68 @@ app.post('/api/reviews', reviewLimiter, async (req, res) => {
       return res.status(400).json({ ok: false, message: 'Please write at least 20 characters about your experience.' });
     }
 
-    // Optional auth — marks review as verified when signed in
-    let userId = null;
-    let verified = false;
-    try {
-      const header = req.headers.authorization || '';
-      const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-      if (token) {
-        const payload = jwt.verify(token, JWT_SECRET);
-        userId = payload?.id || null;
-        verified = Boolean(userId);
-      }
-    } catch {
-      // Public reviews allowed without auth
+    const { rows: jobs } = await pool.query(
+      `SELECT id, homeowner_user_id, status, category, title FROM managed_jobs WHERE id=$1`,
+      [jobId]
+    );
+    const job = jobs[0];
+    if (!job) {
+      return res.status(404).json({ ok: false, message: 'Job not found.' });
+    }
+    if (Number(job.homeowner_user_id) !== Number(req.authUser.id)) {
+      return res.status(403).json({
+        ok: false,
+        code: 'NOT_JOB_OWNER',
+        message: 'You can only review your own completed jobs.',
+      });
+    }
+    if (!REVIEWABLE_STATUSES.has(String(job.status || ''))) {
+      return res.status(400).json({
+        ok: false,
+        code: 'JOB_NOT_COMPLETE',
+        message: 'Reviews are available after the job is completed.',
+      });
     }
 
+    const { rows: existing } = await pool.query(
+      `SELECT id FROM site_reviews WHERE user_id=$1 AND job_id=$2 LIMIT 1`,
+      [req.authUser.id, jobId]
+    );
+    if (existing.length) {
+      return res.status(409).json({
+        ok: false,
+        code: 'DUPLICATE_REVIEW',
+        message: 'You already submitted a review for this job.',
+      });
+    }
+
+    const authorName = clampString(req.authUser.name || 'Homeowner', 80);
+    const serviceType = clampString(req.body?.serviceType || job.category || 'Home repair', 60);
     const imagesJson = images.length ? JSON.stringify(images) : null;
 
     const { rows } = await pool.query(
       `INSERT INTO site_reviews
-         (author_name, location, service_type, rating, body, verified, published, user_id, images)
-       VALUES ($1,$2,$3,$4,$5,$6,TRUE,$7,$8)
-       RETURNING *`,
-      [name, location, serviceType || 'Home repair', rating, body.trim(), verified, userId, imagesJson]
+         (author_name, location, service_type, rating, body, verified, published, user_id, job_id, images)
+       VALUES ($1,$2,$3,$4,$5,TRUE,TRUE,$6,$7,$8)
+       RETURNING id, author_name, location, service_type, rating, body, verified, published, images, created_at, job_id`,
+      [authorName, location, serviceType, rating, body.trim(), req.authUser.id, jobId, imagesJson]
     );
+
+    await writeAudit(pool, req.authUser.id, 'job_review_created', 'managed_job', jobId, { rating });
 
     return res.status(201).json({
       ok: true,
       review: rowToSiteReview(rows[0]),
-      message: 'Thanks — your review is live on FixBridge.',
+      message: 'Thanks — your verified review is live on FixBridge.',
     });
   } catch (e) {
+    if (e?.code === '23505') {
+      return res.status(409).json({
+        ok: false,
+        code: 'DUPLICATE_REVIEW',
+        message: 'You already submitted a review for this job.',
+      });
+    }
     console.error('reviews create:', e);
     return res.status(500).json({ ok: false, message: 'Could not publish review. Please try again.' });
   }
@@ -2671,7 +2861,8 @@ app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
   }
 });
 
-  registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, makeToken, rowToUser });
+  registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser });
+  registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerSupportTicketRoutes(app, { pool, requireAuth, requireAdmin });
 registerSubscriptionPlanRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerPlatformRoutes(app, {
@@ -2679,9 +2870,12 @@ registerPlatformRoutes(app, {
   requireAuth,
   requireAdmin,
   requireAdminWrite,
+  requirePermission,
   getSubscriptionPlanByCode,
+  makeToken,
+  rowToUser,
 });
-registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
+registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission });
 
 app.post('/api/ai/chat', requireAuth, aiLimiter, async (req, res) => {
   try {
@@ -2710,6 +2904,40 @@ app.post('/api/ai/chat', requireAuth, aiLimiter, async (req, res) => {
       error: 'Chat unavailable. Please try again.',
     });
   }
+});
+
+app.get('/api/health', (_req, res) => {
+  const production = process.env.NODE_ENV === 'production';
+  res.json({
+    ok: true,
+    service: 'fixbridge-api',
+    env: production ? 'production' : 'development',
+    database: useInMemoryDb ? 'memory' : 'neon',
+    stripeConfigured: stripeConfigured(),
+    paymentsSimulateAllowed: !production && !stripeConfigured(),
+    demoSeedAllowed: allowDemoSeed(),
+  });
+});
+
+app.get('/api/admin/production-config', requireAuth, requireAdmin, requirePermission('settings.view'), (_req, res) => {
+  const production = process.env.NODE_ENV === 'production';
+  const checks = [
+    { key: 'SESSION_SECRET', ok: Boolean(process.env.SESSION_SECRET), required: production },
+    { key: 'NEON_DATABASE_URL', ok: Boolean(process.env.NEON_DATABASE_URL), required: production },
+    { key: 'STRIPE_SECRET_KEY', ok: stripeConfigured(), required: production },
+    { key: 'STRIPE_WEBHOOK_SECRET', ok: Boolean(process.env.STRIPE_WEBHOOK_SECRET?.trim()), required: production },
+    { key: 'APP_URL', ok: Boolean(process.env.APP_URL?.trim() || process.env.URL?.trim()), required: production },
+    { key: 'demo_seed_disabled_in_prod', ok: production ? !allowDemoSeed() : true, required: true },
+    { key: 'ssl_reject_unauthorized', ok: postgresSslOptions().rejectUnauthorized === true || !production, required: production },
+  ];
+  const missingRequired = checks.filter((c) => c.required && !c.ok).map((c) => c.key);
+  res.json({
+    ok: missingRequired.length === 0,
+    production,
+    checks,
+    missingRequired,
+    note: 'Secret values are never returned — only presence flags.',
+  });
 });
 
 export default app;

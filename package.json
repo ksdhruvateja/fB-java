@@ -8,7 +8,10 @@
     "dev:api": "node --env-file=.env server.js",
     "dev:client": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "audit:production": "node --env-file=.env scripts/audit-production.mjs",
+    "smoke:hardening": "node --env-file=.env scripts/smoke-production-hardening.mjs",
+    "smoke:idor": "node --env-file=.env scripts/smoke-security-idor.mjs"
   },
   "dependencies": {
     "@auth0/auth0-react": "^2.24.1",

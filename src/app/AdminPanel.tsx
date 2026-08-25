@@ -20,9 +20,7 @@ import AdminCommandPalette, { type CommandAction } from "./AdminCommandPalette";
 import AdminPricingPanel, { type PricingRules } from "./AdminPricingPanel";
 import AdminContractorPayoutsPanel from "./AdminContractorPayoutsPanel";
 import AdminPayoutSettingsPanel from "./AdminPayoutSettingsPanel";
-import AdminQuoteBuilderPanel from "./AdminQuoteBuilderPanel";
-import AdminQuotesWorkspace from "./AdminQuotesWorkspace";
-import AdminMarketIntelligencePanel from "./AdminMarketIntelligencePanel";
+import AdminOrderLedgerPanel from "./AdminOrderLedgerPanel";
 import AdminAuditLogsPanel from "./AdminAuditLogsPanel";
 import AdminSupportTicketsPanel from "./AdminSupportTicketsPanel";
 import AdminSubscriptionPlansPanel from "./AdminSubscriptionPlansPanel";
@@ -82,6 +80,7 @@ import {
   formatMoney,
   listBids,
   retailRangeLabel,
+  requestAdminDispatch,
   type AdminDiscount,
   type Bid,
   type ManagedJob,
@@ -99,7 +98,6 @@ type Tab =
   | "overview"
   | "work-queue"
   | "dispatch"
-  | "proposals"
   | "pricing"
   | "payments"
   | "contractor-payouts"
@@ -107,7 +105,6 @@ type Tab =
   | "contractors"
   | "partners"
   | "ai"
-  | "market-intel"
   | "reporting"
   | "platform"
   | "subscriptions"
@@ -126,9 +123,7 @@ const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React
     items: [
       { id: "work-queue", label: "Work Queue", icon: ListTodo },
       { id: "dispatch", label: "Dispatch", icon: Briefcase },
-      { id: "proposals", label: "Quotes", icon: DollarSign },
       { id: "ai", label: "AI Estimates", icon: Sparkles },
-      { id: "market-intel", label: "Market Intelligence", icon: MapPin },
     ],
   },
   {
@@ -583,7 +578,7 @@ export default function AdminPanel({
         if (r.ok) setReport(r);
       });
     }
-    if (tab === "dispatch" || tab === "overview" || tab === "proposals" || tab === "work-queue") {
+    if (tab === "dispatch" || tab === "overview" || tab === "work-queue") {
       void refreshJobs();
     }
     if (tab === "platform") {
@@ -600,6 +595,7 @@ export default function AdminPanel({
   const filteredDispatch = useMemo(() => {
     const queue = jobs.filter((j) =>
       [
+        "ai_review_complete",
         "paid_for_dispatch",
         "awaiting_contractor",
         "contractor_invited",
@@ -625,7 +621,7 @@ export default function AdminPanel({
   const dispatchQueueCount = useMemo(
     () =>
       jobs.filter((j) =>
-        ["paid_for_dispatch", "awaiting_contractor", "contractor_invited", "awaiting_bid", "bid_received"].includes(
+        ["ai_review_complete", "paid_for_dispatch", "awaiting_contractor", "contractor_invited", "awaiting_bid", "bid_received", "approved"].includes(
           j.status
         )
       ).length,
@@ -809,7 +805,10 @@ export default function AdminPanel({
       { id: "wq", label: "Open Work Queue", group: "Navigate", run: () => setTab("work-queue") },
       { id: "ov", label: "Open Overview", group: "Navigate", run: () => setTab("overview") },
       { id: "dispatch", label: "Open Dispatch", group: "Navigate", run: () => setTab("dispatch") },
-      { id: "quotes", label: "Open Quote Queue", group: "Navigate", run: () => setTab("proposals") },
+      { id: "quotes", label: "Open Quotes (Work Queue)", group: "Navigate", run: () => {
+        setTab("work-queue");
+        setMessage("Open a job from Work Queue → Quotes to edit the professional quotation.");
+      } },
       { id: "payouts", label: "Open Payouts", group: "Navigate", run: () => setTab("contractor-payouts") },
       { id: "payments", label: "Open Payments", group: "Navigate", run: () => setTab("payments") },
       { id: "pricing", label: "Pricing Controls", group: "Navigate", run: () => setTab("pricing") },
@@ -1507,6 +1506,23 @@ export default function AdminPanel({
                       <button
                         type="button"
                         className={btnSecondary}
+                        disabled={busy || selectedJob.status !== "approved" || !selectedJob.assignedContractorUserId}
+                        onClick={async () => {
+                          setBusy(true);
+                          try {
+                            const r = await requestAdminDispatch(selectedJob.id);
+                            setMessage(r.ok ? "Dispatch requested — contractor notified." : r.message || "Dispatch failed.");
+                            if (r.ok) await refreshJobs();
+                          } finally {
+                            setBusy(false);
+                          }
+                        }}
+                      >
+                        Request contractor dispatch
+                      </button>
+                      <button
+                        type="button"
+                        className={btnSecondary}
                         disabled={busy}
                         onClick={async () => {
                           setBusy(true);
@@ -1621,65 +1637,6 @@ export default function AdminPanel({
             </div>
           </section>
         )}
-
-        {tab === "proposals" && (
-          <section className="space-y-8">
-            <AdminQuotesWorkspace
-              onMessage={setMessage}
-              onOpenJob={(jobId) => {
-                setSelectedJobId(jobId);
-                setTab("work-queue");
-                openJobDrawer(jobId);
-              }}
-            />
-            <div className="border-t border-border pt-6 space-y-4">
-              <SectionHeader
-                title="Build quote from contractor bid"
-                subtitle="Stage B — contractor actual quote is the base. Apply adjustments, then publish a unique FBQ number. Homeowner only sees the final FixBridge amount."
-              />
-              <select
-                className={fieldClass}
-                value={selectedJobId || ""}
-                onChange={(e) => setSelectedJobId(e.target.value ? Number(e.target.value) : null)}
-              >
-                <option value="">Select job</option>
-                {jobs.map((j) => (
-                  <option key={j.id} value={j.id}>
-                    {j.bookingId || `#${j.id}`} {j.title} · {STATUS_LABELS[j.status] || j.status}
-                  </option>
-                ))}
-              </select>
-              {!selectedJobId ? (
-                <EmptyState title="Choose a job" hint="Bids appear after a contractor submits a confidential net bid." />
-              ) : bids.length === 0 ? (
-                <EmptyState title="No bids yet" hint="Invite a contractor from Dispatch first." />
-              ) : (
-                <div className="grid gap-4">
-                  {bids.map((b, i) => (
-                    <motion.div
-                      key={b.id}
-                      initial={{ opacity: 0, y: 8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: i * 0.05 }}
-                    >
-                      <AdminQuoteBuilderPanel
-                        job={jobs.find((j) => j.id === selectedJobId)!}
-                        bid={b}
-                        busy={busy}
-                        onMessage={setMessage}
-                        onPublished={async () => {
-                          await refreshJobs();
-                        }}
-                      />
-                    </motion.div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </section>
-        )}
-
-        {tab === "market-intel" && <AdminMarketIntelligencePanel />}
 
         {tab === "visit-fee" && (
           <AdminVisitFeePanel
@@ -2710,8 +2667,8 @@ export default function AdminPanel({
                 <div className="space-y-3 border-t border-border pt-4">
                   <h2 className="font-medium">Customer price adjustment</h2>
                   <p className="text-xs text-muted-foreground">
-                    Recalculate from the engine first, then optionally add markup in dollars or percent — or set an exact
-                    range / hide the price.
+                    Recalculate from the engine first (includes your saved overall markup from Pricing Rules), then
+                    optionally add a one-off markup for this job only — or set an exact range / hide the price.
                   </p>
                   <div className="flex flex-wrap gap-2">
                     {(
@@ -2745,7 +2702,7 @@ export default function AdminPanel({
                       onChange={setMarkupPercent}
                       suffix="%"
                       step="1"
-                      hint="Example: 10 adds 10% on top of the calculated retail range."
+                      hint="Example: 10 adds 10% to the overall estimate range."
                     />
                   )}
                   {priceMode === "markup_amount" && (
@@ -2754,7 +2711,7 @@ export default function AdminPanel({
                       value={markupAmount}
                       onChange={setMarkupAmount}
                       suffix="$"
-                      hint="Added to both the low and high ends of the range."
+                      hint="Shifts the entire customer range up by this amount."
                     />
                   )}
                   {priceMode === "set_range" && (
@@ -2903,10 +2860,10 @@ export default function AdminPanel({
 
         {tab === "reporting" && (
           report ? (
-            <section className="space-y-4">
+            <section className="space-y-6">
               <SectionHeader
                 title="Financial reporting"
-                subtitle="Revenue, payouts, and status volume. Charts live on Overview."
+                subtitle="Revenue, payouts, and status volume. Full order ledger below."
                 action={
                   <button type="button" className={btnSecondary} onClick={() => setTab("overview")}>
                     <LayoutDashboard className="h-4 w-4" />
@@ -2946,9 +2903,9 @@ export default function AdminPanel({
                       </button>
                     ))}
                   </div>
-                  <p className="mt-3 text-xs text-muted-foreground">Click a status to jump to Dispatch filtered by that label.</p>
                 </div>
               </div>
+              <AdminOrderLedgerPanel onMessage={setMessage} />
             </section>
           ) : (
             <div className={`${cardClass} flex items-center gap-2 px-4 py-10 text-sm text-muted-foreground`}>
@@ -3505,10 +3462,6 @@ export default function AdminPanel({
           setBusy(false);
           setMessage(r.ok ? "Auto-match complete." : r.message || "Match failed.");
           await refreshJobs();
-        }}
-        onOpenProposalsTab={() => {
-          setDrawerOpen(false);
-          setTab("proposals");
         }}
         onOpenContractor={(contractorId) => {
           setDrawerOpen(false);

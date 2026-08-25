@@ -175,12 +175,6 @@ export default function CustomerPage({
                 Describe Your Problem
                 <ArrowRight size={15} className="transition-transform group-hover:translate-x-1" />
               </button>
-              <button
-                onClick={() => document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" })}
-                className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase tracking-wider text-sm border border-white/40 text-white px-5 sm:px-7 py-3 sm:py-3.5 hover:border-white transition-colors w-full sm:w-auto text-center"
-              >
-                How It Works
-              </button>
             </div>
           </motion.div>
 

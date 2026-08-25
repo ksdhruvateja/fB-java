@@ -2,6 +2,7 @@ import pg from 'pg';
 import { initManagedSchema } from '../api/schema-managed.js';
 import { initSupportTicketSchema } from '../api/support-tickets.js';
 import { initSubscriptionPlansSchema } from '../api/subscription-plans.js';
+import { postgresSslOptions } from '../api/db-ssl.js';
 
 const url = process.env.NEON_DATABASE_URL;
 if (!url) {
@@ -15,7 +16,7 @@ const connectionString = url.includes('uselibpqcompat=')
 
 const pool = new pg.Pool({
   connectionString,
-  ssl: { rejectUnauthorized: false },
+  ssl: postgresSslOptions(),
   max: 5,
 });
 

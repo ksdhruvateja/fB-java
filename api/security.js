@@ -61,6 +61,22 @@ export function securityHeaders(_req, res, next) {
   res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
   if (process.env.NODE_ENV === 'production') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    // Light CSP: allow Stripe.js / Auth0 / self. Avoid breaking Checkout / OAuth.
+    res.setHeader(
+      'Content-Security-Policy',
+      [
+        "default-src 'self'",
+        "base-uri 'self'",
+        "frame-ancestors 'none'",
+        "object-src 'none'",
+        "img-src 'self' data: blob: https:",
+        "font-src 'self' data: https:",
+        "style-src 'self' 'unsafe-inline' https:",
+        "script-src 'self' 'unsafe-inline' https://js.stripe.com https://cdn.jsdelivr.net https://*.auth0.com",
+        "connect-src 'self' https://api.stripe.com https://*.stripe.com https://*.auth0.com https://*.neon.tech https:",
+        "frame-src 'self' https://js.stripe.com https://hooks.stripe.com https://*.auth0.com",
+      ].join('; ')
+    );
   }
   // API responses should not be cached by shared caches.
   if (_req.path && _req.path.startsWith('/api/')) {

@@ -62,6 +62,12 @@ import HomeownerPaymentsPanel from "./HomeownerPaymentsPanel";
 import HomeownerDocumentsPanel from "./HomeownerDocumentsPanel";
 import HomeownerSupportPanel from "./HomeownerSupportPanel";
 import HomeownerGoProPlans, { type GoProPlanCard } from "./HomeownerGoProPlans";
+import SubscriptionSuccessModal from "./SubscriptionSuccessModal";
+import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
+import HomeownerLocalEstimate, { EstimateLoadingSteps } from "./HomeownerLocalEstimate";
+import HireProfessionalWizard from "./HireProfessionalWizard";
+import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
+import { UsLocationFields, normalizeUsStateCode } from "./UsLocationFields";
 import { useIsMobile } from "./components/ui/use-mobile";
 import {
   type DashTab,
@@ -81,6 +87,40 @@ function formatChatMessage(text: string): string {
   return text
     .replace(/^#+\s+/gm, "") // strip markdown headers
     .replace(/\*\*/g, "");   // strip markdown bolding
+}
+
+/** Shrink phone photos so create+assess don't hang on multi‑MB data URLs. */
+function compressImageForAssessment(file: File, maxEdge = 1280, quality = 0.72): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read image"));
+    reader.onload = () => {
+      const src = String(reader.result || "");
+      const img = new Image();
+      img.onerror = () => reject(new Error("Could not decode image"));
+      img.onload = () => {
+        const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          reject(new Error("Canvas unavailable"));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, w, h);
+        try {
+          resolve(canvas.toDataURL("image/jpeg", quality));
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error("Compress failed"));
+        }
+      };
+      img.src = src;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 type ReportStep = "intake" | "experts" | "assessment";
@@ -223,14 +263,22 @@ export default function HomeownerDashboard({
   isDark,
   onToggleDark,
   onUserUpdated,
+  initialTab,
+  showSubscriptionSuccess,
+  subscriptionSuccessPlanCode,
+  onDismissSubscriptionSuccess,
 }: {
   onLogout: () => void;
   user: AuthUser;
   isDark: boolean;
   onToggleDark: () => void;
   onUserUpdated?: (u: AuthUser) => void;
+  initialTab?: DashTab;
+  showSubscriptionSuccess?: boolean;
+  subscriptionSuccessPlanCode?: string | null;
+  onDismissSubscriptionSuccess?: () => void;
 }) {
-  const [tab, setTab] = useState<DashTab>("overview");
+  const [tab, setTab] = useState<DashTab>(initialTab || "overview");
   const [jobsSegment, setJobsSegment] = useState<JobsSegment>("active");
   const [propertyPickerOpen, setPropertyPickerOpen] = useState(false);
   const [primaryPropertyId, setPrimaryPropertyId] = useState<number | null>(null);
@@ -244,6 +292,7 @@ export default function HomeownerDashboard({
   const [busy, setBusy] = useState(false);
   const [step, setStep] = useState<ReportStep>("intake");
   const [intakePhase, setIntakePhase] = useState<IntakePhase>("whats");
+  const [reportPath, setReportPath] = useState<"ai" | "experts" | null>(null);
   const [requestSystemId, setRequestSystemId] = useState<string>("");
   const [issueArea, setIssueArea] = useState<HomeownerArea | "">("");
   const [category, setCategory] = useState<HomeownerService | "">("");
@@ -255,6 +304,7 @@ export default function HomeownerDashboard({
   const voiceRecRef = useRef<{ stop: () => void } | null>(null);
   const [assessmentMode, setAssessmentMode] = useState<"expert" | "diy">("diy");
   const [diyUnlockCodes, setDiyUnlockCodes] = useState<string[]>(["pro_membership", "homecare", "property_pro"]);
+  const [goProPlans, setGoProPlans] = useState<GoProPlanCard[]>([]);
 
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editName, setEditName] = useState(user.name);
@@ -324,8 +374,12 @@ export default function HomeownerDashboard({
   } | null>(null);
   const [discountLookingUp, setDiscountLookingUp] = useState(false);
   const [discountMessage, setDiscountMessage] = useState<string | null>(null);
+  const [dispatchCouponPreview, setDispatchCouponPreview] = useState<DispatchCouponPreview | null>(null);
+  const [dispatchSuccessMsg, setDispatchSuccessMsg] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<ManagedJob | null>(null);
   const [assessmentMsg, setAssessmentMsg] = useState<string | null>(null);
+  const [assessLoadingStep, setAssessLoadingStep] = useState<number | null>(null);
+  const [assessLoadingZip, setAssessLoadingZip] = useState<string | null>(null);
   const [showTechMessage, setShowTechMessage] = useState(false);
   const [techMessageDraft, setTechMessageDraft] = useState("");
   const [techMessageSent, setTechMessageSent] = useState(false);
@@ -560,6 +614,28 @@ export default function HomeownerDashboard({
     setTab("report");
     setStep("intake");
     setIntakePhase("whats");
+    setReportPath(null);
+  }
+
+  function goBackOneReportStep() {
+    setError(null);
+    if (step === "assessment") {
+      if (reportPath === "experts") {
+        setStep("experts");
+      } else {
+        setStep("intake");
+        setIntakePhase("details");
+      }
+      return;
+    }
+    if (step === "experts") {
+      setStep("intake");
+      setIntakePhase("details");
+      return;
+    }
+    if (step === "intake" && intakePhase === "details") {
+      setIntakePhase("whats");
+    }
   }
 
   async function refresh() {
@@ -625,6 +701,25 @@ export default function HomeownerDashboard({
     }
   }
 
+  function closeAddressPrompt() {
+    setShowAddressPromptPropertyId(null);
+    setAddressPromptJobId(null);
+    setAddressPromptLine1("");
+    setAddressPromptLine2("");
+    setAddressPromptCity("");
+    setAddressPromptState("");
+    setAddressPromptZip("");
+  }
+
+  function closeAddAddressModal() {
+    setShowAddAddressModal(false);
+    setModalActionAfterSave(null);
+    setModalAddressLine1("");
+    setModalCity("");
+    setModalState("");
+    setModalZip("");
+  }
+
   async function handleSaveAddressAndProceed() {
     if (!showAddressPromptPropertyId) return;
     if (!addressPromptLine1.trim() || !addressPromptCity.trim() || !addressPromptState.trim() || !addressPromptZip.trim()) {
@@ -652,7 +747,7 @@ export default function HomeownerDashboard({
           addressLine1: addressPromptLine1.trim(),
           addressLine2: addressPromptLine2.trim() || undefined,
           city: addressPromptCity.trim(),
-          state: addressPromptState.trim(),
+          state: normalizeUsStateCode(addressPromptState),
           zip: normalizeZip(addressPromptZip),
         }),
       });
@@ -661,12 +756,17 @@ export default function HomeownerDashboard({
         alert(data.message || "Failed to update address.");
         return;
       }
-      
+
       const propertyIdForAddress = showAddressPromptPropertyId;
       const jobId = addressPromptJobId;
-      setShowAddressPromptPropertyId(null);
-      setAddressPromptJobId(null);
+      closeAddressPrompt();
 
+      if (data.property && propertyIdForAddress) {
+        const existing = properties.find((p) => p.id === propertyIdForAddress);
+        if (existing) {
+          upsertPropertyInState({ ...existing, ...data.property });
+        }
+      }
       const reloaded = propertyIdForAddress ? await reloadProperty(propertyIdForAddress) : null;
       if (reloaded) {
         await syncHealthFromProperty(reloaded.id, reloaded);
@@ -678,10 +778,8 @@ export default function HomeownerDashboard({
         const r = await payDispatchFee(jobId);
         if (r.ok && r.url) {
           window.location.href = r.url;
-        } else if (r.ok) {
-          await refresh();
         } else {
-          alert(r.message || "Payment failed.");
+          alert(r.message || "Stripe checkout could not be started.");
         }
       }
     } catch (e: any) {
@@ -706,7 +804,7 @@ export default function HomeownerDashboard({
         {
           addressLine1: modalAddressLine1.trim(),
           city: modalCity.trim(),
-          state: modalState.trim(),
+          state: normalizeUsStateCode(modalState),
           zip: normalizeZip(modalZip),
           country: "US",
           streetAddress: modalAddressLine1.trim(),
@@ -717,8 +815,7 @@ export default function HomeownerDashboard({
       );
       if (r.ok) {
         const action = modalActionAfterSave;
-        setShowAddAddressModal(false);
-        setModalActionAfterSave(null);
+        closeAddAddressModal();
         if (action) {
           if (action === "ai") {
             await submitIssue("ai");
@@ -791,15 +888,36 @@ export default function HomeownerDashboard({
       }
 
       const stripeJobId = sessionStorage.getItem("fixbridge-stripe-active-job-id");
-      if (stripeJobId) {
+      const dispatchPaid = sessionStorage.getItem("fixbridge-dispatch-paid") === "1";
+
+      if (dispatchPaid) {
+        setDispatchSuccessMsg("Dispatch fee authorized — FixBridge has been notified and will contact a contractor.");
+        setTab("report");
+        setStep("assessment");
+        setAssessmentMode("expert");
+        if (stripeJobId) {
+          setSelectedJobId(Number(stripeJobId));
+        }
+        sessionStorage.removeItem("fixbridge-dispatch-paid");
+      } else if (stripeJobId) {
         setSelectedJobId(Number(stripeJobId));
         setTab("jobs");
+      }
+
+      if (stripeJobId) {
         sessionStorage.removeItem("fixbridge-stripe-active-job-id");
       }
     } catch {
       // ignore
     }
   }, []);
+
+  useEffect(() => {
+    if (selectedJobId && step === "assessment" && tab === "report") {
+      const j = jobs.find((x) => x.id === selectedJobId);
+      if (j) setActiveJob(j);
+    }
+  }, [selectedJobId, jobs, step, tab]);
 
   async function handleSubscribe(jobId?: number, planCode = "pro_membership") {
     setBusy(true);
@@ -814,23 +932,27 @@ export default function HomeownerDashboard({
         window.location.href = r.url;
         return;
       }
-      if (r.simulated) {
-        if (onUserUpdated && user) {
-          onUserUpdated({ ...user, planCode });
-        }
-        setTab("go-pro");
-      }
-    } catch (e: any) {
-      setError(e.message || "Could not complete subscription.");
+      setError("Stripe checkout could not be started. Check payment configuration.");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Could not complete subscription.");
     } finally {
       setBusy(false);
     }
   }
 
+  const handleAuthenticatedCheckout = async (planCode: string) => {
+    await handleSubscribe(selectedJobId || undefined, planCode);
+  };
+
   function handleSelectGoProPlan(plan: GoProPlanCard) {
     if (!plan.planCode) return;
     void handleSubscribe(selectedJobId || undefined, plan.planCode);
   }
+
+  const successPlanCard =
+    goProPlans.find((p) => p.planCode === subscriptionSuccessPlanCode) ||
+    goProPlans.find((p) => p.planCode === user.planCode) ||
+    null;
 
   const hasDiyAccess = Boolean(
     user.planCode && diyUnlockCodes.includes(user.planCode)
@@ -909,12 +1031,57 @@ export default function HomeownerDashboard({
 
   function onFile(file: File | null) {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      setMediaDataUrl(String(reader.result));
-      setMediaType(file.type.startsWith("video") ? "video" : "image");
-    };
-    reader.readAsDataURL(file);
+    if (file.type.startsWith("video")) {
+      if (file.size > 8_000_000) {
+        setError("Video is too large. Please use a photo under ~8 MB, or a short clip.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        setMediaDataUrl(String(reader.result));
+        setMediaType("video");
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setError("Please upload a photo (JPEG, PNG, or WebP).");
+      return;
+    }
+    void (async () => {
+      try {
+        setError(null);
+        const dataUrl = await compressImageForAssessment(file);
+        setMediaDataUrl(dataUrl);
+        setMediaType("image");
+      } catch {
+        // Fallback to raw read if canvas compress fails
+        const reader = new FileReader();
+        reader.onload = () => {
+          setMediaDataUrl(String(reader.result));
+          setMediaType("image");
+        };
+        reader.readAsDataURL(file);
+      }
+    })();
+  }
+
+  async function runAssessWithProgress(jobId: number, zip?: string | null) {
+    setAssessLoadingStep(0);
+    setAssessLoadingZip(zip ? String(zip).slice(0, 5) : null);
+    const timer = window.setInterval(() => {
+      setAssessLoadingStep((s) => (s == null ? 0 : Math.min(3, s + 1)));
+    }, 900);
+    try {
+      return await assessManagedJob(jobId);
+    } finally {
+      window.clearInterval(timer);
+      setAssessLoadingStep(3);
+      window.setTimeout(() => {
+        setAssessLoadingStep(null);
+        setAssessLoadingZip(null);
+      }, 350);
+    }
   }
 
   async function submitIssue(path: "ai" | "experts") {
@@ -1002,14 +1169,20 @@ export default function HomeownerDashboard({
         // ignore
       }
       setActiveJob(created.job);
+      setReportPath(path);
       setStep("assessment");
-      const assessed = await assessManagedJob(created.job.id);
+      const propZip = properties.find((p) => p.id === propertyId)?.zip || null;
+      const assessed = await runAssessWithProgress(created.job.id, propZip);
       if (!assessed.ok || !assessed.job) {
         setAssessmentMsg(assessed.message || "Assessment failed — you can still request a professional.");
         setActiveJob(created.job);
       } else {
         setActiveJob(assessed.job);
-        setAssessmentMsg(assessed.pricing?.message || null);
+        setAssessmentMsg(
+          assessed.warning ||
+            assessed.pricing?.message ||
+            null
+        );
       }
       await refresh();
       // Keep assessment for DIY/hire choice; tracking is one click away
@@ -1046,6 +1219,7 @@ export default function HomeownerDashboard({
       return;
     }
     setError(null);
+    setReportPath("experts");
     setStep("experts");
   }
 
@@ -1066,8 +1240,12 @@ export default function HomeownerDashboard({
       }
     }
     setBusy(true);
+    setError(null);
     try {
-      const r = await payDispatchFee(activeJob.id);
+      const r = await payDispatchFee(
+        activeJob.id,
+        dispatchCouponPreview?.code || activeJob.discountCode || undefined
+      );
       if (!r.ok) {
         setError(r.message || "Payment failed.");
         return;
@@ -1076,15 +1254,17 @@ export default function HomeownerDashboard({
         window.location.href = r.url;
         return;
       }
-      setActiveJob(r.job || activeJob);
-      setStep("intake");
-      setTab("jobs");
-      setSelectedJobId(r.job?.id || activeJob.id);
-      await refresh();
+      setError("Stripe checkout could not be started. Check payment configuration.");
     } finally {
       setBusy(false);
     }
   }
+
+  const baseDispatchFee =
+    activeJob?.visitFeeAmount ??
+    activeJob?.pricing?.contractor_visit_fee ??
+    125;
+  const dispatchHoldAmount = dispatchCouponPreview?.discountedAmount ?? baseDispatchFee;
 
   async function sendDiyChatMessage() {
     if (!diyChatInput.trim() || !activeJob) return;
@@ -1465,16 +1645,32 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
             <HomeownerGoProPlans
               currentPlanCode={user.planCode}
               busy={busy}
+              isAuthenticated
+              onAuthenticatedCheckout={handleAuthenticatedCheckout}
               onSelectPlan={handleSelectGoProPlan}
               onPlansLoaded={(cards) => {
+                setGoProPlans(cards);
                 setDiyUnlockCodes(
                   cards.filter((c) => c.unlocksDiy).map((c) => c.planCode)
                 );
               }}
+              onSubscribeSuccess={(u) => onUserUpdated?.(u)}
+              checkPricingUpdates
+              showFeatureMatrix
             />
             {error ? <p className="mt-4 text-center text-sm text-red-600">{error}</p> : null}
           </div>
         )}
+
+        <SubscriptionSuccessModal
+          open={Boolean(showSubscriptionSuccess)}
+          plan={successPlanCard}
+          onClose={() => onDismissSubscriptionSuccess?.()}
+          onViewFeatures={() => {
+            setTab("go-pro");
+            onDismissSubscriptionSuccess?.();
+          }}
+        />
 
         {tab === "report" && (
           <section className="mx-auto max-w-3xl space-y-5">
@@ -1708,7 +1904,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                   <div className="space-y-5">
                     <button
                       type="button"
-                      onClick={() => setIntakePhase("whats")}
+                      onClick={goBackOneReportStep}
                       className="inline-flex items-center gap-1.5 text-sm font-semibold text-muted-foreground hover:text-foreground"
                     >
                       <ArrowLeft size={14} /> Back
@@ -1953,7 +2149,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
 
                 <button
                   type="button"
-                  onClick={() => setStep("intake")}
+                  onClick={goBackOneReportStep}
                   className="relative inline-flex items-center gap-1 text-sm text-muted-foreground transition hover:text-foreground"
                 >
                   <ArrowLeft className="h-4 w-4" /> Back
@@ -2292,10 +2488,10 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <button
                     type="button"
-                    onClick={() => setStep("intake")}
+                    onClick={goBackOneReportStep}
                     className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
                   >
-                    <ArrowLeft className="h-4 w-4" /> Report another issue
+                    <ArrowLeft className="h-4 w-4" /> Back
                   </button>
                   <button
                     type="button"
@@ -2326,6 +2522,12 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                     <p className="text-sm text-muted-foreground">{activeJob.aiAssessment?.disclaimer}</p>
                   </div>
                 </div>
+
+                {assessmentMsg && activeJob.aiAssessment ? (
+                  <p className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                    {assessmentMsg}
+                  </p>
+                ) : null}
 
                 {/* Mode Selector Toggle */}
                 <div className="flex border-b border-border">
@@ -2373,39 +2575,54 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                   </div>
                 )}
 
-                {busy && !activeJob.aiAssessment ? (
-                  <div className="space-y-6 animate-pulse py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="h-5 w-5 rounded bg-muted-foreground/25 animate-pulse" />
-                      <p className="text-sm font-semibold text-muted-foreground animate-pulse">FixBridge AI is analyzing your repair details...</p>
-                    </div>
-                    <div className="space-y-2 bg-muted/20 p-4 rounded-xl">
-                      <div className="h-3 w-full rounded bg-muted-foreground/20" />
-                      <div className="h-3 w-5/6 rounded bg-muted-foreground/20" />
-                      <div className="h-3 w-4/5 rounded bg-muted-foreground/20" />
-                    </div>
-                    <div className="grid gap-3 sm:grid-cols-3">
-                      <div className="rounded-lg bg-muted/40 p-4 space-y-2">
-                        <div className="h-2.5 w-12 rounded bg-muted-foreground/20" />
-                        <div className="h-3.5 w-20 rounded bg-muted-foreground/20" />
-                      </div>
-                      <div className="rounded-lg bg-muted/40 p-4 space-y-2">
-                        <div className="h-2.5 w-12 rounded bg-muted-foreground/20" />
-                        <div className="h-3.5 w-20 rounded bg-muted-foreground/20" />
-                      </div>
-                      <div className="rounded-lg bg-muted/40 p-4 space-y-2">
-                        <div className="h-2.5 w-12 rounded bg-muted-foreground/20" />
-                        <div className="h-3.5 w-20 rounded bg-muted-foreground/20" />
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-border bg-card p-5 space-y-4">
-                      <div className="h-3.5 w-1/3 rounded bg-muted-foreground/20" />
-                      <div className="h-2.5 w-2/3 rounded bg-muted-foreground/20" />
-                      <div className="h-10 w-full rounded-xl bg-[#FF4D1C]/25" />
-                    </div>
+                {assessLoadingStep != null || (busy && !activeJob.aiAssessment) ? (
+                  <EstimateLoadingSteps zip={assessLoadingZip} activeStep={assessLoadingStep ?? 0} />
+                ) : !activeJob.aiAssessment ? (
+                  <div className="space-y-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                    <p className="text-sm font-semibold">Assessment not ready yet</p>
+                    <p className="text-sm leading-relaxed">
+                      {assessmentMsg ||
+                        "AI assessment did not complete. You can retry, or hire a professional below."}
+                    </p>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => {
+                        void (async () => {
+                          setBusy(true);
+                          setAssessmentMsg(null);
+                          try {
+                            const propZip =
+                              properties.find((p) => p.id === activeJob.propertyId)?.zip || null;
+                            const assessed = await runAssessWithProgress(activeJob.id, propZip);
+                            if (!assessed.ok || !assessed.job) {
+                              setAssessmentMsg(
+                                assessed.message ||
+                                  "Assessment failed — you can still request a professional."
+                              );
+                            } else {
+                              setActiveJob(assessed.job);
+                              setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
+                              await refresh();
+                            }
+                          } finally {
+                            setBusy(false);
+                          }
+                        })();
+                      }}
+                      className="inline-flex items-center gap-2 rounded-md bg-[#FF4D1C] px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60"
+                    >
+                      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                      Retry AI assessment
+                    </button>
                   </div>
                 ) : assessmentMode === "expert" ? (
                   <div className="space-y-4">
+                    {dispatchSuccessMsg ? (
+                      <p className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-900 dark:text-emerald-100">
+                        {dispatchSuccessMsg}
+                      </p>
+                    ) : null}
                     <p className="text-sm leading-relaxed">{activeJob.aiAssessment?.summary || "Assessment saved."}</p>
                     <div className="grid gap-3 sm:grid-cols-3">
                       <div className="rounded-md bg-muted/50 p-3 text-sm">
@@ -2435,58 +2652,23 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                         </ul>
                       </div>
                     )}
-                    <div className="rounded-xl border border-border bg-card p-5 space-y-4 shadow-sm">
-                      <h3 className="font-semibold text-sm uppercase tracking-wider text-foreground">📋 Pricing & Dispatch Summary</h3>
-                      
-                      <div className="space-y-2.5">
-                        <div className="flex justify-between text-sm">
-                          <span className="text-muted-foreground">Estimated Repair Cost Range:</span>
-                          <span className="font-semibold tabular-nums">{moneyRange(activeJob)}</span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-muted-foreground">Contractor Visit Fee:</span>
-                          <span className="font-semibold text-foreground">
-                            ${activeJob.visitFeeAmount ?? activeJob.pricing?.contractor_visit_fee ?? 125}
-                          </span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-muted-foreground">FixBridge Beta Fee:</span>
-                          <span className="font-semibold text-emerald-600">
-                            <span className="line-through text-muted-foreground/60 mr-1.5">$49.00</span>
-                            $0.00 (Waived)
-                          </span>
-                        </div>
-                        <div className="border-t border-border/60 pt-2.5 flex justify-between text-sm font-bold">
-                          <span className="text-foreground">Dispatch Authorization Hold:</span>
-                          <span className="text-primary">${activeJob.visitFeeAmount ?? activeJob.pricing?.contractor_visit_fee ?? 125}</span>
-                        </div>
-                      </div>
-
-                      <div className="rounded-lg bg-amber-500/5 border border-amber-500/20 p-3 text-xs text-amber-900 leading-relaxed">
-                        🔒 <strong>Pre-Authorization Hold:</strong> Your card will not be charged today. A temporary hold will be placed to secure the dispatch. The charge is captured only when the contractor arrives and checks in. If you cancel, the hold is released.
-                      </div>
-
-                      <div className="rounded-lg border border-border bg-muted/20 p-3.5 space-y-2 text-xs leading-relaxed text-muted-foreground">
-                        <h4 className="font-bold text-foreground text-[11px] uppercase tracking-wider">### Estimated Repair</h4>
-                        <p>
-                          <em>Disclaimer:</em> This estimate is based solely on the photos provided. Not all damage or repair requirements can be assessed from photos. Additional damage discovered during an in-person inspection may result in higher repair costs.
-                        </p>
-                        <p>
-                          <em>Visit Fee:</em> If you proceed with repairs through the FixBridge team, the visit fee will be deducted from your final repair bill. The visit fee can be customized through the Admin Page.
-                        </p>
-                      </div>
-                      
-                      <p className="text-[11px] text-muted-foreground">{activeJob.preferredTimeNote}</p>
-
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void payFee()}
-                        className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-3 text-sm font-semibold text-white shadow-[0_10px_20px_rgba(255,77,28,0.2)] hover:bg-primary/95 disabled:opacity-60 transition-all"
-                      >
-                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Authorize Dispatch & Hold Card"}
-                      </button>
-                    </div>
+                    <HomeownerLocalEstimate job={activeJob} />
+                    <HireProfessionalWizard
+                      job={activeJob}
+                      busy={busy}
+                      setBusy={setBusy}
+                      onError={setError}
+                      onJobUpdated={(updated) => {
+                        setActiveJob(updated);
+                        setSelectedJobId(updated.id);
+                      }}
+                      onPaid={async () => {
+                        setDispatchSuccessMsg("Dispatch fee authorized — FixBridge has been notified.");
+                        setTab("jobs");
+                        setSelectedJobId(activeJob.id);
+                        await refresh();
+                      }}
+                    />
                   </div>
                 ) : (
                   !hasDiyAccess ? (
@@ -2519,12 +2701,17 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                           compact
                           currentPlanCode={user.planCode}
                           busy={busy}
+                          isAuthenticated
+                          onAuthenticatedCheckout={handleAuthenticatedCheckout}
                           onSelectPlan={handleSelectGoProPlan}
                           onPlansLoaded={(cards) => {
+                            setGoProPlans(cards);
                             setDiyUnlockCodes(
                               cards.filter((c) => c.unlocksDiy).map((c) => c.planCode)
                             );
                           }}
+                          showFeatureMatrix={false}
+                          checkPricingUpdates={false}
                         />
                       </div>
                     </div>
@@ -2542,6 +2729,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                           </div>
                         </div>
                       )}
+
+                      <HomeownerLocalEstimate job={activeJob} compact />
 
                       {/* Split Grid Layout: Left Side (Action plan tools, steps) and Right Side (AI Assistant chat) */}
                       <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_0.9fr] gap-6 items-start">
@@ -3389,7 +3578,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                 <h3 className="text-lg font-bold tracking-wide text-foreground">Complete Address Details</h3>
                 <button
                   type="button"
-                  onClick={() => setShowAddressPromptPropertyId(null)}
+                  onClick={closeAddressPrompt}
                   className="rounded p-1 hover:bg-muted"
                 >
                   <X className="h-5 w-5" />
@@ -3422,58 +3611,32 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                     onChange={(e) => setAddressPromptLine2(e.target.value)}
                   />
                 </label>
-                <div className="grid grid-cols-2 gap-3">
-                  <label className="grid gap-1.5">
-                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">City <span className="text-red-500">*</span></span>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. Brooklyn"
-                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#FF4D1C] text-foreground"
-                      value={addressPromptCity}
-                      onChange={(e) => setAddressPromptCity(e.target.value)}
-                    />
-                  </label>
-                  <label className="grid gap-1.5">
-                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">State <span className="text-red-500">*</span></span>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. NY"
-                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#FF4D1C] text-foreground"
-                      value={addressPromptState}
-                      onChange={(e) => setAddressPromptState(e.target.value)}
-                    />
-                  </label>
-                </div>
-                <label className="grid gap-1.5">
-                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">ZIP Code <span className="text-red-500">*</span></span>
-                  <input
-                    type="text"
-                    required
-                    {...zipInputProps()}
-                    className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#FF4D1C] text-foreground"
-                    value={addressPromptZip}
-                    onChange={(e) => setAddressPromptZip(normalizeZip(e.target.value))}
-                  />
-                </label>
+                <UsLocationFields
+                  city={addressPromptCity}
+                  state={addressPromptState}
+                  zip={addressPromptZip}
+                  onCityChange={setAddressPromptCity}
+                  onStateChange={setAddressPromptState}
+                  onZipChange={setAddressPromptZip}
+                  disabled={busy}
+                />
               </div>
 
               <div className="flex justify-end gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowAddressPromptPropertyId(null)}
+                  onClick={closeAddressPrompt}
                   className="rounded-lg border border-border px-4 py-2 hover:bg-muted font-medium text-foreground"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  disabled={busy || !addressPromptLine1.trim() || !addressPromptCity.trim() || !addressPromptState.trim() || !isValidUsZip(addressPromptZip)}
+                  disabled={busy || !addressPromptLine1.trim() || !addressPromptCity.trim() || !normalizeUsStateCode(addressPromptState) || !isValidUsZip(addressPromptZip)}
                   onClick={() => void handleSaveAddressAndProceed()}
                   className="rounded-lg bg-[#FF4D1C] px-4 py-2 font-semibold text-white transition hover:brightness-105 disabled:opacity-60"
                 >
-                  {busy ? "Saving..." : "Save & Complete Checkout"}
+                  {busy ? "Saving..." : "Save Address"}
                 </button>
               </div>
             </motion.div>
@@ -3495,7 +3658,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                 <h3 className="text-lg font-bold tracking-wide text-foreground">Add New Address</h3>
                 <button
                   type="button"
-                  onClick={() => setShowAddAddressModal(false)}
+                  onClick={closeAddAddressModal}
                   className="rounded p-1 hover:bg-muted"
                 >
                   <X className="h-5 w-5" />
@@ -3518,54 +3681,28 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                     onChange={(e) => setModalAddressLine1(e.target.value)}
                   />
                 </label>
-                <div className="grid grid-cols-2 gap-3">
-                  <label className="grid gap-1.5">
-                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">City <span className="text-red-500">*</span></span>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. Brooklyn"
-                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#FF4D1C] text-foreground"
-                      value={modalCity}
-                      onChange={(e) => setModalCity(e.target.value)}
-                    />
-                  </label>
-                  <label className="grid gap-1.5">
-                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">State <span className="text-red-500">*</span></span>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. NY"
-                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#FF4D1C] text-foreground"
-                      value={modalState}
-                      onChange={(e) => setModalState(e.target.value)}
-                    />
-                  </label>
-                </div>
-                <label className="grid gap-1.5">
-                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">ZIP Code <span className="text-red-500">*</span></span>
-                  <input
-                    type="text"
-                    required
-                    {...zipInputProps()}
-                    className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#FF4D1C] text-foreground"
-                    value={modalZip}
-                    onChange={(e) => setModalZip(normalizeZip(e.target.value))}
-                  />
-                </label>
+                <UsLocationFields
+                  city={modalCity}
+                  state={modalState}
+                  zip={modalZip}
+                  onCityChange={setModalCity}
+                  onStateChange={setModalState}
+                  onZipChange={setModalZip}
+                  disabled={busy}
+                />
               </div>
 
               <div className="flex justify-end gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowAddAddressModal(false)}
+                  onClick={closeAddAddressModal}
                   className="rounded-lg border border-border px-4 py-2 hover:bg-muted font-medium text-foreground"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  disabled={busy || !modalAddressLine1.trim() || !modalCity.trim() || !modalState.trim() || !isValidUsZip(modalZip)}
+                  disabled={busy || !modalAddressLine1.trim() || !modalCity.trim() || !normalizeUsStateCode(modalState) || !isValidUsZip(modalZip)}
                   onClick={() => void handleSaveAddressModal()}
                   className="rounded-lg bg-[#FF4D1C] px-4 py-2 font-semibold text-white transition hover:brightness-105 disabled:opacity-60"
                 >

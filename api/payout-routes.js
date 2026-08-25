@@ -42,9 +42,13 @@ function payoutSettingsToApi(row) {
   };
 }
 
-export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite }) {
+export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission }) {
+  const need = typeof requirePermission === 'function'
+    ? requirePermission
+    : () => (_req, _res, next) => next();
+
   // ── Admin payout settings ───────────────────────────────────────────────────
-  app.get('/api/admin/payout-settings', requireAuth, requireAdmin, async (_req, res) => {
+  app.get('/api/admin/payout-settings', requireAuth, requireAdmin, need('payouts.view'), async (_req, res) => {
     try {
       const { rows } = await pool.query(`SELECT * FROM payout_settings WHERE id='default'`);
       res.json({ ok: true, settings: payoutSettingsToApi(rows[0]) });
@@ -53,7 +57,7 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, req
     }
   });
 
-  app.put('/api/admin/payout-settings', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+  app.put('/api/admin/payout-settings', requireAuth, requireAdmin, requireAdminWrite, need('settings.edit'), async (req, res) => {
     try {
       const b = req.body || {};
       const numOr = (v, fallback) => (v == null || v === '' || Number.isNaN(Number(v)) ? fallback : Number(v));

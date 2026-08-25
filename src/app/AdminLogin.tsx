@@ -51,7 +51,11 @@ export default function AdminLogin({
       const mfa = await startAdminMfa();
       setLoading(false);
       if (!mfa.ok) {
-        setError("Could not start MFA. Please try again.");
+        setError(
+          (mfa as { message?: string; detail?: string }).detail
+            ? `Could not start MFA: ${(mfa as { detail?: string }).detail}`
+            : (mfa as { message?: string }).message || "Could not start MFA. Please try again."
+        );
         return;
       }
       setPendingUser(result.user);

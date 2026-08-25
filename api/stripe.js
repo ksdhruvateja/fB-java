@@ -1,5 +1,6 @@
 /**
- * Stripe Checkout + Connect helpers with simulate fallback when keys are missing.
+ * Stripe Checkout + Connect helpers.
+ * Payments require STRIPE_SECRET_KEY — no simulated checkout fallback.
  */
 
 let stripeClient = null;
@@ -8,18 +9,22 @@ export function stripeConfigured() {
   return Boolean(process.env.STRIPE_SECRET_KEY?.trim());
 }
 
-/**
- * Simulated payments are only for local/demo when Stripe is not configured.
- * Never honor a client `simulate: true` flag when live Stripe keys exist.
- */
-export function shouldSimulatePayment(clientRequestedSimulate = false) {
-  if (!stripeConfigured()) return true;
-  if (process.env.NODE_ENV === 'production') return false;
-  // Local/dev with Stripe keys: only simulate when explicitly allowed
-  return (
-    clientRequestedSimulate === true &&
-    String(process.env.ALLOW_PAYMENT_SIMULATION || '').toLowerCase() === 'true'
-  );
+/** Simulated payments are disabled — always use live Stripe when charging. */
+export function shouldSimulatePayment(_clientRequestedSimulate = false) {
+  return false;
+}
+
+/** Call before charging: fails if Stripe is not configured. */
+export function assertPaymentsAvailable(_clientRequestedSimulate = false) {
+  if (!stripeConfigured()) {
+    const err = new Error(
+      'Payments are not configured. Set STRIPE_SECRET_KEY (and STRIPE_WEBHOOK_SECRET for webhooks) in your environment.'
+    );
+    err.status = 503;
+    err.code = 'STRIPE_NOT_CONFIGURED';
+    throw err;
+  }
+  return { simulate: false };
 }
 
 export async function getStripe() {
@@ -48,12 +53,18 @@ export async function createCheckoutSession({
   description,
   mode = 'payment',
   trialDays = 0,
+  interval = 'month',
   origin,
 }) {
+  assertPaymentsAvailable();
   const stripe = await getStripe();
   if (!stripe) {
-    return { simulated: true, url: null, sessionId: null };
+    const err = new Error('Stripe is not configured.');
+    err.status = 503;
+    err.code = 'STRIPE_NOT_CONFIGURED';
+    throw err;
   }
+
   const lineItem = {
     quantity: 1,
     price_data: {
@@ -63,7 +74,7 @@ export async function createCheckoutSession({
     },
   };
   if (mode === 'subscription') {
-    lineItem.price_data.recurring = { interval: 'month' };
+    lineItem.price_data.recurring = { interval: interval === 'year' ? 'year' : 'month' };
   }
   const baseUrl = origin ? origin.replace(/\/$/, '') : appBaseUrl();
   const sessionParams = {
@@ -84,37 +95,49 @@ export async function createCheckoutSession({
       trial_period_days: trialDays,
     };
   }
-  try {
-    const session = await stripe.checkout.sessions.create(sessionParams);
-    return { simulated: false, url: session.url, sessionId: session.id };
-  } catch (err) {
-    console.error('[Stripe API Error, falling back to simulation]', err.message);
-    return { simulated: true, url: null, sessionId: null };
+
+  const session = await stripe.checkout.sessions.create(sessionParams);
+  if (!session.url) {
+    const err = new Error('Stripe did not return a checkout URL.');
+    err.status = 502;
+    err.code = 'STRIPE_CHECKOUT_FAILED';
+    throw err;
   }
+  return { url: session.url, sessionId: session.id };
 }
 
 export async function createConnectAccountLink(accountId, refreshPath, returnPath) {
   const stripe = await getStripe();
-  if (!stripe) return { simulated: true, url: null };
+  if (!stripe) {
+    const err = new Error('Stripe is not configured.');
+    err.status = 503;
+    err.code = 'STRIPE_NOT_CONFIGURED';
+    throw err;
+  }
   const link = await stripe.accountLinks.create({
     account: accountId,
     refresh_url: `${appBaseUrl()}${refreshPath}`,
     return_url: `${appBaseUrl()}${returnPath}`,
     type: 'account_onboarding',
   });
-  return { simulated: false, url: link.url };
+  return { url: link.url };
 }
 
 export async function createConnectAccountUpdateLink(accountId, refreshPath, returnPath) {
   const stripe = await getStripe();
-  if (!stripe) return { simulated: true, url: null };
+  if (!stripe) {
+    const err = new Error('Stripe is not configured.');
+    err.status = 503;
+    err.code = 'STRIPE_NOT_CONFIGURED';
+    throw err;
+  }
   const link = await stripe.accountLinks.create({
     account: accountId,
     refresh_url: `${appBaseUrl()}${refreshPath}`,
     return_url: `${appBaseUrl()}${returnPath}`,
     type: 'account_update',
   });
-  return { simulated: false, url: link.url };
+  return { url: link.url };
 }
 
 const STRIPE_RETURN = '/?stripe=return';
@@ -135,12 +158,10 @@ export function stripeConnectRefreshUrl() {
 export async function listConnectExternalAccounts(accountId) {
   const stripe = await getStripe();
   if (!stripe || !accountId) {
-    return {
-      simulated: true,
-      accounts: [
-        { id: 'sim_ba_1', objectType: 'bank_account', bankName: 'Demo Bank', last4: '6789', currency: 'usd', defaultForCurrency: true, status: 'verified' },
-      ],
-    };
+    const err = new Error('Stripe is not configured.');
+    err.status = 503;
+    err.code = 'STRIPE_NOT_CONFIGURED';
+    throw err;
   }
   try {
     const list = await stripe.accounts.listExternalAccounts(accountId, { object: 'bank_account', limit: 10 });
@@ -155,10 +176,10 @@ export async function listConnectExternalAccounts(accountId) {
       status: ext.status || 'unknown',
       routingLast4: ext.routing_number ? String(ext.routing_number).slice(-4) : null,
     }));
-    return { simulated: false, accounts };
+    return { accounts };
   } catch (err) {
     console.error('listConnectExternalAccounts:', err.message);
-    return { simulated: false, accounts: [], error: err.message };
+    return { accounts: [], error: err.message };
   }
 }
 
@@ -190,7 +211,10 @@ export function summarizeConnectAccount(account, externalAccounts = []) {
 export async function createExpressAccount(email) {
   const stripe = await getStripe();
   if (!stripe) {
-    return { simulated: true, accountId: `sim_acct_${Date.now()}` };
+    const err = new Error('Stripe is not configured.');
+    err.status = 503;
+    err.code = 'STRIPE_NOT_CONFIGURED';
+    throw err;
   }
   const account = await stripe.accounts.create({
     type: 'express',
@@ -199,13 +223,16 @@ export async function createExpressAccount(email) {
       transfers: { requested: true },
     },
   });
-  return { simulated: false, accountId: account.id };
+  return { accountId: account.id };
 }
 
 export async function createTransfer({ amountCents, destinationAccountId, transferGroup, metadata }) {
   const stripe = await getStripe();
   if (!stripe) {
-    return { simulated: true, transferId: `sim_tr_${Date.now()}` };
+    const err = new Error('Stripe is not configured.');
+    err.status = 503;
+    err.code = 'STRIPE_NOT_CONFIGURED';
+    throw err;
   }
   const transfer = await stripe.transfers.create({
     amount: Math.round(amountCents),
@@ -214,7 +241,7 @@ export async function createTransfer({ amountCents, destinationAccountId, transf
     transfer_group: transferGroup,
     metadata,
   });
-  return { simulated: false, transferId: transfer.id };
+  return { transferId: transfer.id };
 }
 
 export async function constructWebhookEvent(rawBody, signature) {
@@ -226,7 +253,9 @@ export async function constructWebhookEvent(rawBody, signature) {
 
 export async function capturePaymentIntent(paymentIntentId, amountCents = null) {
   const stripe = await getStripe();
-  if (!stripe) return { simulated: true };
+  if (!stripe) {
+    return { ok: false, error: 'Stripe is not configured.' };
+  }
   try {
     const params = {};
     if (amountCents != null) {
@@ -242,7 +271,9 @@ export async function capturePaymentIntent(paymentIntentId, amountCents = null) 
 
 export async function cancelPaymentIntent(paymentIntentId) {
   const stripe = await getStripe();
-  if (!stripe) return { simulated: true };
+  if (!stripe) {
+    return { ok: false, error: 'Stripe is not configured.' };
+  }
   try {
     const pi = await stripe.paymentIntents.cancel(paymentIntentId);
     return { ok: true, status: pi.status };
@@ -254,25 +285,29 @@ export async function cancelPaymentIntent(paymentIntentId) {
 
 export async function retrieveConnectAccount(accountId) {
   const stripe = await getStripe();
-  if (!stripe || !accountId) return { simulated: true, account: null };
+  if (!stripe || !accountId) {
+    return { account: null, error: 'Stripe is not configured.' };
+  }
   try {
     const account = await stripe.accounts.retrieve(accountId);
-    return { simulated: false, account };
+    return { account };
   } catch (err) {
     console.error('Stripe retrieve account error:', err.message);
-    return { simulated: false, account: null, error: err.message };
+    return { account: null, error: err.message };
   }
 }
 
 export async function createConnectLoginLink(accountId) {
   const stripe = await getStripe();
-  if (!stripe || !accountId) return { simulated: true, url: null };
+  if (!stripe || !accountId) {
+    return { url: null, error: 'Stripe is not configured.' };
+  }
   try {
     const link = await stripe.accounts.createLoginLink(accountId);
-    return { simulated: false, url: link.url };
+    return { url: link.url };
   } catch (err) {
     console.error('Stripe login link error:', err.message);
-    return { simulated: false, url: null, error: err.message };
+    return { url: null, error: err.message };
   }
 }
 
@@ -288,11 +323,10 @@ export async function createConnectPayout({
 }) {
   const stripe = await getStripe();
   if (!stripe) {
-    return {
-      simulated: true,
-      transferId: `sim_tr_${Date.now()}`,
-      payoutId: method === 'instant' ? `sim_po_instant_${Date.now()}` : `sim_po_${Date.now()}`,
-    };
+    const err = new Error('Stripe is not configured.');
+    err.status = 503;
+    err.code = 'STRIPE_NOT_CONFIGURED';
+    throw err;
   }
 
   const transfer = await stripe.transfers.create({
@@ -317,13 +351,16 @@ export async function createConnectPayout({
     payoutId = payout.id;
   }
 
-  return { simulated: false, transferId: transfer.id, payoutId };
+  return { transferId: transfer.id, payoutId };
 }
 
 export async function createStandardConnectPayout({ amountCents, connectedAccountId, metadata }) {
   const stripe = await getStripe();
   if (!stripe) {
-    return { simulated: true, payoutId: `sim_po_${Date.now()}` };
+    const err = new Error('Stripe is not configured.');
+    err.status = 503;
+    err.code = 'STRIPE_NOT_CONFIGURED';
+    throw err;
   }
   const payout = await stripe.payouts.create(
     {
@@ -334,5 +371,5 @@ export async function createStandardConnectPayout({ amountCents, connectedAccoun
     },
     { stripeAccount: connectedAccountId }
   );
-  return { simulated: false, payoutId: payout.id };
+  return { payoutId: payout.id };
 }

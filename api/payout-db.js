@@ -219,9 +219,29 @@ export async function approveAndReleasePayout(pool, payoutId, adminUserId, { adj
     return { ok: false, message: `Payout cannot be approved from status: ${payout.status}` };
   }
 
+  const { rows: retailPaid } = await pool.query(
+    `SELECT 1 FROM payments WHERE job_id=$1 AND payment_type='retail_payment' AND status='succeeded' LIMIT 1`,
+    [payout.job_id]
+  );
+  if (!retailPaid.length) {
+    return {
+      ok: false,
+      message: 'Homeowner payment must be received before releasing contractor payout.',
+    };
+  }
+
   const { rows: contractors } = await pool.query(`SELECT * FROM users WHERE id=$1`, [payout.contractor_id]);
   const contractor = contractors[0];
   if (!contractor) return { ok: false, message: 'Contractor not found.' };
+
+  const isProduction = process.env.NODE_ENV === 'production';
+  if (isProduction && !stripeConfigured()) {
+    return {
+      ok: false,
+      message: 'Payouts require Stripe in production. STRIPE_SECRET_KEY is not configured.',
+      code: 'STRIPE_NOT_CONFIGURED',
+    };
+  }
 
   const simulate =
     shouldSimulatePayment(false) || (!contractor.stripe_account_id && !stripeConfigured());
@@ -392,6 +412,13 @@ export async function requestInstantPayout(pool, payoutId, contractorUserId) {
 
   const { rows: contractors } = await pool.query(`SELECT * FROM users WHERE id=$1`, [contractorUserId]);
   const contractor = contractors[0];
+  if (process.env.NODE_ENV === 'production' && !stripeConfigured()) {
+    return {
+      ok: false,
+      message: 'Instant payouts require Stripe in production.',
+      code: 'STRIPE_NOT_CONFIGURED',
+    };
+  }
   const simulate = shouldSimulatePayment(false) || !stripeConfigured();
 
   const instantFee = settings.fixbridge_absorbs_fee

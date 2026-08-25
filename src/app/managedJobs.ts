@@ -42,6 +42,9 @@ export type StructuredAssessment = {
   estimated_labor_hours_min: number;
   estimated_labor_hours_max: number;
   complexity: string;
+  service_type?: string;
+  service_subcategory?: string;
+  problem_classification?: string;
   questions_needed: string[];
   diy_difficulty?: string;
   tools_required?: string[];
@@ -76,6 +79,8 @@ export type ManagedJob = {
   estimatedContractorNetLow?: number | null;
   estimatedContractorNetHigh?: number | null;
   pricingDisclaimer?: string;
+  estimateContext?: string | null;
+  estimateConfidence?: string | null;
   preferredTimeNote?: string;
   assignedContractorUserId?: number | null;
   homeownerUserId?: number | null;
@@ -201,7 +206,17 @@ export type Proposal = {
   platformGross?: number;
   processingCost?: number;
   quoteValidUntil?: string | null;
-  customerLineItems?: Array<{ label: string; amount: number; visible?: boolean }>;
+  adminDiscount?: number | null;
+  customerLineItems?: Array<{
+    label?: string;
+    name?: string;
+    description?: string;
+    qty?: number;
+    unit?: string;
+    unitPrice?: number;
+    amount: number;
+    visible?: boolean;
+  }>;
   couponCode?: string | null;
   serviceCharge?: number | null;
   expectedMarginPct?: number | null;
@@ -211,10 +226,21 @@ export type Proposal = {
   jobZip?: string | null;
   homeownerName?: string | null;
   homeownerEmail?: string | null;
+  homeownerPhone?: string | null;
   contractorName?: string | null;
   aiEstimateLow?: number | null;
   aiEstimateHigh?: number | null;
   createdAt?: string | null;
+  publishedAt?: string | null;
+  createdByName?: string | null;
+  createdById?: number | null;
+  pricingAdjustments?: Array<Record<string, unknown>>;
+  adminDiscountReason?: string | null;
+  lineItems?: Array<{ label: string; amount: number; visible?: boolean }>;
+  invoiceId?: number | null;
+  invoiceNumber?: string | null;
+  invoiceStatus?: string | null;
+  invoiceAmountDue?: number | null;
 };
 
 export type Bid = {
@@ -238,8 +264,8 @@ export type Bid = {
 
 export const STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
-  ai_review_complete: "Assessment ready",
-  awaiting_service_payment: "Pay assessment fee",
+  ai_review_complete: "Assessment ready — awaiting FixBridge quote",
+  awaiting_service_payment: "Legacy — dispatch hold pending",
   paid_for_dispatch: "Fee paid",
   awaiting_contractor: "Finding professional",
   contractor_invited: "Contractor invited",
@@ -249,13 +275,13 @@ export const STATUS_LABELS: Record<string, string> = {
   bid_received: "Bid received",
   proposal_sent: "Proposal ready",
   awaiting_customer_approval: "Approve proposal",
-  approved: "Approved",
+  approved: "Quote approved — awaiting dispatch",
   scheduled: "Scheduled",
   contractor_en_route: "En route",
   work_started: "Work in progress",
   change_order_pending: "Change order pending",
   work_completed: "Work completed",
-  customer_review_pending: "Confirm completion",
+  customer_review_pending: "Pay FixBridge",
   admin_review_pending: "Admin review",
   payout_pending: "Payout pending",
   paid_out: "Contractor paid",
@@ -280,8 +306,14 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       return { ok: false, message: text || res.statusText || "Request failed." } as T;
     }
-  } catch {
-    return { ok: false, message: "Network error. Is the API running?" } as T;
+  } catch (err) {
+    const aborted = err instanceof Error && err.name === "AbortError";
+    return {
+      ok: false,
+      message: aborted
+        ? "Request timed out. Try a smaller photo or hire a professional."
+        : "Network error. Is the API running?",
+    } as T;
   }
 }
 
@@ -342,19 +374,32 @@ export async function createManagedJob(body: Record<string, unknown>) {
 }
 
 export async function assessManagedJob(jobId: number) {
-  return api<{
-    ok: boolean;
-    job?: ManagedJob;
-    assessment?: StructuredAssessment;
-    pricing?: {
-      showPrice: boolean;
-      message?: string | null;
-      customerRetailEstimateLow?: number | null;
-      customerRetailEstimateHigh?: number | null;
-      disclaimer?: string;
-    };
-    message?: string;
-  }>(`/api/managed/jobs/${jobId}/assess`, { method: "POST", body: "{}" });
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = controller ? window.setTimeout(() => controller.abort(), 90_000) : 0;
+  try {
+    return await api<{
+      ok: boolean;
+      job?: ManagedJob;
+      assessment?: StructuredAssessment;
+      pricing?: {
+        showPrice: boolean;
+        message?: string | null;
+        customerRetailEstimateLow?: number | null;
+        customerRetailEstimateHigh?: number | null;
+        disclaimer?: string;
+        estimateContext?: string | null;
+        zipMarket?: string | null;
+      };
+      message?: string;
+      warning?: string | null;
+    }>(`/api/managed/jobs/${jobId}/assess`, {
+      method: "POST",
+      body: "{}",
+      signal: controller?.signal,
+    });
+  } finally {
+    if (timer) window.clearTimeout(timer);
+  }
 }
 
 export async function listMyManagedJobs() {
@@ -365,10 +410,51 @@ export async function getManagedJob(jobId: number) {
   return api<{ ok: boolean; job?: ManagedJob }>("/api/managed/jobs/" + jobId);
 }
 
-export async function payDispatchFee(jobId: number) {
+export async function applyJobCoupon(jobId: number, code: string) {
+  return api<{
+    ok: boolean;
+    discount?: {
+      code: string;
+      label?: string | null;
+      discountType: "percent" | "amount";
+      value: number;
+      summary: string;
+    };
+    visitFeeOriginal?: number;
+    visitFeeAfterDiscount?: number;
+    discountAmount?: number;
+    job?: ManagedJob;
+    message?: string;
+  }>(`/api/managed/jobs/${jobId}/apply-coupon`, {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
+}
+
+export async function requestProfessionalDispatch(
+  jobId: number,
+  body: {
+    serviceTiming: string;
+    preferredDate?: string;
+    preferredTimeSlot: string;
+    propertyPurpose: string;
+    transactionStage: string;
+    discountCode?: string;
+  }
+) {
+  return api<{ ok: boolean; job?: ManagedJob; message?: string }>(
+    `/api/managed/jobs/${jobId}/request-professional`,
+    { method: "POST", body: JSON.stringify(body) }
+  );
+}
+
+export async function payDispatchFee(jobId: number, discountCode?: string) {
   return api<{ ok: boolean; simulated?: boolean; url?: string; amount?: number; job?: ManagedJob; message?: string }>(
     `/api/managed/jobs/${jobId}/pay-dispatch`,
-    { method: "POST", body: "{}" }
+    {
+      method: "POST",
+      body: JSON.stringify(discountCode ? { discountCode } : {}),
+    }
   );
 }
 
@@ -386,6 +472,13 @@ export async function approveProposal(jobId: number) {
 export async function payRetail(jobId: number) {
   return api<{ ok: boolean; simulated?: boolean; url?: string; amount?: number; job?: ManagedJob; message?: string }>(
     `/api/managed/jobs/${jobId}/pay-retail`,
+    { method: "POST", body: "{}" }
+  );
+}
+
+export async function requestAdminDispatch(jobId: number) {
+  return api<{ ok: boolean; job?: ManagedJob; message?: string }>(
+    `/api/admin/managed/jobs/${jobId}/request-dispatch`,
     { method: "POST", body: "{}" }
   );
 }
@@ -506,6 +599,101 @@ export async function adminCreateProposal(jobId: number, bidId: number, extras?:
     `/api/admin/managed/jobs/${jobId}/proposal`,
     { method: "POST", body: JSON.stringify({ bidId, ...extras }) }
   );
+}
+
+export async function adminQuoteWorkspace(id: number | string) {
+  return api<{
+    ok: boolean;
+    quote?: import("./quoteDocument").QuoteDocument;
+    invoice?: import("./quoteDocument").QuoteInvoice | null;
+    activity?: import("./quoteDocument").QuoteActivity[];
+    message?: string;
+  }>(`/api/admin/quotes/${id}/workspace`);
+}
+
+export async function adminSaveQuoteDocument(id: number, body: Record<string, unknown>) {
+  return api<{ ok: boolean; quote?: import("./quoteDocument").QuoteDocument; message?: string }>(
+    `/api/admin/quotes/${id}/document`,
+    { method: "PUT", body: JSON.stringify(body) }
+  );
+}
+
+export async function adminSendQuote(
+  id: number,
+  body: {
+    sendEmail?: boolean;
+    sendSms?: boolean;
+    email?: string;
+    phone?: string;
+    subject?: string;
+    message?: string;
+  }
+) {
+  return api<{ ok: boolean; quote?: import("./quoteDocument").QuoteDocument; message?: string }>(
+    `/api/admin/quotes/${id}/send`,
+    { method: "POST", body: JSON.stringify(body) }
+  );
+}
+
+export async function adminDuplicateQuote(id: number) {
+  return api<{ ok: boolean; quote?: import("./quoteDocument").QuoteDocument; message?: string }>(
+    `/api/admin/quotes/${id}/duplicate`,
+    { method: "POST", body: JSON.stringify({}) }
+  );
+}
+
+export async function adminCancelQuote(id: number, reason?: string) {
+  return api<{ ok: boolean; quote?: import("./quoteDocument").QuoteDocument; message?: string }>(
+    `/api/admin/quotes/${id}/cancel`,
+    { method: "POST", body: JSON.stringify({ reason }) }
+  );
+}
+
+export async function adminConvertQuoteToInvoice(id: number) {
+  return api<{
+    ok: boolean;
+    quote?: import("./quoteDocument").QuoteDocument;
+    invoice?: import("./quoteDocument").QuoteInvoice;
+    message?: string;
+  }>(`/api/admin/quotes/${id}/convert-invoice`, { method: "POST", body: JSON.stringify({}) });
+}
+
+export async function adminSendWorkspaceInvoice(
+  id: number,
+  opts: { sendEmail?: boolean; sendSms?: boolean; email?: string; phone?: string }
+) {
+  return api<{ ok: boolean; invoice?: import("./quoteDocument").QuoteInvoice; message?: string }>(
+    `/api/admin/invoices/${id}/send`,
+    { method: "POST", body: JSON.stringify(opts) }
+  );
+}
+
+export async function adminMarkInvoicePaid(
+  id: number,
+  body: {
+    amountReceived?: number;
+    paymentMethod?: string;
+    reference?: string;
+    notes?: string;
+    paymentDate?: string;
+  }
+) {
+  return api<{ ok: boolean; invoice?: import("./quoteDocument").QuoteInvoice; message?: string }>(
+    `/api/admin/invoices/${id}/mark-paid`,
+    { method: "POST", body: JSON.stringify(body) }
+  );
+}
+
+export async function adminCreateInvoicePaymentLink(id: number, force?: boolean) {
+  return api<{
+    ok: boolean;
+    paymentLink?: string;
+    invoice?: import("./quoteDocument").QuoteInvoice;
+    message?: string;
+  }>(`/api/admin/invoices/${id}/payment-link`, {
+    method: "POST",
+    body: JSON.stringify({ force: force === true }),
+  });
 }
 
 export async function adminApplyJobDiscount(jobId: number, code: string) {
@@ -637,6 +825,25 @@ export async function adminReporting() {
     diySplit?: { diyOk: number; proRequired: number; pendingAi: number; diyPct: number };
     message?: string;
   }>("/api/admin/reporting/summary");
+}
+
+export async function adminOrderLedger(q = "") {
+  const params = q.trim() ? `?q=${encodeURIComponent(q.trim())}` : "";
+  return api<{
+    ok: boolean;
+    summary?: {
+      totalIncoming: number;
+      totalPending: number;
+      totalPaidOut: number;
+      totalQuotedProfit: number;
+      netPosition: number;
+      orderCount: number;
+      ledgerEventCount: number;
+    };
+    orders?: Array<Record<string, unknown>>;
+    ledger?: Array<Record<string, unknown>>;
+    message?: string;
+  }>(`/api/admin/order-ledger${params}`);
 }
 
 export async function lookupPartner(code: string) {

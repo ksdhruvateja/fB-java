@@ -408,145 +408,35 @@ export default function CustomerTrustSection() {
               }}
               className="mt-5 inline-flex [font-family:'Barlow_Condensed',sans-serif] font-bold uppercase tracking-wider text-sm bg-primary text-white px-5 py-2.5 rounded-full hover:bg-primary/90 transition-colors"
             >
-              {formOpen ? "Close form" : "Write a review"}
+              {formOpen ? "Close" : "How to leave a review"}
             </button>
           </div>
         </ScrollReveal>
 
         <AnimatePresence initial={false}>
           {formOpen && (
-            <motion.form
+            <motion.div
               key="review-form"
               initial={{ opacity: 0, y: 12, height: 0 }}
               animate={{ opacity: 1, y: 0, height: "auto" }}
               exit={{ opacity: 0, y: -8, height: 0 }}
-              onSubmit={submitReview}
               className="mb-10 overflow-hidden rounded-3xl border border-border bg-muted/80 p-4 sm:p-6"
             >
-              <p className="text-sm text-muted-foreground mb-4 max-w-2xl">
-                Share a real {brand.productName} experience. Reviews publish on this page as soon as you submit.
+              <p className="text-sm text-muted-foreground max-w-2xl">
+                Reviews on {brand.productName} are verified. After your job is completed, sign in as a
+                homeowner and submit a review from that job. Public guest reviews are no longer accepted,
+                so every rating stays tied to real completed work.
               </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mb-4">
-                <label className="block text-sm">
-                  <span className={labelClass}>Your name</span>
-                  <input
-                    required
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className={fieldClass}
-                    placeholder="Alex Rivera"
-                  />
-                </label>
-                <label className="block text-sm">
-                  <span className={labelClass}>City / neighborhood</span>
-                  <input
-                    required
-                    value={location}
-                    onChange={(e) => setLocation(e.target.value)}
-                    className={fieldClass}
-                    placeholder="Astoria, Queens"
-                  />
-                </label>
-                <label className="block text-sm">
-                  <span className={labelClass}>Service</span>
-                  <select
-                    value={serviceType}
-                    onChange={(e) => setServiceType(e.target.value)}
-                    className={fieldClass}
-                  >
-                    {SERVICE_OPTIONS.map((opt) => (
-                      <option key={opt} value={opt}>
-                        {opt}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <div className="block text-sm sm:col-span-2">
-                  <span className={labelClass}>Your rating</span>
-                  <div className="min-h-[48px] flex items-center border border-border bg-background px-3 rounded-xl">
-                    <StarRating
-                      value={rating}
-                      onChange={setRating}
-                      size={26}
-                      interactive
-                      tone="coral"
-                      label="Your rating"
-                    />
-                  </div>
-                </div>
-              </div>
-              <label className="block text-sm mb-4">
-                <span className={labelClass}>Your experience</span>
-                <textarea
-                  required
-                  minLength={20}
-                  rows={4}
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  className={`${fieldClass} resize-y min-h-[110px]`}
-                  placeholder="What needed fixing, how bids compared, and how the job went…"
-                />
-              </label>
-
-              <div className="mb-4">
-                <span className={labelClass}>Photos (optional)</span>
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp,image/gif"
-                  multiple
-                  className="sr-only"
-                  onChange={(e) => void onPickImages(e.target.files)}
-                />
-                <div className="flex flex-wrap gap-2">
-                  {images.map((src, i) => (
-                    <div key={i} className="relative h-20 w-20 rounded-xl overflow-hidden border border-border">
-                      <img src={src} alt="" className="h-full w-full object-cover" />
-                      <button
-                        type="button"
-                        onClick={() => setImages((prev) => prev.filter((_, idx) => idx !== i))}
-                        className="absolute top-1 right-1 rounded-full bg-black/70 text-white p-0.5"
-                        aria-label="Remove photo"
-                      >
-                        <X size={12} />
-                      </button>
-                    </div>
-                  ))}
-                  {images.length < MAX_REVIEW_IMAGES && (
-                    <button
-                      type="button"
-                      disabled={imageBusy}
-                      onClick={() => fileRef.current?.click()}
-                      className="h-20 w-20 rounded-xl border border-dashed border-border bg-background flex flex-col items-center justify-center gap-1 text-muted-foreground hover:border-primary/40 hover:text-foreground transition-colors disabled:opacity-60"
-                    >
-                      {imageBusy ? <Loader2 size={18} className="animate-spin" /> : <ImagePlus size={18} />}
-                      <span className="font-mono text-[9px] tracking-wide uppercase">Add</span>
-                    </button>
-                  )}
-                </div>
-                <p className="mt-1.5 text-[11px] text-muted-foreground">
-                  Up to {MAX_REVIEW_IMAGES} photos of the repair or finished work.
+              {!user || user.role !== "homeowner" ? (
+                <p className="mt-3 text-sm font-medium">Sign in to your homeowner account to review a completed job.</p>
+              ) : (
+                <p className="mt-3 text-sm font-medium">
+                  Open Job History on a completed job and leave your review there (API requires job ID + ownership).
                 </p>
-              </div>
-
-              {error && <p className="text-sm text-destructive mb-3">{error}</p>}
-              <button
-                type="submit"
-                disabled={submitting}
-                className="inline-flex items-center gap-2 [font-family:'Barlow_Condensed',sans-serif] font-bold uppercase tracking-wider text-sm bg-primary text-white px-6 py-3 rounded-full hover:bg-primary/90 disabled:opacity-60"
-              >
-                {submitting ? <Loader2 size={16} className="animate-spin" /> : null}
-                Publish review
-              </button>
-            </motion.form>
+              )}
+            </motion.div>
           )}
         </AnimatePresence>
-
-        {success && (
-          <p className="mb-6 text-sm text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50 dark:bg-emerald-950/40 px-3 py-2 rounded-xl">
-            {success}
-          </p>
-        )}
 
         {loading ? (
           <div className="flex items-center gap-2 text-muted-foreground py-16 justify-center">
@@ -555,13 +445,13 @@ export default function CustomerTrustSection() {
           </div>
         ) : shown.length === 0 ? (
           <div className="rounded-3xl border border-dashed border-border py-16 px-6 text-center">
-            <p className="text-muted-foreground mb-4">No published reviews yet — be the first.</p>
+            <p className="text-muted-foreground mb-4">No published reviews yet.</p>
             <button
               type="button"
               onClick={() => setFormOpen(true)}
               className="text-sm font-medium underline underline-offset-4 text-foreground"
             >
-              Write a review
+              How to leave a review
             </button>
           </div>
         ) : (

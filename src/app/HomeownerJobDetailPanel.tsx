@@ -14,6 +14,8 @@ import {
   type Property,
   type Proposal,
 } from "./managedJobs";
+import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
+import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 
 function DetailSection({
   mobile,
@@ -80,10 +82,17 @@ export default function HomeownerJobDetailPanel({
   const [completionLocation, setCompletionLocation] = useState("");
   const [completionImages, setCompletionImages] = useState<string[]>([]);
   const [completionImageBusy, setCompletionImageBusy] = useState(false);
+  const [dispatchCouponPreview, setDispatchCouponPreview] = useState<DispatchCouponPreview | null>(null);
+
+  const baseDispatchFee = job.visitFeeAmount ?? job.pricing?.contractor_visit_fee ?? 125;
+  const dispatchHoldAmount = dispatchCouponPreview?.discountedAmount ?? baseDispatchFee;
 
   const arrival = arrivalWindowLabel(job);
-  const showDispatch =
-    job.status === "awaiting_service_payment" || job.status === "ai_review_complete";
+  const showDispatch = job.status === "awaiting_service_payment";
+  const showPayAfterWork =
+    (job.status === "customer_review_pending" || job.status === "work_completed") &&
+    proposal != null &&
+    proposal.status === "approved";
   const showQuote =
     proposal != null &&
     ["proposal_sent", "awaiting_customer_approval", "approved"].includes(String(job.status));
@@ -114,6 +123,11 @@ export default function HomeownerJobDetailPanel({
           <span className="text-muted-foreground">Estimate: </span>
           <span className="font-semibold">{estimateLabel}</span>
         </p>
+        {!proposal && estimateLabel !== "Pending estimate" && !estimateLabel.includes("On-site assessment") ? (
+          <div className="mt-2 rounded-lg border border-amber-200/60 bg-amber-50/80 px-3 py-2 dark:border-amber-900/40 dark:bg-amber-950/25">
+            <AiEstimateDisclaimer compact />
+          </div>
+        ) : null}
         {job.category ? (
           <p className="mt-2 text-xs text-muted-foreground">
             Category: <span className="font-medium text-foreground">{job.category}</span>
@@ -155,17 +169,43 @@ export default function HomeownerJobDetailPanel({
             <div className="text-xs space-y-1">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Contractor Visit Fee:</span>
-                <span className="font-semibold text-foreground">${job.visitFeeAmount ?? job.pricing?.contractor_visit_fee ?? 125}</span>
+                <span className="font-semibold text-foreground">${baseDispatchFee}</span>
               </div>
+              {dispatchCouponPreview ? (
+                <div className="flex justify-between text-emerald-700 dark:text-emerald-300">
+                  <span>Coupon ({dispatchCouponPreview.code}):</span>
+                  <span className="font-semibold tabular-nums">−${dispatchCouponPreview.discountAmount}</span>
+                </div>
+              ) : null}
               <div className="flex justify-between">
                 <span className="text-muted-foreground">FixBridge Beta Fee:</span>
                 <span className="font-semibold text-emerald-600">$0.00 (Waived)</span>
               </div>
               <div className="flex justify-between border-t border-border/40 pt-1.5 mt-1 font-bold">
                 <span className="text-foreground">Authorization Hold:</span>
-                <span className="text-primary">${job.visitFeeAmount ?? job.pricing?.contractor_visit_fee ?? 125}</span>
+                <span className="text-primary tabular-nums">
+                  {dispatchCouponPreview ? (
+                    <>
+                      <span className="mr-1 line-through text-muted-foreground font-normal">${baseDispatchFee}</span>
+                      ${dispatchHoldAmount}
+                    </>
+                  ) : (
+                    `$${dispatchHoldAmount}`
+                  )}
+                </span>
               </div>
             </div>
+            <DispatchCouponField
+              jobId={job.id}
+              baseAmount={baseDispatchFee}
+              initialCode={job.discountCode}
+              disabled={busy}
+              onVerified={(preview) => {
+                setDispatchCouponPreview(preview);
+                onError(null);
+              }}
+              onClear={() => setDispatchCouponPreview(null)}
+            />
             <p className="text-[10px] leading-normal text-muted-foreground">
               Card hold placed now. Only charged when the contractor checks in on-site. Released if cancelled.
             </p>
@@ -195,12 +235,20 @@ export default function HomeownerJobDetailPanel({
                   }
                 }
                 onBusy(true);
-                const r = await payDispatchFee(job.id);
-                if (r.ok && r.url) {
-                  window.location.href = r.url;
-                } else {
-                  await onRefresh();
+                const r = await payDispatchFee(
+                  job.id,
+                  dispatchCouponPreview?.code || job.discountCode || undefined
+                );
+                if (!r.ok) {
+                  onError(r.message || "Payment failed.");
+                  onBusy(false);
+                  return;
                 }
+                if (r.url) {
+                  window.location.href = r.url;
+                  return;
+                }
+                onError("Stripe checkout could not be started.");
                 onBusy(false);
               }}
             >
@@ -218,6 +266,23 @@ export default function HomeownerJobDetailPanel({
             </p>
           ) : null}
           <p className="mt-1 tabular-nums text-2xl font-semibold">{formatMoney(proposal.retailAmount)}</p>
+          {(proposal.customerLineItems || []).length > 0 ? (
+            <ul className="mt-3 space-y-1.5 rounded-lg border border-border bg-muted/20 p-3 text-sm">
+              {proposal.customerLineItems!.map((line, i) => (
+                <li key={i} className="flex justify-between tabular-nums">
+                  <span className="text-muted-foreground">{line.label}</span>
+                  <span className="font-medium">
+                    {line.amount < 0 ? "−" : ""}
+                    {formatMoney(Math.abs(line.amount))}
+                  </span>
+                </li>
+              ))}
+              <li className="flex justify-between border-t border-border pt-2 font-semibold">
+                <span>Total</span>
+                <span>{formatMoney(proposal.retailAmount)}</span>
+              </li>
+            </ul>
+          ) : null}
           {proposal.scopeSummary ? (
             <p className="mt-2 text-sm text-muted-foreground">{proposal.scopeSummary}</p>
           ) : null}
@@ -241,37 +306,59 @@ export default function HomeownerJobDetailPanel({
                 Approve proposal
               </button>
             )}
-            {["approved", "awaiting_customer_approval", "proposal_sent"].includes(String(job.status)) &&
-              proposal.status === "approved" && (
-                <button
-                  type="button"
-                  className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
-                  disabled={busy}
-                  onClick={async () => {
-                    onBusy(true);
-                    onError(null);
-                    try {
-                      const r = await payRetail(job.id);
-                      if (r.ok) {
-                        if (r.url) {
-                          window.location.href = r.url;
-                          return;
-                        }
-                        await onRefresh();
-                      } else {
-                        onError(r.message || "Payment failed.");
-                      }
-                    } catch (err: unknown) {
-                      onError(err instanceof Error ? err.message : "Payment request failed.");
-                    } finally {
-                      onBusy(false);
-                    }
-                  }}
-                >
-                  Pay now
-                </button>
-              )}
+            {proposal.status === "approved" && job.status === "approved" && (
+              <p className="text-sm text-muted-foreground">
+                Quote approved. FixBridge will schedule your contractor and notify you when dispatch is confirmed.
+              </p>
+            )}
           </div>
+        </DetailSection>
+      ) : null}
+
+      {showPayAfterWork && proposal ? (
+        <DetailSection mobile={isMobile} title="Payment" defaultOpen>
+          <div className="space-y-3 rounded-lg border border-primary/20 bg-primary/5 p-4">
+            <p className="text-sm text-muted-foreground">
+              Your contractor has finished the work. Pay FixBridge directly to finalize this job.
+            </p>
+            <p className="tabular-nums text-2xl font-semibold">{formatMoney(proposal.retailAmount)}</p>
+            <button
+              type="button"
+              className="w-full rounded-xl bg-primary px-3 py-2.5 text-sm font-semibold text-white hover:bg-primary/90 disabled:opacity-60"
+              disabled={busy}
+              onClick={async () => {
+                onBusy(true);
+                onError(null);
+                try {
+                  const r = await payRetail(job.id);
+                  if (r.ok) {
+                    if (r.url) {
+                      window.location.href = r.url;
+                      return;
+                    }
+                    onError("Stripe checkout could not be started.");
+                  } else {
+                    onError(r.message || "Payment failed.");
+                  }
+                } catch (err: unknown) {
+                  onError(err instanceof Error ? err.message : "Payment request failed.");
+                } finally {
+                  onBusy(false);
+                }
+              }}
+            >
+              Pay FixBridge
+            </button>
+          </div>
+        </DetailSection>
+      ) : null}
+
+      {(job.status === "ai_review_complete" || job.status === "awaiting_service_payment") && !showQuote ? (
+        <DetailSection mobile={isMobile} title="Next steps" defaultOpen>
+          <p className="text-sm text-muted-foreground">
+            FixBridge is reviewing your request and will contact a contractor using your photos and AI assessment.
+            You will receive a final quote to approve before any work begins. Payment is only due after the job is complete.
+          </p>
         </DetailSection>
       ) : null}
 

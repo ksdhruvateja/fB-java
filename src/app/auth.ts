@@ -103,6 +103,10 @@ function storeSession(token: string, user: AuthUser) {
   }
 }
 
+export function saveSession(token: string, user: AuthUser) {
+  storeSession(token, user);
+}
+
 export function clearSession() {
   if (!canUseStorage()) return;
   try {

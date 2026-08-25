@@ -36,10 +36,30 @@ export async function listPlans() {
 }
 
 export async function startSubscription(planCode: string, jobId?: number) {
-  return api<{ ok: boolean; url?: string; simulated?: boolean; message?: string }>(
+  return api<{ ok: boolean; url?: string; simulated?: boolean; message?: string; subscription?: unknown }>(
     "/api/subscriptions/checkout",
     { method: "POST", body: JSON.stringify({ planCode, jobId }) }
   );
+}
+
+export async function guestSubscriptionCheckout(body: {
+  planCode: string;
+  email: string;
+  name?: string;
+  password?: string;
+}) {
+  return api<{
+    ok: boolean;
+    url?: string;
+    simulated?: boolean;
+    message?: string;
+    token?: string;
+    user?: import("./auth").AuthUser;
+    subscription?: unknown;
+  }>("/api/subscriptions/guest-checkout", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 export async function mySubscriptions() {

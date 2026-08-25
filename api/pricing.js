@@ -101,48 +101,67 @@ export function estimateContractorNet(assessment, rules = DEFAULT_PRICING_RULES)
   const baseline = rules.trade_baselines[cat] || rules.trade_baselines.others;
   const hoursMin = Math.max(0.5, num(assessment?.estimated_labor_hours_min, 1));
   const hoursMax = Math.max(hoursMin, num(assessment?.estimated_labor_hours_max, hoursMin + 1));
-  const materials = num(baseline.materials_allowance, 70);
+
+  const svcRaw = String(assessment?.service_type || 'standard_repair').toLowerCase();
+  const svcMult =
+    svcRaw === 'replacement' ? 2.4
+    : svcRaw === 'installation' ? 1.75
+    : svcRaw === 'major_repair' ? 1.45
+    : svcRaw === 'emergency' ? 1.35
+    : svcRaw === 'diagnostic' ? 0.55
+    : svcRaw === 'maintenance' ? 0.65
+    : svcRaw === 'minor_repair' ? 0.85
+    : 1.0;
+
+  const complexity = String(assessment?.complexity || 'medium').toLowerCase();
+  const complexityMult = complexity === 'high' ? 1.22 : complexity === 'low' ? 0.9 : 1.0;
+
+  const materials = num(baseline.materials_allowance, 70) * svcMult;
   const trip = num(baseline.trip, 85);
   const hourly = num(baseline.hourly, 100);
-  const low = Math.round(trip + hoursMin * hourly + materials * 0.6);
-  const high = Math.round(trip + hoursMax * hourly + materials * 1.2);
-  return { low, high, category: cat };
+  const low = Math.round((trip + hoursMin * hourly + materials * 0.6) * complexityMult);
+  const high = Math.round((trip + hoursMax * hourly + materials * 1.2) * complexityMult);
+  return { low, high, category: cat, service_type: svcRaw };
 }
 
 export function getLocationFactorByZip(zip) {
   if (!zip) return null;
   const z = String(zip).trim();
-  if (/^(100|101|102|103|104|111|112|113|114|116)/.test(z)) {
-    // New York City / Brooklyn / Queens
+  // NYC + Long Island (FixBridge pilot market)
+  if (/^(100|101|102|103|104|110|111|112|113|114|116)/.test(z)) {
     return 1.25;
   }
+  if (/^(115|117|118|119)/.test(z)) {
+    return 1.22;
+  }
   if (/^(940|941|942|943|944|945|946)/.test(z)) {
-    // San Francisco Bay Area
     return 1.30;
   }
   if (/^(900|901|902|903|904|905)/.test(z)) {
-    // Los Angeles Area
     return 1.20;
   }
   if (/^(606|607|608)/.test(z)) {
-    // Chicago Area
     return 1.15;
   }
   if (/^(331|332|333)/.test(z)) {
-    // Miami Area
     return 1.12;
   }
   if (/^(750|751|752|770|771|772)/.test(z)) {
-    // Texas Metro Areas
     return 1.05;
   }
+  // Tri-state suburbs near NYC
+  if (/^(070|071|072|073|074|076|077|078|079)/.test(z)) return 1.18;
+  if (/^(068|069)/.test(z)) return 1.16;
   return 1.0;
 }
 
 export function getZipMarketLabel(zip) {
   const factor = getLocationFactorByZip(zip);
   const z = String(zip || '').trim();
-  if (/^(100|101|102|103|104|111|112|113|114|116)/.test(z)) return 'New York City metro';
+  if (/^(100|101|102|103|104|110|111|112|113|114|116)/.test(z)) return 'New York City metro';
+  if (/^(115|117|118|119)/.test(z)) return 'Long Island, NY';
+  if (/^(070|071|072|073|074|076|077|078|079)/.test(z)) return 'Northern New Jersey metro';
+  if (/^(068|069)/.test(z)) return 'Fairfield County, CT';
   if (/^(940|941|942|943|944|945|946)/.test(z)) return 'San Francisco Bay Area';
   if (/^(900|901|902|903|904|905)/.test(z)) return 'Los Angeles metro';
   if (/^(606|607|608)/.test(z)) return 'Chicago metro';
@@ -161,6 +180,9 @@ export function resolveCustomerDisplayAdjustment(rules = DEFAULT_PRICING_RULES, 
     min_dollars: 0,
     max_dollars: null,
   };
+  if (opts.globalOnly === true) {
+    return { ...global, source: 'global' };
+  }
   const overrides = rules.pricing_overrides || {};
   const trade = normalizeCategory(opts.trade || opts.category || '');
   const zip = String(opts.zip || '').trim();
@@ -190,10 +212,8 @@ export function resolveCustomerDisplayAdjustment(rules = DEFAULT_PRICING_RULES, 
   return resolved;
 }
 
-/** Apply Stage A display adjustment to a raw AI/engine retail amount. */
-export function applyCustomerDisplayAdjustment(rawAmount, rules = DEFAULT_PRICING_RULES, opts = {}) {
+function computeDisplayAdjustmentDelta(rawAmount, adj) {
   const raw = Math.max(0, Math.round(num(rawAmount)));
-  const adj = resolveCustomerDisplayAdjustment(rules, opts);
   let delta = 0;
   if (String(adj.type).toLowerCase() === 'fixed') {
     delta = num(adj.value, 0);
@@ -204,12 +224,59 @@ export function applyCustomerDisplayAdjustment(rawAmount, rules = DEFAULT_PRICIN
   const maxD = adj.max_dollars != null && adj.max_dollars !== '' ? num(adj.max_dollars) : null;
   if (minD > 0) delta = Math.max(delta, minD);
   if (maxD != null && Number.isFinite(maxD)) delta = Math.min(delta, maxD);
+  return { raw, delta };
+}
+
+/** Apply Stage A display adjustment to a raw AI/engine retail amount. */
+export function applyCustomerDisplayAdjustment(rawAmount, rules = DEFAULT_PRICING_RULES, opts = {}) {
+  const adj = resolveCustomerDisplayAdjustment(rules, opts);
+  const { raw, delta } = computeDisplayAdjustmentDelta(rawAmount, adj);
   const customer = Math.max(0, Math.round(raw + delta));
   return {
     raw,
     delta,
     customer,
     adjustment: adj,
+  };
+}
+
+/**
+ * Apply one overall display adjustment to an AI estimate range (Stage A).
+ * Markup is computed once from the range midpoint — not separately on low/high/recommended.
+ * Uses the global customer_display_adjustment rule for all future AI estimates.
+ */
+export function applyCustomerDisplayAdjustmentToRange(rawLow, rawHigh, rules = DEFAULT_PRICING_RULES, opts = {}) {
+  const orderedLow = Math.max(0, Math.round(num(Math.min(rawLow, rawHigh))));
+  const orderedHigh = Math.max(orderedLow, Math.round(num(Math.max(rawLow, rawHigh))));
+  const mid = Math.round((orderedLow + orderedHigh) / 2);
+  const halfSpread = Math.round((orderedHigh - orderedLow) / 2);
+
+  const adjOpts = { ...opts, globalOnly: opts.globalOnly !== false };
+  const adj = resolveCustomerDisplayAdjustment(rules, adjOpts);
+  const { delta } = computeDisplayAdjustmentDelta(mid, adj);
+
+  let customerLow;
+  let customerHigh;
+  if (String(adj.type).toLowerCase() === 'fixed') {
+    const adjustedMid = Math.max(0, mid + delta);
+    customerLow = Math.max(0, adjustedMid - halfSpread);
+    customerHigh = adjustedMid + halfSpread;
+  } else {
+    customerLow = Math.max(0, Math.round(orderedLow + delta));
+    customerHigh = Math.max(customerLow, Math.round(orderedHigh + delta));
+  }
+
+  const customerRecommended = Math.round((customerLow + customerHigh) / 2);
+
+  return {
+    rawLow: orderedLow,
+    rawHigh: orderedHigh,
+    rawRecommended: mid,
+    customer_retail_estimate_low: customerLow,
+    customer_retail_estimate_high: customerHigh,
+    customer_recommended: customerRecommended,
+    display_adjustment: adj,
+    display_adjustment_amount: delta,
   };
 }
 
@@ -301,45 +368,97 @@ export function computePreliminaryRetail(assessment, rules = DEFAULT_PRICING_RUL
     urgency: assessment?.urgency,
   });
 
-  // Widen range slightly for preliminary estimates (engine / AI-recommended retail)
-  const rawLow = Math.round(lowCalc.retail * 0.92);
-  const rawHigh = Math.round(highCalc.retail * 1.08);
-  const rawRecommended = Math.round((rawLow + rawHigh) / 2);
+  const mp = opts.marketProfile;
+  // Prefer market intelligence raw range when available; otherwise engine-derived range
+  const rawLow =
+    mp?.aiEstimateLow != null
+      ? Math.round(Number(mp.aiEstimateLow))
+      : Math.round(lowCalc.retail * 0.92);
+  const rawHigh =
+    mp?.aiEstimateHigh != null
+      ? Math.round(Number(mp.aiEstimateHigh))
+      : Math.round(highCalc.retail * 1.08);
+  const rawRecommended =
+    mp?.aiRecommendedValue != null
+      ? Math.round(Number(mp.aiRecommendedValue))
+      : Math.round((rawLow + rawHigh) / 2);
 
   const adjOpts = {
     zip: opts.zip || opts.pincode || opts.zipcode,
     trade: net.category,
     category: net.category,
+    globalOnly: true,
   };
-  const lowAdj = applyCustomerDisplayAdjustment(rawLow, rules, adjOpts);
-  const highAdj = applyCustomerDisplayAdjustment(rawHigh, rules, adjOpts);
-  const recAdj = applyCustomerDisplayAdjustment(rawRecommended, rules, adjOpts);
+  const rangeAdj = applyCustomerDisplayAdjustmentToRange(rawLow, rawHigh, rules, adjOpts);
 
-  const low = Math.min(lowAdj.customer, highAdj.customer);
-  const high = Math.max(lowAdj.customer, highAdj.customer);
+  let low = rangeAdj.customer_retail_estimate_low;
+  let high = rangeAdj.customer_retail_estimate_high;
+
+  // Blend with local FixBridge history when market intel has comparable data
+  if (mp && (mp.jobsAnalyzed >= 2 || mp.quotesAnalyzed >= 2) && mp.medianCustomerEstimate) {
+    const engineMid = Math.round((low + high) / 2);
+    const localMid = Math.round(Number(mp.medianCustomerEstimate));
+    const jobWeight = Math.min(0.55, 0.25 + (mp.jobsAnalyzed || 0) * 0.05);
+    const blendedMid = Math.round(engineMid * (1 - jobWeight) + localMid * jobWeight);
+    const spread = Math.max(75, Math.round((high - low) * (mp.aiConfidence === 'LOW' ? 0.65 : 0.55)));
+    low = Math.max(0, blendedMid - spread);
+    high = blendedMid + spread;
+  }
+
+  // Widen range when AI or market confidence is low
+  const marketConf = String(mp?.aiConfidence || '').toUpperCase();
+  const aiConf = num(assessment?.confidence, 0.5);
+  let finalLow = low;
+  let finalHigh = high;
+  if (marketConf === 'LOW' || aiConf < 0.45) {
+    finalLow = Math.max(0, Math.round(low * 0.88));
+    finalHigh = Math.round(high * 1.14);
+  } else if (marketConf === 'MEDIUM' && aiConf < 0.6) {
+    finalLow = Math.max(0, Math.round(low * 0.94));
+    finalHigh = Math.round(high * 1.08);
+  }
+
+  const estimateContext = buildEstimateContextLabel(adjOpts.zip, mp);
+  const disclaimer =
+    mp?.basedOn ||
+    'Based on similar services and current pricing in your area. Final pricing will be confirmed after professional review.';
 
   return {
     show_price: true,
     message: null,
-    customer_retail_estimate_low: low,
-    customer_retail_estimate_high: Math.max(low, high),
+    customer_retail_estimate_low: finalLow,
+    customer_retail_estimate_high: Math.max(finalLow, finalHigh),
     estimated_contractor_net_low: net.low,
     estimated_contractor_net_high: net.high,
     internal: {
       low: lowCalc,
       high: highCalc,
       category: net.category,
+      service_type: net.service_type,
       ai_recommended_raw: rawRecommended,
       ai_range_raw: { low: rawLow, high: rawHigh },
-      display_adjustment: recAdj.adjustment,
-      display_adjustment_amount: recAdj.delta,
-      customer_recommended: recAdj.customer,
+      display_adjustment: rangeAdj.display_adjustment,
+      display_adjustment_amount: rangeAdj.display_adjustment_amount,
+      customer_recommended: rangeAdj.customer_recommended,
       zip_market: getZipMarketLabel(adjOpts.zip),
       location_factor: lowCalc.location_factor,
+      market_profile: mp || null,
+      market_confidence: marketConf || null,
+      blended_with_local: Boolean(mp?.jobsAnalyzed >= 2),
     },
-    disclaimer:
-      'Estimated service range includes coordination, administration, payment handling and subcontracted delivery. Not a binding quote until a proposal is approved.',
+    disclaimer,
+    estimate_context: estimateContext,
+    estimate_confidence: marketConf || (aiConf >= 0.65 ? 'HIGH' : aiConf >= 0.45 ? 'MEDIUM' : 'LOW'),
   };
+}
+
+function buildEstimateContextLabel(zip, marketProfile) {
+  if (zip) return String(zip).slice(0, 5);
+  const market = getZipMarketLabel(zip);
+  if (marketProfile?.city && marketProfile?.state) {
+    return `${marketProfile.city}, ${marketProfile.state}`;
+  }
+  return market;
 }
 
 /**
@@ -533,86 +652,5 @@ export function mergePricingRules(stored) {
         ...(stored.pricing_overrides?.by_zip_prefix || {}),
       },
     },
-  };
-}
-
-/**
- * ZIP + trade market intelligence snapshot for Admin (Stage A context).
- * Uses live FixBridge jobs when rows are provided; otherwise returns factor-based guidance.
- */
-export function buildZipMarketProfile({
-  zip,
-  trade,
-  rules = DEFAULT_PRICING_RULES,
-  jobs = [],
-  bids = [],
-} = {}) {
-  const cat = normalizeCategory(trade);
-  const factor = getLocationFactorByZip(zip) || Number(rules.location_factor) || 1;
-  const market = getZipMarketLabel(zip);
-  const baseline = rules.trade_baselines?.[cat] || rules.trade_baselines.others;
-
-  const relevantJobs = (jobs || []).filter((j) => {
-    const jZip = String(j.zip || '').trim();
-    const jCat = normalizeCategory(j.category || j.title || '');
-    return (!zip || jZip.startsWith(String(zip).slice(0, 3)) || jZip === String(zip)) && (!trade || jCat === cat);
-  });
-
-  const quoteAmounts = (bids || [])
-    .map((b) => Number(b.net_total || b.netTotal))
-    .filter((n) => Number.isFinite(n) && n > 0)
-    .sort((a, b) => a - b);
-
-  const completedRetail = relevantJobs
-    .map((j) => {
-      const low = Number(j.customer_retail_estimate_low ?? j.customerRetailEstimateLow);
-      const high = Number(j.customer_retail_estimate_high ?? j.customerRetailEstimateHigh);
-      if (Number.isFinite(low) && Number.isFinite(high) && high > 0) return Math.round((low + high) / 2);
-      return null;
-    })
-    .filter((n) => n != null)
-    .sort((a, b) => a - b);
-
-  const median = (arr) => {
-    if (!arr.length) return null;
-    const mid = Math.floor(arr.length / 2);
-    return arr.length % 2 ? arr[mid] : Math.round((arr[mid - 1] + arr[mid]) / 2);
-  };
-
-  const syntheticNet = Math.round(
-    (Number(baseline.trip) || 90) + 2.5 * (Number(baseline.hourly) || 100) + (Number(baseline.materials_allowance) || 80)
-  );
-  const rawRetail = retailFromNet(syntheticNet, rules, { zip, urgency: 'medium' }).retail;
-  const display = applyCustomerDisplayAdjustment(rawRetail, rules, { zip, trade: cat });
-
-  const rangeLow =
-    completedRetail.length >= 2
-      ? completedRetail[0]
-      : Math.round(display.customer * 0.85);
-  const rangeHigh =
-    completedRetail.length >= 2
-      ? completedRetail[completedRetail.length - 1]
-      : Math.round(display.customer * 1.12);
-
-  return {
-    zip: String(zip || '').trim() || null,
-    market,
-    trade: cat,
-    locationFactor: factor,
-    jobsAnalyzed: relevantJobs.length,
-    quotesAnalyzed: quoteAmounts.length,
-    typicalRange: { low: rangeLow, high: Math.max(rangeLow, rangeHigh) },
-    medianContractorQuote: median(quoteAmounts),
-    medianCustomerEstimate: median(completedRetail),
-    averageLaborHourly: Number(baseline.hourly) || null,
-    averageTripFee: Number(baseline.trip) || null,
-    recentQuotes: quoteAmounts.slice(-8).reverse(),
-    aiRecommendedRaw: display.raw,
-    customerDisplayedEstimate: display.customer,
-    displayAdjustment: display.adjustment,
-    displayAdjustmentAmount: display.delta,
-    basedOn: relevantJobs.length
-      ? `Based on ${relevantJobs.length} FixBridge job(s) near ${zip || 'this area'} plus ${market} pricing factors.`
-      : `Based on ${market} pricing factors and ${cat} trade baselines (limited local FixBridge history yet).`,
   };
 }

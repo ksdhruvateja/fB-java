@@ -10,8 +10,11 @@ import AdminLogin from "./AdminLogin";
 import HomeownerDashboard from "./HomeownerDashboard";
 import ContractorDashboard from "./ContractorDashboard";
 import AdminPanel from "./AdminPanel";
+import PartnerPortal from "./PartnerPortal";
 import ResetPassword from "./ResetPassword";
-import { getStoredUser, validateToken, clearSession, loadAllUsers, type AuthUser, type UserRole } from "./auth";
+import GoProPublicPage from "./GoProPublicPage";
+import SubscriptionSuccessModal from "./SubscriptionSuccessModal";
+import { getStoredUser, validateToken, clearSession, loadAllUsers, saveSession, type AuthUser, type UserRole } from "./auth";
 import { brand } from "../config/brand";
 import { BrandLogo } from "./BrandLogo";
 
@@ -19,9 +22,11 @@ type Page =
   | "home"
   | "contractors"
   | "about"
+  | "go-pro"
   | "homeowner-login"
   | "contractor-login"
   | "admin-login"
+  | "partner"
   | "homeowner-dashboard"
   | "contractor-dashboard"
   | "admin";
@@ -57,9 +62,11 @@ function isValidPage(value: unknown): value is Page {
     value === "home" ||
     value === "contractors" ||
     value === "about" ||
+    value === "go-pro" ||
     value === "homeowner-login" ||
     value === "contractor-login" ||
     value === "admin-login" ||
+    value === "partner" ||
     value === "homeowner-dashboard" ||
     value === "contractor-dashboard" ||
     value === "admin"
@@ -117,7 +124,7 @@ function Nav({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const overHero =
-    (page === "home" || page === "contractors" || page === "about") &&
+    (page === "home" || page === "contractors" || page === "about" || page === "go-pro") &&
     !scrolled &&
     !menuOpen;
   const ink = overHero ? "text-white" : "text-foreground";
@@ -292,7 +299,8 @@ function Footer({ onNavigate, isDark }: { onNavigate: (p: Page) => void; isDark:
         { label: "How It Works", page: "home" as Page },
         { label: "AI Assessment", page: "home" as Page },
         { label: "Find a Contractor", page: "home" as Page },
-        { label: "Pricing", page: "home" as Page },
+        { label: "Pricing", page: "go-pro" as Page },
+        { label: "Go Pro Plans", page: "go-pro" as Page },
       ],
     },
     {
@@ -314,6 +322,7 @@ function Footer({ onNavigate, isDark }: { onNavigate: (p: Page) => void; isDark:
         { label: "Careers", page: "home" as Page },
         { label: "Contact", page: "home" as Page },
         { label: "Staff login", page: "admin-login" as Page },
+        { label: "Partner portal", page: "partner" as Page },
       ],
     },
   ];
@@ -459,23 +468,72 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(initialState.currentUser);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [resetParams, setResetParams] = useState<{ token: string; role: UserRole } | null>(null);
+  const [subscriptionSuccessPlan, setSubscriptionSuccessPlan] = useState<string | null>(null);
+  const [showSubscriptionSuccess, setShowSubscriptionSuccess] = useState(false);
+  const [postPaymentDashboard, setPostPaymentDashboard] = useState(false);
 
   // Detect password-reset links: /?action=reset-password&token=...&role=...
   // Partner intake: /start?partner=CODE or /?partner=CODE
+  // Subscription return: /?paid=subscription&plan=...
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    if (params.get("go-pro") === "1" || params.get("subscribe") === "1") {
+      setPage("go-pro");
+      params.delete("go-pro");
+      params.delete("subscribe");
+      const next = params.toString();
+      window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}`);
+    }
+
+    if (params.get("paid") === "dispatch" || params.get("canceled") === "dispatch") {
+      const jobId = params.get("job");
+      if (jobId) {
+        try {
+          sessionStorage.setItem("fixbridge-stripe-active-job-id", jobId);
+          if (params.get("paid") === "dispatch") {
+            sessionStorage.setItem("fixbridge-dispatch-paid", "1");
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      validateToken().then((result) => {
+        if (result.ok) {
+          setCurrentUser(result.user);
+          if (result.user.role === "homeowner") {
+            setPage("homeowner-dashboard");
+          }
+        }
+      });
+      params.delete("paid");
+      params.delete("canceled");
+      params.delete("job");
+      const nextDispatch = params.toString();
+      window.history.replaceState({}, "", `${window.location.pathname}${nextDispatch ? `?${nextDispatch}` : ""}`);
+    }
+
     if (params.get("paid") === "subscription" || params.get("canceled") === "subscription") {
       const jobId = params.get("jobId");
+      const planCode = params.get("plan");
       if (jobId) {
         sessionStorage.setItem("fixbridge-stripe-active-job-id", jobId);
         params.delete("jobId");
       }
       if (params.get("paid") === "subscription") {
+        if (planCode) setSubscriptionSuccessPlan(planCode);
+        setShowSubscriptionSuccess(true);
+        setPostPaymentDashboard(true);
         validateToken().then((result) => {
           if (result.ok) {
             setCurrentUser(result.user);
+            if (result.user.role === "homeowner") {
+              setPage("homeowner-dashboard");
+            }
           }
         });
+      }
+      if (params.get("canceled") === "subscription") {
+        setPage("go-pro");
       }
       params.delete("paid");
       params.delete("canceled");
@@ -577,7 +635,7 @@ export default function App() {
     void import("./auth0SignOut").then(({ runAuth0SignOut }) => runAuth0SignOut()).catch(() => {});
   };
 
-  const isMarketing = page === "home" || page === "contractors" || page === "about";
+  const isMarketing = page === "home" || page === "contractors" || page === "about" || page === "go-pro";
   const isDashboard = page === "homeowner-dashboard" || page === "contractor-dashboard";
 
   // Persist nav state (no user data — that lives in the secure token cache)
@@ -686,7 +744,12 @@ export default function App() {
           animate={{ opacity: 1 }}
           transition={{ duration: 0.25 }}
         >
-          {page === "home" && <CustomerPage scrollContainer={scrollRef} onGetStarted={() => navigate("homeowner-login")} />}
+          {page === "home" && (
+            <CustomerPage
+              scrollContainer={scrollRef}
+              onGetStarted={() => navigate("homeowner-login")}
+            />
+          )}
           {page === "contractors" && (
             <ContractorPage
               scrollContainer={scrollRef}
@@ -698,6 +761,17 @@ export default function App() {
               scrollContainer={scrollRef}
               onGoHomeowner={() => navigate("homeowner-login")}
               onGoContractor={() => navigate("contractor-login")}
+            />
+          )}
+
+          {page === "go-pro" && (
+            <GoProPublicPage
+              currentUser={currentUser}
+              onBack={() => navigate("home")}
+              onLoginSuccess={(user) => {
+                setCurrentUser(user);
+                navigate("homeowner-dashboard");
+              }}
             />
           )}
 
@@ -736,6 +810,10 @@ export default function App() {
             />
           )}
 
+          {page === "partner" && (
+            <PartnerPortal onBack={() => navigate("home")} />
+          )}
+
           {page === "homeowner-dashboard" && currentUser && (
             <HomeownerDashboard
               onLogout={() => handleSignOut("home")}
@@ -743,6 +821,14 @@ export default function App() {
               isDark={isDark}
               onToggleDark={toggleDark}
               onUserUpdated={(u) => setCurrentUser(u)}
+              initialTab={postPaymentDashboard ? "go-pro" : undefined}
+              showSubscriptionSuccess={showSubscriptionSuccess}
+              subscriptionSuccessPlanCode={subscriptionSuccessPlan}
+              onDismissSubscriptionSuccess={() => {
+                setShowSubscriptionSuccess(false);
+                setSubscriptionSuccessPlan(null);
+                setPostPaymentDashboard(false);
+              }}
             />
           )}
 

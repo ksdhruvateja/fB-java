@@ -599,11 +599,24 @@ export async function initManagedSchema(pool) {
     )
   `);
   await pool.query(`ALTER TABLE site_reviews ADD COLUMN IF NOT EXISTS images TEXT`);
-
-  // Seed starter reviews once (empty table only)
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_role_preset TEXT`);
   try {
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS site_reviews_user_job_uidx
+      ON site_reviews (user_id, job_id)
+      WHERE user_id IS NOT NULL AND job_id IS NOT NULL
+    `);
+  } catch (idxErr) {
+    console.warn('[API] site_reviews unique index skipped:', idxErr.message);
+  }
+
+  // Seed starter reviews once (empty table only) — never in production
+  try {
+    const allowMarketingSeed =
+      process.env.NODE_ENV !== 'production' &&
+      String(process.env.ENABLE_DEMO_SEED ?? 'true').toLowerCase() !== 'false';
     const { rows: existingReviews } = await pool.query(`SELECT COUNT(*)::int AS c FROM site_reviews`);
-    if ((existingReviews[0]?.c || 0) === 0) {
+    if (allowMarketingSeed && (existingReviews[0]?.c || 0) === 0) {
       const seeds = [
         ['Maria Santos', 'Astoria, Queens', 'Plumbing', 5, 'Ceiling leak the night before Thanksgiving. Three bids by morning — the contractor who won was excellent and cleaned up after.', true],
         ['Tony Marchetti', 'Huntington, LI', 'HVAC', 5, 'Thought I needed a full HVAC replacement. The AI flagged a capacitor issue — $180 fix. Nobody tried to upsell me.', true],
@@ -895,6 +908,46 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS expected_margin_pct NUMERIC`);
   await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS quote_number TEXT`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_proposals_quote_number ON proposals (quote_number) WHERE quote_number IS NOT NULL`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS discount_type TEXT DEFAULT 'none'`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS discount_value NUMERIC DEFAULT 0`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS shipping_amount NUMERIC DEFAULT 0`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS shipping_label TEXT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS additional_charges JSONB`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS tax_mode TEXT DEFAULT 'none'`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS tax_value NUMERIC DEFAULT 0`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS customer_notes TEXT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS terms_conditions TEXT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS internal_notes TEXT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS contractor_quote_amount NUMERIC`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS contractor_notes TEXT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS contractor_special_conditions TEXT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS document_totals JSONB`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS viewed_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS converted_invoice_id INT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS company_name TEXT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS bill_to JSONB`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS quote_activity (
+      id               BIGSERIAL PRIMARY KEY,
+      proposal_id      INT,
+      invoice_id       INT,
+      job_id           BIGINT,
+      actor_user_id    INT,
+      action           TEXT NOT NULL,
+      detail           JSONB,
+      created_at       TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_quote_activity_proposal
+    ON quote_activity (proposal_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_quote_activity_invoice
+    ON quote_activity (invoice_id, created_at DESC)
+  `);
 
   await pool.query(`ALTER TABLE job_invitations ADD COLUMN IF NOT EXISTS request_type TEXT DEFAULT 'remote_quote'`);
   await pool.query(`ALTER TABLE job_invitations ADD COLUMN IF NOT EXISTS site_visit_window TEXT`);
@@ -902,6 +955,38 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS access_instructions TEXT`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS quote_request_mode TEXT`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS similar_jobs_count INT DEFAULT 0`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS market_snapshot_id BIGINT`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS market_snapshots (
+      id                          BIGSERIAL PRIMARY KEY,
+      job_id                      BIGINT,
+      property_zip                TEXT,
+      city                        TEXT,
+      state                       TEXT,
+      service_category            TEXT,
+      service_subcategory         TEXT,
+      market_profile              JSONB NOT NULL,
+      ai_estimate_low             NUMERIC,
+      ai_estimate_high            NUMERIC,
+      ai_recommended_value        NUMERIC,
+      ai_confidence               TEXT,
+      customer_estimate_low       NUMERIC,
+      customer_estimate_high      NUMERIC,
+      customer_recommended_value  NUMERIC,
+      pricing_rule_id             TEXT DEFAULT 'default',
+      pricing_rule_version        TEXT,
+      generated_at                TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_market_snapshots_zip_trade
+    ON market_snapshots (property_zip, service_category, generated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_market_snapshots_job
+    ON market_snapshots (job_id, generated_at DESC)
+  `);
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_job_financial_snapshots_job
@@ -932,6 +1017,34 @@ export async function initManagedSchema(pool) {
     CREATE INDEX IF NOT EXISTS idx_homeowner_invoices_homeowner
     ON homeowner_invoices (homeowner_user_id, created_at DESC)
   `);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS proposal_id INT`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'draft'`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS discount_type TEXT DEFAULT 'none'`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS discount_value NUMERIC DEFAULT 0`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS discount_amount NUMERIC DEFAULT 0`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS shipping_amount NUMERIC DEFAULT 0`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS shipping_label TEXT`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS additional_charges JSONB`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS tax_mode TEXT DEFAULT 'none'`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS tax_value NUMERIC DEFAULT 0`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS tax_amount NUMERIC DEFAULT 0`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS total NUMERIC`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS customer_notes TEXT`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS terms_conditions TEXT`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS bill_to JSONB`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS due_date TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS paid_by INT`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS payment_method TEXT`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS payment_reference TEXT`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS payment_notes TEXT`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS stripe_payment_link_id TEXT`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS stripe_payment_link_url TEXT`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS stripe_session_id TEXT`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS stripe_payment_intent TEXT`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS viewed_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS document_snapshot JSONB`);
 
   console.log('[API] Managed schema ready');
 }
