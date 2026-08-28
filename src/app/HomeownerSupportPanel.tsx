@@ -18,10 +18,25 @@ import {
   createSupportTicket,
   getMySupportTicket,
   listMySupportTickets,
+  replySupportTicket,
   type SupportChannel,
   type SupportTicket,
   type TicketDelivery,
+  type TicketMessage,
 } from "./supportTickets";
+
+const HOMEOWNER_CATEGORIES = [
+  "Service Issue",
+  "Contractor Issue",
+  "Quote Question",
+  "Billing / Payment",
+  "Refund",
+  "Appointment",
+  "Warranty",
+  "Technical Issue",
+  "Account",
+  "Other",
+];
 
 const ASSISTANT_PROMPTS = [
   "Help me understand my home health score",
@@ -107,7 +122,11 @@ export default function HomeownerSupportPanel({
   const [error, setError] = useState<string | null>(null);
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
   const [selectedTicket, setSelectedTicket] = useState<string | null>(null);
-  const [deliveries, setDeliveries] = useState<TicketDelivery[]>([]);
+  const [category, setCategory] = useState(HOMEOWNER_CATEGORIES[0]);
+  const [priority, setPriority] = useState("normal");
+  const [ticketFilter, setTicketFilter] = useState("all");
+  const [messages, setMessages] = useState<TicketMessage[]>([]);
+  const [reply, setReply] = useState("");
   const [lastSubmitted, setLastSubmitted] = useState<{
     ticketNumber: string;
     deliveries: TicketDelivery[];
@@ -125,22 +144,24 @@ export default function HomeownerSupportPanel({
       : "Contact our team. Your profile, properties, and recent jobs are included automatically. Email and SMS confirmations are logged here — no third-party apps.";
 
   useEffect(() => {
-    void listMySupportTickets()
+    void listMySupportTickets(ticketFilter === "all" ? undefined : ticketFilter)
       .then((r) => {
         const mine = (r.tickets || []).filter((t) => t.channel === channel);
         setTickets(mine);
       })
       .catch(() => setTickets([]));
-  }, [channel, lastSubmitted?.ticketNumber]);
+  }, [channel, lastSubmitted?.ticketNumber, ticketFilter]);
 
   useEffect(() => {
     if (!selectedTicket) {
-      setDeliveries([]);
+      setMessages([]);
       return;
     }
     void getMySupportTicket(selectedTicket)
-      .then((r) => setDeliveries(r.deliveries || []))
-      .catch(() => setDeliveries([]));
+      .then((r) => {
+        setMessages(r.messages || []);
+      })
+      .catch(() => setMessages([]));
   }, [selectedTicket]);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -156,6 +177,8 @@ export default function HomeownerSupportPanel({
         channel,
         subject: subject.trim(),
         message: message.trim(),
+        category,
+        priority,
         relatedJobId: relatedJobId === "" ? null : Number(relatedJobId),
       });
       setLastSubmitted({
@@ -163,7 +186,7 @@ export default function HomeownerSupportPanel({
         deliveries: r.deliveries || [],
       });
       setSelectedTicket(r.ticket.ticketNumber);
-      setDeliveries(r.deliveries || []);
+      setMessages([]);
       setSubject("");
       setMessage("");
       setRelatedJobId("");
@@ -240,6 +263,26 @@ export default function HomeownerSupportPanel({
           </div>
         )}
 
+        {channel === "help" && (
+          <>
+            <label className="grid gap-1.5 text-sm">
+              <span className="font-medium">Category</span>
+              <select className="rounded-xl border border-border bg-background px-3 py-2.5" value={category} onChange={(e) => setCategory(e.target.value)}>
+                {HOMEOWNER_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+            <label className="grid gap-1.5 text-sm">
+              <span className="font-medium">Priority</span>
+              <select className="rounded-xl border border-border bg-background px-3 py-2.5" value={priority} onChange={(e) => setPriority(e.target.value)}>
+                <option value="low">Low</option>
+                <option value="normal">Normal</option>
+                <option value="high">High</option>
+                <option value="urgent">Urgent</option>
+              </select>
+            </label>
+          </>
+        )}
+
         <label className="grid gap-1.5 text-sm">
           <span className="font-medium">Subject</span>
           <input
@@ -295,8 +338,13 @@ export default function HomeownerSupportPanel({
 
       {tickets.length > 0 && (
         <div className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            {["all", "open", "resolved", "closed"].map((f) => (
+              <button key={f} type="button" onClick={() => setTicketFilter(f)} className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${ticketFilter === f ? "bg-primary text-white" : "border border-border"}`}>{f}</button>
+            ))}
+          </div>
           <p className="text-sm font-semibold flex items-center gap-2">
-            <Ticket size={16} /> Your {channel === "assistant" ? "assistant" : "support"} tickets
+            <Ticket size={16} /> My Support Tickets
           </p>
           <ul className="space-y-2">
             {tickets.map((t) => (
@@ -312,11 +360,28 @@ export default function HomeownerSupportPanel({
                   <p className="text-xs text-muted-foreground mt-0.5">{t.subject}</p>
                   <p className="text-[10px] text-muted-foreground mt-1">{fmtWhen(t.createdAt)} · {t.status}</p>
                 </button>
-                {selectedTicket === t.ticketNumber && deliveries.length > 0 && (
+                {selectedTicket === t.ticketNumber && messages.length > 0 && (
                   <div className="mt-2 space-y-2 pl-1">
-                    {deliveries.map((d) => (
-                      <DeliveryCard key={d.id} delivery={d} />
+                    {messages.map((m) => (
+                      <div key={m.id} className="rounded-xl border border-border bg-muted/20 p-3 text-sm">
+                        <p className="text-xs font-semibold capitalize">{m.senderRole}{m.senderName ? ` · ${m.senderName}` : ""}</p>
+                        <p className="text-[10px] text-muted-foreground">{fmtWhen(m.createdAt)}</p>
+                        <p className="mt-1 whitespace-pre-wrap">{m.message}</p>
+                      </div>
                     ))}
+                    <textarea rows={2} className="w-full rounded-xl border border-border px-3 py-2 text-sm" value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Reply…" />
+                    <button type="button" disabled={busy} className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-white" onClick={async () => {
+                      if (!reply.trim()) return;
+                      setBusy(true);
+                      try {
+                        await replySupportTicket(selectedTicket, reply.trim());
+                        setReply("");
+                        const r = await getMySupportTicket(selectedTicket);
+                        setMessages(r.messages || []);
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}>Send reply</button>
                   </div>
                 )}
               </li>

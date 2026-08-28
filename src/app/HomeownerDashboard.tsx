@@ -1,17 +1,21 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Home, PlusCircle, LogOut, Sun, Moon, Menu, X,
   Loader2, ImagePlus, ShieldAlert, AlertTriangle, CheckCircle, DollarSign, Sparkles, HardHat, ArrowLeft, ArrowRight,
   CalendarDays, Clock, Zap, Building2, KeyRound, Hammer, Store, BadgeCheck,
   Send, MessageSquare, Bot, Volume2, VolumeX, Star, Search, LayoutDashboard, Wrench, Shield,
   FileText, CreditCard, Headphones, Settings, HelpCircle, Mic, Camera, Droplets, Wind, Bug, History,
+  Trees, Snowflake, Brush,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import type { AuthUser } from "./auth";
 import { getStoredToken } from "./auth";
 import { chatWithAi, type ChatMessage } from "./geminiAssessment";
 import { brand } from "../config/brand";
-import { BrandLogo } from "./BrandLogo";
+import AppLogo from "./AppLogo";
+import AppBackButton from "./AppBackButton";
+import { type HomeownerNavFrame } from "./navigation";
+import { useDashboardNavigation } from "./useDashboardNavigation";
 import {
   STATUS_LABELS,
   assessManagedJob,
@@ -24,7 +28,9 @@ import {
   lookupPartner,
   lookupDiscount,
   payDispatchFee,
+  getManagedJob,
   retailRangeLabel,
+  homeownerInvoicePaymentStatus,
   updatePropertyHealth,
   type ManagedJob,
   type Property,
@@ -41,6 +47,7 @@ import {
   type HomeownerArea,
   type HomeownerService,
 } from "./homeownerCategories";
+import { subServiceLabel, subServicesForCategory } from "./serviceCatalog";
 import {
   REQUEST_SYSTEM_OPTIONS,
   analyzePropertyHealthProfile,
@@ -48,11 +55,26 @@ import {
   type PropertyHealthProfile,
 } from "./homeownerPropertyHealth";
 import HomeownerOverview from "./HomeownerOverview";
-import HomeownerHealthPanel from "./HomeownerHealthPanel";
+import HomeownerHomeUpdates from "./HomeownerHomeUpdates";
+import HomeownerPropertyCare from "./HomeownerPropertyCare";
+import HomeownerHomeProtection from "./HomeownerHomeProtection";
+import HomeownerReferEarn from "./HomeownerReferEarn";
+import { buildHomeUpdatesSnapshot, type HomeUpdateItem } from "./homeUpdates";
+import {
+  type DashTab,
+  type JobsSegment,
+  type PropertyCareSection,
+  NAV_SECTIONS,
+  FOOTER_NAV,
+  resolveNavTab,
+  propertyCareSectionForTab,
+  jobsForSegment,
+  jobsForProperty,
+  countQuotesWaiting,
+  mobileHeaderTitle,
+} from "./homeownerNav";
 import ServiceTrackingCard from "./ServiceTrackingCard";
 import HomeownerPropertyPage, { DEFAULT_HOME_SYSTEMS } from "./HomeownerPropertyPage";
-import HomeownerMaintenanceTimeline from "./HomeownerMaintenanceTimeline";
-import HomeownerServiceHistory from "./HomeownerServiceHistory";
 import HomeownerBottomNav from "./HomeownerBottomNav";
 import HomeownerMoreMenu from "./HomeownerMoreMenu";
 import HomeownerInboxPanel from "./HomeownerInboxPanel";
@@ -67,19 +89,10 @@ import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 import HomeownerLocalEstimate, { EstimateLoadingSteps } from "./HomeownerLocalEstimate";
 import HireProfessionalWizard from "./HireProfessionalWizard";
 import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
-import { UsLocationFields, normalizeUsStateCode } from "./UsLocationFields";
+import { VerifiedAddressFields, type AddressVerificationMeta } from "./VerifiedAddressInput";
+import { normalizeUsStateCode } from "./UsLocationFields";
+import { isAddressComplete } from "./addressFormat";
 import { useIsMobile } from "./components/ui/use-mobile";
-import {
-  type DashTab,
-  type JobsSegment,
-  NAV_SECTIONS,
-  FOOTER_NAV,
-  resolveNavTab,
-  jobsForSegment,
-  jobsForProperty,
-  countQuotesWaiting,
-  mobileHeaderTitle,
-} from "./homeownerNav";
 import { isValidUsZip, normalizeZip, zipInputProps } from "./zipCode";
 
 function formatChatMessage(text: string): string {
@@ -141,6 +154,9 @@ const REQUEST_ICONS: Record<string, React.ElementType> = {
   hammer: Hammer,
   bug: Bug,
   home: Home,
+  trees: Trees,
+  snowflake: Snowflake,
+  cleaning: Brush,
   more: PlusCircle,
 };
 
@@ -266,6 +282,7 @@ export default function HomeownerDashboard({
   initialTab,
   showSubscriptionSuccess,
   subscriptionSuccessPlanCode,
+  subscriptionActivating,
   onDismissSubscriptionSuccess,
 }: {
   onLogout: () => void;
@@ -276,9 +293,13 @@ export default function HomeownerDashboard({
   initialTab?: DashTab;
   showSubscriptionSuccess?: boolean;
   subscriptionSuccessPlanCode?: string | null;
+  subscriptionActivating?: boolean;
   onDismissSubscriptionSuccess?: () => void;
 }) {
-  const [tab, setTab] = useState<DashTab>(initialTab || "overview");
+  const [tab, setTab] = useState<DashTab>(() => resolveNavTab(initialTab || "overview"));
+  const [careSection, setCareSection] = useState<PropertyCareSection>(() =>
+    propertyCareSectionForTab(initialTab || "overview")
+  );
   const [jobsSegment, setJobsSegment] = useState<JobsSegment>("active");
   const [propertyPickerOpen, setPropertyPickerOpen] = useState(false);
   const [primaryPropertyId, setPrimaryPropertyId] = useState<number | null>(null);
@@ -296,6 +317,7 @@ export default function HomeownerDashboard({
   const [requestSystemId, setRequestSystemId] = useState<string>("");
   const [issueArea, setIssueArea] = useState<HomeownerArea | "">("");
   const [category, setCategory] = useState<HomeownerService | "">("");
+  const [serviceSubcategory, setServiceSubcategory] = useState("");
   const [areaSearch, setAreaSearch] = useState("");
   const [serviceSearch, setServiceSearch] = useState("");
   const [description, setDescription] = useState("");
@@ -334,12 +356,21 @@ export default function HomeownerDashboard({
   const [addressPromptCity, setAddressPromptCity] = useState("");
   const [addressPromptState, setAddressPromptState] = useState("");
   const [addressPromptZip, setAddressPromptZip] = useState("");
+  const [addressPromptVerification, setAddressPromptVerification] = useState<AddressVerificationMeta>({
+    status: "unverified",
+    addressVerified: false,
+  });
   const [addressPromptJobId, setAddressPromptJobId] = useState<number | null>(null);
   const [showAddAddressModal, setShowAddAddressModal] = useState(false);
   const [modalAddressLine1, setModalAddressLine1] = useState("");
+  const [modalAddressLine2, setModalAddressLine2] = useState("");
   const [modalCity, setModalCity] = useState("");
   const [modalState, setModalState] = useState("");
   const [modalZip, setModalZip] = useState("");
+  const [modalAddressVerification, setModalAddressVerification] = useState<AddressVerificationMeta>({
+    status: "unverified",
+    addressVerified: false,
+  });
   const [modalActionAfterSave, setModalActionAfterSave] = useState<"ai" | "experts" | null>(null);
   const [speakingText, setSpeakingText] = useState<string | null>(null);
 
@@ -376,11 +407,13 @@ export default function HomeownerDashboard({
   const [discountMessage, setDiscountMessage] = useState<string | null>(null);
   const [dispatchCouponPreview, setDispatchCouponPreview] = useState<DispatchCouponPreview | null>(null);
   const [dispatchSuccessMsg, setDispatchSuccessMsg] = useState<string | null>(null);
+  const [invoicePaymentMsg, setInvoicePaymentMsg] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<ManagedJob | null>(null);
   const [assessmentMsg, setAssessmentMsg] = useState<string | null>(null);
   const [assessLoadingStep, setAssessLoadingStep] = useState<number | null>(null);
   const [assessLoadingZip, setAssessLoadingZip] = useState<string | null>(null);
   const [showTechMessage, setShowTechMessage] = useState(false);
+  const [forceEditSchedule, setForceEditSchedule] = useState(false);
   const [techMessageDraft, setTechMessageDraft] = useState("");
   const [techMessageSent, setTechMessageSent] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -450,7 +483,20 @@ export default function HomeownerDashboard({
   }, [properties, propertyId, primaryPropertyId]);
 
   function navigateTab(next: DashTab) {
-    setTab(resolveNavTab(next));
+    navigateTo({
+      role: "homeowner",
+      tab: resolveNavTab(next),
+      jobId: null,
+    });
+  }
+
+  function openPropertyCare(section: PropertyCareSection = "overview") {
+    setCareSection(section);
+    navigateTo({
+      role: "homeowner",
+      tab: "property-care",
+      jobId: null,
+    });
   }
 
   function selectPrimaryProperty(id: number) {
@@ -459,10 +505,46 @@ export default function HomeownerDashboard({
   }
 
   function openJobsSegment(segment: JobsSegment, jobId?: number) {
-    setJobsSegment(segment);
-    setTab("jobs");
-    if (jobId != null) setSelectedJobId(jobId);
+    navigateTo({
+      role: "homeowner",
+      tab: "jobs",
+      jobsSegment: segment,
+      jobId: jobId ?? null,
+    });
   }
+
+  const applyNavFrame = useCallback((f: HomeownerNavFrame) => {
+    const nextTab = resolveNavTab(f.tab as DashTab);
+    setCareSection(propertyCareSectionForTab(nextTab));
+    setTab(nextTab);
+    if (f.jobId !== undefined) setSelectedJobId(f.jobId);
+    if (f.jobsSegment) setJobsSegment(f.jobsSegment as JobsSegment);
+    if (f.tab === "report") {
+      if (f.reportStep) setStep(f.reportStep as ReportStep);
+      if (f.intakePhase) setIntakePhase(f.intakePhase as IntakePhase);
+      if (f.reportPath !== undefined) setReportPath(f.reportPath);
+    }
+  }, []);
+
+  const navFrame = useMemo(
+    (): HomeownerNavFrame => ({
+      role: "homeowner",
+      tab,
+      jobId: tab === "jobs" ? selectedJobId : null,
+      jobsSegment: tab === "jobs" ? jobsSegment : undefined,
+      reportStep: tab === "report" ? step : undefined,
+      intakePhase: tab === "report" && step === "intake" ? intakePhase : undefined,
+      reportPath: tab === "report" ? reportPath : undefined,
+    }),
+    [tab, selectedJobId, jobsSegment, step, intakePhase, reportPath]
+  );
+
+  const { goHome, goBack, canBack, navigateTo } = useDashboardNavigation(
+    "homeowner",
+    "homeowner-dashboard",
+    navFrame,
+    applyNavFrame
+  );
   const healthProfile = useMemo(() => {
     const base = normalizeHealthProfile(primaryProperty?.healthProfile as PropertyHealthProfile | null);
     return {
@@ -610,32 +692,24 @@ export default function HomeownerDashboard({
     }
   }
 
-  function openRequestService() {
-    setTab("report");
-    setStep("intake");
-    setIntakePhase("whats");
-    setReportPath(null);
+  function openRequestService(prefill?: HomeUpdateItem["requestPrefill"]) {
+    if (prefill?.systemId) setRequestSystemId(prefill.systemId);
+    if (prefill?.area) setIssueArea(prefill.area);
+    if (prefill?.service) setCategory(prefill.service);
+    if (prefill?.description) setDescription(prefill.description);
+    navigateTo({
+      role: "homeowner",
+      tab: "report",
+      reportStep: "intake",
+      intakePhase: prefill?.description ? "details" : "whats",
+      reportPath: null,
+      jobId: null,
+    });
   }
 
   function goBackOneReportStep() {
     setError(null);
-    if (step === "assessment") {
-      if (reportPath === "experts") {
-        setStep("experts");
-      } else {
-        setStep("intake");
-        setIntakePhase("details");
-      }
-      return;
-    }
-    if (step === "experts") {
-      setStep("intake");
-      setIntakePhase("details");
-      return;
-    }
-    if (step === "intake" && intakePhase === "details") {
-      setIntakePhase("whats");
-    }
+    goBack();
   }
 
   async function refresh() {
@@ -715,6 +789,7 @@ export default function HomeownerDashboard({
     setShowAddAddressModal(false);
     setModalActionAfterSave(null);
     setModalAddressLine1("");
+    setModalAddressLine2("");
     setModalCity("");
     setModalState("");
     setModalZip("");
@@ -749,6 +824,8 @@ export default function HomeownerDashboard({
           city: addressPromptCity.trim(),
           state: normalizeUsStateCode(addressPromptState),
           zip: normalizeZip(addressPromptZip),
+          addressVerified: addressPromptVerification.addressVerified,
+          postalCodePlus4: addressPromptVerification.postalCodePlus4 || undefined,
         }),
       });
       const data = await res.json();
@@ -790,25 +867,31 @@ export default function HomeownerDashboard({
   }
 
   async function handleSaveAddressModal() {
-    if (!modalAddressLine1.trim() || !modalCity.trim() || !modalState.trim() || !modalZip.trim()) {
-      alert("Please fill in all address details.");
-      return;
-    }
-    if (!isValidUsZip(modalZip)) {
-      alert("Please enter a valid 5-digit US ZIP code.");
+    const structured = {
+      addressLine1: modalAddressLine1.trim(),
+      addressLine2: modalAddressLine2.trim(),
+      city: modalCity.trim(),
+      state: normalizeUsStateCode(modalState),
+      zip: modalZip.trim(),
+    };
+    if (!isAddressComplete(structured) || !isValidUsZip(structured.zip)) {
+      alert("Please fill in Address Line 1, City, State, and a valid ZIP Code.");
       return;
     }
     setBusy(true);
     try {
       const r = await createAndAdoptProperty(
         {
-          addressLine1: modalAddressLine1.trim(),
-          city: modalCity.trim(),
-          state: normalizeUsStateCode(modalState),
-          zip: normalizeZip(modalZip),
+          addressLine1: structured.addressLine1,
+          addressLine2: structured.addressLine2 || undefined,
+          city: structured.city,
+          state: structured.state,
+          zip: normalizeZip(structured.zip),
+          addressVerified: modalAddressVerification.addressVerified,
+          postalCodePlus4: modalAddressVerification.postalCodePlus4 || undefined,
           country: "US",
-          streetAddress: modalAddressLine1.trim(),
-          label: modalAddressLine1.trim(),
+          streetAddress: structured.addressLine1,
+          label: structured.addressLine1,
           homeSystems: DEFAULT_HOME_SYSTEMS,
         },
         { makePrimary: true, forReport: true, analyzeHealth: true }
@@ -888,17 +971,53 @@ export default function HomeownerDashboard({
       }
 
       const stripeJobId = sessionStorage.getItem("fixbridge-stripe-active-job-id");
-      const dispatchPaid = sessionStorage.getItem("fixbridge-dispatch-paid") === "1";
+      const dispatchConfirming = sessionStorage.getItem("fixbridge-dispatch-confirming") === "1";
+      const dispatchCanceled = sessionStorage.getItem("fixbridge-dispatch-canceled") === "1";
 
-      if (dispatchPaid) {
-        setDispatchSuccessMsg("Dispatch fee authorized — FixBridge has been notified and will contact a contractor.");
+      if (dispatchConfirming) {
+        setDispatchSuccessMsg("Confirming payment with FixBridge…");
         setTab("report");
         setStep("assessment");
         setAssessmentMode("expert");
         if (stripeJobId) {
           setSelectedJobId(Number(stripeJobId));
         }
-        sessionStorage.removeItem("fixbridge-dispatch-paid");
+        sessionStorage.removeItem("fixbridge-dispatch-confirming");
+        const confirmJobId = Number(stripeJobId || 0);
+        if (confirmJobId) {
+          void (async () => {
+            for (let i = 0; i < 12; i++) {
+              try {
+                const r = await getManagedJob(confirmJobId);
+                const job = r.ok ? r.job : null;
+                const paid =
+                  job &&
+                  (job.visitFeeAuthorized === true ||
+                    Boolean(job.paymentCompletedAt) ||
+                    ["paid_for_dispatch", "awaiting_contractor"].includes(String(job.status)));
+                if (paid) {
+                  setDispatchSuccessMsg(
+                    "Payment Successful — Your request has been submitted to FixBridge. An admin will review it shortly."
+                  );
+                  return;
+                }
+              } catch {
+                /* keep polling */
+              }
+              await new Promise((resolve) => setTimeout(resolve, 2000));
+            }
+            setDispatchSuccessMsg(null);
+            setError(
+              "We could not confirm your payment yet. If you were charged, refresh this page or contact support — do not pay again."
+            );
+          })();
+        }
+      } else if (dispatchCanceled) {
+        setError("Payment was not completed. Your request has not been submitted for dispatch. Return to checkout to try again.");
+        if (stripeJobId) {
+          setSelectedJobId(Number(stripeJobId));
+        }
+        sessionStorage.removeItem("fixbridge-dispatch-canceled");
       } else if (stripeJobId) {
         setSelectedJobId(Number(stripeJobId));
         setTab("jobs");
@@ -906,6 +1025,47 @@ export default function HomeownerDashboard({
 
       if (stripeJobId) {
         sessionStorage.removeItem("fixbridge-stripe-active-job-id");
+      }
+
+      const invoiceConfirming = sessionStorage.getItem("fixbridge-invoice-confirming");
+      const invoiceCanceled = sessionStorage.getItem("fixbridge-invoice-canceled");
+      if (invoiceConfirming) {
+        setInvoicePaymentMsg("Confirming your payment…");
+        setTab("jobs");
+        const invNum = invoiceConfirming;
+        void (async () => {
+          for (let i = 0; i < 15; i++) {
+            try {
+              const r = await homeownerInvoicePaymentStatus(invNum);
+              if (r.ok && r.paid) {
+                try {
+                  sessionStorage.removeItem("fixbridge-invoice-confirming");
+                } catch {
+                  /* ignore */
+                }
+                setInvoicePaymentMsg("Payment received ✓");
+                void refresh();
+                return;
+              }
+            } catch {
+              /* keep polling */
+            }
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+          }
+          try {
+            sessionStorage.removeItem("fixbridge-invoice-confirming");
+          } catch {
+            /* ignore */
+          }
+          setInvoicePaymentMsg(null);
+          setError(
+            "We could not confirm your payment yet. If you were charged, refresh this page or contact support — do not pay again."
+          );
+        })();
+      } else if (invoiceCanceled) {
+        setError("Payment wasn't completed. Please try again.");
+        setTab("jobs");
+        sessionStorage.removeItem("fixbridge-invoice-canceled");
       }
     } catch {
       // ignore
@@ -1132,7 +1292,12 @@ export default function HomeownerDashboard({
       const usePartner = Boolean(code);
       const created = await createManagedJob({
         category,
-        title: jobTitleForHomeowner(issueArea || category, category),
+        serviceSubcategory: serviceSubcategory || undefined,
+        title: jobTitleForHomeowner(
+          issueArea || category,
+          category,
+          serviceSubcategory ? subServiceLabel(category, serviceSubcategory) : undefined
+        ),
         description,
         propertyId: propertyId || undefined,
         serviceTiming: path === "experts" ? serviceTiming : "weekday",
@@ -1342,7 +1507,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
               }}
               className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors ${
                 tab === resolveNavTab(item.id) ||
-                (item.id === "property" && (tab === "properties" || tab === "property"))
+                (item.id === "property" && (tab === "properties" || tab === "property")) ||
+                (item.id === "property-care" && tab === "property-care")
                   ? "bg-[#FF4D1C] text-white shadow-sm"
                   : "text-foreground hover:bg-muted"
               }`}
@@ -1355,6 +1521,9 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
       ))}
       <div className="mx-2 border-t border-border" />
       <div className="space-y-1">
+        <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+          Account
+        </p>
         {FOOTER_NAV.map((item) => (
           <button
             key={item.id}
@@ -1391,20 +1560,17 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
   );
 
   const goProPromoCard = !hasDiyAccess && (
-    <div className="mx-3.5 my-3 rounded-xl border border-[#4A90D9]/25 bg-gradient-to-br from-[#4A90D9]/10 via-transparent to-[#FF6B2C]/5 p-4 text-center shadow-[0_4px_16px_-6px_rgba(74,144,217,0.25)] relative overflow-hidden">
-      <p className="text-xs font-bold text-[#4A90D9] uppercase tracking-wider flex items-center justify-center gap-1.5">
-        <Sparkles className="h-3.5 w-3.5" /> Go Pro
-      </p>
-      <p className="mt-1 text-[11px] text-muted-foreground leading-relaxed">
-        Compare plans — unlock DIY plans & priority support.
+    <div className="mx-3.5 my-3 rounded-xl border border-border/80 bg-muted/30 p-4 text-left">
+      <p className="text-xs font-semibold text-foreground">FixBridge Pro</p>
+      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+        Unlock advanced property insights, DIY guidance and priority support.
       </p>
       <button
         type="button"
         onClick={() => navigateTab("go-pro")}
-        className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#FF6B2C] px-3 py-2 text-xs font-semibold text-white shadow hover:brightness-105 active:scale-[0.98] transition duration-200"
+        className="mt-3 inline-flex w-full items-center justify-center rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold hover:bg-muted"
       >
-        <Zap className="h-3 w-3 fill-current" />
-        View plans
+        View Plans
       </button>
     </div>
   );
@@ -1413,11 +1579,14 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
     <div className="min-h-screen bg-background text-foreground">
       {/* Mobile top bar — title + quick actions; full nav lives in bottom bar */}
       <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-background/95 px-4 py-3 backdrop-blur lg:hidden">
-        <div className="min-w-0">
-          <p className="[font-family:'Barlow_Condensed',sans-serif] text-xl font-black uppercase tracking-tight">
-            {mobileHeaderTitle(tab)}
-          </p>
-          <p className="truncate text-[10px] text-muted-foreground">{user.name}</p>
+        <div className="flex min-w-0 items-center gap-1">
+          {canBack && <AppBackButton onBack={goBack} className="-ml-1 shrink-0" />}
+          <div className="min-w-0">
+            <p className="[font-family:'Barlow_Condensed',sans-serif] text-xl font-black uppercase tracking-tight">
+              {mobileHeaderTitle(tab)}
+            </p>
+            <p className="truncate text-[10px] text-muted-foreground">{user.name}</p>
+          </div>
         </div>
         <div className="flex items-center gap-1">
           {!hasDiyAccess && (
@@ -1428,15 +1597,6 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
             >
               <Sparkles className="h-3 w-3" />
               Pro
-            </button>
-          )}
-          {tab !== "overview" && (
-            <button
-              type="button"
-              onClick={() => navigateTab("overview")}
-              className="rounded-md p-2 text-sm font-medium text-primary hover:bg-muted"
-            >
-              Home
             </button>
           )}
         </div>
@@ -1454,7 +1614,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
               </div>
             )}
             <div>
-              <BrandLogo variant="auth" tone="auto" className="mb-0.5" />
+              <AppLogo onHome={goHome} variant="auth" className="mb-0.5" />
               <p className="text-[10px] text-muted-foreground leading-none">Homeowner · {user.name}</p>
             </div>
           </div>
@@ -1481,18 +1641,54 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
           )}
 
         {tab === "overview" && (
-          <HomeownerOverview
-            userName={user.name || "there"}
-            property={primaryProperty}
-            health={healthProfile}
-            jobs={primaryPropertyJobs}
-            quotesWaiting={countQuotesWaiting(primaryPropertyJobs)}
-            onRequestService={openRequestService}
-            onOpenJob={(id) => openJobsSegment("active", id)}
-            onOpenHealth={() => navigateTab("health")}
+          <div className="space-y-6">
+            <HomeownerOverview
+              userName={user.name || "there"}
+              property={primaryProperty}
+              health={healthProfile}
+              jobs={primaryPropertyJobs}
+              quotesWaiting={countQuotesWaiting(primaryPropertyJobs)}
+              onRequestService={() => openRequestService()}
+              onOpenJob={(id) => openJobsSegment("active", id)}
+              onOpenHealth={() => openPropertyCare("overview")}
+              onOpenProperty={() => navigateTab("properties")}
+              onOpenPropertyPicker={() => setPropertyPickerOpen(true)}
+              onOpenQuotes={() => openJobsSegment("quotes")}
+              onOpenHomeUpdates={() => openPropertyCare("recommendations")}
+            />
+            <div className="mx-auto max-w-5xl">
+              <HomeownerHomeUpdates
+                property={primaryProperty}
+                health={healthProfile}
+                jobs={primaryPropertyJobs}
+                busy={busy}
+                compact
+                onSaveHealth={async (next) => {
+                  if (!primaryProperty?.id) return;
+                  await saveHealthProfile(primaryProperty.id, next);
+                }}
+                onRequestService={(prefill) => openRequestService(prefill)}
+                onOpenProperty={() => navigateTab("properties")}
+              />
+            </div>
+          </div>
+        )}
+
+        {tab === "property-care" && (
+          <HomeownerPropertyCare
+            properties={properties}
+            jobs={jobs}
+            busy={busy}
+            initialSection={careSection}
+            initialPropertyId={primaryPropertyId}
+            onSaveHealth={saveHealthProfile}
+            onAddProperty={addHealthProperty}
+            onRequestService={(prefill) => openRequestService(prefill)}
+            onOpenJob={(id) => {
+              setSelectedJobId(id);
+              setTab("jobs");
+            }}
             onOpenProperty={() => navigateTab("properties")}
-            onOpenPropertyPicker={() => setPropertyPickerOpen(true)}
-            onOpenQuotes={() => openJobsSegment("quotes")}
           />
         )}
 
@@ -1513,94 +1709,22 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
         {tab === "inbox" && (
           <HomeownerInboxPanel
             jobs={jobs}
+            homeUpdates={buildHomeUpdatesSnapshot({
+              property: primaryProperty,
+              health: healthProfile,
+              jobs: primaryPropertyJobs,
+              prefs: healthProfile.homeUpdateState || null,
+            }).items}
             onOpenJob={(id, segment) => openJobsSegment(segment ?? "active", id)}
-            onRequestService={openRequestService}
+            onRequestService={() => openRequestService()}
+            onOpenHomeUpdates={() => openPropertyCare("recommendations")}
           />
         )}
 
-        {tab === "health" && (
-          <HomeownerHealthPanel
-            properties={properties}
-            jobs={jobs}
-            busy={busy}
-            onSave={saveHealthProfile}
-            onAddProperty={addHealthProperty}
-            onRequestService={openRequestService}
-          />
+        {tab === "protection" && (
+          <HomeownerHomeProtection userEmail={user.email} userId={user.id} />
         )}
-
-        {(tab === "maintenance") && (
-          <section className="mx-auto max-w-3xl space-y-4">
-            <div>
-              <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase">
-                Maintenance
-              </h1>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Upcoming care items from your Property Health schedule.
-              </p>
-            </div>
-            <div className="rounded-[1.5rem] border border-border/70 bg-card divide-y divide-border">
-              {properties.flatMap((p) => {
-                const profile = normalizeHealthProfile(p.healthProfile as PropertyHealthProfile | null);
-                return (profile.maintenance || []).map((m) => ({
-                  ...m,
-                  homeLabel: p.label || p.addressLine1 || `Home #${p.id}`,
-                  key: `${p.id}-${m.label}-${m.dueDate}`,
-                }));
-              })
-                .sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)))
-                .map((m) => (
-                <div key={m.key} className="flex items-center justify-between gap-3 px-5 py-4">
-                  <div>
-                    <p className="font-semibold">{m.label}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {[m.system || "Home", properties.length > 1 ? m.homeLabel : null].filter(Boolean).join(" · ")}
-                    </p>
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    {m.dueDate
-                      ? new Date(`${m.dueDate}T12:00:00`).toLocaleDateString(undefined, {
-                          month: "short",
-                          day: "numeric",
-                          year: "numeric",
-                        })
-                      : "—"}
-                  </p>
-                </div>
-              ))}
-              {properties.every((p) => {
-                const profile = normalizeHealthProfile(p.healthProfile as PropertyHealthProfile | null);
-                return !(profile.maintenance || []).length;
-              }) && (
-                <p className="px-5 py-8 text-sm text-muted-foreground">No upcoming maintenance yet. Add past services in Property Health to get AI suggestions.</p>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={() => navigateTab("timeline")}
-              className="text-sm font-semibold text-primary hover:underline"
-            >
-              Open Maintenance Timeline →
-            </button>
-          </section>
-        )}
-
-        {tab === "timeline" && (
-          <HomeownerMaintenanceTimeline
-            properties={properties}
-            jobs={jobs}
-            onOpenJob={(id) => {
-              setSelectedJobId(id);
-              setTab("jobs");
-            }}
-          />
-        )}
-
-        {tab === "protection" &&
-          comingSoon(
-            "Home Protection",
-            "Warranty coverage and FixBridge protection plans will appear here as jobs are completed."
-          )}
+        {tab === "refer-earn" && <HomeownerReferEarn referredByCode={user.referredByCode} />}
         {tab === "documents" && (
           <HomeownerDocumentsPanel
             jobs={jobs}
@@ -1616,16 +1740,6 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
             jobs={jobs}
             properties={properties}
             onOpenJob={(id) => {
-              setSelectedJobId(id);
-              setTab("jobs");
-            }}
-          />
-        )}
-        {tab === "history" && (
-          <HomeownerServiceHistory
-            jobs={jobs}
-            properties={properties}
-            onOpenTracking={(id) => {
               setSelectedJobId(id);
               setTab("jobs");
             }}
@@ -1665,6 +1779,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
         <SubscriptionSuccessModal
           open={Boolean(showSubscriptionSuccess)}
           plan={successPlanCard}
+          activating={Boolean(subscriptionActivating)}
           onClose={() => onDismissSubscriptionSuccess?.()}
           onViewFeatures={() => {
             setTab("go-pro");
@@ -1712,6 +1827,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                               setRequestSystemId(opt.id);
                               setIssueArea(opt.area);
                               setCategory(opt.service);
+                              setServiceSubcategory("");
                               setServiceSearch("");
                               setError(null);
                             }}
@@ -2008,7 +2124,10 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                               <button
                                 key={svc}
                                 type="button"
-                                onClick={() => setCategory(svc)}
+                                onClick={() => {
+                                  setCategory(svc);
+                                  setServiceSubcategory("");
+                                }}
                                 className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
                                   selected
                                     ? "border-primary bg-primary text-white shadow-sm shadow-primary/25"
@@ -2021,6 +2140,30 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                           })}
                       </div>
                     </div>
+                    {category && subServicesForCategory(category).length > 0 ? (
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium">Specific service</p>
+                        <div className="flex flex-wrap gap-2">
+                          {subServicesForCategory(category).map((sub) => {
+                            const selected = serviceSubcategory === sub.id;
+                            return (
+                              <button
+                                key={sub.id}
+                                type="button"
+                                onClick={() => setServiceSubcategory(sub.id)}
+                                className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                                  selected
+                                    ? "border-primary bg-primary text-white shadow-sm shadow-primary/25"
+                                    : "border-border bg-card text-foreground hover:border-primary/40 hover:bg-primary/5"
+                                }`}
+                              >
+                                {sub.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
 
@@ -2512,6 +2655,11 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                     setSelectedJobId(activeJob.id);
                     setTab("jobs");
                     setShowTechMessage(true);
+                  }}
+                  onChangeSchedule={() => {
+                    setSelectedJobId(activeJob.id);
+                    setTab("jobs");
+                    setForceEditSchedule(true);
                   }}
                 />
 
@@ -3061,6 +3209,17 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
 
         {tab === "jobs" && (
           <section className="mx-auto max-w-5xl space-y-4">
+            {invoicePaymentMsg ? (
+              <p
+                className={`rounded-xl border px-4 py-3 text-sm ${
+                  invoicePaymentMsg.includes("✓")
+                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-900 dark:text-emerald-100"
+                    : "border-amber-500/30 bg-amber-500/10 text-amber-900 dark:text-amber-100"
+                }`}
+              >
+                {invoicePaymentMsg}
+              </p>
+            ) : null}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight">
@@ -3122,7 +3281,12 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                       key={job.id}
                       type="button"
                       onClick={() => {
-                        setSelectedJobId(job.id);
+                        navigateTo({
+                          role: "homeowner",
+                          tab: "jobs",
+                          jobsSegment,
+                          jobId: job.id,
+                        });
                         setShowTechMessage(false);
                         setTechMessageSent(false);
                       }}
@@ -3144,19 +3308,17 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                 {(selectedJob || filteredJobs[0]) && (
                   <div className={`space-y-3 ${isMobile && !selectedJobId ? "hidden" : ""}`}>
                     {isMobile && selectedJobId && (
-                      <button
-                        type="button"
-                        onClick={() => setSelectedJobId(null)}
-                        className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary"
-                      >
-                        <ArrowLeft size={16} /> Back to Jobs
-                      </button>
+                      <AppBackButton onBack={goBack} label="Back to Jobs" className="-ml-1" />
                     )}
                     <ServiceTrackingCard
                       job={selectedJob || filteredJobs[0]}
                       onMessage={() => {
                         setShowTechMessage(true);
                         setTechMessageSent(false);
+                      }}
+                      onChangeSchedule={() => {
+                        setForceEditSchedule(true);
+                        // Keep details visible; scroll-friendly cue via force flag
                       }}
                     />
                     {showTechMessage && (
@@ -3208,6 +3370,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                       onBusy={setBusy}
                       onError={setError}
                       onRefresh={refresh}
+                      forceEditSchedule={forceEditSchedule}
+                      onEditScheduleConsumed={() => setForceEditSchedule(false)}
                       onNeedAddress={({
                         propertyId,
                         jobId,
@@ -3590,34 +3754,19 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
               </p>
 
               <div className="space-y-3">
-                <label className="grid gap-1.5">
-                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Street Address <span className="text-red-500">*</span></span>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. 123 Main St"
-                    className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#FF4D1C] text-foreground"
-                    value={addressPromptLine1}
-                    onChange={(e) => setAddressPromptLine1(e.target.value)}
-                  />
-                </label>
-                <label className="grid gap-1.5">
-                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Apartment, Suite, Unit, etc. <span className="font-normal text-muted-foreground">(Optional)</span></span>
-                  <input
-                    type="text"
-                    placeholder="e.g. Apt 4B"
-                    className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#FF4D1C] text-foreground"
-                    value={addressPromptLine2}
-                    onChange={(e) => setAddressPromptLine2(e.target.value)}
-                  />
-                </label>
-                <UsLocationFields
+                <VerifiedAddressFields
+                  idPrefix="address-prompt"
+                  addressLine1={addressPromptLine1}
+                  addressLine2={addressPromptLine2}
                   city={addressPromptCity}
                   state={addressPromptState}
                   zip={addressPromptZip}
+                  onAddressLine1Change={setAddressPromptLine1}
+                  onAddressLine2Change={setAddressPromptLine2}
                   onCityChange={setAddressPromptCity}
                   onStateChange={setAddressPromptState}
                   onZipChange={setAddressPromptZip}
+                  onVerificationChange={setAddressPromptVerification}
                   disabled={busy}
                 />
               </div>
@@ -3670,24 +3819,19 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
               </p>
 
               <div className="space-y-3">
-                <label className="grid gap-1.5">
-                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Street Address <span className="text-red-500">*</span></span>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. 123 Main St"
-                    className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#FF4D1C] text-foreground"
-                    value={modalAddressLine1}
-                    onChange={(e) => setModalAddressLine1(e.target.value)}
-                  />
-                </label>
-                <UsLocationFields
+                <VerifiedAddressFields
+                  idPrefix="add-address"
+                  addressLine1={modalAddressLine1}
+                  addressLine2={modalAddressLine2}
                   city={modalCity}
                   state={modalState}
                   zip={modalZip}
+                  onAddressLine1Change={setModalAddressLine1}
+                  onAddressLine2Change={setModalAddressLine2}
                   onCityChange={setModalCity}
                   onStateChange={setModalState}
                   onZipChange={setModalZip}
+                  onVerificationChange={setModalAddressVerification}
                   disabled={busy}
                 />
               </div>

@@ -212,6 +212,15 @@ function MascotAside({
   );
 }
 
+/** Matches marketing nav logo chip (home screen when scrolled). */
+function AuthHeaderLogo() {
+  return (
+    <div className="inline-flex shrink-0 items-center rounded-lg border border-border/80 bg-card px-2.5 py-1.5 shadow-sm dark:border-white/10 dark:bg-[#141414]">
+      <BrandLogo variant="nav" />
+    </div>
+  );
+}
+
 export function AuthShell({
   onBack,
   backLabel = "Back to site",
@@ -254,6 +263,7 @@ export function AuthShell({
           <div className="relative flex min-h-screen flex-col bg-white dark:bg-background">
             <div className="border-b border-neutral-100 px-5 py-4 dark:border-border sm:px-8">
               <div className="mx-auto flex max-w-xl items-center justify-between gap-3">
+                <AuthHeaderLogo />
                 <button
                   type="button"
                   onClick={onBack}
@@ -262,7 +272,6 @@ export function AuthShell({
                   <ArrowLeft size={15} />
                   {backLabel}
                 </button>
-                <BrandLogo variant="auth" tone="auto" />
               </div>
             </div>
 
@@ -306,6 +315,7 @@ export function AuthShell({
 
       <div className="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-5 sm:px-6 lg:px-8">
         <header className="mb-5 flex items-center justify-between gap-3 sm:mb-7">
+          <AuthHeaderLogo />
           <button
             type="button"
             onClick={onBack}
@@ -314,7 +324,6 @@ export function AuthShell({
             <ArrowLeft size={14} />
             {backLabel}
           </button>
-          <BrandLogo variant="auth" tone="auto" />
         </header>
 
         <div

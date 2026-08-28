@@ -1,6 +1,31 @@
 import { getStoredToken } from "./auth";
 import { brand } from "../config/brand";
 
+
+export type CheckoutBreakdown = {
+  customerId?: number | null;
+  propertyId?: number | null;
+  serviceRequestId?: number;
+  bookingId?: string;
+  serviceTitle?: string;
+  serviceCategory?: string | null;
+  serviceAmount?: number | null;
+  serviceAmountLow?: number | null;
+  serviceAmountHigh?: number | null;
+  serviceFee: number;
+  couponId?: number | null;
+  couponCode?: string | null;
+  couponLabel?: string | null;
+  couponDiscount: number;
+  finalAmount: number;
+  pricingVersion?: string;
+  preferredDate?: string | null;
+  preferredTimeSlot?: string | null;
+  serviceTiming?: string | null;
+  address?: string | null;
+  createdAt?: string;
+};
+
 export type ManagedJobStatus =
   | "draft"
   | "ai_review_complete"
@@ -60,6 +85,7 @@ export type ManagedJob = {
   jobMode?: string;
   status: ManagedJobStatus | string;
   category?: string;
+  serviceSubcategory?: string | null;
   title?: string;
   description?: string;
   mediaDataUrl?: string | null;
@@ -110,6 +136,13 @@ export type ManagedJob = {
   updatedAt?: string;
   pricing?: any;
   visitFeeAuthorized?: boolean;
+  workQueueStatus?: string | null;
+  serviceFeeAmount?: number | null;
+  serviceAmount?: number | null;
+  couponDiscountAmount?: number | null;
+  finalCustomerAmount?: number | null;
+  paymentCompletedAt?: string | null;
+  checkoutSnapshot?: CheckoutBreakdown | null;
   visitFeeCaptured?: boolean;
   visitFeeAmount?: number | null;
   diyRiskLevel?: string;
@@ -132,6 +165,11 @@ export type PropertyHealthProfilePayload = {
   previousServices?: Array<Record<string, unknown>>;
   aiSuggestions?: Array<Record<string, unknown>>;
   onboardingComplete?: boolean;
+  homeUpdateState?: {
+    dismissed?: Record<string, string>;
+    snoozedUntil?: Record<string, string>;
+    history?: Array<Record<string, unknown>>;
+  };
 };
 
 export type PropertyDocumentCategory =
@@ -165,7 +203,11 @@ export type HomeSystemRecord = {
   installedYear?: string | number | null;
   warrantyUntil?: string | null;
   lastService?: string | null;
+  lastInspection?: string | null;
   notes?: string | null;
+  /** Structured follow-up from an inspection or AI document extract (homeowner-confirmed). */
+  followUpRecommendation?: string | null;
+  followUpDueDate?: string | null;
 };
 
 export type Property = {
@@ -176,6 +218,10 @@ export type Property = {
   city?: string | null;
   state?: string | null;
   zip?: string | null;
+  postalCodePlus4?: string | null;
+  addressVerified?: boolean;
+  addressVerifiedAt?: string | null;
+  addressVerificationProvider?: string | null;
   propertyType?: string | null;
   accessNotes?: string | null;
   propertyPurpose?: string | null;
@@ -366,6 +412,48 @@ export async function deletePropertyDocument(propertyId: number, docId: number) 
   });
 }
 
+export type PropertyDocumentExtraction = {
+  serviceType?: string | null;
+  systemKey?: string | null;
+  systemLabel?: string | null;
+  date?: string | null;
+  provider?: string | null;
+  amount?: string | null;
+  warrantyUntil?: string | null;
+  installationDate?: string | null;
+  inspectionFindings?: string[];
+  recommendedFollowUp?: string | null;
+  recommendedFollowUpDate?: string | null;
+  confidence?: number;
+  summary?: string | null;
+};
+
+export async function analyzePropertyDocument(propertyId: number, docId: number) {
+  return api<{
+    ok: boolean;
+    extraction?: PropertyDocumentExtraction;
+    source?: string;
+    message?: string;
+  }>(`/api/properties/${propertyId}/documents/${docId}/analyze`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function applyPropertyDocumentExtract(
+  propertyId: number,
+  docId: number,
+  extraction: PropertyDocumentExtraction
+) {
+  return api<{ ok: boolean; property?: Property; message?: string }>(
+    `/api/properties/${propertyId}/documents/${docId}/apply-extract`,
+    {
+      method: "POST",
+      body: JSON.stringify({ extraction }),
+    }
+  );
+}
+
 export async function createManagedJob(body: Record<string, unknown>) {
   return api<{ ok: boolean; job?: ManagedJob; message?: string }>("/api/managed/jobs", {
     method: "POST",
@@ -431,6 +519,35 @@ export async function applyJobCoupon(jobId: number, code: string) {
   });
 }
 
+export async function clearJobCoupon(jobId: number) {
+  return api<{
+    ok: boolean;
+    breakdown?: CheckoutBreakdown;
+    job?: ManagedJob;
+    message?: string;
+  }>(`/api/managed/jobs/${jobId}/clear-coupon`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+export async function prepareCheckout(
+  jobId: number,
+  body?: { discountCode?: string | null; clearCoupon?: boolean }
+) {
+  return api<{
+    ok: boolean;
+    snapshot?: CheckoutBreakdown;
+    amount?: number;
+    job?: ManagedJob;
+    message?: string;
+  }>(`/api/managed/jobs/${jobId}/prepare-checkout`, {
+    method: "POST",
+    body: JSON.stringify(body || {}),
+  });
+}
+
+
 export async function requestProfessionalDispatch(
   jobId: number,
   body: {
@@ -445,6 +562,23 @@ export async function requestProfessionalDispatch(
   return api<{ ok: boolean; job?: ManagedJob; message?: string }>(
     `/api/managed/jobs/${jobId}/request-professional`,
     { method: "POST", body: JSON.stringify(body) }
+  );
+}
+
+export async function updateHomeownerJob(
+  jobId: number,
+  body: {
+    serviceTiming?: string;
+    preferredDate?: string | null;
+    preferredTimeSlot?: string;
+    description?: string;
+    contactPhone?: string;
+    title?: string;
+  }
+) {
+  return api<{ ok: boolean; job?: ManagedJob; message?: string }>(
+    `/api/managed/jobs/${jobId}/homeowner-update`,
+    { method: "PUT", body: JSON.stringify(body) }
   );
 }
 
@@ -495,6 +629,29 @@ export async function confirmCompletion(
 
 export async function listInvitations() {
   return api<{ ok: boolean; invitations: Array<Record<string, unknown>> }>("/api/contractor/invitations");
+}
+
+export type ContractorJobReview = {
+  id: number;
+  authorName: string;
+  location: string | null;
+  serviceType: string | null;
+  rating: number;
+  text: string;
+  verified: boolean;
+  createdAt: string | null;
+  jobId: number | null;
+  jobTitle: string | null;
+  jobRef: string | null;
+};
+
+export async function getContractorPerformance() {
+  return api<{
+    ok: boolean;
+    reviews?: ContractorJobReview[];
+    stats?: { reviewCount: number; averageRating: number | null };
+    message?: string;
+  }>("/api/contractor/performance");
 }
 
 export async function respondInvitation(id: number, action: "accept" | "decline") {
@@ -609,6 +766,14 @@ export async function adminQuoteWorkspace(id: number | string) {
     activity?: import("./quoteDocument").QuoteActivity[];
     message?: string;
   }>(`/api/admin/quotes/${id}/workspace`);
+}
+
+export async function adminGetInvoice(id: number | string) {
+  return api<{
+    ok: boolean;
+    invoice?: import("./quoteDocument").QuoteInvoice;
+    message?: string;
+  }>(`/api/admin/invoices/${id}`);
 }
 
 export async function adminSaveQuoteDocument(id: number, body: Record<string, unknown>) {
@@ -750,6 +915,38 @@ export type HomeownerInvoicePreview = {
   paid: number;
   amountDue: number;
 };
+
+export async function homeownerInvoiceCheckout(invoiceId: number, tipAmount = 0) {
+  return api<{
+    ok: boolean;
+    checkoutUrl?: string;
+    summary?: { serviceTotal: number; tipAmount: number; customerTotal: number };
+    message?: string;
+  }>(`/api/homeowner/invoices/${invoiceId}/checkout`, {
+    method: "POST",
+    body: JSON.stringify({ tipAmount }),
+  });
+}
+
+export async function homeownerGetInvoice(invoiceId: number) {
+  return api<{ ok: boolean; invoice?: import("./quoteDocument").QuoteInvoice; message?: string }>(
+    `/api/homeowner/invoices/${invoiceId}`
+  );
+}
+
+/** Authoritative invoice settlement poll — do not trust Stripe return URL alone. */
+export async function homeownerInvoicePaymentStatus(invoiceNumber: string) {
+  return api<{
+    ok: boolean;
+    paid?: boolean;
+    status?: string;
+    invoiceNumber?: string;
+    amountPaid?: number;
+    total?: number;
+    jobId?: number;
+    message?: string;
+  }>(`/api/homeowner/invoices/by-number/${encodeURIComponent(invoiceNumber)}/payment-status`);
+}
 
 export async function adminGetJobInvoice(jobId: number, note?: string) {
   const q = note ? `?note=${encodeURIComponent(note)}` : "";
@@ -1018,6 +1215,67 @@ export function formatCents(cents?: number | null) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Number(cents) / 100);
 }
 
+export type PayoutEconomics = {
+  homeowner: {
+    contractProposalCents: number | null;
+    approvedChangeOrdersCents: number;
+    visitFeesCents: number;
+    refundsCents: number;
+    totalChargedCents: number;
+    totalReceivedCents: number | null;
+  };
+  paymentCosts: {
+    stripeProcessingFeeCents: number | null;
+    stripeProcessingFeeStatus: 'known' | 'pending' | 'not_applicable';
+  };
+  contractor: {
+    originalAgreedAmountCents: number | null;
+    adminAdjustmentCents: number;
+    contractorPayableCents: number | null;
+    payoutMethod: string;
+    instantPayoutFeeCents: number | null;
+    contractorGrossPayoutCents: number | null;
+    contractorNetPayoutCents: number | null;
+  };
+  fixbridge: {
+    grossMarginCents: number | null;
+    stripeProcessingFeeCents: number | null;
+    instantPayoutFeeCents: number | null;
+    fixbridgeNetCents: number | null;
+  };
+  refundReconciliations: Array<{
+    id: number;
+    refundAmountCents: number;
+    platformExposureCents: number;
+    status: string;
+    notes: string | null;
+    createdAt: string;
+  }>;
+  ledgerEventCount: number;
+};
+
+export type ConnectAccountStatus = {
+  connected: boolean;
+  accountId: string | null;
+  onboardingComplete: boolean;
+  transfersEligible: boolean;
+  payoutsEnabled: boolean;
+  blockedReason: string | null;
+  currentlyDue: string[];
+  pastDue: string[];
+};
+
+export type PayoutAuditLog = {
+  id: number;
+  payoutId: number;
+  action: string;
+  previousStatus: string | null;
+  newStatus: string | null;
+  performedBy: number | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+};
+
 export type ContractorPayout = {
   id: number;
   contractorId: number;
@@ -1042,6 +1300,8 @@ export type ContractorPayout = {
   failureReason: string | null;
   createdAt: string;
   contractorName?: string;
+  economics?: PayoutEconomics;
+  connectStatus?: ConnectAccountStatus | null;
 };
 
 export type PayoutSummary = {
@@ -1075,6 +1335,7 @@ export type PayoutAccount = {
   bankAccounts?: PayoutBankAccount[];
   readyToReceivePayouts?: boolean;
   simulated?: boolean;
+  connectStatus?: ConnectAccountStatus | null;
 };
 
 export type PayoutSettings = {
@@ -1182,6 +1443,12 @@ export async function adminAdjustPayout(payoutId: number, adjustmentsCents: numb
     method: "POST",
     body: JSON.stringify({ adjustmentsCents, reason }),
   });
+}
+
+export async function adminGetPayoutDetail(payoutId: number) {
+  return api<{ ok: boolean; payout: ContractorPayout; auditLogs: PayoutAuditLog[] }>(
+    `/api/admin/payouts/${payoutId}`
+  );
 }
 
 export async function adminGetPayoutSettings() {

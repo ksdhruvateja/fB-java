@@ -1,11 +1,13 @@
 import { mergePricingRules } from './pricing.js';
 import {
-  amountsFromJobProposal,
   normalizePayoutSettings,
   PAYOUT_STATUS,
   estimateStandardPayoutDate,
   dollarsToCents,
 } from './payout-service.js';
+import { amountsFromJobProposalAndTip, sumApprovedChangeOrderAmounts } from './financial-calculations.js';
+import { FINANCIAL_EVENT, recordFinancialEvent } from './financial-ledger.js';
+import { getPaidTipAmountDollars } from './tips.js';
 import {
   stripeConfigured,
   shouldSimulatePayment,
@@ -110,9 +112,9 @@ export async function buildContractorPayoutAccountView(pool, contractorId) {
 
   const readyToReceive =
     Boolean(user.stripe_account_id) &&
-    summary.payoutsEnabled &&
-    summary.bankAccountStatus === 'connected' &&
-    summary.verificationStatus === 'verified';
+    summary.connectStatus?.transfersEligible === true &&
+    summary.connectStatus?.onboardingComplete === true &&
+    summary.bankAccountStatus === 'connected';
 
   return {
     connected: Boolean(user.stripe_account_id),
@@ -126,6 +128,7 @@ export async function buildContractorPayoutAccountView(pool, contractorId) {
     defaultDestination: summary.defaultDestination,
     bankAccounts: external.accounts,
     readyToReceivePayouts: readyToReceive,
+    connectStatus: summary.connectStatus || null,
     simulated: !stripeConfigured() && Boolean(user.stripe_account_id),
   };
 }
@@ -134,6 +137,159 @@ export async function syncContractorAccountFromUser(pool, contractorId) {
   await buildContractorPayoutAccountView(pool, contractorId);
   const { rows } = await pool.query(`SELECT * FROM contractor_accounts WHERE contractor_id=$1`, [contractorId]);
   return rows[0] || null;
+}
+
+/**
+ * Single reusable payout eligibility gate — must pass before any Stripe transfer.
+ */
+export async function validatePayoutEligibility(pool, payout, { contractor: contractorInput } = {}) {
+  if (!payout) {
+    return { eligible: false, code: 'PAYOUT_NOT_FOUND', message: 'Payout not found.' };
+  }
+
+  if (payout.stripe_transfer_id) {
+    return {
+      eligible: false,
+      code: 'ALREADY_TRANSFERRED',
+      message: 'Payout transfer already exists for this record.',
+      transferId: payout.stripe_transfer_id,
+    };
+  }
+
+  if (payout.status === PAYOUT_STATUS.ON_HOLD || payout.status === 'on_hold') {
+    return {
+      eligible: false,
+      code: 'PAYOUT_ON_HOLD',
+      message: `Payout is on hold: ${payout.hold_reason || 'payment risk'}.`,
+    };
+  }
+
+  if (payout.reversal_required === true) {
+    return {
+      eligible: false,
+      code: 'REVERSAL_REQUIRED',
+      message: 'Payout requires reversal due to refund/dispute.',
+    };
+  }
+
+  const allowedStatuses = [
+    PAYOUT_STATUS.PENDING_APPROVAL,
+    PAYOUT_STATUS.PENDING_JOB_COMPLETION,
+    PAYOUT_STATUS.ELIGIBLE,
+    PAYOUT_STATUS.APPROVED,
+  ];
+  if (!allowedStatuses.includes(payout.status)) {
+    return {
+      eligible: false,
+      code: 'INVALID_STATUS',
+      message: `Payout cannot be released from status: ${payout.status}`,
+    };
+  }
+
+  const { rows: retailPaid } = await pool.query(
+    `SELECT 1 FROM payments
+     WHERE job_id=$1
+       AND status IN ('succeeded','paid','authorized')
+       AND payment_type IN ('retail_payment','invoice_payment','invoice_manual','final_payment')
+     LIMIT 1`,
+    [payout.job_id]
+  );
+  if (!retailPaid.length) {
+    return {
+      eligible: false,
+      code: 'PAYMENT_NOT_RECEIVED',
+      message: 'Homeowner payment must be received before releasing contractor payout.',
+    };
+  }
+
+  const { rows: riskPayments } = await pool.query(
+    `SELECT 1 FROM payments
+     WHERE job_id=$1
+       AND status IN ('refunded','disputed','failed')
+       AND payment_type IN ('retail_payment','invoice_payment','invoice_manual','final_payment')
+     LIMIT 1`,
+    [payout.job_id]
+  );
+  if (riskPayments.length) {
+    return {
+      eligible: false,
+      code: 'PAYMENT_AT_RISK',
+      message: 'Job has refunded/disputed payment — payout blocked.',
+    };
+  }
+
+  let contractor = contractorInput;
+  if (!contractor) {
+    const { rows: contractors } = await pool.query(`SELECT * FROM users WHERE id=$1`, [payout.contractor_id]);
+    contractor = contractors[0];
+  }
+  if (!contractor) {
+    return { eligible: false, code: 'CONTRACTOR_NOT_FOUND', message: 'Contractor not found.' };
+  }
+
+  const isProduction = process.env.NODE_ENV === 'production';
+  if (isProduction && !stripeConfigured()) {
+    return {
+      eligible: false,
+      code: 'STRIPE_NOT_CONFIGURED',
+      message: 'Payouts require Stripe in production. STRIPE_SECRET_KEY is not configured.',
+    };
+  }
+
+  const simulate =
+    process.env.ALLOW_SIMULATED_PAYOUTS === 'true' ||
+    shouldSimulatePayment(false) ||
+    (!contractor.stripe_account_id && !stripeConfigured());
+  if (!simulate && !contractor.stripe_account_id) {
+    return {
+      eligible: false,
+      code: 'STRIPE_NOT_CONNECTED',
+      message: 'Contractor has not connected Stripe payouts yet.',
+    };
+  }
+
+  if (!simulate && contractor.stripe_account_id && stripeConfigured()) {
+    const accountView = await buildContractorPayoutAccountView(pool, contractor.id);
+    if (!accountView?.readyToReceivePayouts) {
+      const blocked = accountView?.connectStatus?.blockedReason;
+      return {
+        eligible: false,
+        code: 'STRIPE_NOT_READY',
+        message:
+          blocked === 'TOS_NOT_ACCEPTED'
+            ? 'Contractor must complete Stripe onboarding (TOS acceptance required).'
+            : 'Contractor Stripe account is not eligible for transfers yet.',
+        connectStatus: accountView?.connectStatus || null,
+      };
+    }
+  }
+
+  const netAmountCents = Math.max(0, Number(payout.net_amount_cents || 0));
+  if (netAmountCents <= 0) {
+    return { eligible: false, code: 'ZERO_AMOUNT', message: 'Payout amount must be greater than zero.' };
+  }
+
+  const { rows: fundRows } = await pool.query(
+    `SELECT COALESCE(SUM(COALESCE(stripe_net_received_cents, ROUND(amount * 100))),0)::bigint AS net_received
+     FROM payments WHERE job_id=$1 AND status IN ('succeeded','paid','authorized')`,
+    [payout.job_id]
+  );
+  const { rows: refundRows } = await pool.query(
+    `SELECT COALESCE(SUM(amount),0)::numeric AS refunded FROM refunds WHERE job_id=$1 AND status IN ('succeeded','pending')`,
+    [payout.job_id]
+  );
+  const customerNetCents =
+    Number(fundRows[0]?.net_received || 0) - Math.round(Number(refundRows[0]?.refunded || 0) * 100);
+  if (!simulate && customerNetCents > 0 && netAmountCents > customerNetCents) {
+    return {
+      eligible: false,
+      code: 'EXCEEDS_COLLECTED_FUNDS',
+      message: 'Contractor payout exceeds net customer funds received after refunds.',
+      customerNetCents,
+    };
+  }
+
+  return { eligible: true, contractor, simulate, netAmountCents, customerNetCents };
 }
 
 /**
@@ -149,14 +305,42 @@ export async function ensurePayoutRecordForJob(pool, jobId, { initialStatus, act
   const job = jobs[0];
   if (!job?.assigned_contractor_user_id) return null;
 
-  const { rows: existing } = await pool.query(`SELECT * FROM contractor_payouts WHERE job_id=$1`, [jobId]);
-  if (existing[0]) return existing[0];
-
   const { rows: props } = await pool.query(
     `SELECT * FROM proposals WHERE job_id=$1 ORDER BY created_at DESC LIMIT 1`,
     [jobId]
   );
-  const amounts = amountsFromJobProposal(job, props[0] || null);
+  const { rows: existing } = await pool.query(`SELECT * FROM contractor_payouts WHERE job_id=$1`, [jobId]);
+  const tipDollars = await getPaidTipAmountDollars(pool, jobId);
+  const changeOrderTotals = await sumApprovedChangeOrderAmounts(pool, jobId);
+  const amounts = amountsFromJobProposalAndTip(job, props[0] || null, tipDollars, changeOrderTotals);
+
+  if (existing[0]) {
+    if (!existing[0].stripe_transfer_id) {
+      const adj = Number(existing[0].adjustments_cents || 0);
+      const netWithAdj = Math.max(0, amounts.netBeforeInstantCents + adj);
+      await pool.query(
+        `UPDATE contractor_payouts SET
+           gross_amount_cents=$1,
+           platform_fee_cents=$2,
+           net_amount_cents=$3,
+           service_amount_cents=$4,
+           tip_amount_cents=$5,
+           updated_at=NOW()
+         WHERE id=$6 AND COALESCE(stripe_transfer_id,'') = ''`,
+        [
+          amounts.grossAmountCents,
+          amounts.platformFeeCents,
+          netWithAdj,
+          amounts.serviceContractorNetCents,
+          amounts.tipAmountCents,
+          existing[0].id,
+        ]
+      );
+      const { rows: refreshed } = await pool.query(`SELECT * FROM contractor_payouts WHERE id=$1`, [existing[0].id]);
+      return refreshed[0] || existing[0];
+    }
+    return existing[0];
+  }
 
   const customerLabel =
     [job.contact_name, job.city_state_zip || job.full_address].filter(Boolean).join(' · ') || 'Customer';
@@ -170,8 +354,9 @@ export async function ensurePayoutRecordForJob(pool, jobId, { initialStatus, act
   const { rows: inserted } = await pool.query(
     `INSERT INTO contractor_payouts
        (contractor_id, job_id, job_ref, customer_label, completion_date,
-        gross_amount_cents, platform_fee_cents, adjustments_cents, net_amount_cents, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        gross_amount_cents, platform_fee_cents, adjustments_cents, net_amount_cents,
+        service_amount_cents, tip_amount_cents, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      RETURNING *`,
     [
       job.assigned_contractor_user_id,
@@ -183,6 +368,8 @@ export async function ensurePayoutRecordForJob(pool, jobId, { initialStatus, act
       amounts.platformFeeCents,
       amounts.otherAdjustmentsCents,
       amounts.netBeforeInstantCents,
+      amounts.serviceContractorNetCents,
+      amounts.tipAmountCents,
       status,
     ]
   );
@@ -212,68 +399,95 @@ export async function ensurePayoutRecordForJob(pool, jobId, { initialStatus, act
  * Admin approves payout and initiates standard Stripe transfer.
  */
 export async function approveAndReleasePayout(pool, payoutId, adminUserId, { adjustmentsCents = 0, note } = {}) {
-  const { rows } = await pool.query(`SELECT * FROM contractor_payouts WHERE id=$1`, [payoutId]);
-  const payout = rows[0];
-  if (!payout) return { ok: false, message: 'Payout not found.' };
-  if (![PAYOUT_STATUS.PENDING_APPROVAL, PAYOUT_STATUS.PENDING_JOB_COMPLETION].includes(payout.status)) {
-    return { ok: false, message: `Payout cannot be approved from status: ${payout.status}` };
+  const client = await pool.connect();
+  let payout;
+  let contractor;
+  let simulate = false;
+  let netAmountCents = 0;
+  let transferAmountCents = 0;
+  let reserveAmountCents = 0;
+  let payRules = null;
+  let transferId = null;
+  let prevStatus = null;
+
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(`SELECT * FROM contractor_payouts WHERE id=$1 FOR UPDATE`, [payoutId]);
+    payout = rows[0];
+    if (!payout) {
+      await client.query('ROLLBACK');
+      return { ok: false, message: 'Payout not found.' };
+    }
+
+    if (payout.stripe_transfer_id) {
+      await client.query('COMMIT');
+      return {
+        ok: true,
+        alreadyPaid: true,
+        transferId: payout.stripe_transfer_id,
+        payout,
+        message: 'Payout transfer already exists for this record.',
+      };
+    }
+
+    if (String(payout.payout_method || '').toLowerCase() === 'instant') {
+      await client.query('ROLLBACK');
+      return {
+        ok: false,
+        code: 'INSTANT_PAYOUT_SELECTED',
+        message: 'This payable is set for instant payout. Standard transfer cannot run on the same record.',
+      };
+    }
+
+    const eligibility = await validatePayoutEligibility(pool, payout);
+    if (!eligibility.eligible) {
+      await client.query('ROLLBACK');
+      return {
+        ok: false,
+        message: eligibility.message,
+        code: eligibility.code,
+      };
+    }
+
+    contractor = eligibility.contractor;
+    simulate = eligibility.simulate;
+
+    const adj = Math.round(Number(adjustmentsCents || 0));
+    netAmountCents = Math.max(0, Number(payout.net_amount_cents) + adj);
+
+    payRules = await loadPricingRules(pool);
+    const reservePct = Math.max(0, Math.min(100, Number(payRules.reserve_percentage ?? 10))) / 100;
+    reserveAmountCents = Math.round(netAmountCents * reservePct);
+    transferAmountCents = Math.max(0, netAmountCents - reserveAmountCents);
+    const estimatedAt = estimateStandardPayoutDate(new Date());
+    prevStatus = payout.status;
+
+    await client.query(
+      `UPDATE contractor_payouts SET
+         adjustments_cents=$1,
+         net_amount_cents=$2,
+         reserve_amount_cents=$3,
+         status=$4,
+         approved_by=$5,
+         approved_at=NOW(),
+         estimated_payout_at=$6,
+         payout_method='standard',
+         updated_at=NOW()
+       WHERE id=$7`,
+      [adj, netAmountCents, reserveAmountCents, PAYOUT_STATUS.APPROVED, adminUserId, estimatedAt, payoutId]
+    );
+
+    await client.query('COMMIT');
+  } catch (e) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  } finally {
+    client.release();
   }
-
-  const { rows: retailPaid } = await pool.query(
-    `SELECT 1 FROM payments WHERE job_id=$1 AND payment_type='retail_payment' AND status='succeeded' LIMIT 1`,
-    [payout.job_id]
-  );
-  if (!retailPaid.length) {
-    return {
-      ok: false,
-      message: 'Homeowner payment must be received before releasing contractor payout.',
-    };
-  }
-
-  const { rows: contractors } = await pool.query(`SELECT * FROM users WHERE id=$1`, [payout.contractor_id]);
-  const contractor = contractors[0];
-  if (!contractor) return { ok: false, message: 'Contractor not found.' };
-
-  const isProduction = process.env.NODE_ENV === 'production';
-  if (isProduction && !stripeConfigured()) {
-    return {
-      ok: false,
-      message: 'Payouts require Stripe in production. STRIPE_SECRET_KEY is not configured.',
-      code: 'STRIPE_NOT_CONFIGURED',
-    };
-  }
-
-  const simulate =
-    shouldSimulatePayment(false) || (!contractor.stripe_account_id && !stripeConfigured());
-  if (!simulate && !contractor.stripe_account_id) {
-    return { ok: false, message: 'Contractor has not connected Stripe payouts yet.' };
-  }
-
-  const adj = Math.round(Number(adjustmentsCents || 0));
-  const netAmountCents = Math.max(0, Number(payout.net_amount_cents) + adj);
-
-  const payRules = await loadPricingRules(pool);
-  const reservePct = Math.max(0, Math.min(100, Number(payRules.reserve_percentage ?? 10))) / 100;
-  const reserveAmountCents = Math.round(netAmountCents * reservePct);
-  const transferAmountCents = Math.max(0, netAmountCents - reserveAmountCents);
-
-  const estimatedAt = estimateStandardPayoutDate(new Date());
-  const prevStatus = payout.status;
-
-  await pool.query(
-    `UPDATE contractor_payouts SET
-       adjustments_cents=$1,
-       net_amount_cents=$2,
-       reserve_amount_cents=$3,
-       status=$4,
-       approved_by=$5,
-       approved_at=NOW(),
-       estimated_payout_at=$6,
-       payout_method='standard',
-       updated_at=NOW()
-     WHERE id=$7`,
-    [adj, netAmountCents, reserveAmountCents, PAYOUT_STATUS.APPROVED, adminUserId, estimatedAt, payoutId]
-  );
 
   await logPayoutAudit(pool, {
     payoutId,
@@ -284,7 +498,6 @@ export async function approveAndReleasePayout(pool, payoutId, adminUserId, { adj
     metadata: { note, netAmountCents, reserveAmountCents },
   });
 
-  let transferId = null;
   if (transferAmountCents > 0) {
     await pool.query(`UPDATE contractor_payouts SET status=$1, updated_at=NOW() WHERE id=$2`, [
       PAYOUT_STATUS.PROCESSING,
@@ -292,13 +505,14 @@ export async function approveAndReleasePayout(pool, payoutId, adminUserId, { adj
     ]);
 
     if (simulate) {
-      transferId = `sim_tr_${Date.now()}`;
+      transferId = `sim_tr_${payoutId}`;
     } else {
       const result = await createTransfer({
         amountCents: transferAmountCents,
         destinationAccountId: contractor.stripe_account_id,
         transferGroup: `job_${payout.job_id}`,
         metadata: { payoutId: String(payoutId), jobId: String(payout.job_id) },
+        idempotencyKey: `fixbridge-payout-${payoutId}`,
       });
       transferId = result.transferId;
     }
@@ -320,7 +534,7 @@ export async function approveAndReleasePayout(pool, payoutId, adminUserId, { adj
         simulate,
         adminUserId,
         reserveAmountCents / 100,
-        new Date(Date.now() + (Number(payRules.reserve_hold_days ?? 7) * 86400000)),
+        new Date(Date.now() + (Number(payRules?.reserve_hold_days ?? 7) * 86400000)),
       ]
     ).catch(() => {});
 
@@ -331,6 +545,17 @@ export async function approveAndReleasePayout(pool, payoutId, adminUserId, { adj
       newStatus: PAYOUT_STATUS.PROCESSING,
       performedBy: adminUserId,
       metadata: { transferId, transferAmountCents },
+    });
+
+    await recordFinancialEvent(pool, {
+      eventType: FINANCIAL_EVENT.CONTRACTOR_TRANSFER_CREATED,
+      jobId: payout.job_id,
+      payoutId,
+      contractorId: payout.contractor_id,
+      amountCents: transferAmountCents,
+      stripeObjectId: transferId,
+      createdBy: adminUserId,
+      metadata: { simulate, reserveAmountCents },
     });
   }
 
@@ -344,7 +569,6 @@ export async function approveAndReleasePayout(pool, payoutId, adminUserId, { adj
 
   const { rows: fresh } = await pool.query(`SELECT * FROM contractor_payouts WHERE id=$1`, [payoutId]);
 
-  // Close managed job lifecycle when payout is wired
   try {
     const { rows: jobRows } = await pool.query(`SELECT id, status FROM managed_jobs WHERE id=$1`, [payout.job_id]);
     const job = jobRows[0];
@@ -395,6 +619,21 @@ export async function requestInstantPayout(pool, payoutId, contractorUserId) {
   }
   if (payout.status !== PAYOUT_STATUS.APPROVED) {
     return { ok: false, message: 'Instant payout is only available for approved payouts.' };
+  }
+  if (payout.stripe_transfer_id) {
+    return {
+      ok: false,
+      message: 'A transfer was already created for this payout. Instant payout cannot stack on an existing transfer.',
+      code: 'TRANSFER_ALREADY_EXISTS',
+    };
+  }
+
+  if (String(payout.payout_method || '').toLowerCase() === 'standard' && payout.approved_at) {
+    return {
+      ok: false,
+      code: 'STANDARD_PAYOUT_SELECTED',
+      message: 'Standard payout was already approved for this payable. Instant payout cannot be combined.',
+    };
   }
 
   const netCents = Number(payout.net_amount_cents);

@@ -32,7 +32,7 @@ async function main() {
   console.log(`\nFixBridge security IDOR smoke @ ${API}\n`);
 
   const maria = await login('homeowner', 'maria@example.com', 'demo123');
-  const admin = await login('admin', 'admin@fixbridge.local', 'admin123');
+  const admin = await login('admin', 'ksdt2702@gmail.com', 'admin123');
   const homeH = { Authorization: `Bearer ${maria.token}`, 'Content-Type': 'application/json' };
   const adminH = { Authorization: `Bearer ${admin.token}`, 'Content-Type': 'application/json' };
 

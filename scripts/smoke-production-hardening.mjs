@@ -2,16 +2,7 @@
  * Production-hardening smoke tests (IDOR, reviews, RBAC, privacy, config).
  * Usage: node --env-file=.env scripts/smoke-production-hardening.mjs
  */
-const API = process.env.API_BASE || 'http://127.0.0.1:3001';
-
-async function json(res) {
-  const text = await res.text();
-  try {
-    return { status: res.status, ...(JSON.parse(text) || {}) };
-  } catch {
-    return { status: res.status, raw: text };
-  }
-}
+import { API, authH, json, login, loginAdminWithMfa } from './smoke-auth.mjs';
 
 let failed = 0;
 function ok(label, pass, detail = '') {
@@ -19,18 +10,13 @@ function ok(label, pass, detail = '') {
   if (!pass) failed += 1;
 }
 
-async function login(role, email, password) {
-  const r = await fetch(`${API}/api/auth/signin`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role, email, password }),
-  }).then(json);
-  if (!r.ok || !r.token) throw new Error(`login ${email}: ${r.message || r.status}`);
+async function loginRole(role, email, password) {
+  const r = await login(role, email, password);
   return r;
 }
 
 function auth(token) {
-  return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+  return authH(token);
 }
 
 async function main() {
@@ -45,9 +31,9 @@ async function main() {
   }).then(json);
   ok('invalid JWT rejected', badJwt.status === 401);
 
-  const maria = await login('homeowner', 'maria@example.com', 'demo123');
-  const admin = await login('admin', 'admin@fixbridge.local', 'admin123');
-  const james = await login('contractor', 'james@yourcompany.com', 'demo123');
+  const maria = await loginRole('homeowner', 'maria@example.com', 'demo123');
+  const admin = await loginAdminWithMfa();
+  const james = await loginRole('contractor', 'james@yourcompany.com', 'demo123');
 
   ok('admin has permissions array', Array.isArray(admin.user?.permissions) && admin.user.permissions.length > 0);
 

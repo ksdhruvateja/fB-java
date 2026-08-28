@@ -9,19 +9,25 @@ import {
   Paperclip,
   Pencil,
   Plus,
+  Sparkles,
   Trash2,
   Wrench,
 } from "lucide-react";
 import {
   addPropertyDocument,
+  analyzePropertyDocument,
+  applyPropertyDocumentExtract,
   deletePropertyDocument,
   updateProperty,
   type HomeSystemRecord,
   type Property,
   type PropertyDocument,
+  type PropertyDocumentExtraction,
 } from "./managedJobs";
 import { isValidUsZip, normalizeZip } from "./zipCode";
-import { UsLocationFields, normalizeUsStateCode } from "./UsLocationFields";
+import { VerifiedAddressFields, type AddressVerificationMeta } from "./VerifiedAddressInput";
+import { normalizeUsStateCode } from "./UsLocationFields";
+import { formatAddressLines, isAddressComplete } from "./addressFormat";
 
 const DOC_CATEGORIES: { id: string; label: string }[] = [
   { id: "receipt", label: "Receipt" },
@@ -116,6 +122,7 @@ export default function HomeownerPropertyPage({
 
   const [label, setLabel] = useState("");
   const [addressLine1, setAddressLine1] = useState("");
+  const [addressLine2, setAddressLine2] = useState("");
   const [city, setCity] = useState("");
   const [state, setState] = useState("");
   const [zip, setZip] = useState("");
@@ -126,20 +133,33 @@ export default function HomeownerPropertyPage({
   const [systems, setSystems] = useState<HomeSystemRecord[]>([]);
 
   const [newAddress, setNewAddress] = useState("");
+  const [newAddressLine2, setNewAddressLine2] = useState("");
   const [newCity, setNewCity] = useState("");
   const [newState, setNewState] = useState("");
   const [newZip, setNewZip] = useState("");
   const [newLabel, setNewLabel] = useState("");
+  const [newHomeVerification, setNewHomeVerification] = useState<AddressVerificationMeta>({
+    status: "unverified",
+    addressVerified: false,
+  });
+  const [editVerification, setEditVerification] = useState<AddressVerificationMeta>({
+    status: "unverified",
+    addressVerified: false,
+  });
 
   const [docCategory, setDocCategory] = useState("warranty");
   const [docTitle, setDocTitle] = useState("");
   const [docSystemKey, setDocSystemKey] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const [extractDoc, setExtractDoc] = useState<PropertyDocument | null>(null);
+  const [extractDraft, setExtractDraft] = useState<PropertyDocumentExtraction | null>(null);
+  const [extractBusy, setExtractBusy] = useState(false);
 
   useEffect(() => {
     if (!selected) return;
     setLabel(selected.label || "");
     setAddressLine1(selected.addressLine1 || "");
+    setAddressLine2(selected.addressLine2 || "");
     setCity(selected.city || "");
     setState(selected.state || "");
     setZip(selected.zip || "");
@@ -163,15 +183,29 @@ export default function HomeownerPropertyPage({
 
   async function saveFacts() {
     if (!selected) return;
+    const structured = {
+      addressLine1: addressLine1.trim(),
+      addressLine2: addressLine2.trim(),
+      city: city.trim(),
+      state: normalizeUsStateCode(state),
+      zip: zip.trim(),
+    };
+    if (!isAddressComplete(structured) || !isValidUsZip(structured.zip)) {
+      onError("Address Line 1, City, State, and a valid ZIP Code are required.");
+      return;
+    }
     onBusy(true);
     onError(null);
     try {
       const r = await updateProperty(selected.id, {
         label: label.trim() || selected.label || undefined,
-        addressLine1: addressLine1.trim(),
-        city: city.trim(),
-        state: normalizeUsStateCode(state),
-        zip: zip.trim(),
+        addressLine1: structured.addressLine1,
+        addressLine2: structured.addressLine2 || null,
+        city: structured.city,
+        state: structured.state,
+        zip: normalizeZip(structured.zip),
+        addressVerified: editVerification.addressVerified,
+        postalCodePlus4: editVerification.postalCodePlus4 || null,
         yearBuilt: yearBuilt ? Number(yearBuilt) : null,
         beds: beds ? Number(beds) : null,
         baths: baths ? Number(baths) : null,
@@ -216,9 +250,15 @@ export default function HomeownerPropertyPage({
 
   async function addHome(e: FormEvent) {
     e.preventDefault();
-    if (!newAddress.trim()) return;
-    if (newZip.trim() && !isValidUsZip(newZip)) {
-      onError("Enter a valid 5-digit US ZIP code.");
+    const structured = {
+      addressLine1: newAddress.trim(),
+      addressLine2: newAddressLine2.trim(),
+      city: newCity.trim(),
+      state: normalizeUsStateCode(newState),
+      zip: newZip.trim(),
+    };
+    if (!isAddressComplete(structured) || !isValidUsZip(structured.zip)) {
+      onError("Address Line 1, City, State, and a valid ZIP Code are required.");
       return;
     }
     onBusy(true);
@@ -230,10 +270,13 @@ export default function HomeownerPropertyPage({
       }
       const r = await onCreateProperty(
         {
-          addressLine1: newAddress.trim(),
-          city: newCity.trim() || undefined,
-          state: newState.trim() ? normalizeUsStateCode(newState) : undefined,
-          zip: newZip.trim() ? normalizeZip(newZip) : undefined,
+          addressLine1: structured.addressLine1,
+          addressLine2: structured.addressLine2 || undefined,
+          city: structured.city,
+          state: structured.state,
+          zip: normalizeZip(structured.zip),
+          addressVerified: newHomeVerification.addressVerified,
+          postalCodePlus4: newHomeVerification.postalCodePlus4 || undefined,
           country: "US",
           label: newLabel.trim() || undefined,
           homeSystems: DEFAULT_HOME_SYSTEMS,
@@ -246,6 +289,7 @@ export default function HomeownerPropertyPage({
       }
       setShowAddHome(false);
       setNewAddress("");
+      setNewAddressLine2("");
       setNewCity("");
       setNewState("");
       setNewZip("");
@@ -302,6 +346,46 @@ export default function HomeownerPropertyPage({
     }
   }
 
+  async function analyzeDoc(doc: PropertyDocument) {
+    if (!selected) return;
+    setExtractBusy(true);
+    onError(null);
+    try {
+      const r = await analyzePropertyDocument(selected.id, doc.id);
+      if (!r.ok || !r.extraction) {
+        onError(r.message || "Could not analyze document.");
+        return;
+      }
+      setExtractDoc(doc);
+      setExtractDraft({
+        ...r.extraction,
+        systemKey: r.extraction.systemKey || doc.systemKey || docSystemKey || "",
+      });
+    } finally {
+      setExtractBusy(false);
+    }
+  }
+
+  async function confirmExtract() {
+    if (!selected || !extractDoc || !extractDraft) return;
+    setExtractBusy(true);
+    onError(null);
+    try {
+      const r = await applyPropertyDocumentExtract(selected.id, extractDoc.id, extractDraft);
+      if (!r.ok) {
+        onError(r.message || "Could not save extracted details.");
+        return;
+      }
+      if (r.property && onPropertyUpdated) await onPropertyUpdated(r.property);
+      else if (onReloadProperty) await onReloadProperty(selected.id);
+      else await onRefresh();
+      setExtractDoc(null);
+      setExtractDraft(null);
+    } finally {
+      setExtractBusy(false);
+    }
+  }
+
   const docsByCategory = useMemo(() => {
     const list = selected?.documents || [];
     const map = new Map<string, PropertyDocument[]>();
@@ -342,23 +426,22 @@ export default function HomeownerPropertyPage({
             value={newLabel}
             onChange={(e) => setNewLabel(e.target.value)}
           />
-          <input
-            required
-            className="rounded-xl border border-border bg-background px-3 py-2.5 text-sm sm:col-span-2"
-            placeholder="Street address"
-            value={newAddress}
-            onChange={(e) => setNewAddress(e.target.value)}
-          />
           <div className="sm:col-span-2">
-            <UsLocationFields
+            <VerifiedAddressFields
+              idPrefix="new-home"
+              addressLine1={newAddress}
+              addressLine2={newAddressLine2}
               city={newCity}
               state={newState}
               zip={newZip}
+              onAddressLine1Change={setNewAddress}
+              onAddressLine2Change={setNewAddressLine2}
               onCityChange={setNewCity}
               onStateChange={setNewState}
               onZipChange={setNewZip}
+              onVerificationChange={setNewHomeVerification}
               disabled={busy}
-              zipRequired={false}
+              zipRequired
             />
           </div>
           <div className="sm:col-span-2 flex gap-2">
@@ -405,7 +488,7 @@ export default function HomeownerPropertyPage({
                   </p>
                   <p className="mt-1 text-sm font-semibold leading-snug">{p.label || p.addressLine1}</p>
                   <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">
-                    {[p.city, p.state].filter(Boolean).join(", ") || "Address on file"}
+                    {formatAddressLines(p).slice(0, 2).join(" · ") || "Address on file"}
                   </p>
                 </button>
               );
@@ -426,8 +509,9 @@ export default function HomeownerPropertyPage({
                     </h2>
                     {!editingFacts ? (
                       <div className="mt-2 text-sm text-muted-foreground">
-                        <p>{selected.addressLine1}</p>
-                        <p>{[selected.city, selected.state, selected.zip].filter(Boolean).join(", ")}</p>
+                        {formatAddressLines(selected).map((line) => (
+                          <p key={line}>{line}</p>
+                        ))}
                       </div>
                     ) : null}
                   </div>
@@ -455,22 +539,23 @@ export default function HomeownerPropertyPage({
                       onChange={(e) => setLabel(e.target.value)}
                       placeholder="Home label"
                     />
-                    <input
-                      className="rounded-xl border border-border bg-background px-3 py-2.5 text-sm sm:col-span-2"
-                      value={addressLine1}
-                      onChange={(e) => setAddressLine1(e.target.value)}
-                      placeholder="Street"
-                    />
                     <div className="sm:col-span-2">
-                      <UsLocationFields
+                      <VerifiedAddressFields
+                        idPrefix="edit-home"
+                        addressLine1={addressLine1}
+                        addressLine2={addressLine2}
                         city={city}
                         state={state}
                         zip={zip}
+                        onAddressLine1Change={setAddressLine1}
+                        onAddressLine2Change={setAddressLine2}
                         onCityChange={setCity}
                         onStateChange={setState}
                         onZipChange={setZip}
+                        onVerificationChange={setEditVerification}
+                        initiallyVerified={selected?.addressVerified === true}
                         disabled={busy}
-                        zipRequired={false}
+                        zipRequired
                       />
                     </div>
                     <input
@@ -604,6 +689,26 @@ export default function HomeownerPropertyPage({
                           />
                           <input
                             className="rounded-xl border border-border bg-background px-3 py-2 text-sm sm:col-span-2"
+                            placeholder="Follow-up recommendation (from inspection)"
+                            value={s.followUpRecommendation || ""}
+                            onChange={(e) => {
+                              const next = [...systems];
+                              next[idx] = { ...s, followUpRecommendation: e.target.value };
+                              setSystems(next);
+                            }}
+                          />
+                          <input
+                            className="rounded-xl border border-border bg-background px-3 py-2 text-sm"
+                            placeholder="Follow-up due date (YYYY-MM-DD)"
+                            value={s.followUpDueDate || ""}
+                            onChange={(e) => {
+                              const next = [...systems];
+                              next[idx] = { ...s, followUpDueDate: e.target.value };
+                              setSystems(next);
+                            }}
+                          />
+                          <input
+                            className="rounded-xl border border-border bg-background px-3 py-2 text-sm sm:col-span-2"
                             placeholder="Notes"
                             value={s.notes || ""}
                             onChange={(e) => {
@@ -622,6 +727,12 @@ export default function HomeownerPropertyPage({
                           )}
                           {s.lastService && (
                             <p className="mt-0.5 text-sm text-muted-foreground">Last service: {s.lastService}</p>
+                          )}
+                          {s.followUpRecommendation && (
+                            <p className="mt-0.5 text-xs text-amber-800 dark:text-amber-300">
+                              Follow-up: {s.followUpRecommendation}
+                              {s.followUpDueDate ? ` · due ${s.followUpDueDate}` : ""}
+                            </p>
                           )}
                           {s.notes && <p className="mt-0.5 text-xs text-muted-foreground">{s.notes}</p>}
                         </div>
@@ -762,14 +873,30 @@ export default function HomeownerPropertyPage({
                                   </p>
                                 </div>
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => void removeDoc(doc)}
-                                className="rounded-lg p-2 text-muted-foreground hover:bg-red-50 hover:text-red-600"
-                                aria-label="Delete document"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  disabled={extractBusy || busy}
+                                  onClick={() => void analyzeDoc(doc)}
+                                  className="rounded-lg p-2 text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                                  aria-label="Analyze document"
+                                  title="Extract details with AI"
+                                >
+                                  {extractBusy && extractDoc?.id === doc.id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Sparkles className="h-4 w-4" />
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void removeDoc(doc)}
+                                  className="rounded-lg p-2 text-muted-foreground hover:bg-red-50 hover:text-red-600"
+                                  aria-label="Delete document"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
                             </li>
                           ))}
                         </ul>
@@ -783,6 +910,85 @@ export default function HomeownerPropertyPage({
                     </div>
                   )}
                 </div>
+
+                {extractDraft && extractDoc ? (
+                  <div className="mt-5 rounded-2xl border border-primary/25 bg-primary/5 p-4">
+                    <p className="text-sm font-semibold">Confirm extracted details</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Review before FixBridge updates your home systems. Nothing is saved until you confirm.
+                    </p>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <label className="grid gap-1 text-xs">
+                        System key
+                        <input
+                          className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+                          value={extractDraft.systemKey || ""}
+                          onChange={(e) => setExtractDraft({ ...extractDraft, systemKey: e.target.value })}
+                        />
+                      </label>
+                      <label className="grid gap-1 text-xs">
+                        Service / install date
+                        <input
+                          className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+                          value={extractDraft.date || ""}
+                          onChange={(e) => setExtractDraft({ ...extractDraft, date: e.target.value })}
+                        />
+                      </label>
+                      <label className="grid gap-1 text-xs">
+                        Warranty until
+                        <input
+                          className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+                          value={extractDraft.warrantyUntil || ""}
+                          onChange={(e) => setExtractDraft({ ...extractDraft, warrantyUntil: e.target.value })}
+                        />
+                      </label>
+                      <label className="grid gap-1 text-xs">
+                        Follow-up due
+                        <input
+                          className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+                          value={extractDraft.recommendedFollowUpDate || ""}
+                          onChange={(e) =>
+                            setExtractDraft({ ...extractDraft, recommendedFollowUpDate: e.target.value })
+                          }
+                        />
+                      </label>
+                      <label className="grid gap-1 text-xs sm:col-span-2">
+                        Follow-up recommendation
+                        <input
+                          className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+                          value={extractDraft.recommendedFollowUp || ""}
+                          onChange={(e) =>
+                            setExtractDraft({ ...extractDraft, recommendedFollowUp: e.target.value })
+                          }
+                        />
+                      </label>
+                    </div>
+                    {extractDraft.summary ? (
+                      <p className="mt-2 text-xs text-muted-foreground">{extractDraft.summary}</p>
+                    ) : null}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={extractBusy}
+                        onClick={() => void confirmExtract()}
+                        className="rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white"
+                      >
+                        Save to home systems
+                      </button>
+                      <button
+                        type="button"
+                        disabled={extractBusy}
+                        onClick={() => {
+                          setExtractDoc(null);
+                          setExtractDraft(null);
+                        }}
+                        className="rounded-xl border border-border px-3.5 py-2 text-xs font-semibold"
+                      >
+                        Discard
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
           )}

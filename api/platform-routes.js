@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { brand } from './brand.js';
+import { loadHomeownerProfileExtras } from './homeowner-admin-routes.js';
 import {
   stripeConfigured,
   assertPaymentsAvailable,
@@ -14,7 +15,9 @@ import {
   createTransfer,
   getStripe,
 } from './stripe.js';
-import { retailFromBid, mergePricingRules } from './pricing.js';
+import { isAdminRole } from './auth-helpers.js';
+import { reconcileRefundForJob } from './payment-settlement.js';
+import { FINANCIAL_EVENT, recordFinancialEvent } from './financial-ledger.js';
 
 const PARTNER_JWT_SECRET = process.env.SESSION_SECRET || (!process.env.NETLIFY && process.env.NODE_ENV !== 'production' ? 'local-dev-secret' : undefined);
 
@@ -34,7 +37,7 @@ async function assertManagedJobAccess(pool, jobId, authUser) {
   const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [id]);
   const job = rows[0];
   if (!job) return { status: 404, message: 'Job not found.' };
-  if (authUser?.role === 'admin' || authUser?.isAdmin) return { job };
+  if (isAdminRole(authUser)) return { job };
   if (authUser?.role === 'homeowner' && Number(job.homeowner_user_id) === Number(authUser.id)) {
     return { job };
   }
@@ -159,15 +162,15 @@ async function startSubscriptionCheckout(pool, {
   });
 
   await pool.query(
-    `INSERT INTO payments (user_id, payment_type, amount, status, stripe_session_id, simulated, meta)
-     VALUES ($1,'subscription',$2,'pending',$3,false,$4)`,
+    `INSERT INTO payments (user_id, payment_type, amount, currency, status, stripe_session_id, provider, simulated, meta)
+     VALUES ($1,'subscription',$2,'usd','pending',$3,'stripe',false,$4)`,
     [userId, amount, checkout.sessionId, JSON.stringify({ planCode })]
   );
   return { simulated: false, url: checkout.url };
 }
 
 import { writeAudit } from './audit.js';
-import { sendEmailSafe, sendSmsSafe, notifyOps } from './notify.js';
+import { sendEmailSafe, sendSmsSafe, notifyOps, mailStatus } from './notify.js';
 
 export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, pushStatus, getSubscriptionPlanByCode, makeToken, rowToUser }) {
   const statusPush = typeof pushStatus === 'function' ? pushStatus : pushStatusLocal;
@@ -180,11 +183,11 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       : async () => null;
   // ── Catalog / health for integrations ────────────────────────────────────
   app.get('/api/platform/status', requireAuth, requireAdmin, (_req, res) => {
+    const gmail = mailStatus();
     res.json({
       ok: true,
       stripe: stripeConfigured(),
-      resend: Boolean(process.env.RESEND_API_KEY?.trim()),
-      twilio: Boolean(process.env.TWILIO_ACCOUNT_SID?.trim() && process.env.TWILIO_AUTH_TOKEN?.trim()),
+      gmail: gmail.configured,
       places: Boolean(process.env.GOOGLE_PLACES_API_KEY?.trim() || process.env.GOOGLE_MAPS_API_KEY?.trim()),
       slackOrN8n: Boolean(process.env.SLACK_WEBHOOK_URL?.trim() || process.env.N8N_WEBHOOK_URL?.trim()),
       sentry: Boolean(process.env.SENTRY_DSN?.trim()),
@@ -197,15 +200,16 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
 
   app.get('/api/admin/subscription-stats', requireAuth, requireAdmin, async (req, res) => {
     try {
+      const q = String(req.query.q || '').trim();
       // Get all homeowners with active subscription details
       const { rows: homeowners } = await pool.query(
-        `SELECT u.id, u.name, u.email, u.plan_code, u.created_at,
+        `SELECT u.id, u.name, u.email, u.phone, u.plan_code, u.created_at, u.is_blocked,
                 s.current_period_end, s.meta AS sub_meta
          FROM users u
          LEFT JOIN (
            SELECT DISTINCT ON (user_id) user_id, current_period_end, meta
            FROM subscriptions
-           WHERE plan_code = 'pro_membership' AND status = 'active'
+           WHERE status = 'active'
            ORDER BY user_id, created_at DESC
          ) s ON s.user_id = u.id
          WHERE u.role='homeowner'
@@ -216,7 +220,11 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       const subscribedCount = homeowners.filter(h => h.plan_code === 'pro_membership').length;
       const nonSubscribedCount = totalHomeowners - subscribedCount;
 
-      const customers = homeowners.map(h => {
+      const needle = q.toLowerCase();
+      const digits = q.replace(/\D/g, '');
+
+      const customers = homeowners
+        .map(h => {
         let isTrial = false;
         let trialDaysLeft = 0;
         const now = new Date();
@@ -235,13 +243,23 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
           id: h.id,
           name: h.name,
           email: h.email,
+          phone: h.phone || null,
           planCode: h.plan_code,
+          accountStatus: h.is_blocked ? 'blocked' : 'active',
           createdAt: h.created_at,
           currentPeriodEnd: h.current_period_end,
           isTrial,
           trialDaysLeft,
         };
-      });
+      })
+        .filter((c) => {
+          if (!needle && !digits) return true;
+          const hay = `${c.id} ${c.name || ''} ${c.email || ''} ${c.phone || ''}`.toLowerCase();
+          if (needle && hay.includes(needle)) return true;
+          if (digits && String(c.phone || '').replace(/\D/g, '').includes(digits)) return true;
+          if (digits && String(c.id) === digits) return true;
+          return false;
+        });
 
       res.json({
         ok: true,
@@ -255,6 +273,275 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, message: 'Server error fetching subscription stats.' });
+    }
+  });
+
+  app.get('/api/admin/homeowners/:userId/profile', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const userId = Number(req.params.userId);
+      if (!Number.isFinite(userId)) {
+        return res.status(400).json({ ok: false, message: 'Invalid customer id.' });
+      }
+      const { rows: users } = await pool.query(
+        `SELECT id, name, email, phone, plan_code, created_at, is_blocked, role
+         FROM users WHERE id=$1 AND role='homeowner'`,
+        [userId]
+      );
+      if (!users[0]) {
+        return res.status(404).json({ ok: false, message: 'Homeowner not found.' });
+      }
+      const u = users[0];
+
+      const { rows: props } = await pool.query(
+        `SELECT id, label, address_line1, address_line2, city, state, zip, property_type, created_at,
+                postal_code_plus4, address_verified, address_verified_at, address_verification_provider
+         FROM properties WHERE owner_user_id=$1 ORDER BY created_at ASC`,
+        [userId]
+      );
+
+      const { rows: jobs } = await pool.query(
+        `SELECT id, booking_id, title, category, status, full_address, city_state_zip,
+                assigned_contractor_user_id, customer_retail_estimate_low, customer_retail_estimate_high,
+                visit_fee_amount, created_at, updated_at, preferred_date, property_id
+         FROM managed_jobs WHERE homeowner_user_id=$1 ORDER BY created_at DESC LIMIT 100`,
+        [userId]
+      );
+
+      const contractorIds = [...new Set(jobs.map((j) => j.assigned_contractor_user_id).filter(Boolean))];
+      let contractorMap = {};
+      if (contractorIds.length) {
+        const { rows: contractors } = await pool.query(
+          `SELECT id, name, company_name FROM users WHERE id = ANY($1::int[])`,
+          [contractorIds]
+        );
+        contractorMap = Object.fromEntries(
+          contractors.map((c) => [c.id, c.company_name || c.name || `Contractor #${c.id}`])
+        );
+      }
+
+      const { rows: payments } = await pool.query(
+        `SELECT * FROM payments WHERE user_id=$1 ORDER BY created_at DESC LIMIT 200`,
+        [userId]
+      );
+
+      const { rows: subs } = await pool.query(
+        `SELECT * FROM subscriptions WHERE user_id=$1 ORDER BY created_at DESC LIMIT 20`,
+        [userId]
+      );
+
+      let referrals = [];
+      try {
+        const { rows: refRows } = await pool.query(
+          `SELECT * FROM referral_relationships
+           WHERE referrer_user_id=$1 OR referred_user_id=$1
+           ORDER BY created_at DESC LIMIT 50`,
+          [userId]
+        );
+        referrals = refRows.map((r) => ({
+          id: Number(r.id),
+          publicId: r.public_id,
+          type: r.type,
+          status: r.status,
+          referralCode: r.referral_code,
+          referrerRewardCents: r.referrer_reward_cents,
+          referredRewardCents: r.referred_reward_cents,
+          relatedJobId: r.related_job_id ? Number(r.related_job_id) : null,
+          createdAt: r.created_at,
+          qualifiedAt: r.qualified_at,
+        }));
+      } catch {
+        referrals = [];
+      }
+
+      const serializePayment = (p) => {
+        let meta = p.meta;
+        if (typeof meta === 'string') {
+          try {
+            meta = JSON.parse(meta);
+          } catch {
+            meta = {};
+          }
+        }
+        const publicId = p.public_id || (p.id != null ? `TXN-${String(p.id).padStart(5, '0')}` : null);
+        return {
+          id: Number(p.id),
+          transactionId: publicId,
+          jobId: p.job_id != null ? Number(p.job_id) : null,
+          paymentType: p.payment_type,
+          amount: Number(p.amount),
+          currency: p.currency || 'usd',
+          status: p.status,
+          provider: p.provider || 'stripe',
+          stripeSessionId: p.stripe_session_id,
+          stripePaymentIntent: p.stripe_payment_intent,
+          stripeSubscriptionId: p.stripe_subscription_id,
+          meta: meta || {},
+          createdAt: p.created_at,
+        };
+      };
+
+      let extras = {
+        stats: {
+          activeJobs: 0,
+          totalJobs: jobs.length,
+          openQuotes: 0,
+          outstandingBalance: 0,
+          totalPaid: 0,
+          openTickets: 0,
+          properties: props.length,
+        },
+        quotes: [],
+        invoices: [],
+        tickets: [],
+        activity: [],
+      };
+      try {
+        extras = await loadHomeownerProfileExtras(pool, userId);
+      } catch (extraErr) {
+        console.error('homeowner profile extras:', extraErr);
+      }
+
+      res.json({
+        ok: true,
+        customer: {
+          id: Number(u.id),
+          name: u.name,
+          email: u.email,
+          phone: u.phone || null,
+          planCode: u.plan_code,
+          accountStatus: u.is_blocked ? 'blocked' : 'active',
+          joinedAt: u.created_at,
+        },
+        stats: extras.stats,
+        addresses: props.map((p, idx) => ({
+          propertyId: Number(p.id),
+          label: p.label || (idx === 0 ? 'Primary Property' : `Property ${idx + 1}`),
+          isPrimary: idx === 0,
+          addressLine1: p.address_line1,
+          addressLine2: p.address_line2,
+          city: p.city,
+          state: p.state,
+          zip: p.zip,
+          postalCodePlus4: p.postal_code_plus4 || null,
+          addressVerified: p.address_verified === true,
+          addressVerificationProvider: p.address_verification_provider || null,
+          propertyType: p.property_type || null,
+          createdAt: p.created_at,
+        })),
+        serviceHistory: jobs.map((j) => ({
+          id: Number(j.id),
+          bookingId: j.booking_id,
+          title: j.title,
+          category: j.category,
+          status: j.status,
+          propertyId: j.property_id != null ? Number(j.property_id) : null,
+          address: j.full_address || j.city_state_zip,
+          contractor: j.assigned_contractor_user_id
+            ? contractorMap[j.assigned_contractor_user_id] || null
+            : null,
+          amount:
+            j.customer_retail_estimate_high != null
+              ? Number(j.customer_retail_estimate_high)
+              : j.customer_retail_estimate_low != null
+                ? Number(j.customer_retail_estimate_low)
+                : j.visit_fee_amount != null
+                  ? Number(j.visit_fee_amount)
+                  : null,
+          createdAt: j.created_at,
+          updatedAt: j.updated_at,
+          scheduledDate: j.preferred_date || null,
+          completedAt: null,
+        })),
+        quotes: extras.quotes,
+        invoices: extras.invoices,
+        tickets: extras.tickets,
+        activity: extras.activity,
+        payments: payments.map(serializePayment),
+        transactions: payments.map(serializePayment),
+        subscriptions: subs.map((s) => ({
+          id: Number(s.id),
+          planCode: s.plan_code,
+          status: s.status,
+          stripeSubscriptionId: s.stripe_subscription_id,
+          currentPeriodEnd: s.current_period_end,
+          createdAt: s.created_at,
+        })),
+        referrals,
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Server error loading customer profile.' });
+    }
+  });
+
+  app.get('/api/payments/mine', requireAuth, async (req, res) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT * FROM payments WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100`,
+        [req.authUser.id]
+      );
+      // Backfill public_id for older rows
+      for (const p of rows) {
+        if (!p.public_id) {
+          await pool.query(
+            `UPDATE payments SET public_id='TXN-' || LPAD(id::text, 5, '0') WHERE id=$1 AND public_id IS NULL`,
+            [p.id]
+          );
+          p.public_id = `TXN-${String(p.id).padStart(5, '0')}`;
+        }
+      }
+      res.json({
+        ok: true,
+        transactions: rows.map((p) => {
+          let meta = p.meta;
+          if (typeof meta === 'string') {
+            try {
+              meta = JSON.parse(meta);
+            } catch {
+              meta = {};
+            }
+          }
+          const planCode = meta?.planCode || null;
+          let description = 'Payment';
+          let typeLabel = p.payment_type;
+          if (p.payment_type === 'subscription') {
+            description = planCode === 'pro_membership' ? 'FixBridge Pro' : planCode || 'Subscription';
+            typeLabel = 'Subscription Payment';
+          } else if (p.payment_type === 'dispatch_fee') {
+            description = 'Dispatch / visit fee';
+            typeLabel = 'Service Payment';
+          } else if (p.payment_type === 'retail_payment' || p.payment_type === 'invoice_payment') {
+            description = 'Service payment';
+            typeLabel = 'Service Payment';
+          } else if (p.payment_type === 'tip') {
+            description = 'Tip';
+            typeLabel = 'Tip';
+          } else if (String(p.status).includes('refund')) {
+            typeLabel = 'Refund';
+          }
+          return {
+            id: Number(p.id),
+            transactionId: p.public_id,
+            paymentType: p.payment_type,
+            typeLabel,
+            description,
+            amount: Number(p.amount),
+            currency: (p.currency || 'usd').toUpperCase(),
+            status: p.status,
+            provider: p.provider || 'stripe',
+            jobId: p.job_id != null ? Number(p.job_id) : null,
+            stripeSessionId: p.stripe_session_id,
+            stripePaymentIntent: p.stripe_payment_intent,
+            stripeSubscriptionId: p.stripe_subscription_id,
+            planCode,
+            createdAt: p.created_at,
+            receiptUrl: null,
+          };
+        }),
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Could not load transactions.' });
     }
   });
 
@@ -501,7 +788,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
     }
   });
 
-  app.put('/api/admin/managed/jobs/:id/mode', requireAuth, requireAdmin, async (req, res) => {
+  app.put('/api/admin/managed/jobs/:id/mode', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
       const mode = String(req.body?.jobMode || '').toLowerCase();
@@ -532,9 +819,9 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
         return res.status(400).json({ ok: false, message: 'description and contractorNet required.' });
       }
       const { rows: inserted } = await pool.query(
-        `INSERT INTO change_orders (job_id, contractor_user_id, description, media_data_url, contractor_net, status)
-         VALUES ($1,$2,$3,$4,$5,'pending_admin') RETURNING *`,
-        [jobId, req.authUser.id, String(req.body.description).slice(0, 4000), req.body.mediaDataUrl || null, net]
+        `INSERT INTO change_orders (job_id, contractor_user_id, description, media_data_url, contractor_net, reason, status)
+         VALUES ($1,$2,$3,$4,$5,$6,'submitted') RETURNING *`,
+        [jobId, req.authUser.id, String(req.body.description).slice(0, 4000), req.body.mediaDataUrl || null, net, req.body.reason ? String(req.body.reason).slice(0, 500) : null]
       );
       if (typeof statusPush === 'function') {
         await statusPush(pool, jobId, job.status, 'change_order_pending', req.authUser.id, 'Change order submitted');
@@ -546,7 +833,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
     }
   });
 
-  app.post('/api/admin/change-orders/:id/price', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/admin/change-orders/:id/price', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const id = Number(req.params.id);
       const { rows } = await pool.query(`SELECT * FROM change_orders WHERE id=$1`, [id]);
@@ -557,10 +844,14 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
         retail = Number(priced.customer_final_retail_amount || Number(rows[0].contractor_net) * 1.35);
       }
       const { rows: updated } = await pool.query(
-        `UPDATE change_orders SET retail_amount=$1, status='awaiting_customer' WHERE id=$2 RETURNING *`,
+        `UPDATE change_orders SET retail_amount=$1, status='sent_to_homeowner'
+         WHERE id=$2 AND status IN ('submitted','admin_reviewed') RETURNING *`,
         [retail, id]
       );
-      res.json({ ok: true, changeOrder: updated[0] });
+      if (!updated[0]) {
+        return res.status(409).json({ ok: false, code: 'invalid_change_order_state', message: 'Change order cannot be priced in current state.' });
+      }
+      res.json({ ok: true, changeOrder: serializeChangeOrder(updated[0], req.authUser.role) });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, message: 'Could not price change order.' });
@@ -577,11 +868,26 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
       const { rows } = await pool.query(
-        `UPDATE change_orders SET status='approved', approved_at=NOW()
-         WHERE id=$1 AND job_id=$2 RETURNING *`,
+        `UPDATE change_orders SET status='approved', approved_at=NOW(),
+           approved_snapshot=COALESCE(approved_snapshot, jsonb_build_object(
+             'description', description,
+             'contractor_net', contractor_net,
+             'retail_amount', retail_amount,
+             'line_items', COALESCE(line_items, '[]'::jsonb),
+             'reason', reason,
+             'approved_at', NOW()
+           ))
+         WHERE id=$1 AND job_id=$2 AND status IN ('awaiting_customer','sent_to_homeowner','admin_reviewed')
+         RETURNING *`,
         [coId, jobId]
       );
-      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Change order not found.' });
+      if (!rows[0]) {
+        return res.status(409).json({
+          ok: false,
+          code: 'invalid_change_order_state',
+          message: 'Change order cannot be approved in its current state.',
+        });
+      }
       if (typeof statusPush === 'function') {
         await statusPush(pool, jobId, 'change_order_pending', 'work_started', req.authUser.id, 'Change order approved');
       }
@@ -607,13 +913,29 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
   });
 
   // ── Refunds / disputes / payout holds ────────────────────────────────────
-  app.post('/api/admin/payments/:id/refund', requireAuth, requireAdmin, need('payments.refund'), async (req, res) => {
+  app.post('/api/admin/payments/:id/refund', requireAuth, requireAdmin, requireAdminWrite, need('payments.refund'), async (req, res) => {
     try {
       const paymentId = Number(req.params.id);
       const { rows } = await pool.query(`SELECT * FROM payments WHERE id=$1`, [paymentId]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Payment not found.' });
       const amount = Number(req.body?.amount ?? rows[0].amount);
       const reason = String(req.body?.reason || 'admin_refund').slice(0, 500);
+      const idempotencyKey =
+        String(req.body?.idempotencyKey || req.body?.refundRequestId || '').trim() ||
+        `refund-${paymentId}-${Math.round(amount * 100)}-${reason.slice(0, 40)}`;
+
+      const existingRefund = await pool.query(
+        `SELECT * FROM refunds WHERE idempotency_key=$1 LIMIT 1`,
+        [idempotencyKey]
+      );
+      if (existingRefund.rows[0]) {
+        return res.json({
+          ok: true,
+          alreadyRefunded: true,
+          refund: existingRefund.rows[0],
+          simulated: existingRefund.rows[0].simulated,
+        });
+      }
       const simulate = shouldSimulatePayment(true) || !rows[0].stripe_payment_intent;
       if (process.env.NODE_ENV === 'production' && !stripeConfigured()) {
         return res.status(503).json({
@@ -642,8 +964,8 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       }
 
       const { rows: refundRows } = await pool.query(
-        `INSERT INTO refunds (payment_id, job_id, amount, reason, status, simulated, created_by, stripe_refund_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        `INSERT INTO refunds (payment_id, job_id, amount, reason, status, simulated, created_by, stripe_refund_id, idempotency_key)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
         [
           paymentId,
           rows[0].job_id,
@@ -653,9 +975,28 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
           simulate,
           req.authUser.id,
           simulate ? `sim_re_${Date.now()}` : stripeRefundId,
+          idempotencyKey,
         ]
       );
       await pool.query(`UPDATE payments SET status='refunded' WHERE id=$1`, [paymentId]);
+      if (rows[0].job_id) {
+        await reconcileRefundForJob(pool, rows[0].job_id, {
+          refundAmountCents: Math.round(amount * 100),
+          paymentId,
+          refundId: refundRows[0].id,
+          actorUserId: req.authUser.id,
+          reason,
+        });
+        await recordFinancialEvent(pool, {
+          eventType: FINANCIAL_EVENT.REFUND_SUCCEEDED,
+          jobId: rows[0].job_id,
+          paymentId,
+          amountCents: Math.round(amount * 100),
+          stripeObjectId: stripeRefundId,
+          createdBy: req.authUser.id,
+          metadata: { reason, simulate },
+        });
+      }
       if (rows[0].job_id && typeof statusPush === 'function') {
         const { rows: jobs } = await pool.query(`SELECT status FROM managed_jobs WHERE id=$1`, [rows[0].job_id]);
         await statusPush(pool, rows[0].job_id, jobs[0]?.status, 'refunded', req.authUser.id, reason);
@@ -669,7 +1010,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
     }
   });
 
-  app.post('/api/admin/disputes', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/admin/disputes', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const { rows } = await pool.query(
         `INSERT INTO disputes (payment_id, job_id, amount, reason, status, meta)
@@ -692,7 +1033,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
     }
   });
 
-  app.post('/api/admin/transfers/:id/hold', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/admin/transfers/:id/hold', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const id = Number(req.params.id);
       const reason = String(req.body?.reason || 'Admin hold').slice(0, 500);
@@ -707,7 +1048,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
     }
   });
 
-  app.post('/api/admin/transfers/:id/release', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/admin/transfers/:id/release', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const id = Number(req.params.id);
       const { rows } = await pool.query(`SELECT * FROM transfers WHERE id=$1`, [id]);
@@ -743,7 +1084,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
     }
   });
 
-  app.post('/api/admin/transfers/:id/reverse', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/admin/transfers/:id/reverse', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const id = Number(req.params.id);
       const { rows } = await pool.query(
@@ -758,7 +1099,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
   });
 
   // ── Payment schedules (deposit / progress / final) ───────────────────────
-  app.put('/api/admin/managed/jobs/:id/payment-schedule', requireAuth, requireAdmin, async (req, res) => {
+  app.put('/api/admin/managed/jobs/:id/payment-schedule', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
       const items = Array.isArray(req.body?.items) ? req.body.items : [];
@@ -808,23 +1149,22 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
   });
 
   // ── Coverage / matching / ops deadlines ──────────────────────────────────
-  app.post('/api/admin/managed/jobs/:id/match', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/admin/managed/jobs/:id/match', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
       const { rows: jobs } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       if (!jobs[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
-      const category = String(jobs[0].category || '').toLowerCase();
+      const job = jobs[0];
       const { rows: contractors } = await pool.query(
-        `SELECT id, name, email, trade, compliance_status FROM users
-         WHERE role='contractor' AND COALESCE(is_blocked,false)=false
-           AND LOWER(COALESCE(compliance_status,''))='approved'`
+        `SELECT id, name, email, trade, compliance_status, service_zips, is_blocked
+         FROM users
+         WHERE role='contractor' AND COALESCE(is_blocked,false)=false`
       );
-      const matches = contractors.filter((c) => {
-        const trade = String(c.trade || '').toLowerCase();
-        if (!category) return true;
-        return trade.includes(category) || category.includes(trade.split(' ')[0] || '');
-      });
-      const coverage = matches.length === 0 ? 'no_coverage' : matches.length < 2 ? 'limited' : 'covered';
+      const { filterEligibleContractors, rankEligibleContractors } = await import('./contractor-matching.js');
+      const eligible = filterEligibleContractors(contractors, job);
+      const ranked = rankEligibleContractors(eligible, job);
+      const coverage =
+        eligible.length === 0 ? 'no_coverage' : eligible.length < 2 ? 'limited' : 'covered';
       const deadlineHours = Number(req.body?.responseHours || 4);
       await pool.query(
         `UPDATE managed_jobs SET coverage_state=$1, invite_deadline_at=NOW() + ($2 || ' hours')::interval, updated_at=NOW()
@@ -834,7 +1174,14 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       res.json({
         ok: true,
         coverageState: coverage,
-        matches: matches.map((m) => ({ id: Number(m.id), name: m.name, email: m.email, trade: m.trade })),
+        jobZip: job.zip || null,
+        matches: ranked.map(({ contractor: m, score }) => ({
+          id: Number(m.id),
+          name: m.name,
+          email: m.email,
+          trade: m.trade,
+          score,
+        })),
       });
     } catch (e) {
       console.error(e);
@@ -1091,11 +1438,20 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
     }
   });
 
-  app.post('/api/admin/partners/:id/users', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/admin/partners/:id/users', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const partnerId = Number(req.params.id);
       const email = String(req.body?.email || '').trim().toLowerCase();
-      const password = String(req.body?.password || 'partner123');
+      if (!email) {
+        return res.status(400).json({ ok: false, message: 'Email is required.' });
+      }
+      const password = String(req.body?.password || '').trim();
+      if (!password || password.length < 12) {
+        return res.status(400).json({
+          ok: false,
+          message: 'A secure password (minimum 12 characters) is required. Passwords are never auto-generated or returned by API.',
+        });
+      }
       const hash = await bcrypt.hash(password, 10);
       const { rows } = await pool.query(
         `INSERT INTO partner_users (partner_id, email, name, password_hash)
@@ -1104,7 +1460,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
          RETURNING id, partner_id, email, name`,
         [partnerId, email, req.body?.name || email, hash]
       );
-      res.json({ ok: true, user: rows[0], tempPassword: password });
+      res.json({ ok: true, user: rows[0] });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, message: 'Could not create partner user.' });
@@ -1298,7 +1654,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
   });
 
   // ── Notifications ────────────────────────────────────────────────────────
-  app.post('/api/notify/test', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/notify/test', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const email = await sendEmailSafe({
         to: req.body?.email || req.authUser.email,
@@ -1345,7 +1701,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
         [req.authUser.id, hash]
       );
 
-      // Email is best-effort — never block admin login if Resend is missing/misconfigured.
+      // Email is best-effort — never block admin login if Gmail is missing/misconfigured.
       await sendEmailSafe({
         to: req.authUser.email,
         subject: `${brand.productName} admin verification code`,
@@ -1388,7 +1744,16 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       const match = await bcrypt.compare(code, rows[0].code_hash);
       if (!match) return res.status(401).json({ ok: false, message: 'Invalid code.' });
       await pool.query(`UPDATE mfa_challenges SET consumed=true WHERE id=$1`, [rows[0].id]);
-      res.json({ ok: true, verified: true });
+      let token = null;
+      let user = null;
+      if (typeof makeToken === 'function' && typeof rowToUser === 'function') {
+        const { rows: userRows } = await pool.query(`SELECT * FROM users WHERE id=$1`, [req.authUser.id]);
+        if (userRows[0]) {
+          user = rowToUser(userRows[0]);
+          token = makeToken(user, { authStage: 'complete' });
+        }
+      }
+      res.json({ ok: true, verified: true, token, user });
     } catch (e) {
       console.error('[MFA verify]', e);
       res.status(500).json({ ok: false, message: 'Verify failed.' });
@@ -1450,7 +1815,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
   });
 
   // Commercial NTE / SLA on job
-  app.put('/api/admin/managed/jobs/:id/commercial', requireAuth, requireAdmin, async (req, res) => {
+  app.put('/api/admin/managed/jobs/:id/commercial', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
       await pool.query(
@@ -1526,6 +1891,47 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       console.error(e);
       res.status(500).json({ ok: false, message: 'Could not load audit logs.' });
     }
+  });
+
+  app.get('/api/admin/work-queue', requireAuth, requireAdmin, async (_req, res) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT id, booking_id, title, category, status, work_queue_status, homeowner_user_id,
+                assigned_contractor_user_id, city_state_zip, zip, updated_at, created_at,
+                invite_deadline_at, ai_assessment
+         FROM managed_jobs
+         WHERE status NOT IN ('closed','canceled','cancelled','refunded')
+         ORDER BY updated_at DESC NULLS LAST
+         LIMIT 500`
+      );
+      const { buildWorkQueueSections, WORK_QUEUE_SECTIONS } = await import('./work-queue.js');
+      const sections = buildWorkQueueSections(rows);
+      res.json({
+        ok: true,
+        sections: sections.map((s) => ({
+          id: s.id,
+          label: s.label,
+          count: s.count,
+          jobIds: s.jobs.map((j) => Number(j.id)),
+        })),
+        catalog: WORK_QUEUE_SECTIONS,
+        endpoint: 'GET /api/admin/work-queue',
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Could not load work queue.' });
+    }
+  });
+
+  app.get('/api/comms/status', requireAuth, async (_req, res) => {
+    const { mailStatus } = await import('./mail.js');
+    const { smsConfigured } = await import('./notify.js');
+    const email = mailStatus();
+    res.json({
+      ok: true,
+      emailConfigured: Boolean(email.configured),
+      smsConfigured: smsConfigured(),
+    });
   });
 }
 

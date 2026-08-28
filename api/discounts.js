@@ -30,26 +30,32 @@ export async function lookupDiscountByCode(pool, code) {
 
 /** Returns { ok, discount?, message? } — public-safe validation. */
 export function validateDiscountRow(row) {
-  if (!row) return { ok: false, message: 'Discount code not found.' };
-  if (row.active === false) return { ok: false, message: 'This discount code is inactive.' };
+  if (!row) return { ok: false, message: 'This coupon is not valid for this service.' };
+  if (row.active === false) return { ok: false, message: 'This coupon is not valid for this service.' };
+  if (row.starts_at) {
+    const start = row.starts_at instanceof Date ? row.starts_at : new Date(row.starts_at);
+    if (!Number.isNaN(start.getTime()) && start.getTime() > Date.now()) {
+      return { ok: false, message: 'This coupon is not valid for this service.' };
+    }
+  }
   if (row.expires_at) {
     const exp = row.expires_at instanceof Date ? row.expires_at : new Date(row.expires_at);
     if (!Number.isNaN(exp.getTime()) && exp.getTime() < Date.now()) {
-      return { ok: false, message: 'This discount code has expired.' };
+      return { ok: false, message: 'This coupon has expired.' };
     }
   }
   const maxUses = row.max_uses != null ? Number(row.max_uses) : null;
   const uses = Number(row.uses_count || 0);
   if (maxUses != null && Number.isFinite(maxUses) && uses >= maxUses) {
-    return { ok: false, message: 'This discount code has reached its usage limit.' };
+    return { ok: false, message: 'This coupon is not valid for this service.' };
   }
   const type = String(row.discount_type || 'percent').toLowerCase() === 'amount' ? 'amount' : 'percent';
   const value = Number(row.value);
   if (!Number.isFinite(value) || value <= 0) {
-    return { ok: false, message: 'Invalid discount code.' };
+    return { ok: false, message: 'This coupon is not valid for this service.' };
   }
   if (type === 'percent' && value > 90) {
-    return { ok: false, message: 'Invalid discount code.' };
+    return { ok: false, message: 'This coupon is not valid for this service.' };
   }
   return {
     ok: true,
@@ -59,6 +65,8 @@ export function validateDiscountRow(row) {
       label: row.label || null,
       discountType: type,
       value,
+      minPurchase: row.min_purchase != null ? Number(row.min_purchase) : null,
+      maxDiscount: row.max_discount != null ? Number(row.max_discount) : null,
     },
   };
 }
@@ -88,10 +96,16 @@ export function applyDiscountToAmount(retail, discount) {
   if (discount.discountType === 'amount') {
     off = Math.min(base, Number(discount.value) || 0);
   } else {
-    off = Math.round(base * (Number(discount.value) || 0) / 100);
+    off = Math.round((base * (Number(discount.value) || 0)) / 100);
   }
-  off = Math.max(0, Math.round(off));
-  return { retail: Math.max(0, base - off), discountAmount: off };
+  if (discount.maxDiscount != null && Number.isFinite(Number(discount.maxDiscount))) {
+    off = Math.min(off, Math.max(0, Number(discount.maxDiscount)));
+  }
+  if (discount.minPurchase != null && Number.isFinite(Number(discount.minPurchase)) && base < Number(discount.minPurchase)) {
+    return { retail: base, discountAmount: 0, rejected: 'min_purchase' };
+  }
+  off = Math.max(0, Math.round(off * 100) / 100);
+  return { retail: Math.max(0, Math.round((base - off) * 100) / 100), discountAmount: off };
 }
 
 /** Apply discount to a preliminary retail pricing object (mutates copy). */
@@ -137,9 +151,50 @@ export function applyDiscountToPricing(pricing, discount) {
 }
 
 export async function incrementDiscountUse(pool, discountId) {
-  if (!discountId) return;
-  await pool.query(
-    `UPDATE discount_codes SET uses_count = COALESCE(uses_count,0) + 1 WHERE id=$1`,
-    [discountId]
-  );
+  const result = await claimDiscountRedemption(pool, discountId);
+  if (!result.ok) throw new Error(result.message || 'Coupon redemption failed.');
+  return result;
+}
+
+/**
+ * Atomically claim one coupon use. Returns { ok, alreadyAtMax?, usesCount? }.
+ * Safe under concurrent redemption (max_uses = 1 → exactly one winner).
+ */
+export async function claimDiscountRedemption(pool, discountId) {
+  if (!discountId) return { ok: false, message: 'Missing discount id.' };
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(`SELECT * FROM discount_codes WHERE id=$1 FOR UPDATE`, [discountId]);
+    const row = rows[0];
+    if (!row) {
+      await client.query('ROLLBACK');
+      return { ok: false, message: 'Coupon not found.' };
+    }
+    if (row.active === false) {
+      await client.query('ROLLBACK');
+      return { ok: false, message: 'This coupon is not valid for this service.' };
+    }
+    const maxUses = row.max_uses != null ? Number(row.max_uses) : null;
+    const uses = Number(row.uses_count || 0);
+    if (maxUses != null && Number.isFinite(maxUses) && uses >= maxUses) {
+      await client.query('ROLLBACK');
+      return { ok: false, code: 'coupon_exhausted', message: 'This coupon has reached its usage limit.' };
+    }
+    const { rows: updated } = await client.query(
+      `UPDATE discount_codes SET uses_count = COALESCE(uses_count,0) + 1 WHERE id=$1 RETURNING uses_count`,
+      [discountId]
+    );
+    await client.query('COMMIT');
+    return { ok: true, usesCount: Number(updated[0]?.uses_count || uses + 1) };
+  } catch (e) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  } finally {
+    client.release();
+  }
 }

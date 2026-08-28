@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Check,
   Circle,
-  MessageSquare,
   Send,
   UserPlus,
   X,
@@ -11,6 +10,7 @@ import { AnimatePresence, motion } from "motion/react";
 import AdminQuoteBuilderPanel from "./AdminQuoteBuilderPanel";
 import { AdminQuoteDocumentPanel } from "./AdminQuotesWorkspace";
 import AdminHomeownerInvoicePanel from "./AdminHomeownerInvoicePanel";
+import ChangeOrderPanel from "./ChangeOrderPanel";
 import {
   STATUS_LABELS,
   formatMoney,
@@ -293,14 +293,11 @@ export default function AdminJobDrawer({
                   >
                     <UserPlus className="h-4 w-4" /> Request quote / site visit
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => onMessage("Messaging opens in the full job workspace (coming next).")}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-border px-4 py-2.5 text-sm font-medium hover:bg-muted"
-                  >
-                    <MessageSquare className="h-4 w-4" /> Message contractor
-                  </button>
                 </div>
+
+                {["work_started", "change_order_pending", "contractor_en_route", "work_completed"].includes(job.status) ? (
+                  <ChangeOrderPanel jobId={job.id} role="admin" onChanged={onRefresh} />
+                ) : null}
               </div>
             )}
 

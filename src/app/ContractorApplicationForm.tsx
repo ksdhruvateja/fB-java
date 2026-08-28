@@ -21,6 +21,7 @@ import {
   type TaxIdType,
   type YesNo,
 } from "./contractorApplication";
+import { VerifiedAddressFields } from "./VerifiedAddressInput";
 
 const inputClass =
   "w-full rounded-xl border border-border bg-background px-3.5 py-2.5 text-sm outline-none transition focus:border-primary/50 focus:ring-2 focus:ring-primary/15";
@@ -387,54 +388,27 @@ export default function ContractorApplicationForm({
       {/* 3. Address */}
       <div className={sectionClass}>
         <SectionTitle icon={SECTION_ICONS.address}>3. Business address</SectionTitle>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Street address" required className="sm:col-span-2">
-            <input
-              className={inputClass}
-              value={value.businessAddress}
-              onChange={(e) => set("businessAddress", e.target.value)}
-              required
-            />
-          </Field>
-          <Field label="Suite / unit">
-            <input
-              className={inputClass}
-              value={value.businessSuite}
-              onChange={(e) => set("businessSuite", e.target.value)}
-            />
-          </Field>
-          <Field label="City" required>
-            <input
-              className={inputClass}
-              value={value.businessCity}
-              onChange={(e) => set("businessCity", e.target.value)}
-              required
-            />
-          </Field>
-          <Field label="State" required>
-            <select
-              className={inputClass}
-              value={value.businessState}
-              onChange={(e) => set("businessState", e.target.value)}
-              required
-            >
-              <option value="">…</option>
-              {US_STATES.map((s) => (
-                <option key={s.code} value={s.code}>
-                  {s.code} — {s.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="ZIP" required>
-            <input
-              className={inputClass}
-              value={value.businessZip}
-              onChange={(e) => set("businessZip", e.target.value)}
-              required
-            />
-          </Field>
-        </div>
+        <VerifiedAddressFields
+          idPrefix="contractor-biz"
+          addressLine1={value.businessAddress}
+          addressLine2={value.businessSuite}
+          city={value.businessCity}
+          state={value.businessState}
+          zip={value.businessZip}
+          onAddressLine1Change={(v) => set("businessAddress", v)}
+          onAddressLine2Change={(v) => set("businessSuite", v)}
+          onCityChange={(v) => set("businessCity", v)}
+          onStateChange={(v) => set("businessState", v)}
+          onZipChange={(v) => set("businessZip", v)}
+          initiallyVerified={value.addressVerified === true}
+          onVerificationChange={(meta) =>
+            onChange({
+              ...value,
+              addressVerified: meta.addressVerified,
+              postalCodePlus4: meta.postalCodePlus4 || null,
+            })
+          }
+        />
       </div>
 
       {/* 4. Contact */}

@@ -1,6 +1,22 @@
 import { brand } from './brand.js';
 import { clampString } from './security.js';
 
+export const TICKET_STATUSES = [
+  'open',
+  'in_review',
+  'waiting_for_customer',
+  'waiting_for_contractor',
+  'waiting_for_admin',
+  'resolved',
+  'closed',
+];
+
+export const TICKET_PRIORITIES = ['low', 'normal', 'high', 'urgent'];
+
+const LEGACY_STATUS_MAP = {
+  in_progress: 'in_review',
+};
+
 function isoNow(d) {
   if (!d) return new Date().toISOString();
   return d instanceof Date ? d.toISOString() : String(d);
@@ -21,6 +37,16 @@ function fmtDateTime(d) {
   }
 }
 
+function normalizeStatus(status) {
+  const s = String(status || 'open').toLowerCase().replace(/\s+/g, '_');
+  return LEGACY_STATUS_MAP[s] || s;
+}
+
+function normalizePriority(priority) {
+  const p = String(priority || 'normal').toLowerCase();
+  return TICKET_PRIORITIES.includes(p) ? p : 'normal';
+}
+
 export async function initSupportTicketSchema(pool) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS support_tickets (
@@ -34,11 +60,78 @@ export async function initSupportTicketSchema(pool) {
       channel         TEXT NOT NULL,
       subject         TEXT NOT NULL,
       message         TEXT NOT NULL,
+      category        TEXT,
+      priority        TEXT NOT NULL DEFAULT 'normal',
+      assigned_to     TEXT,
+      related_property_id BIGINT,
       related_job_id  BIGINT,
+      related_quote_id BIGINT,
+      related_invoice_id BIGINT,
+      related_payment_id BIGINT,
       context         JSONB,
       status          TEXT NOT NULL DEFAULT 'open',
       created_at      TIMESTAMPTZ DEFAULT NOW(),
-      updated_at      TIMESTAMPTZ DEFAULT NOW()
+      updated_at      TIMESTAMPTZ DEFAULT NOW(),
+      resolved_at     TIMESTAMPTZ,
+      closed_at       TIMESTAMPTZ
+    )
+  `);
+
+  const alters = [
+    'ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS category TEXT',
+    "ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal'",
+    'ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS assigned_to TEXT',
+    'ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS related_property_id BIGINT',
+    'ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS related_quote_id BIGINT',
+    'ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS related_invoice_id BIGINT',
+    'ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS related_payment_id BIGINT',
+    'ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ',
+    'ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ',
+  ];
+  for (const sql of alters) {
+    try {
+      await pool.query(sql);
+    } catch {
+      /* column may exist with different constraints in pg-mem */
+    }
+  }
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS support_ticket_messages (
+      id              BIGSERIAL PRIMARY KEY,
+      ticket_id       BIGINT NOT NULL,
+      sender_user_id  INT,
+      sender_role     TEXT NOT NULL,
+      sender_name     TEXT,
+      message         TEXT NOT NULL,
+      is_internal     BOOLEAN NOT NULL DEFAULT false,
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS support_ticket_attachments (
+      id              BIGSERIAL PRIMARY KEY,
+      ticket_id       BIGINT NOT NULL,
+      message_id      BIGINT,
+      file_url        TEXT NOT NULL,
+      file_name       TEXT NOT NULL,
+      mime_type       TEXT,
+      uploaded_by     INT,
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS support_ticket_activity (
+      id              BIGSERIAL PRIMARY KEY,
+      ticket_id       BIGINT NOT NULL,
+      actor_user_id   INT,
+      actor_role      TEXT,
+      action          TEXT NOT NULL,
+      old_value       TEXT,
+      new_value       TEXT,
+      created_at      TIMESTAMPTZ DEFAULT NOW()
     )
   `);
 
@@ -56,30 +149,23 @@ export async function initSupportTicketSchema(pool) {
     )
   `);
 
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_support_tickets_user ON support_tickets(user_id, created_at DESC)
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_ticket_deliveries_ticket ON ticket_deliveries(ticket_id)
-  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_support_tickets_user ON support_tickets(user_id, created_at DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets(status, updated_at DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_support_ticket_messages_ticket ON support_ticket_messages(ticket_id, created_at ASC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_support_ticket_activity_ticket ON support_ticket_activity(ticket_id, created_at ASC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_ticket_deliveries_ticket ON ticket_deliveries(ticket_id)`);
 }
 
 async function nextTicketNumber(pool) {
-  const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  const prefix = `FB-TKT-${day}-`;
   const { rows } = await pool.query(
-    `SELECT ticket_number FROM support_tickets
-     WHERE ticket_number LIKE $1
-     ORDER BY id DESC LIMIT 1`,
-    [`${prefix}%`]
+    `SELECT ticket_number FROM support_tickets WHERE ticket_number LIKE 'FBT-%' ORDER BY id DESC LIMIT 1`
   );
-  let seq = 1;
+  let seq = 10001;
   if (rows[0]?.ticket_number) {
-    const tail = String(rows[0].ticket_number).slice(prefix.length);
-    const n = Number.parseInt(tail, 10);
-    if (Number.isFinite(n)) seq = n + 1;
+    const n = Number.parseInt(String(rows[0].ticket_number).replace(/^FBT-/, ''), 10);
+    if (Number.isFinite(n) && n >= 10001) seq = n + 1;
   }
-  return `${prefix}${String(seq).padStart(5, '0')}`;
+  return `FBT-${seq}`;
 }
 
 async function gatherUserContext(pool, userId) {
@@ -200,11 +286,12 @@ function buildAdminEmailBody(ticket, context) {
   const lines = [
     `[ADMIN] New ${channelLabel} ticket — ${ticket.ticket_number}`,
     '',
-    '— Homeowner —',
+    '— User —',
     `Name: ${ticket.user_name || '—'}`,
     `Email: ${ticket.user_email}`,
     `Phone: ${ticket.user_phone || '—'}`,
     `User ID: ${ticket.user_id}`,
+    `Role: ${ticket.user_role || '—'}`,
     '',
     '— Message —',
     `Subject: ${ticket.subject}`,
@@ -212,6 +299,8 @@ function buildAdminEmailBody(ticket, context) {
     '',
     '— Ticket —',
     `Ticket ID: ${ticket.ticket_number}`,
+    `Category: ${ticket.category || '—'}`,
+    `Priority: ${ticket.priority || 'normal'}`,
     `Channel: ${channelLabel}`,
     `Submitted: ${fmtDateTime(ticket.created_at)}`,
     ticket.related_job_id ? `Related job ID: ${ticket.related_job_id}` : null,
@@ -219,7 +308,7 @@ function buildAdminEmailBody(ticket, context) {
     '— Auto-attached context —',
     ...contextSummaryLines(context),
     '',
-    'Open the Admin Support Tickets panel to view full delivery logs.',
+    'Open the Admin Support panel to view and reply.',
   ].filter(Boolean);
   return lines.join('\n');
 }
@@ -240,11 +329,46 @@ function rowToTicket(r) {
     channel: r.channel,
     subject: r.subject,
     message: r.message,
+    category: r.category || null,
+    priority: normalizePriority(r.priority),
+    assignedTo: r.assigned_to || null,
+    relatedPropertyId: r.related_property_id != null ? Number(r.related_property_id) : null,
     relatedJobId: r.related_job_id != null ? Number(r.related_job_id) : null,
+    relatedQuoteId: r.related_quote_id != null ? Number(r.related_quote_id) : null,
+    relatedInvoiceId: r.related_invoice_id != null ? Number(r.related_invoice_id) : null,
+    relatedPaymentId: r.related_payment_id != null ? Number(r.related_payment_id) : null,
     context: r.context,
-    status: r.status,
+    status: normalizeStatus(r.status),
     createdAt: isoNow(r.created_at),
     updatedAt: isoNow(r.updated_at),
+    resolvedAt: r.resolved_at ? isoNow(r.resolved_at) : null,
+    closedAt: r.closed_at ? isoNow(r.closed_at) : null,
+  };
+}
+
+function rowToMessage(r) {
+  return {
+    id: Number(r.id),
+    ticketId: Number(r.ticket_id),
+    senderUserId: r.sender_user_id != null ? Number(r.sender_user_id) : null,
+    senderRole: r.sender_role,
+    senderName: r.sender_name,
+    message: r.message,
+    isInternal: Boolean(r.is_internal),
+    createdAt: isoNow(r.created_at),
+  };
+}
+
+function rowToActivity(r) {
+  return {
+    id: Number(r.id),
+    ticketId: Number(r.ticket_id),
+    actorUserId: r.actor_user_id != null ? Number(r.actor_user_id) : null,
+    actorRole: r.actor_role,
+    action: r.action,
+    oldValue: r.old_value,
+    newValue: r.new_value,
+    createdAt: isoNow(r.created_at),
   };
 }
 
@@ -262,6 +386,53 @@ function rowToDelivery(r) {
   };
 }
 
+async function logActivity(pool, ticketId, actor, action, oldValue, newValue) {
+  await pool.query(
+    `INSERT INTO support_ticket_activity (ticket_id, actor_user_id, actor_role, action, old_value, new_value)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [ticketId, actor?.id || null, actor?.role || null, action, oldValue || null, newValue || null]
+  );
+}
+
+async function loadTicketMessages(pool, ticketId, includeInternal = false) {
+  const { rows } = await pool.query(
+    `SELECT * FROM support_ticket_messages
+     WHERE ticket_id=$1 ${includeInternal ? '' : 'AND is_internal=false'}
+     ORDER BY created_at ASC, id ASC`,
+    [ticketId]
+  );
+  if (rows.length === 0) {
+    const { rows: ticketRows } = await pool.query(`SELECT * FROM support_tickets WHERE id=$1`, [ticketId]);
+    if (ticketRows[0]?.message) {
+      await pool.query(
+        `INSERT INTO support_ticket_messages (ticket_id, sender_user_id, sender_role, sender_name, message, is_internal)
+         VALUES ($1,$2,$3,$4,$5,false)`,
+        [
+          ticketId,
+          ticketRows[0].user_id,
+          ticketRows[0].user_role || 'homeowner',
+          ticketRows[0].user_name,
+          ticketRows[0].message,
+        ]
+      );
+      const { rows: migrated } = await pool.query(
+        `SELECT * FROM support_ticket_messages WHERE ticket_id=$1 AND is_internal=false ORDER BY created_at ASC`,
+        [ticketId]
+      );
+      return migrated.map(rowToMessage);
+    }
+  }
+  return rows.map(rowToMessage);
+}
+
+async function loadTicketActivity(pool, ticketId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM support_ticket_activity WHERE ticket_id=$1 ORDER BY created_at ASC, id ASC`,
+    [ticketId]
+  );
+  return rows.map(rowToActivity);
+}
+
 async function loadTicketDeliveries(pool, ticketId) {
   const { rows } = await pool.query(
     `SELECT * FROM ticket_deliveries WHERE ticket_id=$1 ORDER BY sent_at ASC, id ASC`,
@@ -270,14 +441,63 @@ async function loadTicketDeliveries(pool, ticketId) {
   return rows.map(rowToDelivery);
 }
 
+async function notifyTicketUser(pool, userId, title, message) {
+  if (!userId) return;
+  try {
+    await pool.query(
+      `INSERT INTO notifications (user_id, type, title, message) VALUES ($1,'support_ticket',$2,$3)`,
+      [userId, title, message]
+    );
+  } catch {
+    /* notifications table optional */
+  }
+}
+
+async function notifyAdmins(pool, title, message) {
+  try {
+    const { rows: admins } = await pool.query(
+      `SELECT id FROM users WHERE role='admin' AND COALESCE(is_blocked,false)=false`
+    );
+    for (const admin of admins) {
+      await notifyTicketUser(pool, admin.id, title, message);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+async function canAccessTicket(pool, authUser, ticket) {
+  if (authUser.role === 'admin') return true;
+  if (Number(ticket.user_id) === Number(authUser.id)) return true;
+  if (authUser.role === 'contractor') {
+    if (Number(ticket.user_id) === Number(authUser.id)) return true;
+    if (ticket.related_job_id) {
+      const { rows } = await pool.query(
+        `SELECT id FROM managed_jobs WHERE id=$1 AND assigned_contractor_user_id=$2`,
+        [ticket.related_job_id, authUser.id]
+      );
+      if (rows[0]) return true;
+    }
+  }
+  return false;
+}
+
+async function loadTicketByNumber(pool, ticketNumber) {
+  const { rows } = await pool.query(`SELECT * FROM support_tickets WHERE ticket_number=$1`, [ticketNumber]);
+  return rows[0] || null;
+}
+
 async function createSupportTicket(pool, authUser, payload) {
   const channel = payload.channel === 'assistant' ? 'assistant' : 'help';
   const subject = clampString(payload.subject, 200);
   const message = clampString(payload.message, 8000);
-  const relatedJobId =
-    payload.relatedJobId != null && Number.isFinite(Number(payload.relatedJobId))
-      ? Number(payload.relatedJobId)
-      : null;
+  const category = clampString(payload.category, 80) || 'Other';
+  const priority = normalizePriority(payload.priority);
+  const relatedJobId = payload.relatedJobId != null && Number.isFinite(Number(payload.relatedJobId)) ? Number(payload.relatedJobId) : null;
+  const relatedPropertyId = payload.relatedPropertyId != null && Number.isFinite(Number(payload.relatedPropertyId)) ? Number(payload.relatedPropertyId) : null;
+  const relatedQuoteId = payload.relatedQuoteId != null && Number.isFinite(Number(payload.relatedQuoteId)) ? Number(payload.relatedQuoteId) : null;
+  const relatedInvoiceId = payload.relatedInvoiceId != null && Number.isFinite(Number(payload.relatedInvoiceId)) ? Number(payload.relatedInvoiceId) : null;
+  const relatedPaymentId = payload.relatedPaymentId != null && Number.isFinite(Number(payload.relatedPaymentId)) ? Number(payload.relatedPaymentId) : null;
 
   if (!subject || !message) {
     const err = new Error('Subject and message are required.');
@@ -292,36 +512,50 @@ async function createSupportTicket(pool, authUser, payload) {
   const userEmail = u?.email || authUser.email;
   const userPhone = u?.phone || null;
   const userName = u?.name || authUser.email;
+  const userRole = authUser.role || u?.role || 'homeowner';
 
   const { rows } = await pool.query(
     `INSERT INTO support_tickets
-      (ticket_number, user_id, user_role, user_name, user_email, user_phone, channel, subject, message, related_job_id, context, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'open')
+      (ticket_number, user_id, user_role, user_name, user_email, user_phone, channel, subject, message,
+       category, priority, related_property_id, related_job_id, related_quote_id, related_invoice_id, related_payment_id, context, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'open')
      RETURNING *`,
     [
       ticketNumber,
       authUser.id,
-      authUser.role || u?.role || 'homeowner',
+      userRole,
       userName,
       userEmail,
       userPhone,
       channel,
       subject,
       message,
+      category,
+      priority,
+      relatedPropertyId,
       relatedJobId,
+      relatedQuoteId,
+      relatedInvoiceId,
+      relatedPaymentId,
       JSON.stringify(context),
     ]
   );
-  const ticket = rowToTicket(rows[0]);
-  const deliveries = [];
+  const ticketRow = rows[0];
+  const ticket = rowToTicket(ticketRow);
 
+  await pool.query(
+    `INSERT INTO support_ticket_messages (ticket_id, sender_user_id, sender_role, sender_name, message, is_internal)
+     VALUES ($1,$2,$3,$4,$5,false)`,
+    [ticket.id, authUser.id, userRole, userName, message]
+  );
+  await logActivity(pool, ticket.id, authUser, 'created', null, ticketNumber);
+
+  const deliveries = [];
   const homeownerSubject = `[${brand.productName}] Ticket ${ticketNumber} — we received your message`;
-  const homeownerBody = buildHomeownerEmailBody(ticket, context);
+  const homeownerBody = buildHomeownerEmailBody(ticketRow, context);
   const { rows: hoMail } = await pool.query(
-    `INSERT INTO ticket_deliveries
-      (ticket_id, delivery_type, recipient_role, recipient_address, subject, body, status)
-     VALUES ($1,'email','homeowner',$2,$3,$4,'sent')
-     RETURNING *`,
+    `INSERT INTO ticket_deliveries (ticket_id, delivery_type, recipient_role, recipient_address, subject, body, status)
+     VALUES ($1,'email','homeowner',$2,$3,$4,'sent') RETURNING *`,
     [ticket.id, userEmail, homeownerSubject, homeownerBody]
   );
   deliveries.push(rowToDelivery(hoMail[0]));
@@ -330,38 +564,24 @@ async function createSupportTicket(pool, authUser, payload) {
     `SELECT id, email, name FROM users WHERE role='admin' AND COALESCE(is_blocked,false)=false`
   );
   const adminSubject = `[${brand.productName} Admin] New ticket ${ticketNumber}`;
-  const adminBody = buildAdminEmailBody(ticket, context);
+  const adminBody = buildAdminEmailBody(ticketRow, context);
 
   for (const admin of admins) {
-    const adminEmail = admin.email;
-    if (!adminEmail) continue;
+    if (!admin.email) continue;
     const { rows: adMail } = await pool.query(
-      `INSERT INTO ticket_deliveries
-        (ticket_id, delivery_type, recipient_role, recipient_address, subject, body, status)
-       VALUES ($1,'email','admin',$2,$3,$4,'sent')
-       RETURNING *`,
-      [ticket.id, adminEmail, adminSubject, adminBody]
+      `INSERT INTO ticket_deliveries (ticket_id, delivery_type, recipient_role, recipient_address, subject, body, status)
+       VALUES ($1,'email','admin',$2,$3,$4,'sent') RETURNING *`,
+      [ticket.id, admin.email, adminSubject, adminBody]
     );
     deliveries.push(rowToDelivery(adMail[0]));
-
-    await pool.query(
-      `INSERT INTO notifications (user_id, type, title, message)
-       VALUES ($1, 'support_ticket', $2, $3)`,
-      [
-        admin.id,
-        `Support ticket ${ticketNumber}`,
-        `${userName} (${channel}) — ${subject}`,
-      ]
-    );
+    await notifyTicketUser(pool, admin.id, `Support ticket ${ticketNumber}`, `${userName} — ${subject}`);
   }
 
   if (userPhone?.trim()) {
-    const smsBody = buildSmsBody(ticket);
+    const smsBody = buildSmsBody(ticketRow);
     const { rows: smsRows } = await pool.query(
-      `INSERT INTO ticket_deliveries
-        (ticket_id, delivery_type, recipient_role, recipient_address, subject, body, status)
-       VALUES ($1,'sms','homeowner',$2,$3,$4,'sent')
-       RETURNING *`,
+      `INSERT INTO ticket_deliveries (ticket_id, delivery_type, recipient_role, recipient_address, subject, body, status)
+       VALUES ($1,'sms','homeowner',$2,$3,$4,'sent') RETURNING *`,
       [ticket.id, userPhone.trim(), `${brand.productName} ticket confirmation`, smsBody]
     );
     deliveries.push(rowToDelivery(smsRows[0]));
@@ -370,7 +590,136 @@ async function createSupportTicket(pool, authUser, payload) {
   return { ticket, deliveries, context };
 }
 
-export function registerSupportTicketRoutes(app, { pool, requireAuth, requireAdmin }) {
+async function addTicketReply(pool, authUser, ticketNumber, messageText, isInternal = false) {
+  const ticketRow = await loadTicketByNumber(pool, ticketNumber);
+  if (!ticketRow) {
+    const err = new Error('Ticket not found.');
+    err.status = 404;
+    throw err;
+  }
+  if (!(await canAccessTicket(pool, authUser, ticketRow))) {
+    const err = new Error('Ticket not found.');
+    err.status = 404;
+    throw err;
+  }
+  if (isInternal && authUser.role !== 'admin') {
+    const err = new Error('Forbidden.');
+    err.status = 403;
+    throw err;
+  }
+
+  const message = clampString(messageText, 8000);
+  if (!message) {
+    const err = new Error('Message is required.');
+    err.status = 400;
+    throw err;
+  }
+
+  const senderRole = authUser.role === 'admin' ? 'admin' : authUser.role || 'homeowner';
+  const senderName = authUser.name || authUser.email;
+
+  const { rows } = await pool.query(
+    `INSERT INTO support_ticket_messages (ticket_id, sender_user_id, sender_role, sender_name, message, is_internal)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+    [ticketRow.id, authUser.id, senderRole, senderName, message, isInternal]
+  );
+
+  await pool.query(`UPDATE support_tickets SET updated_at=NOW() WHERE id=$1`, [ticketRow.id]);
+  await logActivity(pool, ticketRow.id, authUser, isInternal ? 'internal_note' : 'reply', null, message.slice(0, 120));
+
+  if (!isInternal) {
+    if (authUser.role === 'admin') {
+      await notifyTicketUser(pool, ticketRow.user_id, `Reply on ${ticketRow.ticket_number}`, message.slice(0, 200));
+    } else {
+      await notifyAdmins(pool, `Reply on ${ticketRow.ticket_number}`, `${senderName}: ${message.slice(0, 200)}`);
+    }
+  }
+
+  return rowToMessage(rows[0]);
+}
+
+async function updateTicketFields(pool, authUser, ticketNumber, fields) {
+  const ticketRow = await loadTicketByNumber(pool, ticketNumber);
+  if (!ticketRow) {
+    const err = new Error('Ticket not found.');
+    err.status = 404;
+    throw err;
+  }
+  if (authUser.role !== 'admin') {
+    const err = new Error('Forbidden.');
+    err.status = 403;
+    throw err;
+  }
+
+  const updates = [];
+  const params = [];
+  let i = 1;
+
+  if (fields.status != null) {
+    const status = normalizeStatus(fields.status);
+    if (!TICKET_STATUSES.includes(status)) {
+      const err = new Error('Invalid status.');
+      err.status = 400;
+      throw err;
+    }
+    updates.push(`status=$${i++}`);
+    params.push(status);
+    if (status === 'resolved') updates.push(`resolved_at=COALESCE(resolved_at, NOW())`);
+    if (status === 'closed') updates.push(`closed_at=COALESCE(closed_at, NOW())`);
+    await logActivity(pool, ticketRow.id, authUser, 'status_changed', ticketRow.status, status);
+    await notifyTicketUser(pool, ticketRow.user_id, `Ticket ${ticketRow.ticket_number} updated`, `Status: ${status}`);
+  }
+
+  if (fields.priority != null) {
+    const priority = normalizePriority(fields.priority);
+    updates.push(`priority=$${i++}`);
+    params.push(priority);
+    await logActivity(pool, ticketRow.id, authUser, 'priority_changed', ticketRow.priority, priority);
+  }
+
+  if (fields.assignedTo !== undefined) {
+    updates.push(`assigned_to=$${i++}`);
+    params.push(fields.assignedTo || null);
+    await logActivity(pool, ticketRow.id, authUser, 'assigned', ticketRow.assigned_to, fields.assignedTo || 'unassigned');
+  }
+
+  if (fields.reopen === true) {
+    updates.push(`status=$${i++}`);
+    params.push('open');
+    updates.push(`resolved_at=NULL`);
+    updates.push(`closed_at=NULL`);
+    await logActivity(pool, ticketRow.id, authUser, 'reopened', ticketRow.status, 'open');
+    await notifyTicketUser(pool, ticketRow.user_id, `Ticket ${ticketRow.ticket_number} reopened`, 'Your support ticket was reopened.');
+  }
+
+  if (!updates.length) {
+    return rowToTicket(ticketRow);
+  }
+
+  updates.push('updated_at=NOW()');
+  params.push(ticketNumber);
+  const { rows } = await pool.query(
+    `UPDATE support_tickets SET ${updates.join(', ')} WHERE ticket_number=$${i} RETURNING *`,
+    params
+  );
+  return rowToTicket(rows[0]);
+}
+
+async function loadFullTicket(pool, ticketRow, authUser) {
+  const includeInternal = authUser.role === 'admin';
+  const messages = await loadTicketMessages(pool, ticketRow.id, includeInternal);
+  const activity = includeInternal ? await loadTicketActivity(pool, ticketRow.id) : [];
+  const deliveries = includeInternal ? await loadTicketDeliveries(pool, ticketRow.id) : [];
+  return {
+    ticket: rowToTicket(ticketRow),
+    messages,
+    activity,
+    deliveries,
+    context: ticketRow.context,
+  };
+}
+
+export function registerSupportTicketRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite }) {
   app.post('/api/support/tickets', requireAuth, async (req, res) => {
     try {
       const result = await createSupportTicket(pool, req.authUser, req.body || {});
@@ -383,10 +732,7 @@ export function registerSupportTicketRoutes(app, { pool, requireAuth, requireAdm
       });
     } catch (e) {
       console.error('create support ticket:', e);
-      return res.status(e.status || 500).json({
-        ok: false,
-        message: e.message || 'Could not create support ticket.',
-      });
+      return res.status(e.status || 500).json({ ok: false, message: e.message || 'Could not create support ticket.' });
     }
   });
 
@@ -396,7 +742,12 @@ export function registerSupportTicketRoutes(app, { pool, requireAuth, requireAdm
         channel: 'help',
         subject: req.body?.subject,
         message: req.body?.message,
-        relatedJobId: req.body?.relatedJob,
+        category: req.body?.category,
+        priority: req.body?.priority,
+        relatedJobId: req.body?.relatedJob ?? req.body?.relatedJobId,
+        relatedPropertyId: req.body?.relatedPropertyId,
+        relatedQuoteId: req.body?.relatedQuoteId,
+        relatedInvoiceId: req.body?.relatedInvoiceId,
       });
       return res.json({
         ok: true,
@@ -414,9 +765,21 @@ export function registerSupportTicketRoutes(app, { pool, requireAuth, requireAdm
 
   app.get('/api/support/tickets', requireAuth, async (req, res) => {
     try {
+      const statusFilter = typeof req.query?.status === 'string' ? req.query.status.trim() : '';
+      const params = [req.authUser.id];
+      let where = 'WHERE user_id=$1';
+      if (statusFilter && statusFilter !== 'all') {
+        if (statusFilter === 'open') {
+          where += ` AND status NOT IN ('resolved','closed')`;
+        } else if (statusFilter === 'resolved') {
+          where += ` AND status='resolved'`;
+        } else if (statusFilter === 'closed') {
+          where += ` AND status='closed'`;
+        }
+      }
       const { rows } = await pool.query(
-        `SELECT * FROM support_tickets WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50`,
-        [req.authUser.id]
+        `SELECT * FROM support_tickets ${where} ORDER BY updated_at DESC, created_at DESC LIMIT 50`,
+        params
       );
       return res.json({ ok: true, tickets: rows.map(rowToTicket) });
     } catch (e) {
@@ -428,33 +791,64 @@ export function registerSupportTicketRoutes(app, { pool, requireAuth, requireAdm
   app.get('/api/support/tickets/:ticketNumber', requireAuth, async (req, res) => {
     try {
       const ticketNumber = String(req.params.ticketNumber || '').trim();
-      const { rows } = await pool.query(
-        `SELECT * FROM support_tickets WHERE ticket_number=$1 AND user_id=$2`,
-        [ticketNumber, req.authUser.id]
-      );
-      if (!rows[0]) {
+      const ticketRow = await loadTicketByNumber(pool, ticketNumber);
+      if (!ticketRow || !(await canAccessTicket(pool, req.authUser, ticketRow))) {
         return res.status(404).json({ ok: false, message: 'Ticket not found.' });
       }
-      const ticket = rowToTicket(rows[0]);
-      const deliveries = await loadTicketDeliveries(pool, ticket.id);
-      return res.json({ ok: true, ticket, deliveries, context: ticket.context });
+      const full = await loadFullTicket(pool, ticketRow, req.authUser);
+      return res.json({ ok: true, ...full });
     } catch (e) {
       console.error('get support ticket:', e);
       return res.status(500).json({ ok: false, message: 'Could not load ticket.' });
     }
   });
 
+  app.post('/api/support/tickets/:ticketNumber/reply', requireAuth, async (req, res) => {
+    try {
+      const ticketNumber = String(req.params.ticketNumber || '').trim();
+      const msg = await addTicketReply(pool, req.authUser, ticketNumber, req.body?.message, false);
+      return res.json({ ok: true, message: msg });
+    } catch (e) {
+      console.error('ticket reply:', e);
+      return res.status(e.status || 500).json({ ok: false, message: e.message || 'Could not send reply.' });
+    }
+  });
+
   app.get('/api/admin/support/tickets', requireAuth, requireAdmin, async (req, res) => {
     try {
       const status = typeof req.query?.status === 'string' ? req.query.status.trim() : '';
+      const q = typeof req.query?.q === 'string' ? req.query.q.trim() : '';
       const params = [];
-      let where = '';
+      const clauses = [];
+
       if (status && status !== 'all') {
-        params.push(status);
-        where = `WHERE status=$1`;
+        if (status === 'open') {
+          clauses.push(`status NOT IN ('resolved','closed')`);
+        } else if (status === 'urgent') {
+          clauses.push(`priority='urgent'`);
+        } else if (status === 'waiting') {
+          clauses.push(`status LIKE 'waiting_%'`);
+        } else {
+          params.push(status);
+          clauses.push(`status=$${params.length}`);
+        }
       }
+
+      if (q) {
+        params.push(`%${q}%`);
+        const p = `$${params.length}`;
+        clauses.push(`(
+          ticket_number ILIKE ${p} OR subject ILIKE ${p} OR user_name ILIKE ${p}
+          OR user_email ILIKE ${p} OR user_phone ILIKE ${p}
+          OR CAST(related_job_id AS TEXT) ILIKE ${p}
+          OR CAST(related_quote_id AS TEXT) ILIKE ${p}
+          OR CAST(related_invoice_id AS TEXT) ILIKE ${p}
+        )`);
+      }
+
+      const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
       const { rows } = await pool.query(
-        `SELECT * FROM support_tickets ${where} ORDER BY created_at DESC LIMIT 100`,
+        `SELECT * FROM support_tickets ${where} ORDER BY updated_at DESC, created_at DESC LIMIT 200`,
         params
       );
       return res.json({ ok: true, tickets: rows.map(rowToTicket) });
@@ -467,38 +861,38 @@ export function registerSupportTicketRoutes(app, { pool, requireAuth, requireAdm
   app.get('/api/admin/support/tickets/:ticketNumber', requireAuth, requireAdmin, async (req, res) => {
     try {
       const ticketNumber = String(req.params.ticketNumber || '').trim();
-      const { rows } = await pool.query(`SELECT * FROM support_tickets WHERE ticket_number=$1`, [ticketNumber]);
-      if (!rows[0]) {
+      const ticketRow = await loadTicketByNumber(pool, ticketNumber);
+      if (!ticketRow) {
         return res.status(404).json({ ok: false, message: 'Ticket not found.' });
       }
-      const ticket = rowToTicket(rows[0]);
-      const deliveries = await loadTicketDeliveries(pool, ticket.id);
-      return res.json({ ok: true, ticket, deliveries, context: ticket.context });
+      const full = await loadFullTicket(pool, ticketRow, req.authUser);
+      return res.json({ ok: true, ...full });
     } catch (e) {
       console.error('admin get support ticket:', e);
       return res.status(500).json({ ok: false, message: 'Could not load ticket.' });
     }
   });
 
-  app.patch('/api/admin/support/tickets/:ticketNumber', requireAuth, requireAdmin, async (req, res) => {
+  app.patch('/api/admin/support/tickets/:ticketNumber', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const ticketNumber = String(req.params.ticketNumber || '').trim();
-      const status = typeof req.body?.status === 'string' ? req.body.status.trim() : '';
-      if (!['open', 'in_progress', 'resolved', 'closed'].includes(status)) {
-        return res.status(400).json({ ok: false, message: 'Invalid status.' });
-      }
-      const { rows } = await pool.query(
-        `UPDATE support_tickets SET status=$1, updated_at=NOW()
-         WHERE ticket_number=$2 RETURNING *`,
-        [status, ticketNumber]
-      );
-      if (!rows[0]) {
-        return res.status(404).json({ ok: false, message: 'Ticket not found.' });
-      }
-      return res.json({ ok: true, ticket: rowToTicket(rows[0]) });
+      const ticket = await updateTicketFields(pool, req.authUser, ticketNumber, req.body || {});
+      return res.json({ ok: true, ticket });
     } catch (e) {
       console.error('admin update support ticket:', e);
-      return res.status(500).json({ ok: false, message: 'Could not update ticket.' });
+      return res.status(e.status || 500).json({ ok: false, message: e.message || 'Could not update ticket.' });
+    }
+  });
+
+  app.post('/api/admin/support/tickets/:ticketNumber/reply', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    try {
+      const ticketNumber = String(req.params.ticketNumber || '').trim();
+      const isInternal = Boolean(req.body?.internal);
+      const msg = await addTicketReply(pool, req.authUser, ticketNumber, req.body?.message, isInternal);
+      return res.json({ ok: true, message: msg });
+    } catch (e) {
+      console.error('admin ticket reply:', e);
+      return res.status(e.status || 500).json({ ok: false, message: e.message || 'Could not send reply.' });
     }
   });
 }

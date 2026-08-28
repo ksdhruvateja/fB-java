@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   LayoutDashboard, Bell, Briefcase, CalendarDays, MessageSquare, Wrench, MapPin,
-  Users, DollarSign, CreditCard, BarChart3, Star, Shield, FileText, Settings,
-  HelpCircle, LogOut, Menu, Moon, Sun, X, Loader2, User,
+  Users, DollarSign, CreditCard, BarChart3, Shield, FileText, Settings,
+  HelpCircle, LogOut, Menu, Moon, Sun, X, Loader2, User, Gift,
 } from "lucide-react";
 import type { AuthUser } from "./auth";
-import { BrandLogo } from "./BrandLogo";
+import AppLogo from "./AppLogo";
+import AppBackButton from "./AppBackButton";
+import { type ContractorNavFrame } from "./navigation";
+import { useDashboardNavigation } from "./useDashboardNavigation";
 import {
   formatMoney,
   formatCents,
@@ -42,8 +45,10 @@ import ContractorServiceAreasPanel from "./ContractorServiceAreasPanel";
 import ContractorTeamPanel from "./ContractorTeamPanel";
 import ContractorPricingPanel from "./ContractorPricingPanel";
 import ContractorPayoutsPanel from "./ContractorPayoutsPanel";
+import ContractorReferEarn from "./ContractorReferEarn";
 import ContractorPerformancePanel from "./ContractorPerformancePanel";
-import ContractorReviewsSection from "./ContractorReviewsSection";
+import ContractorSupportPanel from "./ContractorSupportPanel";
+import ContractorStripeConnectCard from "./ContractorStripeConnectCard";
 import ContractorExpiryAlert from "./ContractorExpiryAlert";
 import {
   evaluateCredentialExpiry,
@@ -64,8 +69,8 @@ type DashTab =
   | "team"
   | "pricing"
   | "payouts"
+  | "refer-earn"
   | "performance"
-  | "reviews"
   | "compliance"
   | "documents"
   | "settings"
@@ -90,14 +95,12 @@ const NAV_GROUPS: { label: string; items: { id: DashTab; label: string; icon: Re
       { id: "team", label: "Team", icon: Users },
       { id: "pricing", label: "Pricing & Rates", icon: DollarSign },
       { id: "payouts", label: "Payouts", icon: CreditCard },
+      { id: "refer-earn", label: "Refer & Earn", icon: Gift },
     ],
   },
   {
     label: "Performance",
-    items: [
-      { id: "performance", label: "Performance", icon: BarChart3 },
-      { id: "reviews", label: "Reviews", icon: Star },
-    ],
+    items: [{ id: "performance", label: "Performance & Reviews", icon: BarChart3 }],
   },
   {
     label: "Compliance",
@@ -180,6 +183,34 @@ export default function ContractorDashboard({
   const [exclusions, setExclusions] = useState("Hidden damage, permits not included");
   const [expiryAlertOpen, setExpiryAlertOpen] = useState(false);
   const expiryDismissKey = `fixbridge-expiry-dismiss-${user.id}`;
+
+  const applyNavFrame = useCallback((f: ContractorNavFrame) => {
+    setTab(f.tab as DashTab);
+    setMobileNav(false);
+  }, []);
+
+  const navFrame = useMemo(
+    (): ContractorNavFrame => ({
+      role: "contractor",
+      tab,
+    }),
+    [tab]
+  );
+
+  const { goHome, goBack, canBack, navigateTo } = useDashboardNavigation(
+    "contractor",
+    "contractor-dashboard",
+    navFrame,
+    applyNavFrame
+  );
+
+  const handleMobileBack = () => {
+    if (mobileNav) {
+      setMobileNav(false);
+      return;
+    }
+    goBack();
+  };
 
   const expiryAlerts = useMemo(() => getContractorExpiryAlerts(user), [user]);
   const licenseStatus = useMemo(
@@ -312,6 +343,8 @@ export default function ContractorDashboard({
         gender: editGender.trim() || undefined,
         dob: editDob.trim() || undefined,
         contractorApplication: app,
+        addressVerified: app.addressVerified === true,
+        postalCodePlus4: app.postalCodePlus4 || null,
       };
       if (editPhotoDataUrl) payload.photoDataUrl = editPhotoDataUrl;
       else if (user.photoDataUrl && editPhotoDataUrl === null) payload.photoDataUrl = null;
@@ -400,18 +433,18 @@ export default function ContractorDashboard({
     const params = new URLSearchParams(window.location.search);
     const stripe = params.get("stripe");
     if (stripe === "return") {
-      setTab("payouts");
-      setPayoutSubTab("account");
-      setStripeReturnMessage("Payout account updated. Your deposit details are synced from Stripe.");
+      setTab("compliance");
+      setStripeReturnMessage("Stripe payout setup saved. Refresh below if your status has not updated yet.");
       params.delete("stripe");
       const next = params.toString();
       window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}`);
       void refresh();
     } else if (stripe === "refresh") {
-      setTab("payouts");
-      setPayoutSubTab("account");
+      setTab("compliance");
+      setStripeReturnMessage(null);
       params.delete("stripe");
       window.history.replaceState({}, "", window.location.pathname);
+      void refresh();
     }
   }, []);
 
@@ -464,9 +497,11 @@ export default function ContractorDashboard({
     }
   }
 
-  const go = (id: DashTab) => {
-    setTab(id);
-    setMobileNav(false);
+  const go = (id: DashTab | "reviews") => {
+    navigateTo({
+      role: "contractor",
+      tab: id === "reviews" ? "performance" : id,
+    });
   };
 
   const goToPayoutAccount = () => {
@@ -512,9 +547,14 @@ export default function ContractorDashboard({
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-background/95 px-4 py-3 backdrop-blur lg:hidden">
-        <div className="flex items-center gap-2.5">
-          <BrandLogo variant="auth" tone="auto" />
-          <p className="text-[10px] text-muted-foreground">Contractor</p>
+        <div className="flex min-w-0 items-center gap-1">
+          {(canBack || mobileNav) && (
+            <AppBackButton onBack={handleMobileBack} className="-ml-1 shrink-0" />
+          )}
+          <div className="min-w-0">
+            <AppLogo onHome={goHome} variant="auth" />
+            <p className="text-[10px] text-muted-foreground">Contractor</p>
+          </div>
         </div>
         <div className="flex items-center gap-1">
           <button type="button" onClick={onToggleDark} className="rounded-md p-2 hover:bg-muted" aria-label="Theme">
@@ -531,7 +571,7 @@ export default function ContractorDashboard({
           <button type="button" className="absolute inset-0 bg-black/40" aria-label="Close" onClick={() => setMobileNav(false)} />
           <aside className="absolute inset-y-0 left-0 flex w-72 flex-col border-r border-border bg-background shadow-xl">
             <div className="border-b border-border px-4 py-4">
-              <BrandLogo variant="auth" tone="auto" className="mb-1" />
+              <AppLogo onHome={goHome} variant="auth" className="mb-1" />
               <p className="text-xs text-muted-foreground">{companyName}</p>
             </div>
             <div className="flex-1 overflow-y-auto">{sidebarNav}</div>
@@ -547,7 +587,7 @@ export default function ContractorDashboard({
       <div className="lg:flex lg:min-h-screen">
         <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-card lg:flex">
           <div className="border-b border-border px-4 py-4">
-            <BrandLogo variant="auth" tone="auto" className="mb-1" />
+            <AppLogo onHome={goHome} variant="auth" className="mb-1" />
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Contractor</p>
             <p className="mt-0.5 text-sm font-semibold truncate">{companyName}</p>
           </div>
@@ -574,7 +614,6 @@ export default function ContractorDashboard({
               invites={invites}
               jobs={jobs}
               monthEarnings={monthEarnings}
-              rating={4.8}
               onOpenInvites={() => go("invites")}
               onOpenJobs={() => go("jobs")}
               onOpenCompliance={() => go("compliance")}
@@ -725,15 +764,10 @@ export default function ContractorDashboard({
             />
           )}
 
-          {tab === "performance" && (
-            <ContractorPerformancePanel jobs={jobs} invites={invites} rating={4.8} />
-          )}
+          {tab === "refer-earn" && <ContractorReferEarn />}
 
-          {tab === "reviews" && (
-            <section className="mx-auto max-w-3xl space-y-4">
-              <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase">Reviews</h1>
-              <ContractorReviewsSection />
-            </section>
+          {tab === "performance" && (
+            <ContractorPerformancePanel jobs={jobs} invites={invites} />
           )}
 
           {tab === "documents" && (
@@ -851,9 +885,7 @@ export default function ContractorDashboard({
               </div>
             </section>
           )}
-          {tab === "help" && (
-            <Stub title="Help & Support" body="Email support@fixbridge.app or use Compliance → Stripe Connect if payouts need setup. For job issues, open the Job Workspace and contact dispatch." />
-          )}
+          {tab === "help" && <ContractorSupportPanel user={user} />}
 
           {tab === "compliance" && (
             <section className="mx-auto max-w-3xl space-y-4">
@@ -875,6 +907,13 @@ export default function ContractorDashboard({
                   </ul>
                 </div>
               )}
+
+              <ContractorStripeConnectCard
+                account={payoutAccount}
+                onRefresh={refresh}
+                stripeReturnMessage={stripeReturnMessage}
+              />
+
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
@@ -966,10 +1005,7 @@ export default function ContractorDashboard({
                   Accept agreement & submit for review
                 </button>
                 <button type="button" disabled={busy} className="rounded-xl border border-border px-3 py-2" onClick={goToPayoutAccount}>
-                  Set up payout account
-                </button>
-                <button type="button" disabled={busy} className="ml-2 rounded-xl bg-primary px-3 py-2 text-white" onClick={goToPayoutAccount}>
-                  Manage deposit accounts
+                  View full payout account details
                 </button>
               </div>
             </section>

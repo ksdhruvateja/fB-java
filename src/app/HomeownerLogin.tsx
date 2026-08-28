@@ -17,8 +17,7 @@ import {
   Home,
   Zap,
 } from "lucide-react";
-import { GoogleLogin, type CredentialResponse } from "@react-oauth/google";
-import { signInUser, signUpUser, signInWithGoogle, createPublicGuestJob, type AuthUser } from "./auth";
+import { signInUser, signUpUser, createPublicGuestJob, type AuthUser } from "./auth";
 import ForgotPasswordModal from "./ForgotPasswordModal";
 import {
   AuthShell,
@@ -42,8 +41,6 @@ import {
 import { isValidUsZip, normalizeZip, zipInputProps } from "./zipCode";
 
 type ReportStep = 0 | 1 | 2 | 3;
-
-const GOOGLE_ENABLED = Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID);
 
 const REPORT_STEPS = [
   { id: 0, label: "Area", hint: "Where?" },
@@ -86,27 +83,6 @@ export default function HomeownerLogin({
   const [mediaDataUrl, setMediaDataUrl] = useState<string | null>(null);
   const [mediaType, setMediaType] = useState<string | null>(null);
   const [mediaName, setMediaName] = useState("");
-
-  const handleGoogleSuccess = async (response: CredentialResponse) => {
-    if (!response.credential) {
-      setError("Google sign-in failed. Please try again.");
-      return;
-    }
-    setLoading(true);
-    setError("");
-    try {
-      const result = await signInWithGoogle(response.credential, "homeowner");
-      setLoading(false);
-      if (!result.ok) {
-        setError(result.message);
-        return;
-      }
-      onLogin(result.user);
-    } catch {
-      setLoading(false);
-      setError("Google sign-in failed. Please try again.");
-    }
-  };
 
   const filteredAreas = useMemo(
     () =>
@@ -379,36 +355,6 @@ export default function HomeownerLogin({
                       aria-label={`Go to ${s.label}`}
                     />
                   ))}
-                </div>
-              </div>
-            )}
-
-            {(tab === "login" || tab === "signup") && (
-              <div className="mt-5">
-                {GOOGLE_ENABLED ? (
-                  <div className="flex justify-center">
-                    <GoogleLogin
-                      onSuccess={handleGoogleSuccess}
-                      onError={() => setError("Google sign-in failed. Please try again.")}
-                      text="continue_with"
-                      shape="pill"
-                      theme="outline"
-                      size="large"
-                      width="380"
-                    />
-                  </div>
-                ) : (
-                  <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-4 py-3 text-center dark:border-border dark:bg-muted/40">
-                    <p className="text-sm font-medium">Continue with Google</p>
-                    <p className="mt-1 text-[10px] text-muted-foreground">Available when Google Sign-In is configured</p>
-                  </div>
-                )}
-                <div className="mt-4 flex items-center gap-3">
-                  <div className="h-px flex-1 bg-neutral-200 dark:bg-border" />
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 dark:text-muted-foreground">
-                    or email
-                  </span>
-                  <div className="h-px flex-1 bg-neutral-200 dark:bg-border" />
                 </div>
               </div>
             )}
@@ -754,13 +700,13 @@ export default function HomeownerLogin({
 
             <div className="mt-6 flex flex-wrap justify-center gap-4 border-t border-neutral-100 pt-5 text-xs text-neutral-500 lg:hidden dark:border-border dark:text-muted-foreground">
               <span className="inline-flex items-center gap-1.5">
-                <ShieldCheck size={14} className="text-emerald-600" /> Verified pros
+                <ShieldCheck size={14} className="text-emerald-600" /> Verified professionals
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <Lock size={14} /> Secure
+                <Lock size={14} /> Secure payments
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <Star size={14} className="fill-amber-400 text-amber-400" /> 4.8 rating
+                Local service coverage
               </span>
             </div>
 

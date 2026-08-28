@@ -1,4 +1,5 @@
 export type UserRole = "homeowner" | "contractor" | "admin";
+export type ResetRole = UserRole | "partner";
 
 export type AuthUser = {
   id?: string | number;
@@ -32,6 +33,9 @@ export type AuthUser = {
   photoDataUrl?: string;
   phone?: string;
   address?: string;
+  addressVerified?: boolean;
+  postalCodePlus4?: string | null;
+  addressVerificationProvider?: string | null;
   contactEmail?: string;
   companyName?: string;
   companyDetails?: string;
@@ -57,6 +61,7 @@ export type AuthUser = {
   gender?: string | null;
   dob?: string | null;
   referralCode?: string | null;
+  referredByCode?: string | null;
 };
 
 // ── Session storage keys ──────────────────────────────────────────────────────
@@ -193,7 +198,10 @@ export async function signInUser(
   role: UserRole,
   email: string,
   password: string,
-): Promise<{ ok: true; user: AuthUser } | { ok: false; message: string }> {
+): Promise<
+  | { ok: true; user: AuthUser; mfaRequired?: boolean }
+  | { ok: false; message: string }
+> {
   try {
     const res = await fetch("/api/auth/signin", {
       method: "POST",
@@ -202,74 +210,16 @@ export async function signInUser(
     });
     const data = await res.json();
     if (!data.ok) return { ok: false, message: data.message };
+    // Admin MFA-pending tokens are stored so MFA start/verify can authenticate,
+    // but they cannot call requireAdmin APIs until MFA completes.
     storeSession(data.token, data.user);
-    return { ok: true, user: data.user };
+    return {
+      ok: true,
+      user: data.user,
+      mfaRequired: data.mfaRequired === true || role === "admin",
+    };
   } catch {
     return { ok: false, message: "Network error. Please check your connection and try again." };
-  }
-}
-
-// ── Google OAuth sign-in ──────────────────────────────────────────────────────
-
-export async function signInWithGoogle(
-  credential: string,
-  role: UserRole,
-): Promise<{ ok: true; user: AuthUser } | { ok: false; message: string }> {
-  try {
-    const data = await post<{ ok: boolean; token?: string; user?: AuthUser; message?: string }>(
-      "/api/auth/google",
-      { credential, role },
-    );
-    if (!data.ok || !data.token || !data.user) {
-      return { ok: false, message: data.message ?? "Google sign-in failed." };
-    }
-    storeSession(data.token, data.user);
-    return { ok: true, user: data.user };
-  } catch {
-    return { ok: false, message: "Network error. Please try again." };
-  }
-}
-
-// ── Sign in with Apple ────────────────────────────────────────────────────────
-
-export async function signInWithApple(
-  idToken: string,
-  role: UserRole,
-  user?: { email?: string; name?: { firstName?: string; lastName?: string } },
-): Promise<{ ok: true; user: AuthUser } | { ok: false; message: string }> {
-  try {
-    const data = await post<{ ok: boolean; token?: string; user?: AuthUser; message?: string }>(
-      "/api/auth/apple",
-      { idToken, role, user },
-    );
-    if (!data.ok || !data.token || !data.user) {
-      return { ok: false, message: data.message ?? "Apple sign-in failed." };
-    }
-    storeSession(data.token, data.user);
-    return { ok: true, user: data.user };
-  } catch {
-    return { ok: false, message: "Network error. Please try again." };
-  }
-}
-
-// ── Auth0 sign-in ─────────────────────────────────────────────────────────────
-
-export async function signInWithAuth0(
-  accessToken: string,
-  role: UserRole,
-): Promise<{ ok: true; user: AuthUser } | { ok: false; message: string }> {
-  try {
-    const data = await post<{ ok: boolean; token?: string; user?: AuthUser; message?: string }>(
-      "/api/auth/auth0",
-      { accessToken, role },
-    );
-    if (!data.ok || !data.token || !data.user) {
-      return { ok: false, message: data.message ?? "Auth0 sign-in failed." };
-    }
-    storeSession(data.token, data.user);
-    return { ok: true, user: data.user };
-  } catch {
-    return { ok: false, message: "Network error. Please try again." };
   }
 }
 
@@ -302,16 +252,16 @@ export async function updateUserProfile(
 
 export async function forgotPassword(
   email: string,
-  role: UserRole,
+  role: ResetRole,
 ): Promise<{ ok: boolean; message?: string }> {
   return post("/api/auth/forgot-password", { email, role });
 }
 
 export async function resetPassword(
   token: string,
-  role: UserRole,
+  role: ResetRole,
   password: string,
-): Promise<{ ok: boolean; message?: string }> {
+): Promise<{ ok: boolean; message?: string; code?: string }> {
   return post("/api/auth/reset-password", { token, role, password });
 }
 
@@ -385,8 +335,15 @@ export async function loadAllUsers(): Promise<AuthUser[]> {
 
 // ── Demo credentials (shown in UI login hints) ────────────────────────────────
 
-/** Sync helper — returns a plausible demo user object for pre-filling login forms. */
+/** Sync helper — returns demo login hints only in non-production dev builds. */
 export function getDemoUser(role: UserRole): AuthUser {
+  const demoEnabled =
+    import.meta.env.DEV ||
+    import.meta.env.VITE_ENABLE_DEMO_HINTS === "true" ||
+    import.meta.env.VITE_ENABLE_DEMO_USERS === "true";
+  if (!demoEnabled) {
+    return { role, name: "", email: "", password: "" };
+  }
   if (role === "homeowner") {
     return { role, name: "Maria Santos", email: "maria@example.com", password: "demo123" };
   }
@@ -394,7 +351,7 @@ export function getDemoUser(role: UserRole): AuthUser {
     return {
       role: "admin",
       name: "Ops Admin",
-      email: "admin@fixbridge.local",
+      email: "ksdt2702@gmail.com",
       password: "admin123",
       isAdmin: true,
     };

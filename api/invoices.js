@@ -1,5 +1,10 @@
 import { brand } from './brand.js';
 import { applyDiscountToAmount } from './discounts.js';
+import {
+  formatAddressLines,
+  structuredFromProperty,
+  normalizeBillToAddress,
+} from './address-format.js';
 
 function parseJson(val, fallback = null) {
   if (val == null) return fallback;
@@ -108,12 +113,18 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
     .reduce((s, p) => s + Number(p.amount || 0), 0);
   const amountDue = Math.max(0, Math.round((subtotal - paid) * 100) / 100);
 
-  const billTo = {
+  let propertyAddr = null;
+  if (job.property_id) {
+    const { rows: propRows } = await pool.query(`SELECT * FROM properties WHERE id=$1`, [job.property_id]);
+    if (propRows[0]) propertyAddr = structuredFromProperty(propRows[0]);
+  }
+  const billTo = normalizeBillToAddress({
     name: job.contact_name || homeowner?.name || 'Homeowner',
     email: homeowner?.email || homeowner?.contact_email || null,
     phone: job.contact_phone || homeowner?.phone || null,
+    ...(propertyAddr || {}),
     address: job.full_address || job.city_state_zip || null,
-  };
+  });
 
   return {
     ok: true,
@@ -178,7 +189,9 @@ export function renderInvoiceHtml(invoice) {
     <p style="margin:0;font-weight:600;">${escapeHtml(invoice.billTo.name)}</p>
     ${invoice.billTo.email ? `<p style="margin:4px 0 0;color:#444;">${escapeHtml(invoice.billTo.email)}</p>` : ''}
     ${invoice.billTo.phone ? `<p style="margin:4px 0 0;color:#444;">${escapeHtml(invoice.billTo.phone)}</p>` : ''}
-    ${invoice.billTo.address ? `<p style="margin:4px 0 0;color:#444;">${escapeHtml(invoice.billTo.address)}</p>` : ''}
+    ${formatAddressLines(invoice.billTo)
+      .map((line) => `<p style="margin:4px 0 0;color:#444;">${escapeHtml(line)}</p>`)
+      .join('')}
   </div>
   <table style="width:100%;border-collapse:collapse;font-size:14px;">
     <thead><tr>
@@ -215,7 +228,7 @@ Date: ${new Date(invoice.issuedAt).toLocaleDateString()}
 Bill to: ${invoice.billTo.name}
 ${invoice.billTo.email || ''}
 ${invoice.billTo.phone || ''}
-${invoice.billTo.address || ''}
+${formatAddressLines(invoice.billTo).join('\n') || invoice.billTo.address || ''}
 
 Line items:
 ${items}

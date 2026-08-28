@@ -138,7 +138,8 @@ export function legacyAccessToPreset(level) {
   if (l === 'read') return 'read_only';
   if (l === 'write') return 'operations_admin';
   if (VALID_ROLE_PRESETS.includes(l)) return l;
-  return 'super_admin';
+  // P0-9: never escalate unset/legacy presets to super_admin
+  return 'operations_admin';
 }
 
 export function resolveAdminPreset(authUser) {

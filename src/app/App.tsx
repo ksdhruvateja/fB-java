@@ -14,9 +14,32 @@ import PartnerPortal from "./PartnerPortal";
 import ResetPassword from "./ResetPassword";
 import GoProPublicPage from "./GoProPublicPage";
 import SubscriptionSuccessModal from "./SubscriptionSuccessModal";
-import { getStoredUser, validateToken, clearSession, loadAllUsers, saveSession, type AuthUser, type UserRole } from "./auth";
+import SubscriptionCancelModal from "./SubscriptionCancelModal";
+import { getStoredUser, validateToken, clearSession, loadAllUsers, saveSession, type AuthUser, type UserRole, type ResetRole } from "./auth";
 import { brand } from "../config/brand";
 import { BrandLogo } from "./BrandLogo";
+import {
+  type AppHistoryState,
+  type AppPage,
+  clearNavFrames,
+  DASHBOARD_PAGES,
+  LOGIN_PAGES,
+  pushAppHistory,
+  replaceAppHistory,
+  roleHomeFrame,
+  roleHomePage,
+} from "./navigation";
+
+function isResetRole(role: string | null): role is ResetRole {
+  return role === "homeowner" || role === "contractor" || role === "admin" || role === "partner";
+}
+
+function loginPageForResetRole(role: ResetRole): Page {
+  if (role === "homeowner") return "homeowner-login";
+  if (role === "contractor") return "contractor-login";
+  if (role === "admin") return "admin-login";
+  return "partner";
+}
 
 type Page =
   | "home"
@@ -132,110 +155,131 @@ function Nav({
   const active = overHero ? "text-white" : "text-foreground";
   const border = overHero ? "border-white/30" : "border-border";
 
+  const navSolid = scrolled || menuOpen;
+
   return (
     <nav
       className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 pt-[env(safe-area-inset-top)] ${
-        scrolled || menuOpen
-          ? "bg-background/95 backdrop-blur-md border-b border-border shadow-sm"
+        navSolid
+          ? "border-b border-border bg-background/98 shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-lg dark:shadow-[0_4px_24px_rgba(0,0,0,0.35)]"
           : "bg-transparent"
       }`}
     >
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2.5 sm:py-3.5 flex items-center justify-between gap-3 min-h-[3.25rem]">
-        {/* Logo */}
+      <div className="relative w-full px-5 sm:px-6 lg:px-10 xl:px-12 2xl:px-16 py-2.5 sm:py-3.5 min-h-[3.25rem] flex items-center">
+        {/* Logo — padded backdrop for contrast on hero and when scrolled */}
         <button
           onClick={() => onNavigate("home")}
-          className="flex items-center shrink-0 min-w-0"
+          className={`relative z-10 flex shrink-0 items-center min-w-0 rounded-lg transition-all duration-300 ${
+            navSolid
+              ? "border border-border/80 bg-card px-2.5 py-1.5 shadow-sm"
+              : "border border-white/15 bg-black/45 px-2.5 py-1.5 shadow-[0_4px_20px_rgba(0,0,0,0.25)] backdrop-blur-md"
+          }`}
           aria-label={brand.productName}
         >
-          <BrandLogo variant="nav" tone={overHero || isDark ? "white" : "black"} />
+          <BrandLogo variant="nav" />
         </button>
 
-        {/* Desktop links */}
-        <div className="hidden md:flex items-center gap-1">
-          <button
-            onClick={() => onNavigate("home")}
-            className={`relative px-4 py-2 text-sm font-medium transition-colors ${
-              page === "home" ? active : muted
-            }`}
-          >
-            For Homeowners
-            {page === "home" && (
-              <span className={`absolute bottom-0 left-4 right-4 h-0.5 ${overHero ? "bg-white" : "bg-primary"}`} />
-            )}
-          </button>
-          <button
-            onClick={() => onNavigate("contractors")}
-            className={`relative px-4 py-2 text-sm font-medium transition-colors ${
-              page === "contractors" ? active : muted
-            }`}
-          >
-            For Contractors
-            {page === "contractors" && (
-              <span className={`absolute bottom-0 left-4 right-4 h-0.5 ${overHero ? "bg-white" : "bg-primary"}`} />
-            )}
-          </button>
-          <button
-            onClick={() => onNavigate("about")}
-            className={`relative px-4 py-2 text-sm font-medium transition-colors ${
-              page === "about" ? active : muted
-            }`}
-          >
-            About
-            {page === "about" && (
-              <span className={`absolute bottom-0 left-4 right-4 h-0.5 ${overHero ? "bg-white" : "bg-primary"}`} />
-            )}
-          </button>
+        {/* Desktop center links — truly centered in the viewport */}
+        <div className="pointer-events-none absolute inset-x-0 top-1/2 hidden -translate-y-1/2 justify-center lg:flex">
+          <div className="pointer-events-auto flex items-center gap-1">
+            <button
+              onClick={() => onNavigate("home")}
+              className={`relative px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+                page === "home" ? active : muted
+              }`}
+            >
+              For Homeowners
+              {page === "home" && (
+                <span className={`absolute bottom-0 left-4 right-4 h-0.5 ${overHero ? "bg-white" : "bg-primary"}`} />
+              )}
+            </button>
+            <button
+              onClick={() => onNavigate("contractors")}
+              className={`relative px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+                page === "contractors" ? active : muted
+              }`}
+            >
+              For Contractors
+              {page === "contractors" && (
+                <span className={`absolute bottom-0 left-4 right-4 h-0.5 ${overHero ? "bg-white" : "bg-primary"}`} />
+              )}
+            </button>
+            <button
+              onClick={() => onNavigate("about")}
+              className={`relative px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+                page === "about" ? active : muted
+              }`}
+            >
+              About
+              {page === "about" && (
+                <span className={`absolute bottom-0 left-4 right-4 h-0.5 ${overHero ? "bg-white" : "bg-primary"}`} />
+              )}
+            </button>
+          </div>
         </div>
 
-        {/* Desktop actions */}
-        <div className="hidden md:flex items-center gap-3">
-          <button
-            onClick={onToggleDark}
-            className={`w-9 h-9 flex items-center justify-center border transition-colors ${border} ${muted}`}
-            aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-          >
-            {isDark ? <Sun size={15} /> : <Moon size={15} />}
-          </button>
+        {/* Right actions — flush right within page gutters */}
+        <div className="relative z-10 ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
+          <div className="hidden md:flex items-center gap-3">
+            <button
+              onClick={onToggleDark}
+              className={`w-9 h-9 flex items-center justify-center border transition-colors ${border} ${muted}`}
+              aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {isDark ? <Sun size={15} /> : <Moon size={15} />}
+            </button>
 
-          {/* Sign in — context-aware */}
-          <button
-            onClick={() =>
-              marketingContext === "contractors"
-                ? onNavigate("contractor-login")
-                : onNavigate("homeowner-login")
-            }
-            className={`text-sm transition-colors ${muted}`}
-          >
-            Sign In
-          </button>
+            <button
+              onClick={() =>
+                marketingContext === "contractors"
+                  ? onNavigate("contractor-login")
+                  : onNavigate("homeowner-login")
+              }
+              className={`text-sm font-medium transition-colors whitespace-nowrap ${muted}`}
+            >
+              Sign In
+            </button>
 
-          <button
-            onClick={() =>
-              marketingContext === "contractors"
-                ? onNavigate("contractor-login")
-                : onNavigate("homeowner-login")
-            }
-            className={`text-sm px-4 py-2 transition-colors font-medium ${
-              overHero
-                ? "bg-white text-black hover:bg-white/90"
-                : "bg-primary text-white hover:bg-primary/90"
-            }`}
-          >
-            {marketingContext === "contractors" ? "Apply Now" : "Post a Repair"}
-          </button>
-        </div>
+            <button
+              onClick={() =>
+                marketingContext === "contractors"
+                  ? onNavigate("contractor-login")
+                  : onNavigate("homeowner-login")
+              }
+              className={`text-sm px-4 py-2 transition-colors font-medium whitespace-nowrap ${
+                overHero
+                  ? "bg-white text-black hover:bg-white/90"
+                  : "bg-primary text-white hover:bg-primary/90"
+              }`}
+            >
+              {marketingContext === "contractors" ? "Apply Now" : "Post a Repair"}
+            </button>
+          </div>
 
-        {/* Mobile */}
-        <div className="md:hidden flex items-center gap-2">
+          {/* Mobile menu (below md) */}
+          <div className="flex md:hidden items-center gap-2">
+            <button
+              onClick={onToggleDark}
+              className={`w-9 h-9 flex items-center justify-center border ${border} ${muted}`}
+              aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {isDark ? <Sun size={14} /> : <Moon size={14} />}
+            </button>
+            <button
+              className={`w-9 h-9 flex items-center justify-center ${ink}`}
+              onClick={() => setMenuOpen(!menuOpen)}
+              aria-label={menuOpen ? "Close menu" : "Open menu"}
+            >
+              {menuOpen ? <X size={20} /> : <Menu size={20} />}
+            </button>
+          </div>
+
+          {/* Tablet: page links menu while center nav is hidden (md–lg) */}
           <button
-            onClick={onToggleDark}
-            className={`w-9 h-9 flex items-center justify-center border ${border} ${muted}`}
-          >
-            {isDark ? <Sun size={14} /> : <Moon size={14} />}
-          </button>
-          <button
-            className={`w-9 h-9 flex items-center justify-center ${ink}`}
+            type="button"
+            className={`hidden md:flex lg:hidden w-9 h-9 items-center justify-center ${ink}`}
             onClick={() => setMenuOpen(!menuOpen)}
+            aria-label={menuOpen ? "Close menu" : "Open menu"}
           >
             {menuOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
@@ -247,7 +291,7 @@ function Nav({
         <motion.div
           initial={{ opacity: 0, y: -8 }}
           animate={{ opacity: 1, y: 0 }}
-          className="md:hidden bg-background border-t border-border px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] flex flex-col gap-1 max-h-[min(80svh,520px)] overflow-y-auto"
+          className="lg:hidden bg-background border-t border-border px-5 sm:px-6 lg:px-10 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] flex flex-col gap-1 max-h-[min(80svh,520px)] overflow-y-auto"
         >
           <button
             onClick={() => { onNavigate("home"); setMenuOpen(false); }}
@@ -289,8 +333,7 @@ function Nav({
 
 // ─── Shared Footer ────────────────────────────────────────────────────────────
 
-function Footer({ onNavigate, isDark }: { onNavigate: (p: Page) => void; isDark: boolean }) {
-  const logoTone = isDark ? "white" : "black";
+function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
   const linkGroups = [
     {
       title: "Homeowners",
@@ -328,13 +371,13 @@ function Footer({ onNavigate, isDark }: { onNavigate: (p: Page) => void; isDark:
   ];
 
   return (
-    <footer className="bg-card border-t border-border py-10 sm:py-12 md:py-16 px-4 sm:px-6 pb-[max(2.5rem,env(safe-area-inset-bottom))]">
+    <footer className="border-t border-border bg-muted/35 px-4 py-10 sm:px-6 sm:py-12 md:py-16 pb-[max(2.5rem,env(safe-area-inset-bottom))] dark:bg-[#0a0a0a]">
       <div className="max-w-7xl mx-auto">
         {/* Brand */}
-        <div className="pb-8 mb-8 border-b border-border lg:border-0 lg:pb-0 lg:mb-0">
+        <div className="pb-8 mb-8 border-b border-border/70 lg:border-0 lg:pb-0 lg:mb-0">
           <div className="lg:hidden">
-            <div className="mb-4">
-              <BrandLogo variant="footer" tone={logoTone} />
+            <div className="mb-4 inline-flex rounded-xl border border-border/80 bg-card px-4 py-3 shadow-sm dark:border-white/10 dark:bg-[#141414]">
+              <BrandLogo variant="footer" />
             </div>
             <p className="text-sm text-muted-foreground max-w-sm leading-relaxed mb-3">
               The middle layer between homeowners and licensed local contractors — handling
@@ -350,8 +393,8 @@ function Footer({ onNavigate, isDark }: { onNavigate: (p: Page) => void; isDark:
         {/* Desktop / tablet: brand + 3 columns · Mobile: 2-column link split */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-x-4 gap-y-8 sm:gap-x-8 sm:gap-y-10 mb-8 sm:mb-10 md:mb-12">
           <div className="hidden lg:block lg:col-span-2 pr-6">
-            <div className="mb-4">
-              <BrandLogo variant="footer" tone={logoTone} />
+            <div className="mb-4 inline-flex rounded-xl border border-border/80 bg-card px-4 py-3 shadow-sm dark:border-white/10 dark:bg-[#141414]">
+              <BrandLogo variant="footer" />
             </div>
             <p className="text-sm text-muted-foreground max-w-xs leading-relaxed mb-4">
               The middle layer between homeowners and licensed local contractors — handling
@@ -467,16 +510,21 @@ export default function App() {
   const [scrolled, setScrolled] = useState(false);
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(initialState.currentUser);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [resetParams, setResetParams] = useState<{ token: string; role: UserRole } | null>(null);
+  const [resetParams, setResetParams] = useState<{ token: string; role: ResetRole } | null>(null);
   const [subscriptionSuccessPlan, setSubscriptionSuccessPlan] = useState<string | null>(null);
   const [showSubscriptionSuccess, setShowSubscriptionSuccess] = useState(false);
+  const [subscriptionActivating, setSubscriptionActivating] = useState(false);
+  const [showSubscriptionCancel, setShowSubscriptionCancel] = useState(false);
   const [postPaymentDashboard, setPostPaymentDashboard] = useState(false);
 
-  // Detect password-reset links: /?action=reset-password&token=...&role=...
+  // Detect password-reset links: /reset-password?token=...&role=... or /?action=reset-password&...
   // Partner intake: /start?partner=CODE or /?partner=CODE
   // Subscription return: /?paid=subscription&plan=...
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    const path = window.location.pathname.replace(/\/+$/, "") || "/";
+    const isResetPath = path === "/reset-password" || path.endsWith("/reset-password");
+
     if (params.get("go-pro") === "1" || params.get("subscribe") === "1") {
       setPage("go-pro");
       params.delete("go-pro");
@@ -490,8 +538,11 @@ export default function App() {
       if (jobId) {
         try {
           sessionStorage.setItem("fixbridge-stripe-active-job-id", jobId);
+          // P0-17: never treat return-URL alone as payment success — only mark pending confirmation
           if (params.get("paid") === "dispatch") {
-            sessionStorage.setItem("fixbridge-dispatch-paid", "1");
+            sessionStorage.setItem("fixbridge-dispatch-confirming", "1");
+          } else if (params.get("canceled") === "dispatch") {
+            sessionStorage.setItem("fixbridge-dispatch-canceled", "1");
           }
         } catch {
           /* ignore */
@@ -512,6 +563,40 @@ export default function App() {
       window.history.replaceState({}, "", `${window.location.pathname}${nextDispatch ? `?${nextDispatch}` : ""}`);
     }
 
+    const invoicePaidNum = params.get("invoicePaid");
+    const invoiceCanceledNum = params.get("invoice");
+    if (invoicePaidNum) {
+      try {
+        sessionStorage.setItem("fixbridge-invoice-confirming", invoicePaidNum);
+      } catch {
+        /* ignore */
+      }
+      validateToken().then((result) => {
+        if (result.ok && result.user.role === "homeowner") {
+          setCurrentUser(result.user);
+          setPage("homeowner-dashboard");
+        }
+      });
+      params.delete("invoicePaid");
+      const nextInv = params.toString();
+      window.history.replaceState({}, "", `${window.location.pathname}${nextInv ? `?${nextInv}` : ""}`);
+    } else if (invoiceCanceledNum) {
+      try {
+        sessionStorage.setItem("fixbridge-invoice-canceled", invoiceCanceledNum);
+      } catch {
+        /* ignore */
+      }
+      validateToken().then((result) => {
+        if (result.ok && result.user.role === "homeowner") {
+          setCurrentUser(result.user);
+          setPage("homeowner-dashboard");
+        }
+      });
+      params.delete("invoice");
+      const nextInvCancel = params.toString();
+      window.history.replaceState({}, "", `${window.location.pathname}${nextInvCancel ? `?${nextInvCancel}` : ""}`);
+    }
+
     if (params.get("paid") === "subscription" || params.get("canceled") === "subscription") {
       const jobId = params.get("jobId");
       const planCode = params.get("plan");
@@ -521,6 +606,7 @@ export default function App() {
       }
       if (params.get("paid") === "subscription") {
         if (planCode) setSubscriptionSuccessPlan(planCode);
+        setSubscriptionActivating(true);
         setShowSubscriptionSuccess(true);
         setPostPaymentDashboard(true);
         validateToken().then((result) => {
@@ -529,10 +615,16 @@ export default function App() {
             if (result.user.role === "homeowner") {
               setPage("homeowner-dashboard");
             }
+            // Plan activates only after verified webhook — poll until plan_code matches.
+            const expected = planCode || "pro_membership";
+            if (result.user.planCode === expected) {
+              setSubscriptionActivating(false);
+            }
           }
         });
       }
       if (params.get("canceled") === "subscription") {
+        setShowSubscriptionCancel(true);
         setPage("go-pro");
       }
       params.delete("paid");
@@ -542,20 +634,19 @@ export default function App() {
       window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}`);
     }
 
-    if (params.get("action") === "reset-password") {
+    if (isResetPath || params.get("action") === "reset-password") {
       const token = params.get("token");
       const role = params.get("role");
-      if (token && (role === "homeowner" || role === "contractor")) {
+      if (token && isResetRole(role)) {
         setResetParams({ token, role });
-        window.history.replaceState({}, "", window.location.pathname);
+        window.history.replaceState({}, "", "/");
       }
     }
 
-    const path = window.location.pathname.replace(/\/+$/, "") || "/";
-    const isStartPath = path === "/start" || path.endsWith("/start");
     const partner =
       params.get("partner") || params.get("ref") || params.get("code");
     const discountParam = params.get("discount") || params.get("promo");
+    const isStartPath = path === "/start" || path.endsWith("/start");
 
     if (partner) {
       try {
@@ -620,19 +711,33 @@ export default function App() {
     setScrolled(e.currentTarget.scrollTop > 48);
   };
 
-  const navigate = (p: Page) => {
+  const navigate = (p: Page, options?: { replace?: boolean; user?: AuthUser | null }) => {
     if (p === "home" || p === "contractors") {
       setMarketingContext(p);
     }
     setPage(p);
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
+
+    const actor = options?.user !== undefined ? options.user : currentUser;
+    const historyPage = p as AppPage;
+    if (options?.replace) {
+      if (DASHBOARD_PAGES.includes(historyPage) && actor) {
+        replaceAppHistory(historyPage, roleHomeFrame(actor.role as UserRole));
+      } else {
+        replaceAppHistory(historyPage);
+      }
+    } else if (DASHBOARD_PAGES.includes(historyPage) && actor) {
+      pushAppHistory(historyPage, roleHomeFrame(actor.role as UserRole));
+    }
   };
 
   const handleSignOut = (nextPage: Page) => {
     clearSession();
+    clearNavFrames();
     setCurrentUser(null);
-    navigate(nextPage);
-    void import("./auth0SignOut").then(({ runAuth0SignOut }) => runAuth0SignOut()).catch(() => {});
+    replaceAppHistory(nextPage as AppPage);
+    setPage(nextPage);
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
   };
 
   const isMarketing = page === "home" || page === "contractors" || page === "about" || page === "go-pro";
@@ -650,6 +755,31 @@ export default function App() {
       // Ignore storage failures so UI remains functional.
     }
   }, [page, marketingContext]);
+
+  // After Stripe Checkout return, poll until webhook activates plan_code.
+  useEffect(() => {
+    if (!showSubscriptionSuccess || !subscriptionActivating) return;
+    const expected = subscriptionSuccessPlan || "pro_membership";
+    let cancelled = false;
+    let attempts = 0;
+    const tick = async () => {
+      attempts += 1;
+      const result = await validateToken();
+      if (cancelled) return;
+      if (result.ok) {
+        setCurrentUser(result.user);
+        if (result.user.planCode === expected || attempts >= 20) {
+          setSubscriptionActivating(false);
+          return;
+        }
+      }
+      window.setTimeout(() => void tick(), 1500);
+    };
+    void tick();
+    return () => {
+      cancelled = true;
+    };
+  }, [showSubscriptionSuccess, subscriptionActivating, subscriptionSuccessPlan]);
 
   // Validate the stored JWT and populate user list cache on startup
   useEffect(() => {
@@ -690,11 +820,43 @@ export default function App() {
     if (currentUser?.role === "admin" && (page === "contractor-dashboard" || page === "homeowner-dashboard")) {
       setPage("admin");
     }
-    // Already signed-in staff should skip the login screen.
-    if (currentUser?.role === "admin" && page === "admin-login") {
-      setPage("admin");
+    // Signed-in users should not land on login screens (browser back / stale state).
+    if (currentUser && LOGIN_PAGES.includes(page)) {
+      const home = roleHomePage(currentUser.role);
+      setPage(home);
+      replaceAppHistory(home, roleHomeFrame(currentUser.role as UserRole));
     }
   }, [currentUser, page]);
+
+  useEffect(() => {
+    const onPopState = (event: PopStateEvent) => {
+      const state = (event.state || {}) as AppHistoryState;
+      if (!state.fixbridgePage) return;
+
+      if (currentUser && LOGIN_PAGES.includes(state.fixbridgePage)) {
+        const home = roleHomePage(currentUser.role);
+        replaceAppHistory(home, roleHomeFrame(currentUser.role as UserRole));
+        setPage(home);
+        return;
+      }
+
+      if (!currentUser && DASHBOARD_PAGES.includes(state.fixbridgePage)) {
+        const login =
+          state.fixbridgePage === "admin"
+            ? "admin-login"
+            : state.fixbridgePage === "contractor-dashboard"
+              ? "contractor-login"
+              : "homeowner-login";
+        replaceAppHistory(login as AppPage);
+        setPage(login);
+        return;
+      }
+
+      setPage(state.fixbridgePage);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [currentUser]);
 
   // Show reset-password page when the link is clicked
   if (resetParams) {
@@ -705,8 +867,14 @@ export default function App() {
             token={resetParams.token}
             role={resetParams.role}
             onDone={() => {
+              const next = loginPageForResetRole(resetParams.role);
               setResetParams(null);
-              navigate(resetParams.role === "homeowner" ? "homeowner-login" : "contractor-login");
+              navigate(next);
+            }}
+            onRequestNew={() => {
+              const next = loginPageForResetRole(resetParams.role);
+              setResetParams(null);
+              navigate(next);
             }}
           />
         </div>
@@ -770,17 +938,26 @@ export default function App() {
               onBack={() => navigate("home")}
               onLoginSuccess={(user) => {
                 setCurrentUser(user);
-                navigate("homeowner-dashboard");
+                navigate("homeowner-dashboard", { replace: true, user });
               }}
             />
           )}
+
+          <SubscriptionCancelModal
+            open={showSubscriptionCancel}
+            onClose={() => setShowSubscriptionCancel(false)}
+            onTryAgain={() => {
+              setShowSubscriptionCancel(false);
+              setPage("go-pro");
+            }}
+          />
 
           {page === "homeowner-login" && (
             <HomeownerLogin
               onLogin={(user) => {
                 setCurrentUser(user);
                 loadAllUsers(); // populate contractor cache after sign-in
-                navigate("homeowner-dashboard");
+                navigate("homeowner-dashboard", { replace: true, user });
               }}
               onBack={() => navigate("home")}
               onGoContractor={() => navigate("contractor-login")}
@@ -792,7 +969,7 @@ export default function App() {
               onLogin={(user) => {
                 setCurrentUser(user);
                 loadAllUsers(); // populate contractor cache after sign-in
-                navigate("contractor-dashboard");
+                navigate("contractor-dashboard", { replace: true, user });
               }}
               onBack={() => navigate("contractors")}
               onGoHomeowner={() => navigate("homeowner-login")}
@@ -804,7 +981,7 @@ export default function App() {
             <AdminLogin
               onLogin={(user) => {
                 setCurrentUser(user);
-                navigate("admin");
+                navigate("admin", { replace: true, user });
               }}
               onBack={() => navigate("home")}
             />
@@ -824,9 +1001,11 @@ export default function App() {
               initialTab={postPaymentDashboard ? "go-pro" : undefined}
               showSubscriptionSuccess={showSubscriptionSuccess}
               subscriptionSuccessPlanCode={subscriptionSuccessPlan}
+              subscriptionActivating={subscriptionActivating}
               onDismissSubscriptionSuccess={() => {
                 setShowSubscriptionSuccess(false);
                 setSubscriptionSuccessPlan(null);
+                setSubscriptionActivating(false);
                 setPostPaymentDashboard(false);
               }}
             />
@@ -855,7 +1034,7 @@ export default function App() {
         </motion.div>
 
         {/* Footer only on marketing pages */}
-        {isMarketing && <Footer onNavigate={navigate} isDark={isDark} />}
+        {isMarketing && <Footer onNavigate={navigate} />}
       </div>
     </div>
   );

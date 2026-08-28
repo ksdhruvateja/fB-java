@@ -1,5 +1,5 @@
-import { Resend } from 'resend';
 import { brand } from './brand.js';
+import { sendMail } from './mail.js';
 
 /** Partner-visible statuses only (never pricing, net bids, or payment details). */
 export const PARTNER_VISIBLE_STATUSES = [
@@ -49,10 +49,6 @@ export function mapJobStatusToPartnerStatus(jobStatus) {
   return JOB_TO_PARTNER_STATUS[jobStatus] || null;
 }
 
-function getResend() {
-  const key = process.env.RESEND_API_KEY?.trim();
-  return key ? new Resend(key) : null;
-}
 
 export async function lookupPartnerByCode(pool, code) {
   if (!code || !String(code).trim()) return null;
@@ -158,21 +154,19 @@ async function emailPartnerStatusUpdate(pool, job, partnerStatus) {
     .filter((line) => line !== null)
     .join('\n');
 
-  const resend = getResend();
-  const from = process.env.FROM_EMAIL?.trim() || `${brand.productName} <onboarding@resend.dev>`;
-
-  if (!resend) {
-    console.log(`[Partner referral email — logged only]\nTo: ${partner.email}\nSubject: ${subject}\n${bodyText}`);
-    return;
-  }
-
   try {
-    await resend.emails.send({
-      from,
+    const mailed = await sendMail({
       to: partner.email,
       subject,
       text: bodyText,
+      html: `<pre style="font-family:sans-serif;white-space:pre-wrap;">${bodyText
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')}</pre>`,
     });
+    if (!mailed.ok) {
+      console.log(`[Partner referral email — logged]\nTo: ${partner.email}\nSubject: ${subject}\n${bodyText}`);
+    }
   } catch (e) {
     console.error('[Partner referral email failed]', e.message);
   }

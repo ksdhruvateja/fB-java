@@ -28,6 +28,7 @@ import {
   type PropertySystem,
   type SystemHealthStatus,
 } from "./homeownerPropertyHealth";
+import { buildHomeUpdatesSnapshot } from "./homeUpdates";
 import ServiceTrackingCard from "./ServiceTrackingCard";
 
 function greetingForNow() {
@@ -83,6 +84,7 @@ export default function HomeownerOverview({
   onOpenProperty,
   onOpenPropertyPicker,
   onOpenQuotes,
+  onOpenHomeUpdates,
   quotesWaiting = 0,
 }: {
   userName: string;
@@ -95,6 +97,7 @@ export default function HomeownerOverview({
   onOpenProperty: () => void;
   onOpenPropertyPicker?: () => void;
   onOpenQuotes?: () => void;
+  onOpenHomeUpdates?: () => void;
   quotesWaiting?: number;
 }) {
   const propertyJobs = useMemo(
@@ -121,6 +124,16 @@ export default function HomeownerOverview({
   });
 
   const upcomingMaint = (merged.maintenance || []).slice(0, 3);
+  const homeUpdates = useMemo(
+    () =>
+      buildHomeUpdatesSnapshot({
+        property,
+        health,
+        jobs: propertyJobs,
+        prefs: health.homeUpdateState || null,
+      }),
+    [property, health, propertyJobs]
+  );
 
   return (
     <section className="mx-auto max-w-5xl space-y-5">
@@ -150,6 +163,27 @@ export default function HomeownerOverview({
         </button>
       </div>
 
+      {onOpenHomeUpdates ? (
+        <button
+          type="button"
+          onClick={onOpenHomeUpdates}
+          className="flex w-full items-center justify-between gap-3 rounded-[1.5rem] border border-border/70 bg-card p-4 text-left shadow-sm transition hover:border-primary/30"
+        >
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Your Home</p>
+            <p className="mt-1.5 text-sm font-semibold tracking-tight">
+              We&apos;re tracking {homeUpdates.summary.trackedSystems} home system
+              {homeUpdates.summary.trackedSystems === 1 ? "" : "s"}.
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {homeUpdates.summary.needsAttention} may need attention · {homeUpdates.summary.upToDate} up to date ·{" "}
+              {homeUpdates.summary.needsInfo} need more information
+            </p>
+          </div>
+          <span className="shrink-0 text-sm font-semibold text-primary">View Property Care →</span>
+        </button>
+      ) : null}
+
       {/* Mobile order: active → quotes → upcoming → health → stats */}
       <div className="order-1 lg:order-none">
         <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
@@ -161,6 +195,7 @@ export default function HomeownerOverview({
             compact
             onOpenDetails={() => onOpenJob(active.id)}
             onMessage={() => onOpenJob(active.id)}
+            onChangeSchedule={() => onOpenJob(active.id)}
           />
         ) : (
           <div className="rounded-[1.5rem] border border-dashed border-border bg-card px-4 py-8 text-center shadow-sm">
@@ -340,6 +375,7 @@ export default function HomeownerOverview({
             compact
             onOpenDetails={() => onOpenJob(active.id)}
             onMessage={() => onOpenJob(active.id)}
+            onChangeSchedule={() => onOpenJob(active.id)}
           />
         ) : (
           <div className="rounded-[1.5rem] border border-dashed border-border bg-card px-4 py-8 text-center shadow-sm">

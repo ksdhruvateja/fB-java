@@ -15,7 +15,11 @@ import {
 
 const FILTERS: { id: QueueFilter; label: string }[] = [
   { id: "all", label: "All" },
-  { id: "mine", label: "Mine" },
+  { id: "new_requests", label: "New" },
+  { id: "needs_admin_pricing", label: "Pricing" },
+  { id: "payment_pending", label: "Payment" },
+  { id: "payout_ready", label: "Payout" },
+  { id: "attention_required", label: "Attention" },
   { id: "urgent", label: "Urgent" },
   { id: "waiting", label: "Waiting" },
   { id: "today", label: "Today" },

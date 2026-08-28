@@ -1,12 +1,10 @@
 import type { LucideIcon } from "lucide-react";
 import {
-  Bell,
-  CalendarDays,
   CreditCard,
   FileText,
+  Gift,
   Headphones,
   HelpCircle,
-  History,
   Home,
   LayoutDashboard,
   MessageSquare,
@@ -26,6 +24,9 @@ export type DashTab =
   | "timeline"
   | "protection"
   | "health"
+  | "home-updates"
+  | "property-care"
+  | "refer-earn"
   | "documents"
   | "payments"
   | "history"
@@ -38,6 +39,13 @@ export type DashTab =
   | "inbox"
   | "more"
   | "go-pro";
+
+export type PropertyCareSection =
+  | "overview"
+  | "systems"
+  | "timeline"
+  | "recommendations"
+  | "upcoming";
 
 export type BottomNavId = "home" | "jobs" | "request" | "inbox" | "more";
 export type JobsSegment = "active" | "quotes" | "upcoming" | "history";
@@ -55,18 +63,16 @@ export const NAV_SECTIONS: {
     items: [
       { id: "property", label: "My Property", icon: Home },
       { id: "jobs", label: "Service Requests", icon: Wrench },
-      { id: "maintenance", label: "Maintenance", icon: CalendarDays },
-      { id: "timeline", label: "Maintenance Timeline", icon: History },
+      { id: "property-care", label: "Property Care", icon: Sparkles },
       { id: "protection", label: "Home Protection", icon: Shield },
-      { id: "health", label: "Property Health", icon: Sparkles },
     ],
   },
   {
     label: "Manage",
     items: [
+      { id: "refer-earn", label: "Refer & Earn", icon: Gift },
       { id: "documents", label: "Documents", icon: FileText },
       { id: "payments", label: "Payments", icon: CreditCard },
-      { id: "history", label: "Service History", icon: History },
     ],
   },
   {
@@ -143,6 +149,23 @@ export function jobsForProperty(jobs: ManagedJob[], propertyId?: number | null):
   return jobs.filter((j) => !j.propertyId || Number(j.propertyId) === Number(propertyId));
 }
 
+/** Legacy tabs that now live inside Property Care. */
+const PROPERTY_CARE_LEGACY = new Set<DashTab>([
+  "maintenance",
+  "timeline",
+  "health",
+  "history",
+  "home-updates",
+]);
+
+export function propertyCareSectionForTab(id: DashTab): PropertyCareSection {
+  if (id === "timeline" || id === "history") return "timeline";
+  if (id === "home-updates") return "recommendations";
+  if (id === "maintenance") return "upcoming";
+  if (id === "health") return "overview";
+  return "overview";
+}
+
 export const MORE_MENU_SECTIONS: {
   title: string;
   items: { tab: DashTab; label: string; description?: string }[];
@@ -150,34 +173,32 @@ export const MORE_MENU_SECTIONS: {
   {
     title: "My Home",
     items: [
-      { tab: "properties", label: "Properties", description: "Addresses & details" },
-      { tab: "health", label: "Home Health", description: "Systems & score" },
-      { tab: "maintenance", label: "Maintenance", description: "Upcoming care" },
-      { tab: "timeline", label: "Maintenance Timeline" },
+      { tab: "properties", label: "My Property", description: "Addresses & systems" },
+      { tab: "property-care", label: "Property Care", description: "History, systems & reminders" },
       { tab: "protection", label: "Home Protection" },
     ],
   },
   {
-    title: "Account",
+    title: "Manage",
     items: [
-      { tab: "payments", label: "Payments" },
+      { tab: "refer-earn", label: "Refer & Earn", description: "Share & earn credit" },
       { tab: "documents", label: "Documents" },
-      { tab: "assistant", label: "FixBridge Pro", description: "Plan & AI usage" },
+      { tab: "payments", label: "Payments" },
     ],
   },
   {
     title: "Support",
     items: [
+      { tab: "assistant", label: "FixBridge Assistant" },
       { tab: "help", label: "Help & Support" },
-      { tab: "inbox", label: "Inbox", description: "Messages & alerts" },
+      { tab: "inbox", label: "Messages", description: "Messages & alerts" },
     ],
   },
   {
-    title: "Settings",
+    title: "Account",
     items: [
-      { tab: "profile", label: "Profile" },
-      { tab: "profile", label: "Notifications", description: "Coming soon" },
-      { tab: "profile", label: "Security", description: "Coming soon" },
+      { tab: "profile", label: "Settings" },
+      { tab: "go-pro", label: "FixBridge Pro", description: "Plans & DIY guidance" },
     ],
   },
 ];
@@ -191,6 +212,7 @@ export function isMoreAreaTab(tab: DashTab): boolean {
 export function resolveNavTab(id: DashTab): DashTab {
   if (id === "property") return "properties";
   if (id === "settings") return "profile";
+  if (PROPERTY_CARE_LEGACY.has(id)) return "property-care";
   return id;
 }
 
@@ -208,39 +230,40 @@ export function mobileHeaderTitle(tab: DashTab): string {
     case "overview":
       return "Home";
     case "jobs":
-      return "Jobs";
+      return "Requests";
     case "report":
       return "Request Service";
     case "inbox":
-      return "Inbox";
+      return "Messages";
     case "more":
       return "More";
     case "history":
-      return "Service History";
+    case "maintenance":
+    case "timeline":
     case "health":
-      return "Home Health";
+    case "home-updates":
+    case "property-care":
+      return "Property Care";
     case "properties":
     case "property":
-      return "Properties";
-    case "maintenance":
-      return "Maintenance";
-    case "timeline":
-      return "Timeline";
+      return "My Property";
+    case "refer-earn":
+      return "Refer & Earn";
     case "payments":
       return "Payments";
     case "documents":
       return "Documents";
     case "profile":
     case "settings":
-      return "Profile";
+      return "Settings";
     case "assistant":
-      return "FixBridge Pro";
+      return "Assistant";
     case "help":
       return "Help & Support";
     case "protection":
       return "Home Protection";
     case "go-pro":
-      return "Go Pro";
+      return "FixBridge Pro";
     default:
       return "FixBridge";
   }

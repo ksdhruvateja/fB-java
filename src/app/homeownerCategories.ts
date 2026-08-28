@@ -13,6 +13,7 @@ export const HOMEOWNER_AREAS = [
   "Bathroom",
   "Garage",
   "Gutters",
+  "Yard & Exterior",
   "Drywall",
   "Water Damage",
   "Garage Doors",
@@ -32,6 +33,7 @@ export const HOMEOWNER_SERVICES = [
   "Garage & Garage Doors",
   "Handyman",
   "HVAC & Heating/Cooling",
+  "Landscaping",
   "Landscaping & Yard",
   "Lighting",
   "Locks & Security",
@@ -40,6 +42,7 @@ export const HOMEOWNER_SERVICES = [
   "Plumbing",
   "Roofing & Gutters",
   "Siding",
+  "Snow Removal",
   "Windows & Glass",
   "Bathroom",
   "Kitchen",
@@ -57,6 +60,7 @@ export const HOMEOWNER_AREA_ICONS: Record<HomeownerArea, Unicon> = {
   Bathroom: UilBath,
   Garage: UilStore,
   Gutters: UilRaindrops,
+  "Yard & Exterior": UilEstate,
   Drywall: UilLayerGroup,
   "Water Damage": UilWater,
   "Garage Doors": UilHome,
@@ -68,6 +72,7 @@ export const HOMEOWNER_AREA_DEFAULT_SERVICE: Record<HomeownerArea, HomeownerServ
   Bathroom: "Bathroom",
   Garage: "Garage & Garage Doors",
   Gutters: "Roofing & Gutters",
+  "Yard & Exterior": "Landscaping",
   Drywall: "Drywall & Wall Repair",
   "Water Damage": "Water Damage",
   "Garage Doors": "Garage & Garage Doors",
@@ -109,7 +114,16 @@ export const HOMEOWNER_AREA_SERVICE_PRIORITY: Record<HomeownerArea, HomeownerSer
     "Handyman",
     "Concrete & Driveways",
   ],
-  Gutters: ["Roofing & Gutters", "Siding", "Handyman", "Landscaping & Yard"],
+  Gutters: ["Roofing & Gutters", "Siding", "Handyman", "Landscaping", "Landscaping & Yard"],
+  "Yard & Exterior": [
+    "Landscaping",
+    "Snow Removal",
+    "Landscaping & Yard",
+    "Fences & Gates",
+    "Concrete & Driveways",
+    "Pest Control",
+    "Handyman",
+  ],
   Drywall: ["Drywall & Wall Repair", "Painting", "Handyman", "Carpentry"],
   "Water Damage": [
     "Water Damage",
@@ -135,6 +149,7 @@ export function servicesForArea(area: HomeownerArea | ""): HomeownerService[] {
   return [...priority, ...rest];
 }
 
-export function jobTitleForHomeowner(area: string, service: string) {
+export function jobTitleForHomeowner(area: string, service: string, subServiceLabel?: string) {
+  if (subServiceLabel) return `${area} · ${service} · ${subServiceLabel}`;
   return `${area} · ${service}`;
 }

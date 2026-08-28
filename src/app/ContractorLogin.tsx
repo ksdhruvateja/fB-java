@@ -1,8 +1,7 @@
 import { useState } from "react";
 import { motion } from "motion/react";
 import { ArrowRight, Bell, Loader2, FileCheck, DollarSign } from "lucide-react";
-import { GoogleLogin, type CredentialResponse } from "@react-oauth/google";
-import { signInUser, signUpUser, signInWithGoogle, type AuthUser } from "./auth";
+import { signInUser, signUpUser, type AuthUser } from "./auth";
 import ForgotPasswordModal from "./ForgotPasswordModal";
 import { brand } from "../config/brand";
 import {
@@ -23,8 +22,6 @@ import {
   validateContractorApplication,
   type ContractorApplication,
 } from "./contractorApplication";
-
-const GOOGLE_ENABLED = Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID);
 
 const emptyDocs = (): ContractorApplicationDocs => ({
   w9: null,
@@ -56,27 +53,6 @@ export default function ContractorLogin({
   const [showForgot, setShowForgot] = useState(false);
   const [application, setApplication] = useState<ContractorApplication>(() => emptyContractorApplication());
   const [docs, setDocs] = useState<ContractorApplicationDocs>(emptyDocs);
-
-  const handleGoogleSuccess = async (response: CredentialResponse) => {
-    if (!response.credential) {
-      setError("Google sign-in failed. Please try again.");
-      return;
-    }
-    setLoading(true);
-    setError("");
-    try {
-      const result = await signInWithGoogle(response.credential, "contractor");
-      setLoading(false);
-      if (!result.ok) {
-        setError(result.message);
-        return;
-      }
-      onLogin(result.user);
-    } catch {
-      setLoading(false);
-      setError("Google sign-in failed. Please try again.");
-    }
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -234,34 +210,6 @@ export default function ContractorLogin({
                 { id: "signup", label: "Apply" },
               ]}
             />
-
-            {tab === "login" && (
-              <div className="mt-5">
-                {GOOGLE_ENABLED ? (
-                  <div className="flex justify-center">
-                    <GoogleLogin
-                      onSuccess={handleGoogleSuccess}
-                      onError={() => setError("Google sign-in failed. Please try again.")}
-                      text="continue_with"
-                      shape="pill"
-                      theme="outline"
-                      size="large"
-                      width="380"
-                    />
-                  </div>
-                ) : (
-                  <div className="rounded-xl border border-dashed border-border bg-muted/40 px-4 py-3 text-center">
-                    <p className="text-sm font-medium">Continue with Google</p>
-                    <p className="mt-1 text-[10px] text-muted-foreground">Available when Google Sign-In is configured</p>
-                  </div>
-                )}
-                <div className="mt-4 flex items-center gap-3">
-                  <div className="h-px flex-1 bg-border" />
-                  <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">or email</span>
-                  <div className="h-px flex-1 bg-border" />
-                </div>
-              </div>
-            )}
 
             <form onSubmit={handleSubmit} className="mt-5 space-y-4">
               {tab === "signup" && (

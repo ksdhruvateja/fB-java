@@ -8,6 +8,7 @@ export const brand = {
   tagline: _env.VITE_BRAND_TAGLINE?.trim() || "AI-powered property care and service coordination",
   primaryColor: _env.VITE_BRAND_PRIMARY_COLOR?.trim() || "#FF4D1C",
   logoUrl: _env.VITE_BRAND_LOGO_URL?.trim() || "/fixbridge-logo.png",
+  logoLockupUrl: _env.VITE_BRAND_LOGO_LOCKUP_URL?.trim() || "/fixbridge-logo-lockup.png",
   logoMarkUrl: _env.VITE_BRAND_LOGO_MARK_URL?.trim() || "/fixbridge-mark.png",
   domain: typeof window !== "undefined" ? window.location.host : "localhost:5000",
 } as const;

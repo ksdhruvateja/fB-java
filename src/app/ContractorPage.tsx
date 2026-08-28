@@ -82,7 +82,7 @@ const STATS = [
   { value: 312, suffix: "+", label: "Active Contractors" },
   { value: 2847, suffix: "+", label: "Jobs Posted" },
   { value: 60, suffix: "%", label: "Avg. Bid Close Rate" },
-  { value: 4.8, suffix: "★", label: "Contractor Rating", decimal: true },
+  { value: 100, suffix: "%", label: "Secure Stripe Payouts" },
 ];
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
@@ -180,7 +180,7 @@ export default function ContractorPage({
 
         <motion.div
           style={{ opacity: contentOpacity }}
-          className="relative z-10 flex-1 flex flex-col justify-end max-w-7xl mx-auto w-full px-4 sm:px-8 pt-[max(5.5rem,calc(env(safe-area-inset-top)+4.5rem))] pb-[max(1.25rem,env(safe-area-inset-bottom))] md:pb-8"
+          className="relative z-10 flex-1 flex flex-col justify-end w-full px-5 sm:px-6 lg:px-10 xl:px-12 2xl:px-16 pt-[max(5.5rem,calc(env(safe-area-inset-top)+4.5rem))] pb-[max(1.25rem,env(safe-area-inset-bottom))] md:pb-8"
         >
           <motion.div
             initial={{ opacity: 0, y: 24 }}
@@ -221,7 +221,10 @@ export default function ContractorPage({
           </motion.div>
 
           <motion.div style={{ y: brandY }} className="w-full flex justify-start items-end">
-            <BrandLogo variant="hero" className="drop-shadow-[0_8px_28px_rgba(0,0,0,0.5)]" />
+            <BrandLogo
+              variant="hero"
+              className="drop-shadow-[0_8px_28px_rgba(0,0,0,0.5)] max-h-[min(22vh,12.5rem)] sm:max-h-[min(24vh,11rem)] md:max-h-[min(26vh,12.5rem)]"
+            />
           </motion.div>
         </motion.div>
       </section>
@@ -424,20 +427,20 @@ export default function ContractorPage({
       <ContractorReviewsSection />
 
       {/* ── Application CTA ──────────────────────────────────────────────── */}
-      <section className="py-16 sm:py-28 bg-primary relative overflow-hidden">
+      <section className="py-16 sm:py-24 bg-primary relative overflow-hidden">
         <div
-          className="absolute inset-0 opacity-[0.07]"
+          className="absolute inset-0 opacity-[0.06] pointer-events-none"
           style={{
             backgroundImage:
               "linear-gradient(white 1px, transparent 1px), linear-gradient(90deg, white 1px, transparent 1px)",
             backgroundSize: "60px 60px",
           }}
         />
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 relative grid grid-cols-1 lg:grid-cols-2 gap-10 sm:gap-16 items-center pb-[env(safe-area-inset-bottom)]">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 relative grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-16 items-start pb-[env(safe-area-inset-bottom)]">
           <ScrollReveal>
             <h2
-              className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.88] text-white mb-5 sm:mb-6"
-              style={{ fontSize: "clamp(2.5rem,9vw,6.5rem)" }}
+              className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.95] tracking-tight text-white mb-5 sm:mb-6"
+              style={{ fontSize: "clamp(2.5rem,8vw,5rem)" }}
             >
               READY TO
               <br />
@@ -445,56 +448,61 @@ export default function ContractorPage({
               <br />
               BUSINESS?
             </h2>
-            <p className="text-white/75 text-base sm:text-lg mb-5 sm:mb-6 max-w-sm leading-relaxed">
-              Join 312+ licensed contractors already winning jobs on {brand.productName}. It takes
-              10 minutes to apply. Zero dollars to join.
+            <p className="text-white text-base sm:text-lg mb-6 max-w-md leading-relaxed">
+              Join 312+ licensed contractors already winning jobs on {brand.productName}. It takes 10 minutes to
+              apply. Zero dollars to join.
             </p>
-            <div className="flex flex-wrap items-center gap-2">
-              {[1,2,3,4,5].map((i) => (
-                <Star key={i} size={14} fill="white" className="text-white" />
-              ))}
-              <span className="font-mono text-[10px] sm:text-[11px] text-white/70 ml-1">
-                4.8★ platform rating from contractors
-              </span>
-            </div>
+            <p className="text-sm font-medium text-white/95 leading-relaxed max-w-md">
+              Verified professionals · Secure payments · Local coverage
+            </p>
           </ScrollReveal>
 
-          {/* Application form */}
           <ScrollReveal delay={0.2}>
-            <div className="bg-white/10 border border-white/20 p-5 sm:p-8 backdrop-blur">
-              <p className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase text-xl sm:text-2xl text-white mb-5 sm:mb-6">
+            <div className="rounded-2xl bg-white p-6 sm:p-8 shadow-xl text-foreground">
+              <h3 className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase text-2xl sm:text-3xl text-foreground mb-6">
                 Apply to Join
-              </p>
-              <div className="space-y-4">
+              </h3>
+              <form
+                className="space-y-4"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  onApply?.();
+                }}
+              >
                 {[
-                  { label: "Full Name", placeholder: "John Kowalski" },
-                  { label: "Trade", placeholder: "Plumbing, HVAC, Electrical…" },
-                  { label: "License Number", placeholder: "NY-12345678" },
-                  { label: "Email Address", placeholder: "john@yourcompany.com" },
-                ].map(({ label, placeholder }) => (
-                  <div key={label}>
-                    <label className="font-mono text-[11px] tracking-wider text-white/70 uppercase block mb-1.5">
+                  { label: "Full Name", name: "fullName", type: "text", autoComplete: "name" },
+                  { label: "Trade", name: "trade", type: "text", autoComplete: "organization-title" },
+                  { label: "License Number", name: "licenseNumber", type: "text", autoComplete: "off" },
+                  { label: "Email Address", name: "email", type: "email", autoComplete: "email" },
+                ].map(({ label, name, type, autoComplete }) => (
+                  <div key={name}>
+                    <label
+                      htmlFor={`apply-${name}`}
+                      className="text-xs font-semibold uppercase tracking-wide text-muted-foreground block mb-1.5"
+                    >
                       {label}
                     </label>
                     <input
-                      type="text"
-                      placeholder={placeholder}
-                      className="w-full bg-white/10 border border-white/20 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-white/60 transition-colors"
+                      id={`apply-${name}`}
+                      name={name}
+                      type={type}
+                      autoComplete={autoComplete}
+                      defaultValue=""
+                      className="w-full rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-transparent focus:outline-none focus:ring-2 focus:ring-primary/25 focus:border-primary/40 transition-colors"
                     />
                   </div>
                 ))}
                 <button
-                  type="button"
-                  onClick={onApply}
-                  className="w-full font-medium bg-white text-primary py-3.5 text-base flex items-center justify-center gap-2 hover:bg-white/90 transition-colors mt-2 group"
+                  type="submit"
+                  className="w-full rounded-xl font-semibold bg-primary text-white py-3.5 text-base flex items-center justify-center gap-2 hover:brightness-105 transition-all mt-2 group"
                 >
                   Submit Application
                   <ArrowRight size={15} className="transition-transform group-hover:translate-x-1" />
                 </button>
-                <p className="font-mono text-[10px] text-white/50 text-center">
+                <p className="text-xs text-muted-foreground text-center leading-relaxed">
                   We review applications within 2 business days.
                 </p>
-              </div>
+              </form>
             </div>
           </ScrollReveal>
         </div>

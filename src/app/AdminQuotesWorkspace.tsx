@@ -48,6 +48,12 @@ import {
   type QuoteInvoice,
   type QuoteLineItem,
 } from "./quoteDocument";
+import { StructuredAddressFields } from "./UsLocationFields";
+import {
+  formatAddressLines,
+  normalizeStructuredAddress,
+  structuredToBillToExtras,
+} from "./addressFormat";
 
 const STATUS_FILTERS = [
   "all",
@@ -188,8 +194,11 @@ function QuoteDocumentEditor({
     companyName: "",
     email: "",
     phone: "",
-    street: "",
-    cityStateZip: "",
+    addressLine1: "",
+    addressLine2: "",
+    city: "",
+    state: "",
+    zip: "",
   });
 
   // Send modal
@@ -200,6 +209,7 @@ function QuoteDocumentEditor({
   const [sendSubject, setSendSubject] = useState("");
   const [sendMessage, setSendMessage] = useState("");
   const [busyAction, setBusyAction] = useState(false);
+  const [smsAvailable, setSmsAvailable] = useState(false);
 
   // Mark paid
   const [paidAmount, setPaidAmount] = useState(0);
@@ -295,13 +305,22 @@ function QuoteDocumentEditor({
     setContractorWarranty(doc.warranty || "");
     setContractorSpecial(doc.contractorSpecialConditions || "");
     setValidUntil(doc.quoteValidUntil ? new Date(doc.quoteValidUntil).toISOString().slice(0, 10) : "");
+    const addr = normalizeStructuredAddress({
+      ...(doc.billTo || {}),
+      addressLine1: doc.billTo?.addressLine1 || doc.billTo?.street || doc.jobAddress || "",
+      zip: doc.billTo?.zip || doc.jobZip || "",
+      cityStateZip: doc.billTo?.cityStateZip || "",
+    });
     setBillTo({
       name: doc.billTo?.name || doc.homeownerName || "",
       companyName: doc.billTo?.companyName || doc.companyName || "",
       email: doc.billTo?.email || doc.homeownerEmail || "",
       phone: doc.billTo?.phone || doc.homeownerPhone || "",
-      street: doc.billTo?.street || doc.jobAddress || "",
-      cityStateZip: doc.billTo?.cityStateZip || doc.jobZip || "",
+      addressLine1: addr.addressLine1 || "",
+      addressLine2: addr.addressLine2 || "",
+      city: addr.city || "",
+      state: addr.state || "",
+      zip: addr.zip || "",
     });
     setSendToEmail(doc.billTo?.email || doc.homeownerEmail || "");
     setSendToPhone(doc.billTo?.phone || doc.homeownerPhone || "");
@@ -337,6 +356,17 @@ function QuoteDocumentEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lockedQuoteId]);
 
+  useEffect(() => {
+    const token = getStoredToken();
+    if (!token) return;
+    fetch("/api/comms/status", { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.ok) setSmsAvailable(Boolean(data.smsConfigured));
+      })
+      .catch(() => setSmsAvailable(false));
+  }, []);
+
   const notifyChanged = async () => {
     if (onChanged) await onChanged();
   };
@@ -359,7 +389,7 @@ function QuoteDocumentEditor({
     internalNotes,
     billTo: {
       ...billTo,
-      address: [billTo.street, billTo.cityStateZip].filter(Boolean).join(", "),
+      ...structuredToBillToExtras(billTo),
     },
     companyName: billTo.companyName,
     contractorQuoteAmount,
@@ -693,8 +723,21 @@ function QuoteDocumentEditor({
                         <input className={inputClass} disabled={locked} value={billTo.phone} onChange={(e) => setBillTo({ ...billTo, phone: e.target.value })} />
                       </Field>
                       <Field label="Service address" className="sm:col-span-2">
-                        <input className={inputClass} disabled={locked} value={billTo.street} onChange={(e) => setBillTo({ ...billTo, street: e.target.value })} placeholder="Street" />
-                        <input className={`${inputClass} mt-2`} disabled={locked} value={billTo.cityStateZip} onChange={(e) => setBillTo({ ...billTo, cityStateZip: e.target.value })} placeholder="City, State ZIP" />
+                        <StructuredAddressFields
+                          idPrefix="quote-billto"
+                          addressLine1={billTo.addressLine1}
+                          addressLine2={billTo.addressLine2}
+                          city={billTo.city}
+                          state={billTo.state}
+                          zip={billTo.zip}
+                          onAddressLine1Change={(v) => setBillTo({ ...billTo, addressLine1: v })}
+                          onAddressLine2Change={(v) => setBillTo({ ...billTo, addressLine2: v })}
+                          onCityChange={(v) => setBillTo({ ...billTo, city: v })}
+                          onStateChange={(v) => setBillTo({ ...billTo, state: v })}
+                          onZipChange={(v) => setBillTo({ ...billTo, zip: v })}
+                          disabled={locked}
+                          zipRequired
+                        />
                       </Field>
                     </div>
                   </section>
@@ -1118,7 +1161,11 @@ function QuoteDocumentEditor({
             <p><span className="text-muted-foreground">Amount</span><br /><strong className="text-lg">{formatMoney(invoice?.amountDue ?? totals.total)}</strong></p>
             <div className="flex gap-4">
               <label className="inline-flex items-center gap-2"><input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} /> Email</label>
-              <label className="inline-flex items-center gap-2"><input type="checkbox" checked={sendSms} onChange={(e) => setSendSms(e.target.checked)} /> SMS</label>
+              {smsAvailable ? (
+                <label className="inline-flex items-center gap-2"><input type="checkbox" checked={sendSms} onChange={(e) => setSendSms(e.target.checked)} /> SMS</label>
+              ) : (
+                <p className="text-xs text-muted-foreground">SMS delivery is not currently configured.</p>
+              )}
             </div>
             {sendEmail ? (
               <>
@@ -1446,7 +1493,17 @@ function QuotePreview({
   status: string;
   createdAt?: string | null;
   validUntil?: string | null;
-  billTo: { name: string; companyName: string; email: string; phone: string; street: string; cityStateZip: string };
+  billTo: {
+    name: string;
+    companyName: string;
+    email: string;
+    phone: string;
+    addressLine1: string;
+    addressLine2: string;
+    city: string;
+    state: string;
+    zip: string;
+  };
   lineItems: QuoteLineItem[];
   totals: ReturnType<typeof computeTotals>;
   discountType: string;
@@ -1478,8 +1535,9 @@ function QuotePreview({
         {billTo.email ? <p className="text-muted-foreground">{billTo.email}</p> : null}
         {billTo.phone ? <p className="text-muted-foreground">{billTo.phone}</p> : null}
         <p className="mt-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Service address</p>
-        <p>{billTo.street}</p>
-        <p>{billTo.cityStateZip}</p>
+        {formatAddressLines(billTo).map((line) => (
+          <p key={line}>{line}</p>
+        ))}
       </div>
       <div className="mt-4 border-t border-border pt-3 space-y-2">
         {lineItems.map((l) => (

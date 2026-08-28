@@ -43,12 +43,11 @@ Set these under **Site settings → Environment variables** (and rebuild after c
 |---|---|---|
 | `SESSION_SECRET` | Yes | JWT signing secret (long random string) |
 | `NEON_DATABASE_URL` | Yes (for real data) | Neon connection string |
-| `VITE_GOOGLE_CLIENT_ID` | For Google Sign-In | Build-time + runtime; add your Netlify URL to Google OAuth **Authorized JavaScript origins** |
+| `GMAIL_USER` | For email | Gmail address used for SMTP (password reset + notifications) |
+| `GMAIL_APP_PASSWORD` | For email | Google App Password (not your normal Gmail password) |
+| `FROM_EMAIL` | Optional | e.g. `FixBridge <you@gmail.com>` (defaults to `GMAIL_USER`) |
+| `APP_URL` | Recommended | `https://YOUR-SITE.netlify.app` (reset-link base URL) |
 | `VITE_GEMINI_API_KEY` | Optional | Build-time; AI assessment |
-| `GOOGLE_CLIENT_ID` | Optional | Alias if you prefer not to rely on `VITE_` in Functions |
-| `RESEND_API_KEY` | Optional | Password-reset emails |
-| `FROM_EMAIL` | Optional | Resend from address |
-| `APP_URL` | Recommended | `https://YOUR-SITE.netlify.app` (reset-link fallback) |
 
 Do not commit `.env`. Use `.env.example` as the template.
 

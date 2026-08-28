@@ -35,6 +35,13 @@ export type QuoteBillTo = {
   companyName?: string | null;
   email?: string | null;
   phone?: string | null;
+  /** Structured address (preferred). */
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+  /** Legacy flat fields — kept for older documents. */
   street?: string | null;
   cityStateZip?: string | null;
   address?: string | null;
@@ -111,6 +118,7 @@ export type QuoteInvoice = {
   invoiceNumber: string;
   proposalId?: number | null;
   jobId: number;
+  homeownerUserId?: number | null;
   status: string;
   lineItems: QuoteLineItem[];
   additionalCharges: AdditionalCharge[];
@@ -132,6 +140,7 @@ export type QuoteInvoice = {
   stripePaymentLinkUrl?: string | null;
   paymentMethod?: string | null;
   paidAt?: string | null;
+  dueDate?: string | null;
   createdAt?: string | null;
 };
 

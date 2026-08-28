@@ -200,6 +200,9 @@ export async function initManagedSchema(pool) {
       approved_at          TIMESTAMPTZ
     )
   `);
+  await pool.query(`ALTER TABLE change_orders ADD COLUMN IF NOT EXISTS approved_snapshot JSONB`);
+  await pool.query(`ALTER TABLE change_orders ADD COLUMN IF NOT EXISTS line_items JSONB`);
+  await pool.query(`ALTER TABLE change_orders ADD COLUMN IF NOT EXISTS reason TEXT`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS payments (
@@ -216,6 +219,13 @@ export async function initManagedSchema(pool) {
       meta                 JSONB,
       created_at           TIMESTAMPTZ DEFAULT NOW()
     )
+  `);
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS public_id TEXT`);
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS provider TEXT DEFAULT 'stripe'`);
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT`);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_public_id
+    ON payments (public_id) WHERE public_id IS NOT NULL
   `);
 
   await pool.query(`
@@ -343,6 +353,14 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS visit_fee_amount NUMERIC`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS stripe_payment_intent_id TEXT`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS cancellation_reason TEXT`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS checkout_snapshot JSONB`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS coupon_redeemed_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS service_fee_amount NUMERIC`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS service_amount NUMERIC`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS coupon_discount_amount NUMERIC`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS final_customer_amount NUMERIC`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS payment_completed_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS work_queue_status TEXT`);
 
   // Address segregation columns
   await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS country TEXT DEFAULT 'US'`);
@@ -353,6 +371,15 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS baths NUMERIC`);
   await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS sqft INT`);
   await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS home_systems JSONB`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS postal_code_plus4 TEXT`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS address_verified BOOLEAN DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS address_verified_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS address_verification_provider TEXT`);
+
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS postal_code_plus4 TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS address_verified BOOLEAN DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS address_verified_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS address_verification_provider TEXT`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS property_documents (
@@ -614,7 +641,8 @@ export async function initManagedSchema(pool) {
   try {
     const allowMarketingSeed =
       process.env.NODE_ENV !== 'production' &&
-      String(process.env.ENABLE_DEMO_SEED ?? 'true').toLowerCase() !== 'false';
+      String(process.env.ENABLE_DEMO_SEED ?? process.env.ENABLE_DEMO_USERS ?? 'false').toLowerCase() === 'true' ||
+      String(process.env.ENABLE_DEMO_SEED ?? process.env.ENABLE_DEMO_USERS ?? 'false').toLowerCase() === '1';
     const { rows: existingReviews } = await pool.query(`SELECT COUNT(*)::int AS c FROM site_reviews`);
     if (allowMarketingSeed && (existingReviews[0]?.c || 0) === 0) {
       const seeds = [
@@ -956,6 +984,7 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS quote_request_mode TEXT`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS similar_jobs_count INT DEFAULT 0`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS market_snapshot_id BIGINT`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS service_subcategory TEXT`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS market_snapshots (
@@ -1045,6 +1074,282 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS viewed_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS document_snapshot JSONB`);
+
+  // ── Refer & Earn (peer referrals — separate from promo coupons / B2B partners) ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS referral_settings (
+      id         TEXT PRIMARY KEY DEFAULT 'default',
+      config     JSONB NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_by INT
+    )
+  `);
+  const existingReferralSettings = await pool.query(`SELECT id FROM referral_settings WHERE id='default'`);
+  if (!existingReferralSettings.rows.length) {
+    await pool.query(
+      `INSERT INTO referral_settings (id, config) VALUES ('default', $1::jsonb)`,
+      [
+        JSON.stringify({
+          homeowner_homeowner: {
+            referrerRewardCents: 10000,
+            referredRewardCents: 10000,
+            rewardType: 'credit',
+            qualifyOn: 'first_paid_service',
+          },
+          contractor_customer: {
+            contractorRewardCents: 10000,
+            rewardType: 'payout_bonus',
+            qualifyOn: 'first_paid_service',
+          },
+          contractor_contractor: {
+            contractorRewardCents: 7500,
+            rewardType: 'payout_bonus',
+            qualifyOn: 'approved_and_first_completed_job',
+          },
+          combineWithCoupons: false,
+          maxCreditPerInvoiceCents: 10000,
+          combineMultipleCredits: true,
+        }),
+      ]
+    );
+  }
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS referral_relationships (
+      id                   BIGSERIAL PRIMARY KEY,
+      public_id            TEXT UNIQUE,
+      type                 TEXT NOT NULL,
+      referrer_user_id     INT NOT NULL,
+      referred_user_id     INT,
+      referral_code        TEXT NOT NULL,
+      status               TEXT NOT NULL DEFAULT 'signed_up',
+      referrer_reward_cents INT NOT NULL DEFAULT 0,
+      referred_reward_cents INT NOT NULL DEFAULT 0,
+      reward_type          TEXT NOT NULL DEFAULT 'credit',
+      qualification_event  TEXT,
+      related_job_id       BIGINT,
+      qualified_at         TIMESTAMPTZ,
+      reward_earned_at     TIMESTAMPTZ,
+      reward_available_at  TIMESTAMPTZ,
+      reward_used_at       TIMESTAMPTZ,
+      invalid_reason       TEXT,
+      hold_reason          TEXT,
+      created_at           TIMESTAMPTZ DEFAULT NOW(),
+      updated_at           TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (referred_user_id)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_referral_rel_referrer
+    ON referral_relationships (referrer_user_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_referral_rel_code
+    ON referral_relationships (LOWER(referral_code))
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_referral_rel_status
+    ON referral_relationships (status, type)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS referral_credits (
+      id                BIGSERIAL PRIMARY KEY,
+      user_id           INT NOT NULL,
+      relationship_id   BIGINT,
+      amount_cents      INT NOT NULL,
+      kind              TEXT NOT NULL,
+      status            TEXT NOT NULL DEFAULT 'available',
+      related_job_id    BIGINT,
+      note              TEXT,
+      created_by        INT,
+      created_at        TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_referral_credits_user
+    ON referral_credits (user_id, created_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS referral_payout_bonuses (
+      id                  BIGSERIAL PRIMARY KEY,
+      contractor_user_id  INT NOT NULL,
+      relationship_id     BIGINT NOT NULL UNIQUE,
+      amount_cents        INT NOT NULL,
+      bonus_type          TEXT NOT NULL,
+      status              TEXT NOT NULL DEFAULT 'available',
+      note                TEXT,
+      created_at          TIMESTAMPTZ DEFAULT NOW(),
+      paid_at             TIMESTAMPTZ
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_referral_payout_bonuses_contractor
+    ON referral_payout_bonuses (contractor_user_id, created_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS referral_notes (
+      id                BIGSERIAL PRIMARY KEY,
+      relationship_id   BIGINT NOT NULL,
+      author_user_id    INT,
+      author_label      TEXT NOT NULL DEFAULT 'System',
+      body              TEXT NOT NULL,
+      created_at        TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS referral_code_meta (
+      user_id      INT PRIMARY KEY,
+      code         TEXT UNIQUE NOT NULL,
+      disabled     BOOLEAN DEFAULT FALSE,
+      regenerated_at TIMESTAMPTZ,
+      updated_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // ── P0 hardening: payout uniqueness, holds, webhook status, quote snapshots ─
+  await pool.query(`ALTER TABLE contractor_payouts ADD COLUMN IF NOT EXISTS hold_reason TEXT`);
+  await pool.query(`ALTER TABLE contractor_payouts ADD COLUMN IF NOT EXISTS hold_related_payment_id INT`);
+  await pool.query(`ALTER TABLE contractor_payouts ADD COLUMN IF NOT EXISTS held_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE contractor_payouts ADD COLUMN IF NOT EXISTS reversal_required BOOLEAN DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE contractor_payouts ADD COLUMN IF NOT EXISTS service_amount_cents INT DEFAULT 0`);
+  await pool.query(`ALTER TABLE contractor_payouts ADD COLUMN IF NOT EXISTS tip_amount_cents INT DEFAULT 0`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS payment_settlements (
+      id               BIGSERIAL PRIMARY KEY,
+      idempotency_key  TEXT NOT NULL UNIQUE,
+      job_id           BIGINT,
+      invoice_id       INT,
+      payment_id       INT,
+      status           TEXT NOT NULL DEFAULT 'completed',
+      detail           JSONB,
+      created_at       TIMESTAMPTZ DEFAULT NOW(),
+      updated_at       TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS service_amount NUMERIC`);
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS tip_amount NUMERIC DEFAULT 0`);
+  await pool.query(`ALTER TABLE refunds ADD COLUMN IF NOT EXISTS idempotency_key TEXT`);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_refunds_idempotency_key
+    ON refunds (idempotency_key) WHERE idempotency_key IS NOT NULL
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_stripe_session_settled
+    ON payments (stripe_session_id)
+    WHERE stripe_session_id IS NOT NULL AND status IN ('succeeded','paid')
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_contractor_payouts_job_unique
+    ON contractor_payouts (job_id)
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_transfers_job_unique
+    ON transfers (job_id)
+    WHERE status IN ('paid','processing','pending')
+  `).catch((e) => console.warn('[schema] transfers unique index:', e.message));
+
+  await pool.query(`ALTER TABLE webhook_events ADD COLUMN IF NOT EXISTS processing_status TEXT DEFAULT 'received'`);
+  await pool.query(`ALTER TABLE webhook_events ADD COLUMN IF NOT EXISTS attempt_count INT DEFAULT 0`);
+  await pool.query(`ALTER TABLE webhook_events ADD COLUMN IF NOT EXISTS last_error TEXT`);
+  await pool.query(`ALTER TABLE webhook_events ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE webhook_events ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS quote_acceptance_snapshots (
+      id                BIGSERIAL PRIMARY KEY,
+      proposal_id       BIGINT NOT NULL,
+      quote_number      TEXT,
+      version_number    INT NOT NULL DEFAULT 1,
+      homeowner_user_id INT,
+      property_id       INT,
+      job_id            BIGINT,
+      contractor_user_id INT,
+      line_items        JSONB,
+      subtotal          NUMERIC,
+      discount_amount   NUMERIC,
+      shipping_amount   NUMERIC,
+      additional_charges NUMERIC,
+      tax_amount        NUMERIC,
+      total             NUMERIC,
+      contractor_amount NUMERIC,
+      terms             TEXT,
+      warranty          TEXT,
+      customer_notes    TEXT,
+      document_snapshot JSONB NOT NULL,
+      accepted_at       TIMESTAMPTZ DEFAULT NOW(),
+      accepted_by       INT,
+      UNIQUE (proposal_id, version_number)
+    )
+  `);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS version_number INT DEFAULT 1`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS previous_version_id BIGINT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS change_reason TEXT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS accepted_snapshot_id BIGINT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ`);
+
+  // Payment fee capture + financial ledger
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS stripe_charge_id TEXT`);
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS stripe_balance_transaction_id TEXT`);
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS stripe_processing_fee_cents INT`);
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS stripe_net_received_cents INT`);
+  await pool.query(`ALTER TABLE refunds ADD COLUMN IF NOT EXISTS refund_amount_cents INT`);
+  await pool.query(`ALTER TABLE refunds ADD COLUMN IF NOT EXISTS stripe_fee_refund_cents INT`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS financial_ledger_events (
+      id               BIGSERIAL PRIMARY KEY,
+      event_type       TEXT NOT NULL,
+      job_id           BIGINT,
+      payment_id       INT,
+      payout_id        INT,
+      contractor_id    INT,
+      amount_cents     INT,
+      currency         TEXT DEFAULT 'usd',
+      stripe_object_id TEXT,
+      created_by       INT,
+      metadata         JSONB,
+      created_at       TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_financial_ledger_job ON financial_ledger_events (job_id, created_at)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS refund_reconciliations (
+      id                      SERIAL PRIMARY KEY,
+      job_id                  BIGINT NOT NULL,
+      payment_id              INT,
+      refund_id               INT,
+      contractor_payout_id    INT,
+      refund_amount_cents     INT NOT NULL,
+      platform_exposure_cents INT DEFAULT 0,
+      status                  TEXT NOT NULL DEFAULT 'requires_reconciliation',
+      notes                   TEXT,
+      created_at              TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // Legacy admin_role_preset NULL + read-write must NOT escalate to super_admin
+  await pool.query(`
+    UPDATE users
+    SET admin_role_preset='operations_admin'
+    WHERE role='admin'
+      AND (admin_role_preset IS NULL OR TRIM(admin_role_preset)='')
+      AND COALESCE(admin_access_level,'read-write') IN ('read-write','write','')
+  `);
+  await pool.query(`
+    UPDATE users
+    SET admin_role_preset='read_only'
+    WHERE role='admin'
+      AND (admin_role_preset IS NULL OR TRIM(admin_role_preset)='')
+      AND admin_access_level='read'
+  `);
 
   console.log('[API] Managed schema ready');
 }

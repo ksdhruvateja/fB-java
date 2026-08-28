@@ -1,20 +1,24 @@
-import { Check, Sparkles, X } from "lucide-react";
+import { Check, Loader2, Sparkles, X } from "lucide-react";
 import type { GoProPlanCard } from "./HomeownerGoProPlans";
 
 export default function SubscriptionSuccessModal({
   open,
   plan,
+  activating = false,
   onClose,
   onViewFeatures,
 }: {
   open: boolean;
   plan?: GoProPlanCard | null;
+  /** True while waiting for Stripe webhook to activate the plan. */
+  activating?: boolean;
   onClose: () => void;
   onViewFeatures?: () => void;
 }) {
   if (!open) return null;
 
   const included = plan?.features.filter((f) => f.included) || [];
+  const planName = plan?.name || "FixBridge Pro";
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
@@ -29,41 +33,65 @@ export default function SubscriptionSuccessModal({
         </button>
 
         <div className="flex flex-col items-center text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600">
-            <Check className="h-8 w-8" strokeWidth={2.5} />
-          </div>
-          <h2 className="mt-4 text-xl font-bold">Payment successful!</h2>
-          <p className="mt-2 text-sm text-muted-foreground">
-            {plan
-              ? `Your ${plan.name} subscription is active. These features are now unlocked:`
-              : "Your subscription is active. These features are now unlocked:"}
-          </p>
+          {activating ? (
+            <>
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-sky-500/15 text-sky-600">
+                <Loader2 className="h-8 w-8 animate-spin" strokeWidth={2.5} />
+              </div>
+              <h2 className="mt-4 text-xl font-bold">Payment Successful</h2>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Confirming your payment with Stripe… {planName} will activate when the verified webhook is
+                received.
+              </p>
+            </>
+          ) : (
+            <>
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600">
+                <Check className="h-8 w-8" strokeWidth={2.5} />
+              </div>
+              <h2 className="mt-4 text-xl font-bold">Payment Successful</h2>
+              <p className="mt-2 text-sm text-muted-foreground">
+                {planName} is now active.
+              </p>
+            </>
+          )}
         </div>
 
-        <ul className="mt-5 space-y-2 rounded-xl border border-border bg-muted/30 p-4">
-          {(included.length ? included : [
-            { label: "Service request tracking", included: true },
-            { label: "Property health score", included: true },
-            { label: "Live chat & support", included: true },
-            { label: "AI DIY Action Plans", included: true },
-          ]).map((f) => (
-            <li key={f.label} className="flex items-center gap-2 text-sm">
-              <Sparkles className="h-4 w-4 shrink-0 text-[#FF4D1C]" />
-              {f.label}
-            </li>
-          ))}
-        </ul>
+        {!activating ? (
+          <>
+            <ul className="mt-5 space-y-2 rounded-xl border border-border bg-muted/30 p-4">
+              {(included.length
+                ? included
+                : [
+                    { label: "Service request tracking", included: true },
+                    { label: "Property health score", included: true },
+                    { label: "Live chat & support", included: true },
+                    { label: "AI DIY Action Plans", included: true },
+                  ]
+              ).map((f) => (
+                <li key={f.label} className="flex items-center gap-2 text-sm">
+                  <Sparkles className="h-4 w-4 shrink-0 text-[#FF4D1C]" />
+                  {f.label}
+                </li>
+              ))}
+            </ul>
 
-        <button
-          type="button"
-          onClick={() => {
-            onViewFeatures?.();
-            onClose();
-          }}
-          className="mt-5 inline-flex w-full items-center justify-center rounded-xl bg-[#FF4D1C] px-4 py-3 text-sm font-semibold text-white"
-        >
-          Start using your Pro features
-        </button>
+            <button
+              type="button"
+              onClick={() => {
+                onViewFeatures?.();
+                onClose();
+              }}
+              className="mt-5 inline-flex w-full items-center justify-center rounded-xl bg-[#FF4D1C] px-4 py-3 text-sm font-semibold text-white"
+            >
+              Start using your Pro features
+            </button>
+          </>
+        ) : (
+          <p className="mt-5 text-center text-xs text-muted-foreground">
+            Do not refresh — activation uses the verified payment webhook as the source of truth.
+          </p>
+        )}
       </div>
     </div>
   );

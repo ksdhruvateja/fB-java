@@ -148,7 +148,7 @@ export default function CustomerPage({
 
         <motion.div
           style={{ opacity: contentOpacity }}
-          className="relative z-10 flex-1 flex flex-col justify-end max-w-7xl mx-auto w-full px-4 sm:px-8 pt-[max(5.5rem,calc(env(safe-area-inset-top)+4.5rem))] pb-[max(1.25rem,env(safe-area-inset-bottom))] md:pb-8"
+          className="relative z-10 flex-1 flex flex-col justify-end w-full px-5 sm:px-6 lg:px-10 xl:px-12 2xl:px-16 pt-[max(5.5rem,calc(env(safe-area-inset-top)+4.5rem))] pb-[max(1.25rem,env(safe-area-inset-bottom))] md:pb-8"
         >
           <motion.div
             initial={{ opacity: 0, y: 24 }}
@@ -179,7 +179,10 @@ export default function CustomerPage({
           </motion.div>
 
           <motion.div style={{ y: brandY }} className="w-full flex justify-start items-end">
-            <BrandLogo variant="hero" className="drop-shadow-[0_8px_28px_rgba(0,0,0,0.5)]" />
+            <BrandLogo
+              variant="hero"
+              className="drop-shadow-[0_8px_28px_rgba(0,0,0,0.5)] max-h-[min(22vh,12.5rem)] sm:max-h-[min(24vh,11rem)] md:max-h-[min(26vh,12.5rem)]"
+            />
           </motion.div>
         </motion.div>
       </section>

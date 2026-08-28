@@ -17,6 +17,7 @@ import {
   previewInstantPayout,
   requestInstantPayout,
 } from "./managedJobs";
+import { fetchMyReferrals } from "./referralsApi";
 
 function statusBadge(status: string) {
   const label =
@@ -167,6 +168,13 @@ export default function ContractorPayoutsPanel({
   const [subTab, setSubTab] = useState<"earnings" | "account">(initialSubTab);
   const [instantPayout, setInstantPayout] = useState<ContractorPayout | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [referralBonusCents, setReferralBonusCents] = useState(0);
+
+  useEffect(() => {
+    void fetchMyReferrals().then((r) => {
+      if (r.ok && r.bonuses) setReferralBonusCents(Number(r.bonuses.pendingCents || 0) + Number(r.bonuses.paidCents || 0));
+    });
+  }, []);
 
   const selected = payouts.find((p) => p.id === selectedId) || null;
 
@@ -187,6 +195,12 @@ export default function ContractorPayoutsPanel({
         <p className="mt-1 text-sm text-muted-foreground">
           Track job earnings, set up your payout account, and get paid.
         </p>
+        {referralBonusCents > 0 ? (
+          <p className="mt-2 rounded-xl border border-border/70 bg-muted/30 px-3 py-2 text-xs">
+            <span className="font-semibold">Homeowner Referral Bonus</span> ledger ·{" "}
+            {formatCents(referralBonusCents)} tracked in Refer & Earn (separate from job earnings).
+          </p>
+        ) : null}
       </div>
 
       <div className="flex flex-wrap gap-2">

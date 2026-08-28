@@ -3,7 +3,7 @@
  */
 import { getStoredToken } from "./auth";
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
+export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getStoredToken();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -24,7 +24,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export async function platformStatus() {
-  return api<{ ok: boolean; stripe?: boolean; resend?: boolean; twilio?: boolean; note?: string }>(
+  return api<{ ok: boolean; stripe?: boolean; gmail?: boolean; note?: string }>(
     "/api/platform/status"
   );
 }
@@ -214,10 +214,13 @@ export async function startAdminMfa() {
 }
 
 export async function verifyAdminMfa(code: string) {
-  return api<{ ok: boolean; verified?: boolean }>("/api/auth/mfa/verify", {
-    method: "POST",
-    body: JSON.stringify({ code }),
-  });
+  return api<{ ok: boolean; verified?: boolean; token?: string; user?: import("./auth").AuthUser }>(
+    "/api/auth/mfa/verify",
+    {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }
+  );
 }
 
 export async function uploadMedia(dataUrl: string, kind?: string, jobId?: number) {
@@ -254,17 +257,173 @@ export interface SubscriberCustomer {
   id: number;
   name: string;
   email: string;
+  phone?: string | null;
   planCode: string | null;
+  accountStatus?: string;
   createdAt: string;
   currentPeriodEnd?: string | null;
   isTrial?: boolean;
   trialDaysLeft?: number;
 }
 
-export async function getSubscriptionStats() {
+export async function getSubscriptionStats(q = "") {
+  const qs = q.trim() ? `?q=${encodeURIComponent(q.trim())}` : "";
   return api<{ ok: boolean; stats: SubscriberStats; customers: SubscriberCustomer[] }>(
-    "/api/admin/subscription-stats"
+    `/api/admin/subscription-stats${qs}`
   );
+}
+
+export async function getAdminHomeownerProfile(userId: number) {
+  return api<{
+    ok: boolean;
+    message?: string;
+    customer?: {
+      id: number;
+      name: string;
+      email: string;
+      phone?: string | null;
+      planCode: string | null;
+      accountStatus: string;
+      joinedAt: string;
+    };
+    addresses?: Array<{
+      propertyId: number;
+      label: string;
+      isPrimary: boolean;
+      addressLine1?: string | null;
+      addressLine2?: string | null;
+      city?: string | null;
+      state?: string | null;
+      zip?: string | null;
+      propertyType?: string | null;
+      createdAt?: string;
+    }>;
+    serviceHistory?: Array<{
+      id: number;
+      bookingId?: string | null;
+      title?: string | null;
+      category?: string | null;
+      status: string;
+      propertyId?: number | null;
+      address?: string | null;
+      contractor?: string | null;
+      amount?: number | null;
+      createdAt?: string;
+      completedAt?: string | null;
+    }>;
+    payments?: Array<Record<string, unknown>>;
+    transactions?: Array<{
+      id: number;
+      transactionId: string;
+      paymentType: string;
+      amount: number;
+      currency: string;
+      status: string;
+      provider?: string;
+      jobId?: number | null;
+      meta?: Record<string, unknown>;
+      createdAt: string;
+    }>;
+    subscriptions?: Array<Record<string, unknown>>;
+    referrals?: Array<Record<string, unknown>>;
+    stats?: {
+      activeJobs: number;
+      totalJobs: number;
+      openQuotes: number;
+      outstandingBalance: number;
+      totalPaid: number;
+      openTickets: number;
+      properties: number;
+    };
+    quotes?: Array<{
+      id: number;
+      quoteNumber?: string | null;
+      jobId: number;
+      service?: string | null;
+      amount?: number | null;
+      status?: string;
+      createdAt?: string;
+      sentAt?: string | null;
+      acceptedAt?: string | null;
+    }>;
+    invoices?: Array<{
+      id: number;
+      invoiceNumber?: string | null;
+      quoteNumber?: string | null;
+      proposalId?: number | null;
+      jobId: number;
+      total: number;
+      paid: number;
+      amountDue: number;
+      status: string;
+      dueDate?: string | null;
+      createdAt?: string;
+    }>;
+    tickets?: Array<{
+      id: number;
+      ticketNumber: string;
+      subject: string;
+      category?: string | null;
+      priority?: string;
+      status: string;
+      createdAt?: string;
+      updatedAt?: string;
+    }>;
+    activity?: Array<{ at: string; action: string; detail?: string | null }>;
+  }>(`/api/admin/homeowners/${userId}/profile`);
+}
+
+export async function getFinanceOverview(range: string, from?: string, to?: string) {
+  const params = new URLSearchParams({ range });
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  return api<{ ok: boolean; summary?: Record<string, number> }>(`/api/admin/finance/overview?${params.toString()}`);
+}
+
+export async function listHomeownerNotes(userId: number) {
+  return api<{
+    ok: boolean;
+    notes: Array<{
+      id: number;
+      note: string;
+      adminName?: string;
+      relatedJobId?: number | null;
+      relatedTicketId?: number | null;
+      createdAt: string;
+    }>;
+  }>(`/api/admin/homeowners/${userId}/notes`);
+}
+
+export async function addHomeownerNote(userId: number, note: string, relatedJobId?: number, relatedTicketId?: number) {
+  return api<{
+    ok: boolean;
+    note?: { id: number; note: string; adminName?: string; createdAt: string };
+  }>(`/api/admin/homeowners/${userId}/notes`, {
+    method: "POST",
+    body: JSON.stringify({ note, relatedJobId, relatedTicketId }),
+  });
+}
+
+export async function getMyTransactions() {
+  return api<{
+    ok: boolean;
+    message?: string;
+    transactions: Array<{
+      id: number;
+      transactionId: string;
+      paymentType: string;
+      typeLabel: string;
+      description: string;
+      amount: number;
+      currency: string;
+      status: string;
+      provider?: string;
+      jobId?: number | null;
+      planCode?: string | null;
+      createdAt: string;
+      receiptUrl?: string | null;
+    }>;
+  }>("/api/payments/mine");
 }
 
 export async function updateSubscriptionOverride(userId: number, staffName: string) {
@@ -294,5 +453,12 @@ export async function updateStaffAccess(userId: number, accessLevel: string) {
   return api<{ ok: boolean; user: AuthUser }>("/api/admin/staff/access", {
     method: "POST",
     body: JSON.stringify({ userId, accessLevel }),
+  });
+}
+
+export async function adminSendPasswordReset(userId: number) {
+  return api<{ ok: boolean; message?: string }>(`/api/admin/users/${userId}/send-password-reset`, {
+    method: "POST",
+    body: JSON.stringify({}),
   });
 }

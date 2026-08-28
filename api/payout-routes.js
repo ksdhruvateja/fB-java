@@ -1,5 +1,7 @@
 import {
   serializePayout,
+  serializePayoutForContractor,
+  serializePayoutAdmin,
   calculateContractorPayout,
   calculateInstantPayoutFee,
   normalizePayoutSettings,
@@ -24,6 +26,8 @@ import {
   stripeConnectReturnUrl,
   stripeConnectRefreshUrl,
 } from './stripe.js';
+import { sumApprovedChangeOrderAmounts } from './financial-calculations.js';
+import { FINANCIAL_EVENT, listFinancialEventsForJob, recordFinancialEvent } from './financial-ledger.js';
 
 function payoutSettingsToApi(row) {
   const s = normalizePayoutSettings(row || {});
@@ -39,6 +43,151 @@ function payoutSettingsToApi(row) {
     maximumInstantPayoutCents: s.maximum_instant_payout_cents,
     contractorAbsorbsFee: s.contractor_absorbs_fee,
     fixbridgeAbsorbsFee: s.fixbridge_absorbs_fee,
+  };
+}
+
+const FORBIDDEN_CLIENT_MONEY_FIELDS = [
+  'payoutAmount',
+  'contractorNet',
+  'amount',
+  'netAmountCents',
+  'instantFee',
+  'feePercent',
+  'feeAmount',
+  'grossAmountCents',
+  'platformFeeCents',
+];
+
+function rejectClientMoneyFields(body) {
+  for (const key of FORBIDDEN_CLIENT_MONEY_FIELDS) {
+    if (body?.[key] != null && body[key] !== '') {
+      return { rejected: true, message: `Client-controlled field "${key}" is not allowed.` };
+    }
+  }
+  return { rejected: false };
+}
+
+async function loadPayoutEconomics(pool, jobId, payoutRow = null) {
+  const { rows: props } = await pool.query(
+    `SELECT * FROM proposals WHERE job_id=$1 ORDER BY created_at DESC LIMIT 1`,
+    [jobId]
+  );
+  const proposal = props[0];
+  const coTotals = await sumApprovedChangeOrderAmounts(pool, jobId);
+
+  const proposalRetailCents =
+    proposal?.retail_amount != null ? Math.round(Number(proposal.retail_amount) * 100) : null;
+  const changeOrderRetailCents = Math.round(Number(coTotals.retailDollars || 0) * 100);
+  const changeOrderContractorCents = Math.round(Number(coTotals.contractorNetDollars || 0) * 100);
+
+  const { rows: paid } = await pool.query(
+    `SELECT COALESCE(SUM(amount),0)::numeric AS total_charged,
+            COALESCE(SUM(CASE WHEN stripe_net_received_cents IS NOT NULL THEN stripe_net_received_cents ELSE 0 END),0)::bigint AS net_received_known,
+            COALESCE(SUM(stripe_processing_fee_cents),0)::bigint AS stripe_fees_sum,
+            COUNT(*) FILTER (WHERE stripe_processing_fee_cents IS NOT NULL AND stripe_processing_fee_cents > 0) AS fee_rows
+     FROM payments
+     WHERE job_id=$1 AND status IN ('succeeded','paid','authorized')`,
+    [jobId]
+  );
+  const { rows: refunds } = await pool.query(
+    `SELECT COALESCE(SUM(amount),0)::numeric AS total FROM refunds WHERE job_id=$1 AND status IN ('succeeded','pending')`,
+    [jobId]
+  );
+  const { rows: visitFees } = await pool.query(
+    `SELECT COALESCE(SUM(amount),0)::numeric AS total FROM payments
+     WHERE job_id=$1 AND payment_type='visit_fee' AND status IN ('succeeded','paid')`,
+    [jobId]
+  );
+  const { rows: reconciliations } = await pool.query(
+    `SELECT * FROM refund_reconciliations WHERE job_id=$1 ORDER BY created_at DESC`,
+    [jobId]
+  );
+
+  const totalChargedCents = Math.round(Number(paid[0]?.total_charged || 0) * 100);
+  const refundCents = Math.round(Number(refunds[0]?.total || 0) * 100);
+  const visitFeeCents = Math.round(Number(visitFees[0]?.total || 0) * 100);
+  const stripeFeesKnown = Number(paid[0]?.fee_rows || 0) > 0;
+  const stripeProcessingFeeCents = stripeFeesKnown ? Number(paid[0]?.stripe_fees_sum || 0) : null;
+  const totalReceivedCents = stripeFeesKnown
+    ? Number(paid[0]?.net_received_known || 0)
+    : totalChargedCents > 0
+      ? null
+      : 0;
+
+  const proposalContractorCents =
+    proposal?.contractor_net != null ? Math.round(Number(proposal.contractor_net) * 100) : null;
+  const originalAgreedCents =
+    proposalContractorCents != null
+      ? proposalContractorCents + changeOrderContractorCents
+      : payoutRow
+        ? Math.max(0, Number(payoutRow.net_amount_cents || 0) - Number(payoutRow.adjustments_cents || 0))
+        : null;
+
+  const adminAdjustmentCents = payoutRow ? Number(payoutRow.adjustments_cents || 0) : 0;
+  const contractorPayableCents = payoutRow ? Number(payoutRow.net_amount_cents || 0) : null;
+  const grossMarginCents = payoutRow ? Number(payoutRow.platform_fee_cents || 0) : null;
+
+  const isInstant = payoutRow?.payout_method === 'instant';
+  const instantPayoutFeeCents = isInstant
+    ? Number(payoutRow.instant_payout_fee_cents || 0) > 0
+      ? Number(payoutRow.instant_payout_fee_cents)
+      : null
+    : 0;
+
+  const contractorGrossPayoutCents = contractorPayableCents;
+  const contractorNetPayoutCents =
+    contractorPayableCents != null && instantPayoutFeeCents != null
+      ? Math.max(0, contractorPayableCents - instantPayoutFeeCents)
+      : contractorPayableCents;
+
+  let fixbridgeNetCents = null;
+  if (totalReceivedCents != null && contractorPayableCents != null) {
+    fixbridgeNetCents = totalReceivedCents - refundCents - contractorPayableCents;
+    if (!stripeFeesKnown && totalChargedCents > 0) {
+      fixbridgeNetCents = null;
+    }
+  }
+
+  const ledgerEvents = await listFinancialEventsForJob(pool, jobId, 50);
+
+  return {
+    homeowner: {
+      contractProposalCents: proposalRetailCents,
+      approvedChangeOrdersCents: changeOrderRetailCents,
+      visitFeesCents: visitFeeCents,
+      refundsCents: refundCents,
+      totalChargedCents,
+      totalReceivedCents,
+    },
+    paymentCosts: {
+      stripeProcessingFeeCents,
+      stripeProcessingFeeStatus:
+        stripeProcessingFeeCents != null ? 'known' : totalChargedCents > 0 ? 'pending' : 'not_applicable',
+    },
+    contractor: {
+      originalAgreedAmountCents: originalAgreedCents,
+      adminAdjustmentCents,
+      contractorPayableCents,
+      payoutMethod: payoutRow?.payout_method || 'standard',
+      instantPayoutFeeCents: isInstant ? instantPayoutFeeCents : 0,
+      contractorGrossPayoutCents,
+      contractorNetPayoutCents,
+    },
+    fixbridge: {
+      grossMarginCents,
+      stripeProcessingFeeCents,
+      instantPayoutFeeCents: isInstant ? instantPayoutFeeCents : 0,
+      fixbridgeNetCents,
+    },
+    refundReconciliations: reconciliations.map((r) => ({
+      id: Number(r.id),
+      refundAmountCents: Number(r.refund_amount_cents || 0),
+      platformExposureCents: Number(r.platform_exposure_cents || 0),
+      status: r.status,
+      notes: r.notes,
+      createdAt: r.created_at,
+    })),
+    ledgerEventCount: ledgerEvents.length,
   };
 }
 
@@ -167,7 +316,7 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, req
       res.json({
         ok: true,
         payouts: rows.map((r) =>
-          serializePayout(r, {
+          serializePayoutAdmin(r, {
             contractorName: r.contractor_name,
             contractorEmail: r.contractor_email,
             stripeAccountId: r.stripe_account_id,
@@ -199,12 +348,16 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, req
         `SELECT * FROM proposals WHERE job_id=$1 ORDER BY created_at DESC LIMIT 1`,
         [rows[0].job_id]
       );
+      const economics = await loadPayoutEconomics(pool, rows[0].job_id, rows[0]);
+      const connectAccount = await buildContractorPayoutAccountView(pool, rows[0].contractor_id);
       res.json({
         ok: true,
-        payout: serializePayout(rows[0], {
+        payout: serializePayoutAdmin(rows[0], {
           contractorName: rows[0].contractor_name,
           jobTitle: rows[0].job_title,
           proposal: props[0] || null,
+          economics,
+          connectStatus: connectAccount?.connectStatus || null,
         }),
         auditLogs: logs,
       });
@@ -223,38 +376,50 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, req
       if (!rows[0]) {
         return res.json({ ok: true, payout: null });
       }
-      res.json({ ok: true, payout: serializePayout(rows[0]) });
+      res.json({ ok: true, payout: serializePayoutAdmin(rows[0]) });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Could not load payout for job.' });
     }
   });
 
-  app.post('/api/admin/payouts/:id/approve', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+  app.post('/api/admin/payouts/:id/approve', requireAuth, requireAdmin, requireAdminWrite, need('payouts.approve'), async (req, res) => {
     try {
+      const blocked = rejectClientMoneyFields(req.body || {});
+      if (blocked.rejected) return res.status(400).json({ ok: false, message: blocked.message });
       const id = Number(req.params.id);
-      const adjustmentsCents = req.body?.adjustmentsCents != null ? Math.round(Number(req.body.adjustmentsCents)) : 0;
       const result = await approveAndReleasePayout(pool, id, req.authUser.id, {
-        adjustmentsCents,
+        adjustmentsCents: 0,
         note: req.body?.note,
       });
       if (!result.ok) return res.status(400).json(result);
-      res.json({ ok: true, payout: serializePayout(result.payout), transferId: result.transferId, simulated: result.simulated });
+      res.json({ ok: true, payout: serializePayoutAdmin(result.payout), transferId: result.transferId, simulated: result.simulated });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, message: 'Could not approve payout.' });
     }
   });
 
-  app.post('/api/admin/payouts/:id/adjust', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+  app.post('/api/admin/payouts/:id/adjust', requireAuth, requireAdmin, requireAdminWrite, need('payouts.approve'), async (req, res) => {
     try {
+      const blocked = rejectClientMoneyFields(req.body || {});
+      if (blocked.rejected) return res.status(400).json({ ok: false, message: blocked.message });
       const id = Number(req.params.id);
       const adjustmentsCents = Math.round(Number(req.body?.adjustmentsCents || 0));
+      if (adjustmentsCents !== 0 && !String(req.body?.reason || '').trim()) {
+        return res.status(400).json({ ok: false, message: 'Adjustment reason is required.' });
+      }
       const { rows } = await pool.query(`SELECT * FROM contractor_payouts WHERE id=$1`, [id]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
+      if (rows[0].stripe_transfer_id) {
+        return res.status(400).json({ ok: false, message: 'Payout is locked after transfer.' });
+      }
       if (![PAYOUT_STATUS.PENDING_APPROVAL, PAYOUT_STATUS.PENDING_JOB_COMPLETION].includes(rows[0].status)) {
         return res.status(400).json({ ok: false, message: 'Payout can no longer be adjusted.' });
       }
-      const net = Math.max(0, Number(rows[0].gross_amount_cents) - Number(rows[0].platform_fee_cents) + adjustmentsCents);
+      const previousAdjustmentsCents = Number(rows[0].adjustments_cents || 0);
+      const previousNetAmountCents = Number(rows[0].net_amount_cents || 0);
+      const baseContractorPayableCents = previousNetAmountCents - previousAdjustmentsCents;
+      const net = Math.max(0, baseContractorPayableCents + adjustmentsCents);
       const prev = rows[0].status;
       await pool.query(
         `UPDATE contractor_payouts SET adjustments_cents=$1, net_amount_cents=$2, updated_at=NOW() WHERE id=$3`,
@@ -266,51 +431,67 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, req
         previousStatus: prev,
         newStatus: prev,
         performedBy: req.authUser.id,
-        metadata: { adjustmentsCents, netAmountCents: net, reason: req.body?.reason },
+        metadata: {
+          previousAdjustmentsCents,
+          previousNetAmountCents,
+          adjustmentsCents,
+          netAmountCents: net,
+          reason: req.body?.reason,
+        },
+      });
+      await recordFinancialEvent(pool, {
+        eventType: FINANCIAL_EVENT.CONTRACTOR_PAYABLE_ADJUSTED,
+        jobId: rows[0].job_id,
+        payoutId: id,
+        contractorId: rows[0].contractor_id,
+        amountCents: net,
+        createdBy: req.authUser.id,
+        metadata: {
+          previousAdjustmentsCents,
+          previousNetAmountCents,
+          adjustmentsCents,
+          reason: req.body?.reason,
+        },
       });
       const { rows: fresh } = await pool.query(`SELECT * FROM contractor_payouts WHERE id=$1`, [id]);
-      res.json({ ok: true, payout: serializePayout(fresh[0]) });
+      res.json({ ok: true, payout: serializePayoutAdmin(fresh[0]) });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Could not adjust payout.' });
     }
   });
 
   // Admin job payout — creates/updates contractor_payouts then approves release
-  app.post('/api/admin/managed/jobs/:id/payout-v2', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+  app.post('/api/admin/managed/jobs/:id/payout-v2', requireAuth, requireAdmin, requireAdminWrite, need('payouts.approve'), async (req, res) => {
     try {
+      const blocked = rejectClientMoneyFields(req.body || {});
+      if (blocked.rejected) return res.status(400).json({ ok: false, message: blocked.message });
       const jobId = Number(req.params.id);
       let payout = await ensurePayoutRecordForJob(pool, jobId, { actorUserId: req.authUser.id });
       if (!payout) return res.status(400).json({ ok: false, message: 'Could not create payout for job. Assign a contractor first.' });
 
-      const amountOverride = req.body?.amount != null && req.body.amount !== '' ? Number(req.body.amount) : null;
       const adjustmentsCents =
         req.body?.adjustmentsCents != null ? Math.round(Number(req.body.adjustmentsCents)) : null;
 
-      if (amountOverride != null && Number.isFinite(amountOverride) && amountOverride > 0) {
-        const netCents = Math.round(amountOverride * 100);
-        const grossCents = Math.round(netCents / 0.85);
-        const platformFeeCents = Math.max(0, grossCents - netCents);
+      if (adjustmentsCents != null && Number.isFinite(adjustmentsCents)) {
+        if (adjustmentsCents !== 0 && !String(req.body?.reason || req.body?.note || '').trim()) {
+          return res.status(400).json({ ok: false, message: 'Adjustment reason is required.' });
+        }
         await pool.query(
-          `UPDATE contractor_payouts SET
-             gross_amount_cents=$1,
-             platform_fee_cents=$2,
-             net_amount_cents=$3,
-             updated_at=NOW()
-           WHERE id=$4`,
-          [grossCents, platformFeeCents, netCents, payout.id]
+          `UPDATE contractor_payouts SET adjustments_cents=$1, net_amount_cents=$2, updated_at=NOW() WHERE id=$3 AND COALESCE(stripe_transfer_id,'') = ''`,
+          [adjustmentsCents, Math.max(0, Number(payout.net_amount_cents || 0) - Number(payout.adjustments_cents || 0) + adjustmentsCents), payout.id]
         );
-        const { rows } = await pool.query(`SELECT * FROM contractor_payouts WHERE id=$1`, [payout.id]);
-        payout = rows[0];
-      } else if (adjustmentsCents != null && Number.isFinite(adjustmentsCents)) {
-        await pool.query(
-          `UPDATE contractor_payouts SET adjustments_cents=$1, net_amount_cents=gross_amount_cents - platform_fee_cents + $1, updated_at=NOW() WHERE id=$2`,
-          [adjustmentsCents, payout.id]
-        );
+        await logPayoutAudit(pool, {
+          payoutId: payout.id,
+          action: 'adjusted',
+          previousStatus: payout.status,
+          newStatus: payout.status,
+          performedBy: req.authUser.id,
+          metadata: { adjustmentsCents, reason: req.body?.reason || req.body?.note },
+        });
         const { rows } = await pool.query(`SELECT * FROM contractor_payouts WHERE id=$1`, [payout.id]);
         payout = rows[0];
       }
 
-      // Adjustments/amount already applied on the payout row above
       const result = await approveAndReleasePayout(pool, payout.id, req.authUser.id, {
         adjustmentsCents: 0,
         note: req.body?.note,
@@ -320,7 +501,7 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, req
       const { rows: jobRows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       res.json({
         ok: true,
-        payout: serializePayout(result.payout),
+        payout: serializePayoutAdmin(result.payout),
         transferId: result.transferId,
         simulated: result.simulated,
         amount: Number(result.payout?.net_amount_cents || 0) / 100,
@@ -355,6 +536,17 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, req
         `SELECT COALESCE(SUM(net_amount_cents),0)::bigint AS total FROM contractor_payouts WHERE contractor_id=$1`,
         [cid]
       );
+      const { rows: tipRows } = await pool.query(
+        `SELECT COALESCE(SUM(amount),0)::numeric AS tips FROM job_tips
+         WHERE contractor_user_id=$1 AND status='paid'`,
+        [cid]
+      );
+      const { rows: serviceRows } = await pool.query(
+        `SELECT COALESCE(SUM(service_amount_cents),0)::bigint AS svc,
+                COALESCE(SUM(tip_amount_cents),0)::bigint AS tips
+         FROM contractor_payouts WHERE contractor_id=$1`,
+        [cid]
+      );
       const map = Object.fromEntries(rows.map((r) => [r.status, Number(r.total)]));
       res.json({
         ok: true,
@@ -363,6 +555,9 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, req
           pendingBalanceCents: (map.pending_approval || 0) + (map.pending_job_completion || 0) + (map.processing || 0),
           totalEarningsCents: Number(allTime[0]?.total || 0),
           paidThisMonthCents: Number(paidMonth[0]?.total || 0),
+          serviceEarningsCents: Number(serviceRows[0]?.svc || 0),
+          tipEarningsCents: Number(serviceRows[0]?.tips || 0) || Math.round(Number(tipRows[0]?.tips || 0) * 100),
+          tipsPaidDollars: Number(tipRows[0]?.tips || 0),
         },
       });
     } catch (e) {
@@ -379,7 +574,7 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, req
       );
       res.json({
         ok: true,
-        payouts: rows.map((r) => serializePayout(r)),
+        payouts: rows.map((r) => serializePayoutForContractor(r)),
       });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Server error.' });
@@ -390,12 +585,19 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, req
     try {
       if (req.authUser.role !== 'contractor') return res.status(403).json({ ok: false, message: 'Contractors only.' });
       const jobId = Number(req.params.jobId);
+      const { rows: jobs } = await pool.query(
+        `SELECT assigned_contractor_user_id FROM managed_jobs WHERE id=$1`,
+        [jobId]
+      );
+      if (!jobs[0] || Number(jobs[0].assigned_contractor_user_id) !== Number(req.authUser.id)) {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
       const { rows } = await pool.query(`SELECT * FROM contractor_payouts WHERE job_id=$1`, [jobId]);
       if (!rows[0]) return res.json({ ok: true, payout: null });
       if (Number(rows[0].contractor_id) !== Number(req.authUser.id)) {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
-      res.json({ ok: true, payout: serializePayout(rows[0]) });
+      res.json({ ok: true, payout: serializePayoutForContractor(rows[0]) });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Server error.' });
     }
@@ -410,7 +612,7 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, req
       if (Number(rows[0].contractor_id) !== Number(req.authUser.id)) {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
-      res.json({ ok: true, payout: serializePayout(rows[0]) });
+      res.json({ ok: true, payout: serializePayoutForContractor(rows[0]) });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Server error.' });
     }
@@ -419,12 +621,14 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, req
   app.post('/api/contractor/payouts/:id/instant', requireAuth, async (req, res) => {
     try {
       if (req.authUser.role !== 'contractor') return res.status(403).json({ ok: false, message: 'Contractors only.' });
+      const blocked = rejectClientMoneyFields(req.body || {});
+      if (blocked.rejected) return res.status(400).json({ ok: false, message: blocked.message });
       const id = Number(req.params.id);
       const result = await requestInstantPayout(pool, id, req.authUser.id);
       if (!result.ok) return res.status(400).json(result);
       res.json({
         ok: true,
-        payout: serializePayout(result.payout),
+        payout: serializePayoutForContractor(result.payout),
         instantFeeCents: result.instantFeeCents,
         netPayoutCents: result.netPayoutCents,
         simulated: result.simulated,
@@ -513,7 +717,9 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, req
       await buildContractorPayoutAccountView(pool, req.authUser.id);
       res.json({ ok: true, simulated: false, url: link.url, accountId });
     } catch (e) {
-      res.status(500).json({ ok: false, message: 'Could not start Stripe onboarding.' });
+      console.error('payout-account connect:', e);
+      const msg = e?.message || 'Could not start Stripe onboarding.';
+      res.status(e?.status || 500).json({ ok: false, message: msg, code: e?.code || undefined });
     }
   });
 

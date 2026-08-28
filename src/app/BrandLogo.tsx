@@ -3,100 +3,69 @@ import { brand } from "../config/brand";
 export type BrandLogoVariant = "nav" | "footer" | "hero" | "auth" | "mark";
 
 /**
- * Nav/auth use the gear mark (readable at small sizes) + product name.
- * Hero/footer use the full lockup with fluid sizing for phone → laptop.
+ * Full-color FixBridge logo assets (transparent PNG).
+ * - mark: FB icon only
+ * - nav / auth: icon + FixBridge wordmark (no tagline)
+ * - footer / hero: full lockup with tagline
  */
 const VARIANT: Record<
   BrandLogoVariant,
-  { src: "mark" | "full"; className: string; showName: boolean; nameClass: string }
+  { src: "mark" | "lockup" | "full"; className: string }
 > = {
   mark: {
     src: "mark",
     className: "h-9 w-9 sm:h-10 sm:w-10",
-    showName: false,
-    nameClass: "",
   },
   nav: {
-    src: "mark",
-    className: "h-9 w-9 md:h-10 md:w-10",
-    showName: true,
-    nameClass: "text-base md:text-lg",
+    src: "lockup",
+    className: "h-9 w-auto max-h-9 md:h-10 md:max-h-10 max-w-[10.5rem] md:max-w-[12rem]",
   },
   auth: {
-    src: "mark",
-    className: "h-8 w-8 sm:h-9 sm:w-9",
-    showName: true,
-    nameClass: "text-base sm:text-lg",
+    src: "lockup",
+    className: "h-8 w-auto max-h-8 sm:h-9 sm:max-h-9 max-w-[9.5rem] sm:max-w-[11rem]",
   },
   footer: {
-    src: "full",
-    className: "h-[4.5rem] w-auto max-h-[4.5rem] max-w-[9rem] sm:h-[5.25rem] sm:max-w-[11rem] md:h-24 md:max-w-[13rem]",
-    showName: false,
-    nameClass: "",
+    src: "lockup",
+    className:
+      "h-[3.25rem] w-auto max-h-[3.25rem] max-w-[11rem] sm:h-[3.75rem] sm:max-w-[13rem] md:h-[4.25rem] md:max-w-[15rem]",
   },
   hero: {
     src: "full",
     className:
-      "h-[6.5rem] w-auto max-w-[min(42vw,9.5rem)] sm:h-[8.5rem] sm:max-w-[12rem] md:h-[10.5rem] md:max-w-[15rem] lg:h-48 lg:max-w-[17rem]",
-    showName: false,
-    nameClass: "",
+      "h-auto w-auto max-h-[min(22vh,12.5rem)] max-w-[min(88vw,16rem)] sm:max-w-[18rem] md:max-w-[22rem] lg:max-w-[26rem]",
   },
 };
 
-/** Monochrome FixBridge logo — white, black, or auto (follows light/dark theme). */
+function logoSrc(kind: "mark" | "lockup" | "full") {
+  if (kind === "mark") return brand.logoMarkUrl;
+  if (kind === "lockup") return brand.logoLockupUrl;
+  return brand.logoUrl;
+}
+
+/** Full-color FixBridge logo — preserves silver/orange wordmark from brand assets. */
 export function BrandLogo({
   variant = "nav",
-  tone = "white",
+  tone: _tone = "auto",
   className = "",
-  showName,
+  showName: _showName,
 }: {
   variant?: BrandLogoVariant;
+  /** @deprecated Color logo ignores tone; kept for call-site compatibility. */
   tone?: "white" | "black" | "auto";
   className?: string;
-  /** Override whether the product name appears next to the mark. */
+  /** @deprecated Wordmark is baked into lockup/full assets. */
   showName?: boolean;
 }) {
   const cfg = VARIANT[variant];
-  const src = cfg.src === "mark" ? brand.logoMarkUrl : brand.logoUrl;
-  const mono =
-    tone === "auto"
-      ? "brightness-0 dark:invert"
-      : tone === "white"
-        ? "brightness-0 invert"
-        : "brightness-0";
-  const withName = showName ?? cfg.showName;
-  const nameTone =
-    tone === "auto"
-      ? "text-foreground"
-      : tone === "white"
-        ? "text-white"
-        : "text-black";
-
-  const mark = (
-    <img
-      src={src}
-      alt={withName ? "" : brand.productName}
-      className={`block object-contain select-none pointer-events-none ${mono} ${cfg.className} ${withName ? "" : className}`}
-      draggable={false}
-      decoding="async"
-      aria-hidden={withName ? true : undefined}
-    />
-  );
-
-  if (!withName) return mark;
+  const src = logoSrc(cfg.src);
 
   return (
-    <span
-      className={`inline-flex items-center gap-2.5 min-w-0 ${className}`}
-      role="img"
-      aria-label={brand.productName}
-    >
-      {mark}
-      <span
-        className={`[font-family:'Barlow_Condensed',sans-serif] font-black uppercase tracking-wide leading-none truncate ${nameTone} ${cfg.nameClass}`}
-      >
-        {brand.productName}
-      </span>
-    </span>
+    <img
+      src={src}
+      alt={brand.productName}
+      className={`block object-contain object-left select-none pointer-events-none ${cfg.className} ${className}`}
+      draggable={false}
+      decoding="async"
+    />
   );
 }

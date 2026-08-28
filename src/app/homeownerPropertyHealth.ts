@@ -53,6 +53,12 @@ export type PropertyHealthProfile = {
   previousServices?: PreviousServiceRecord[];
   aiSuggestions?: AiServiceSuggestion[];
   onboardingComplete?: boolean;
+  /** Dismiss / snooze state for Home Updates recommendations */
+  homeUpdateState?: {
+    dismissed?: Record<string, string>;
+    snoozedUntil?: Record<string, string>;
+    history?: Array<Record<string, unknown>>;
+  };
 };
 
 export const REQUEST_SYSTEM_OPTIONS: {
@@ -69,6 +75,9 @@ export const REQUEST_SYSTEM_OPTIONS: {
   { id: "handyman", label: "Handyman", service: "Handyman", area: "Garage", iconHint: "hammer" },
   { id: "pest", label: "Pest", service: "Pest Control", area: "Garage", iconHint: "bug" },
   { id: "roofing", label: "Roofing", service: "Roofing & Gutters", area: "Gutters", iconHint: "home" },
+  { id: "landscaping", label: "Landscaping", service: "Landscaping", area: "Yard & Exterior", iconHint: "trees" },
+  { id: "snow", label: "Snow Removal", service: "Snow Removal", area: "Yard & Exterior", iconHint: "snowflake" },
+  { id: "cleaning", label: "Cleaning", service: "Cleaning", area: "Kitchen", iconHint: "cleaning" },
   { id: "other", label: "Something Else", service: "Other", area: "Kitchen", iconHint: "more" },
 ];
 
@@ -80,6 +89,9 @@ export function serviceToSystem(category?: string | null, title?: string | null)
   if (/roof|gutter|shingle/.test(hay)) return "Roof";
   if (/appliance|fridge|washer|dryer|dishwasher|oven|stove/.test(hay)) return "Appliances";
   if (/pest|termite|rodent|insect/.test(hay)) return "Pest";
+  if (/snow|plow|de-ice|salting|shovel/.test(hay)) return null;
+  if (/landscape|lawn|yard|mulch|hedge|garden|leaf/.test(hay)) return null;
+  if (/clean|janitor|maid|housekeep/.test(hay)) return null;
   if (/smoke|detector|safety|lock|security|alarm/.test(hay)) return "Safety";
   return null;
 }
@@ -162,6 +174,20 @@ export function normalizeHealthProfile(raw?: Partial<PropertyHealthProfile> | nu
     previousServices,
     aiSuggestions,
     onboardingComplete: raw.onboardingComplete === true,
+    homeUpdateState:
+      raw.homeUpdateState && typeof raw.homeUpdateState === "object"
+        ? {
+            dismissed:
+              raw.homeUpdateState.dismissed && typeof raw.homeUpdateState.dismissed === "object"
+                ? raw.homeUpdateState.dismissed
+                : {},
+            snoozedUntil:
+              raw.homeUpdateState.snoozedUntil && typeof raw.homeUpdateState.snoozedUntil === "object"
+                ? raw.homeUpdateState.snoozedUntil
+                : {},
+            history: Array.isArray(raw.homeUpdateState.history) ? raw.homeUpdateState.history : [],
+          }
+        : undefined,
   };
 }
 

@@ -22,6 +22,9 @@ export const DEFAULT_PRICING_RULES = {
     roofing: { trip: 125, hourly: 110, materials_allowance: 200 },
     flooring: { trip: 90, hourly: 95, materials_allowance: 150 },
     carpentry: { trip: 90, hourly: 100, materials_allowance: 90 },
+    snow_removal: { trip: 85, hourly: 95, materials_allowance: 40 },
+    landscaping: { trip: 75, hourly: 85, materials_allowance: 55 },
+    cleaning: { trip: 65, hourly: 75, materials_allowance: 35 },
     others: { trip: 85, hourly: 95, materials_allowance: 70 },
   },
   fixed_platform_cost: 75,
@@ -75,6 +78,15 @@ function clamp(n, min, max) {
 
 export function normalizeCategory(category = '') {
   const c = String(category).toLowerCase().trim();
+  if (c.includes('snow') || c.includes('plow') || c.includes('de-ic') || c.includes('deic') || c.includes('salting')) {
+    return 'snow_removal';
+  }
+  if (c.includes('landscape') || c.includes('lawn') || c.includes('yard') || c.includes('mulch') || c.includes('hedge')) {
+    return 'landscaping';
+  }
+  if (c.includes('clean') || c.includes('janitor') || c.includes('maid')) {
+    return 'cleaning';
+  }
   if (c.includes('plumb')) return 'plumbing';
   if (c.includes('electr')) return 'electrical';
   if (c.includes('hvac') || c.includes('heat') || c.includes('cool')) return 'hvac';

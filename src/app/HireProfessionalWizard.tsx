@@ -19,7 +19,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { ManagedJob } from "./managedJobs";
-import { payDispatchFee, requestProfessionalDispatch, retailRangeLabel } from "./managedJobs";
+import { payDispatchFee, prepareCheckout, requestProfessionalDispatch, retailRangeLabel } from "./managedJobs";
 import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
 import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 
@@ -54,16 +54,16 @@ const PROJECT_STAGE_OPTIONS = [
   { value: "active_renovation", label: "Active renovation" },
 ] as const;
 
-const HIRE_STEPS = ["timing", "window", "date", "info", "confirm", "payment"] as const;
+const HIRE_STEPS = ["timing", "window", "date", "info", "checkout", "review"] as const;
 type HireStep = (typeof HIRE_STEPS)[number];
 
 const STEP_LABELS: Record<HireStep, string> = {
   timing: "Timing",
-  window: "Time window",
+  window: "Window",
   date: "Date",
-  info: "Property info",
-  confirm: "Confirm",
-  payment: "Payment",
+  info: "Details",
+  checkout: "Pricing",
+  review: "Review & Confirm",
 };
 
 function toDateInputValue(d: Date) {
@@ -98,9 +98,9 @@ function formatDisplayDate(iso: string) {
 
 function initialStep(job: ManagedJob): HireStep {
   if (job.visitFeeAuthorized || job.status === "paid_for_dispatch" || job.status === "awaiting_contractor") {
-    return "payment";
+    return "review";
   }
-  if (job.status === "awaiting_service_payment") return "payment";
+  if (job.status === "awaiting_service_payment") return "checkout";
   return "timing";
 }
 
@@ -143,8 +143,8 @@ export default function HireProfessionalWizard({
     setTransactionStage(job.transactionStage || "ongoing_maintenance");
     setDiscountCode(job.discountCode || "");
     setPrefsSaved(job.status === "awaiting_service_payment" || dispatchPaid);
-    if (dispatchPaid) setStep("payment");
-    else if (job.status === "awaiting_service_payment") setStep("payment");
+    if (dispatchPaid) setStep("checkout");
+    else if (job.status === "awaiting_service_payment") setStep("checkout");
   }, [job.id, job.status, job.visitFeeAuthorized]);
 
   function goBack() {
@@ -185,7 +185,7 @@ export default function HireProfessionalWizard({
 
   async function handleConfirm() {
     const ok = await savePreferences();
-    if (ok) setStep("payment");
+    if (ok) setStep("checkout");
   }
 
   async function handlePay() {
@@ -196,9 +196,19 @@ export default function HireProfessionalWizard({
         const ok = await savePreferences();
         if (!ok) return;
       }
-      const r = await payDispatchFee(job.id, dispatchCouponPreview?.code || job.discountCode || undefined);
+      const code = dispatchCouponPreview?.code || job.discountCode || undefined;
+      const prepared = await prepareCheckout(job.id, {
+        discountCode: code || null,
+        clearCoupon: !code,
+      });
+      if (!prepared.ok) {
+        onError(prepared.message || "Could not prepare checkout.");
+        return;
+      }
+      if (prepared.job) onJobUpdated(prepared.job);
+      const r = await payDispatchFee(job.id, code);
       if (!r.ok) {
-        onError(r.message || "Payment failed.");
+        onError(r.message || "Payment unsuccessful. Your request has not been submitted for dispatch.");
         return;
       }
       if (r.url) {
@@ -210,7 +220,7 @@ export default function HireProfessionalWizard({
         window.location.href = r.url;
         return;
       }
-      onError("Stripe checkout could not be started. Check payment configuration.");
+      onError("Secure payment could not be started. Check payment configuration.");
     } finally {
       setBusy(false);
     }
@@ -232,9 +242,9 @@ export default function HireProfessionalWizard({
         <div className="flex items-start gap-3">
           <CheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
           <div>
-            <h3 className="font-semibold text-emerald-900 dark:text-emerald-100">Dispatch fee authorized</h3>
+            <h3 className="font-semibold text-emerald-900 dark:text-emerald-100">Payment Successful</h3>
             <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-              FixBridge has been notified. An admin will contact a qualified contractor and schedule your visit
+              Your request has been submitted to FixBridge. An admin will review and contact a qualified contractor and schedule your visit
               {preferredDate ? ` around ${formatDisplayDate(preferredDate)}` : ""}
               {preferredTimeSlot ? ` (${TIME_WINDOW_OPTIONS.find((o) => o.value === preferredTimeSlot)?.label})` : ""}.
             </p>
@@ -432,38 +442,31 @@ export default function HireProfessionalWizard({
             </div>
           )}
 
-          {step === "confirm" && (
+          {step === "checkout" && (
             <div className="space-y-4">
-              <div className="rounded-xl border border-[#FF4D1C]/20 bg-white/80 p-4 text-sm dark:bg-background/60">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Your dispatch plan</p>
-                <p className="mt-2 leading-relaxed">{summaryLine}</p>
-              </div>
               <div className="rounded-xl border border-border bg-card p-4 space-y-2 text-sm">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Price summary</p>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Repair estimate</span>
+                  <span className="text-muted-foreground">Service estimate</span>
                   <span className="font-semibold tabular-nums">{retailRangeLabel(job)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Contractor visit fee (hold)</span>
-                  <span className="font-semibold">${baseDispatchFee}</span>
+                  <span className="text-muted-foreground">Service fee</span>
+                  <span className="font-semibold tabular-nums">${Number(baseDispatchFee).toFixed(2)}</span>
                 </div>
-                <AiEstimateDisclaimer compact />
-              </div>
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                Next you&apos;ll authorize a temporary card hold for the visit fee via Stripe. FixBridge is notified once payment succeeds, then we contact a vetted contractor.
-              </p>
-            </div>
-          )}
-
-          {step === "payment" && (
-            <div className="space-y-4">
-              <div className="rounded-xl border border-border bg-card p-4 space-y-3 text-sm">
-                <p className="font-semibold">Confirm & pay visit fee</p>
-                <p className="text-xs text-muted-foreground">{summaryLine}</p>
-                <div className="flex justify-between border-t border-border pt-2">
-                  <span>Dispatch authorization hold</span>
-                  <span className="font-bold text-primary tabular-nums">${dispatchHoldAmount}</span>
+                {dispatchCouponPreview ? (
+                  <div className="flex justify-between text-emerald-700 dark:text-emerald-300">
+                    <span>Coupon {dispatchCouponPreview.code}</span>
+                    <span className="font-semibold tabular-nums">−${Number(dispatchCouponPreview.discountAmount).toFixed(2)}</span>
+                  </div>
+                ) : null}
+                <div className="flex justify-between border-t border-border pt-2 text-base font-bold">
+                  <span>Total due today</span>
+                  <span className="text-primary tabular-nums">${Number(dispatchHoldAmount).toFixed(2)}</span>
                 </div>
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  The service fee is calculated from current FixBridge pricing and is locked when you confirm. Repair estimate is informational; today you authorize the service fee.
+                </p>
               </div>
               <DispatchCouponField
                 jobId={job.id}
@@ -476,16 +479,62 @@ export default function HireProfessionalWizard({
                 }}
                 onClear={() => setDispatchCouponPreview(null)}
               />
-              <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs leading-relaxed text-amber-950 dark:text-amber-100">
-                🔒 Your card is not charged today — Stripe places a temporary hold. The charge is captured only when the contractor checks in.
+            </div>
+          )}
+
+          {step === "review" && (
+            <div className="space-y-4">
+              <div>
+                <h4 className="font-semibold text-lg">Review & Confirm</h4>
+                <p className="text-xs text-muted-foreground mt-1">Review Your Service Request</p>
               </div>
+              <div className="rounded-xl border border-border bg-card p-4 space-y-3 text-sm">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Service</p>
+                  <p className="font-medium">{job.title || job.category || "Service request"}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Appointment</p>
+                  <p className="font-medium">{summaryLine}</p>
+                </div>
+                {job.fullAddress || job.cityStateZip ? (
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Property</p>
+                    <p className="font-medium">{job.fullAddress || job.cityStateZip}</p>
+                  </div>
+                ) : null}
+              </div>
+              <div className="rounded-xl border border-[#FF4D1C]/25 bg-card p-4 space-y-2 text-sm">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Price summary</p>
+                <div className="flex justify-between">
+                  <span>Service</span>
+                  <span className="tabular-nums">{retailRangeLabel(job)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Service fee</span>
+                  <span className="tabular-nums">${Number(baseDispatchFee).toFixed(2)}</span>
+                </div>
+                {dispatchCouponPreview ? (
+                  <div className="flex justify-between text-emerald-700 dark:text-emerald-300">
+                    <span>Coupon {dispatchCouponPreview.code}</span>
+                    <span className="tabular-nums">−${Number(dispatchCouponPreview.discountAmount).toFixed(2)}</span>
+                  </div>
+                ) : null}
+                <div className="flex justify-between border-t border-border pt-2 text-base font-bold">
+                  <span>Total due</span>
+                  <span className="text-primary tabular-nums">${Number(dispatchHoldAmount).toFixed(2)}</span>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Confirming starts secure payment. Your request is sent to the Admin Work Queue only after payment succeeds.
+              </p>
             </div>
           )}
         </motion.div>
       </AnimatePresence>
 
       <div className="flex flex-wrap gap-2 pt-2">
-        {stepIndex > 0 && step !== "payment" && (
+        {stepIndex > 0 && step !== "checkout" && step !== "review" && (
           <button
             type="button"
             onClick={goBack}
@@ -495,17 +544,27 @@ export default function HireProfessionalWizard({
             <ArrowLeft className="h-4 w-4" /> Back
           </button>
         )}
-        {step === "payment" && !dispatchPaid && (
+        {step === "checkout" && (
           <button
             type="button"
-            onClick={() => setStep("confirm")}
+            onClick={() => setStep("info")}
             disabled={busy}
             className="inline-flex items-center gap-1.5 rounded-xl border border-border px-4 py-2.5 text-sm font-semibold hover:bg-muted disabled:opacity-60"
           >
             <ArrowLeft className="h-4 w-4" /> Back
           </button>
         )}
-        {step !== "confirm" && step !== "payment" && (
+        {step === "review" && !dispatchPaid && (
+          <button
+            type="button"
+            onClick={() => setStep("checkout")}
+            disabled={busy}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-border px-4 py-2.5 text-sm font-semibold hover:bg-muted disabled:opacity-60"
+          >
+            <ArrowLeft className="h-4 w-4" /> Back
+          </button>
+        )}
+        {step !== "info" && step !== "checkout" && step !== "review" && (
           <button
             type="button"
             onClick={goNext}
@@ -515,7 +574,7 @@ export default function HireProfessionalWizard({
             Continue <ArrowRight className="h-4 w-4" />
           </button>
         )}
-        {step === "confirm" && (
+        {step === "info" && (
           <button
             type="button"
             onClick={() => void handleConfirm()}
@@ -523,10 +582,23 @@ export default function HireProfessionalWizard({
             className="ml-auto inline-flex items-center gap-2 rounded-xl bg-[#FF4D1C] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Continue to payment <ArrowRight className="h-4 w-4" />
+            Continue to pricing <ArrowRight className="h-4 w-4" />
           </button>
         )}
-        {step === "payment" && !dispatchPaid && (
+        {step === "checkout" && (
+          <button
+            type="button"
+            onClick={() => {
+              onError(null);
+              setStep("review");
+            }}
+            disabled={busy}
+            className="ml-auto inline-flex items-center gap-2 rounded-xl bg-[#FF4D1C] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+          >
+            Continue to review <ArrowRight className="h-4 w-4" />
+          </button>
+        )}
+        {step === "review" && !dispatchPaid && (
           <button
             type="button"
             onClick={() => void handlePay()}
@@ -534,7 +606,7 @@ export default function HireProfessionalWizard({
             className="ml-auto inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white shadow-lg disabled:opacity-60 sm:flex-none"
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Pay with Stripe — ${dispatchHoldAmount}
+            Confirm & Pay — ${Number(dispatchHoldAmount).toFixed(2)}
           </button>
         )}
       </div>

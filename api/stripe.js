@@ -45,6 +45,7 @@ export function appBaseUrl() {
 
 export async function createCheckoutSession({
   amountCents,
+  lineItems,
   currency = 'usd',
   customerEmail,
   successPath,
@@ -55,6 +56,7 @@ export async function createCheckoutSession({
   trialDays = 0,
   interval = 'month',
   origin,
+  idempotencyKey,
 }) {
   assertPaymentsAvailable();
   const stripe = await getStripe();
@@ -65,22 +67,33 @@ export async function createCheckoutSession({
     throw err;
   }
 
-  const lineItem = {
+  const buildLineItem = (cents, name) => ({
     quantity: 1,
     price_data: {
       currency,
-      unit_amount: Math.round(amountCents),
-      product_data: { name: description || 'Service payment' },
+      unit_amount: Math.round(cents),
+      product_data: { name: name || description || 'Service payment' },
     },
-  };
-  if (mode === 'subscription') {
-    lineItem.price_data.recurring = { interval: interval === 'year' ? 'year' : 'month' };
+  });
+
+  let checkoutLineItems;
+  if (Array.isArray(lineItems) && lineItems.length) {
+    checkoutLineItems = lineItems.map((li) =>
+      buildLineItem(li.amountCents, li.description || description || 'Service payment')
+    );
+  } else {
+    const lineItem = buildLineItem(amountCents, description || 'Service payment');
+    if (mode === 'subscription') {
+      lineItem.price_data.recurring = { interval: interval === 'year' ? 'year' : 'month' };
+    }
+    checkoutLineItems = [lineItem];
   }
+
   const baseUrl = origin ? origin.replace(/\/$/, '') : appBaseUrl();
   const sessionParams = {
     mode,
     customer_email: customerEmail || undefined,
-    line_items: [lineItem],
+    line_items: checkoutLineItems,
     success_url: `${baseUrl}${successPath}`,
     cancel_url: `${baseUrl}${cancelPath}`,
     metadata,
@@ -96,7 +109,8 @@ export async function createCheckoutSession({
     };
   }
 
-  const session = await stripe.checkout.sessions.create(sessionParams);
+  const createOpts = idempotencyKey ? { idempotencyKey: String(idempotencyKey).slice(0, 255) } : undefined;
+  const session = await stripe.checkout.sessions.create(sessionParams, createOpts);
   if (!session.url) {
     const err = new Error('Stripe did not return a checkout URL.');
     err.status = 502;
@@ -191,6 +205,7 @@ export function summarizeConnectAccount(account, externalAccounts = []) {
       bankAccountStatus: 'missing',
       instantPayoutsEligible: false,
       requirementsDue: [],
+      connectStatus: normalizeConnectAccountStatus(null),
     };
   }
   const requirementsDue = [
@@ -205,7 +220,136 @@ export function summarizeConnectAccount(account, externalAccounts = []) {
     instantPayoutsEligible: account.capabilities?.transfers === 'active',
     requirementsDue,
     defaultDestination: defaultAccount || null,
+    connectStatus: normalizeConnectAccountStatus(account),
   };
+}
+
+/** Normalized Stripe Connect status from live account object. */
+export function normalizeConnectAccountStatus(account) {
+  if (!account) {
+    return {
+      connected: false,
+      accountId: null,
+      onboardingComplete: false,
+      transfersEligible: false,
+      payoutsEnabled: false,
+      chargesEnabled: false,
+      detailsSubmitted: false,
+      requirements: [],
+      currentlyDue: [],
+      eventuallyDue: [],
+      pastDue: [],
+      pendingVerification: [],
+      disabledReason: null,
+      blockedReason: 'NOT_CONNECTED',
+    };
+  }
+
+  const currentlyDue = [...(account.requirements?.currently_due || [])];
+  const eventuallyDue = [...(account.requirements?.eventually_due || [])];
+  const pastDue = [...(account.requirements?.past_due || [])];
+  const pendingVerification = [...(account.requirements?.pending_verification || [])];
+  const requirements = [...new Set([...currentlyDue, ...pastDue, ...eventuallyDue, ...pendingVerification])];
+
+  let blockedReason = null;
+  if (pastDue.some((r) => r.startsWith('tos_acceptance'))) {
+    blockedReason = 'TOS_NOT_ACCEPTED';
+  } else if (currentlyDue.some((r) => r.startsWith('tos_acceptance'))) {
+    blockedReason = 'TOS_NOT_ACCEPTED';
+  } else if (account.requirements?.disabled_reason) {
+    blockedReason = String(account.requirements.disabled_reason).toUpperCase();
+  } else if (account.capabilities?.transfers !== 'active') {
+    blockedReason = 'TRANSFERS_INACTIVE';
+  } else if (!account.details_submitted) {
+    blockedReason = 'ONBOARDING_INCOMPLETE';
+  }
+
+  const transfersEligible = account.capabilities?.transfers === 'active';
+  const onboardingComplete =
+    account.details_submitted === true &&
+    pastDue.length === 0 &&
+    currentlyDue.length === 0 &&
+    transfersEligible;
+
+  return {
+    connected: true,
+    accountId: account.id,
+    onboardingComplete,
+    transfersEligible,
+    payoutsEnabled: account.payouts_enabled === true,
+    chargesEnabled: account.charges_enabled === true,
+    detailsSubmitted: account.details_submitted === true,
+    requirements,
+    currentlyDue,
+    eventuallyDue,
+    pastDue,
+    pendingVerification,
+    disabledReason: account.requirements?.disabled_reason || null,
+    blockedReason: onboardingComplete ? null : blockedReason || 'ONBOARDING_INCOMPLETE',
+  };
+}
+
+/** Retrieve actual Stripe processing fee from PaymentIntent → Charge → BalanceTransaction. */
+export async function captureStripeProcessingFees(paymentIntentId) {
+  const stripe = await getStripe();
+  if (!stripe || !paymentIntentId) {
+    return { ok: false, error: 'Stripe not configured or missing payment intent.' };
+  }
+  try {
+    const pi = await stripe.paymentIntents.retrieve(String(paymentIntentId), {
+      expand: ['latest_charge.balance_transaction'],
+    });
+    let charge = pi.latest_charge;
+    let chargeId = typeof charge === 'string' ? charge : charge?.id || null;
+    let bt = charge && typeof charge === 'object' ? charge.balance_transaction : null;
+
+    if (!bt && chargeId) {
+      const ch = await stripe.charges.retrieve(chargeId, { expand: ['balance_transaction'] });
+      bt = ch.balance_transaction;
+      chargeId = ch.id;
+    }
+    if (typeof bt === 'string') {
+      bt = await stripe.balanceTransactions.retrieve(bt);
+    }
+    if (!bt) {
+      return { ok: false, error: 'Balance transaction not available yet.' };
+    }
+
+    return {
+      ok: true,
+      paymentIntentId: pi.id,
+      chargeId,
+      balanceTransactionId: bt.id,
+      grossCents: Number(bt.amount || 0),
+      feeCents: Number(bt.fee || 0),
+      netCents: Number(bt.net || 0),
+      currency: bt.currency || 'usd',
+    };
+  } catch (err) {
+    console.error('captureStripeProcessingFees:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function persistStripeProcessingFees(pool, paymentId, feeData) {
+  if (!paymentId || !feeData?.ok) return null;
+  const { rows } = await pool.query(
+    `UPDATE payments SET
+       stripe_charge_id=COALESCE($2, stripe_charge_id),
+       stripe_balance_transaction_id=$3,
+       stripe_processing_fee_cents=$4,
+       stripe_net_received_cents=$5
+     WHERE id=$1
+     RETURNING *`,
+    [
+      paymentId,
+      feeData.chargeId,
+      feeData.balanceTransactionId,
+      feeData.feeCents,
+      feeData.netCents,
+    ]
+  );
+  return rows[0] || null;
 }
 
 export async function createExpressAccount(email) {
@@ -226,7 +370,13 @@ export async function createExpressAccount(email) {
   return { accountId: account.id };
 }
 
-export async function createTransfer({ amountCents, destinationAccountId, transferGroup, metadata }) {
+export async function createTransfer({
+  amountCents,
+  destinationAccountId,
+  transferGroup,
+  metadata,
+  idempotencyKey = null,
+}) {
   const stripe = await getStripe();
   if (!stripe) {
     const err = new Error('Stripe is not configured.');
@@ -234,13 +384,15 @@ export async function createTransfer({ amountCents, destinationAccountId, transf
     err.code = 'STRIPE_NOT_CONFIGURED';
     throw err;
   }
-  const transfer = await stripe.transfers.create({
+  const params = {
     amount: Math.round(amountCents),
     currency: 'usd',
     destination: destinationAccountId,
     transfer_group: transferGroup,
     metadata,
-  });
+  };
+  const opts = idempotencyKey ? { idempotencyKey: String(idempotencyKey) } : undefined;
+  const transfer = await stripe.transfers.create(params, opts);
   return { transferId: transfer.id };
 }
 

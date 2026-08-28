@@ -1,175 +1,43 @@
-import { useMemo, useState } from "react";
-import { ChevronRight, CreditCard, DollarSign, ShieldCheck } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ChevronRight, CreditCard, DollarSign, Loader2, Receipt } from "lucide-react";
 import { formatMoney, type ManagedJob, type Property } from "./managedJobs";
+import { getMyTransactions } from "./platformApi";
 
-type PaymentFilter = "all" | "pending" | "holds" | "paid";
-type PaymentState = "pending" | "authorized" | "captured" | "paid" | "refunded";
-
-type PaymentItem = {
-  id: string;
-  jobId: number;
-  title: string;
-  propertyLabel: string;
-  amount: number;
-  kind: "dispatch" | "service";
-  state: PaymentState;
-  date?: string;
-  subtitle: string;
-};
+type PaymentFilter = "all" | "pending" | "holds" | "paid" | "failed";
 
 const FILTERS: { id: PaymentFilter; label: string }[] = [
   { id: "all", label: "All" },
+  { id: "paid", label: "Paid" },
   { id: "pending", label: "Pending" },
   { id: "holds", label: "Holds" },
-  { id: "paid", label: "Paid" },
+  { id: "failed", label: "Failed" },
 ];
-
-function propertyLabel(prop: Property | undefined): string {
-  return prop?.label?.trim() || prop?.addressLine1?.trim() || "Property";
-}
-
-function dispatchFee(job: ManagedJob): number {
-  const fee = job.visitFeeAmount ?? job.pricing?.contractor_visit_fee;
-  return Number.isFinite(Number(fee)) ? Number(fee) : 125;
-}
-
-function jobAmount(job: ManagedJob): number | null {
-  const report = job.completionReport as Record<string, unknown> | null | undefined;
-  const fromReport = report?.amount ?? report?.total ?? report?.retailAmount;
-  if (fromReport != null && Number.isFinite(Number(fromReport))) return Number(fromReport);
-  if (job.customerRetailEstimateHigh != null) return Number(job.customerRetailEstimateHigh);
-  if (job.customerRetailEstimateLow != null) return Number(job.customerRetailEstimateLow);
-  return null;
-}
-
-function buildPaymentItems(jobs: ManagedJob[], properties: Property[]): PaymentItem[] {
-  const items: PaymentItem[] = [];
-
-  for (const job of jobs) {
-    const prop = properties.find((p) => p.id === job.propertyId);
-    const pl = propertyLabel(prop);
-    const title = job.title?.trim() || job.category?.trim() || `Request #${job.bookingId || job.id}`;
-    const date = job.updatedAt || job.createdAt;
-
-    if (["awaiting_service_payment", "ai_review_complete"].includes(String(job.status))) {
-      items.push({
-        id: `dispatch-pending-${job.id}`,
-        jobId: job.id,
-        title,
-        propertyLabel: pl,
-        amount: dispatchFee(job),
-        kind: "dispatch",
-        state: "pending",
-        date,
-        subtitle: "Dispatch hold not authorized yet",
-      });
-      continue;
-    }
-
-    if (job.visitFeeAuthorized && !job.visitFeeCaptured) {
-      items.push({
-        id: `dispatch-hold-${job.id}`,
-        jobId: job.id,
-        title,
-        propertyLabel: pl,
-        amount: dispatchFee(job),
-        kind: "dispatch",
-        state: "authorized",
-        date,
-        subtitle: "Card hold authorized — charged at check-in",
-      });
-    } else if (job.visitFeeCaptured || job.status === "paid_for_dispatch") {
-      items.push({
-        id: `dispatch-captured-${job.id}`,
-        jobId: job.id,
-        title,
-        propertyLabel: pl,
-        amount: dispatchFee(job),
-        kind: "dispatch",
-        state: "captured",
-        date,
-        subtitle: "Visit fee captured",
-      });
-    }
-
-    const serviceAmount = jobAmount(job);
-    const paidServiceStatuses = new Set([
-      "approved",
-      "scheduled",
-      "contractor_en_route",
-      "work_started",
-      "change_order_pending",
-      "work_completed",
-      "customer_review_pending",
-      "admin_review_pending",
-      "payout_pending",
-      "paid_out",
-      "closed",
-    ]);
-
-    if (paidServiceStatuses.has(String(job.status)) && serviceAmount != null) {
-      const paid = ["work_completed", "customer_review_pending", "admin_review_pending", "payout_pending", "paid_out", "closed"].includes(
-        String(job.status)
-      );
-      items.push({
-        id: `service-${job.id}`,
-        jobId: job.id,
-        title,
-        propertyLabel: pl,
-        amount: serviceAmount,
-        kind: "service",
-        state: paid ? "paid" : "pending",
-        date,
-        subtitle: paid ? "Service payment recorded" : "Quote approved — payment due",
-      });
-    }
-
-    if (job.status === "refunded") {
-      items.push({
-        id: `refund-${job.id}`,
-        jobId: job.id,
-        title,
-        propertyLabel: pl,
-        amount: dispatchFee(job),
-        kind: "dispatch",
-        state: "refunded",
-        date,
-        subtitle: "Refund processed",
-      });
-    }
-  }
-
-  return items.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
-}
-
-function stateBadge(state: PaymentState): { label: string; className: string } {
-  switch (state) {
-    case "pending":
-      return { label: "Pending", className: "bg-amber-500/15 text-amber-800 dark:text-amber-300" };
-    case "authorized":
-      return { label: "Hold", className: "bg-sky-500/15 text-sky-800 dark:text-sky-300" };
-    case "captured":
-      return { label: "Captured", className: "bg-emerald-500/15 text-emerald-800 dark:text-emerald-300" };
-    case "paid":
-      return { label: "Paid", className: "bg-emerald-500/15 text-emerald-800 dark:text-emerald-300" };
-    case "refunded":
-      return { label: "Refunded", className: "bg-muted text-muted-foreground" };
-  }
-}
-
-function matchesFilter(item: PaymentItem, filter: PaymentFilter): boolean {
-  if (filter === "all") return true;
-  if (filter === "pending") return item.state === "pending";
-  if (filter === "holds") return item.state === "authorized" || (item.kind === "dispatch" && item.state === "captured");
-  if (filter === "paid") return item.state === "paid" || item.state === "captured";
-  return true;
-}
 
 function formatDate(iso?: string): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function statusBadge(status: string): { label: string; className: string } {
+  const s = String(status || "").toLowerCase();
+  if (s === "succeeded" || s === "paid" || s === "captured") {
+    return { label: "PAID", className: "bg-emerald-500/15 text-emerald-800 dark:text-emerald-300" };
+  }
+  if (s === "authorized") {
+    return { label: "HOLD", className: "bg-sky-500/15 text-sky-800 dark:text-sky-300" };
+  }
+  if (s === "pending") {
+    return { label: "PENDING", className: "bg-amber-500/15 text-amber-800 dark:text-amber-300" };
+  }
+  if (s === "failed" || s === "cancelled" || s === "canceled") {
+    return { label: s === "failed" ? "FAILED" : "CANCELLED", className: "bg-red-500/15 text-red-700 dark:text-red-300" };
+  }
+  if (s.includes("refund")) {
+    return { label: "REFUNDED", className: "bg-muted text-muted-foreground" };
+  }
+  return { label: s.toUpperCase() || "—", className: "bg-muted text-muted-foreground" };
 }
 
 export default function HomeownerPaymentsPanel({
@@ -182,96 +50,138 @@ export default function HomeownerPaymentsPanel({
   onOpenJob?: (jobId: number) => void;
 }) {
   const [filter, setFilter] = useState<PaymentFilter>("all");
-  const items = useMemo(() => buildPaymentItems(jobs, properties), [jobs, properties]);
-  const filtered = useMemo(() => items.filter((item) => matchesFilter(item, filter)), [items, filter]);
+  const [loading, setLoading] = useState(true);
+  const [transactions, setTransactions] = useState<
+    Awaited<ReturnType<typeof getMyTransactions>>["transactions"]
+  >([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      const r = await getMyTransactions();
+      if (!cancelled && r.ok) setTransactions(r.transactions || []);
+      if (!cancelled) setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [jobs.length]);
+
+  const filtered = useMemo(() => {
+    return (transactions || []).filter((t) => {
+      const s = String(t.status || "").toLowerCase();
+      if (filter === "all") return true;
+      if (filter === "paid") return ["succeeded", "paid", "captured"].includes(s);
+      if (filter === "pending") return s === "pending";
+      if (filter === "holds") return s === "authorized";
+      if (filter === "failed") return ["failed", "cancelled", "canceled"].includes(s);
+      return true;
+    });
+  }, [transactions, filter]);
 
   const totalPaid = useMemo(
-    () => items.filter((i) => i.state === "paid" || i.state === "captured").reduce((sum, i) => sum + i.amount, 0),
-    [items]
+    () =>
+      (transactions || [])
+        .filter((t) => ["succeeded", "paid", "captured"].includes(String(t.status).toLowerCase()))
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0),
+    [transactions]
   );
 
-  const pendingCount = useMemo(() => items.filter((i) => i.state === "pending").length, [items]);
+  void properties;
 
   return (
     <section className="mx-auto max-w-2xl space-y-4">
       <div>
         <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight">
-          Payments
+          Transaction History
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Dispatch holds, service charges, and spend across your homes.
+          Plan payments, service charges, and receipts — updated when Stripe confirms payment.
         </p>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
         <div className="rounded-2xl border border-border bg-card p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Total recorded</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Total paid</p>
           <p className="mt-1 text-2xl font-semibold tabular-nums">{formatMoney(totalPaid)}</p>
         </div>
         <div className="rounded-2xl border border-border bg-card p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Needs action</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums">{pendingCount}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Transactions</p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums">{transactions.length}</p>
         </div>
       </div>
 
-      <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {FILTERS.map((chip) => (
+      <div className="flex flex-wrap gap-2">
+        {FILTERS.map((f) => (
           <button
-            key={chip.id}
+            key={f.id}
             type="button"
-            onClick={() => setFilter(chip.id)}
-            className={`shrink-0 rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${
-              filter === chip.id
-                ? "bg-primary text-white"
-                : "border border-border bg-card text-muted-foreground hover:border-primary/30"
+            onClick={() => setFilter(f.id)}
+            className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+              filter === f.id ? "bg-primary text-white" : "border border-border bg-card hover:bg-muted/40"
             }`}
           >
-            {chip.label}
+            {f.label}
           </button>
         ))}
       </div>
 
-      {filtered.length === 0 ? (
-        <div className="rounded-[1.5rem] border border-dashed border-border bg-card px-6 py-12 text-center">
-          <CreditCard className="mx-auto h-8 w-8 text-primary" />
-          <p className="mt-3 text-sm font-medium">No payments in this view</p>
+      {loading ? (
+        <div className="flex items-center justify-center gap-2 rounded-2xl border border-border bg-card py-16 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading transactions…
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-border bg-card px-6 py-12 text-center">
+          <CreditCard className="mx-auto h-8 w-8 text-muted-foreground" />
+          <p className="mt-3 text-sm font-medium">No transactions yet</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            When you authorize dispatch or pay for service, transactions will show up here.
+            Successful Stripe payments appear here automatically — no admin entry required.
           </p>
         </div>
       ) : (
-        <ul className="space-y-2.5">
-          {filtered.map((item) => {
-            const badge = stateBadge(item.state);
-            const Icon = item.kind === "dispatch" ? ShieldCheck : DollarSign;
+        <ul className="space-y-3">
+          {filtered.map((t) => {
+            const badge = statusBadge(t.status);
             return (
-              <li key={item.id}>
-                <button
-                  type="button"
-                  onClick={() => onOpenJob?.(item.jobId)}
-                  className="flex w-full items-center gap-3 rounded-2xl border border-border bg-card p-4 text-left transition hover:border-primary/30 active:scale-[0.99]"
-                >
-                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                    <Icon className="h-5 w-5" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-start justify-between gap-2">
-                      <span className="font-semibold truncate">{item.title}</span>
-                      <span className="shrink-0 text-sm font-semibold tabular-nums">{formatMoney(item.amount)}</span>
+              <li key={t.id} className="rounded-2xl border border-border bg-card p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs text-muted-foreground">{formatDate(t.createdAt)}</p>
+                    <p className="mt-1 text-sm font-semibold">{t.description}</p>
+                    <p className="text-xs text-muted-foreground">{t.typeLabel}</p>
+                    <p className="mt-2 font-mono text-[11px] text-muted-foreground">
+                      Transaction: {t.transactionId}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-base font-semibold tabular-nums">{formatMoney(t.amount)}</p>
+                    <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${badge.className}`}>
+                      {badge.label}
                     </span>
-                    <span className="mt-1 block truncate text-xs text-muted-foreground">{item.propertyLabel}</span>
-                    <span className="mt-2 flex flex-wrap items-center gap-2">
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${badge.className}`}>
-                        {badge.label}
-                      </span>
-                      {item.date ? (
-                        <span className="text-[10px] text-muted-foreground">{formatDate(item.date)}</span>
-                      ) : null}
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {t.jobId && onOpenJob ? (
+                    <button
+                      type="button"
+                      onClick={() => onOpenJob(t.jobId!)}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+                    >
+                      View related job <ChevronRight className="h-3.5 w-3.5" />
+                    </button>
+                  ) : null}
+                  {["succeeded", "paid", "captured"].includes(String(t.status).toLowerCase()) ? (
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                      <Receipt className="h-3.5 w-3.5" /> Receipt on file
                     </span>
-                    <span className="mt-1 block text-xs text-muted-foreground">{item.subtitle}</span>
-                  </span>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                </button>
+                  ) : null}
+                  {t.paymentType === "subscription" ? (
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                      <DollarSign className="h-3.5 w-3.5" /> Plan payment
+                    </span>
+                  ) : null}
+                </div>
               </li>
             );
           })}

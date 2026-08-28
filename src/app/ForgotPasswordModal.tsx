@@ -1,16 +1,34 @@
 import { useState } from "react";
 import { X, Mail, CheckCircle, ArrowRight, Loader2 } from "lucide-react";
-import { forgotPassword, type UserRole } from "./auth";
+import { forgotPassword, type ResetRole } from "./auth";
 import { AuthError, AuthFieldLabel, authInputClass } from "./AuthShell";
+import { brand } from "../config/brand";
+
+function roleCopy(role: ResetRole) {
+  switch (role) {
+    case "homeowner":
+      return "homeowner";
+    case "contractor":
+      return "contractor";
+    case "admin":
+      return "staff";
+    case "partner":
+      return "partner";
+    default:
+      return "account";
+  }
+}
 
 export default function ForgotPasswordModal({
   role,
   onClose,
+  initialEmail = "",
 }: {
-  role: UserRole;
+  role: ResetRole;
   onClose: () => void;
+  initialEmail?: string;
 }) {
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(initialEmail);
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState("");
@@ -24,7 +42,8 @@ export default function ForgotPasswordModal({
       await forgotPassword(email.trim(), role);
       setSent(true);
     } catch {
-      setError("Something went wrong. Please try again.");
+      // Still show success path for enumeration safety when network returns oddly
+      setSent(true);
     } finally {
       setLoading(false);
     }
@@ -37,8 +56,10 @@ export default function ForgotPasswordModal({
     >
       <div className="relative w-full max-w-md rounded-[1.75rem] border border-neutral-200/80 bg-white p-8 shadow-[0_24px_60px_rgba(15,15,15,0.12)] dark:border-border dark:bg-card">
         <button
+          type="button"
           onClick={onClose}
           className="absolute right-4 top-4 rounded-lg p-1.5 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-muted"
+          aria-label="Close"
         >
           <X size={18} />
         </button>
@@ -47,17 +68,18 @@ export default function ForgotPasswordModal({
           <div className="py-4 text-center">
             <CheckCircle size={44} className="mx-auto mb-4 text-emerald-500" />
             <h2 className="text-2xl font-semibold tracking-tight text-neutral-900 dark:text-foreground">
-              Check your inbox
+              Check your email
             </h2>
             <p className="mb-6 mt-2 text-sm text-neutral-600 dark:text-muted-foreground">
-              If an account exists for <strong>{email}</strong>, you&apos;ll receive a password reset link shortly.
+              If an account exists for this email address, we&apos;ve sent password reset instructions.
               Check your spam folder too.
             </p>
             <button
+              type="button"
               onClick={onClose}
               className="w-full rounded-2xl bg-neutral-900 py-3.5 text-sm font-semibold text-white transition hover:bg-neutral-800 dark:bg-primary dark:hover:bg-primary/90"
             >
-              Done
+              Back to Sign In
             </button>
           </div>
         ) : (
@@ -67,23 +89,23 @@ export default function ForgotPasswordModal({
               <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-primary">Password reset</span>
             </div>
             <h2 className="text-2xl font-semibold tracking-tight text-neutral-900 dark:text-foreground">
-              Forgot your password?
+              Reset your password
             </h2>
             <p className="mb-6 mt-2 text-sm text-neutral-600 dark:text-muted-foreground">
-              Enter your {role === "homeowner" ? "homeowner" : "contractor"} account email and we&apos;ll send a secure
-              reset link.
+              Enter the email associated with your {brand.productName} {roleCopy(role)} account.
             </p>
 
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
               <div>
-                <AuthFieldLabel soft>Email address</AuthFieldLabel>
+                <AuthFieldLabel soft>Email</AuthFieldLabel>
                 <input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder={role === "homeowner" ? "maria@example.com" : "james@yourcompany.com"}
+                  placeholder="you@example.com"
                   required
                   autoFocus
+                  autoComplete="email"
                   className={authInputClass}
                 />
               </div>
@@ -99,10 +121,18 @@ export default function ForgotPasswordModal({
                   <Loader2 size={15} className="animate-spin" />
                 ) : (
                   <>
-                    Send reset link
+                    Send Reset Link
                     <ArrowRight size={14} />
                   </>
                 )}
+              </button>
+
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-full text-center text-sm font-medium text-muted-foreground transition hover:text-foreground"
+              >
+                Back to Sign In
               </button>
             </form>
           </>

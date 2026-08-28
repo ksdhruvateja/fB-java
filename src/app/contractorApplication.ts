@@ -1,6 +1,7 @@
 /** Shared contractor application — Broadway-style vendor fields + FixBridge extras. */
 
 import { getContractorExpiryAlerts } from "./contractorExpiry";
+import { normalizeContractorServiceName } from "./serviceCatalog";
 
 export const BUSINESS_TYPES = [
   "LLC",
@@ -29,7 +30,7 @@ export const PRIMARY_SERVICES = [
   "General Contractor",
   "Handyman",
   "HVAC",
-  "Janitorial",
+  "Cleaning",
   "Landscaping",
   "Lighting",
   "Locks",
@@ -41,7 +42,7 @@ export const PRIMARY_SERVICES = [
   "Roofing and Siding",
   "Security",
   "Signage",
-  "Snow",
+  "Snow Removal",
   "Technology",
   "Temporary Protection",
   "Waste Management",
@@ -128,6 +129,8 @@ export type ContractorApplication = {
   businessCity: string;
   businessState: string;
   businessZip: string;
+  addressVerified?: boolean;
+  postalCodePlus4?: string | null;
 
   companyPhone: string;
   companyEmail: string;
@@ -256,6 +259,8 @@ export function applicationFromUser(user: {
   insuranceExpiresAt?: string | null;
   companyName?: string;
   address?: string;
+  addressVerified?: boolean;
+  postalCodePlus4?: string | null;
   contactEmail?: string;
   serviceZips?: string[] | null;
   visitFee?: number | null;
@@ -278,12 +283,18 @@ export function applicationFromUser(user: {
     companyEmail: saved.companyEmail || user.email || "",
     companyPhone: saved.companyPhone || user.phone || "",
     businessAddress: saved.businessAddress || user.address || "",
-    primaryServices:
+    addressVerified: saved.addressVerified ?? user.addressVerified ?? false,
+    postalCodePlus4: saved.postalCodePlus4 ?? user.postalCodePlus4 ?? null,
+    primaryServices: (
       Array.isArray(saved.primaryServices) && saved.primaryServices.length
         ? saved.primaryServices
         : user.trade
-          ? [user.trade]
-          : [],
+          ? String(user.trade).split(/,\s*/)
+          : []
+    )
+      .map((s) => normalizeContractorServiceName(String(s).trim()))
+      .filter(Boolean)
+      .filter((s, i, arr) => arr.indexOf(s) === i),
     serviceStates: Array.isArray(saved.serviceStates) ? saved.serviceStates : [],
     standardHourlyRate:
       saved.standardHourlyRate ||

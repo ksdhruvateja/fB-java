@@ -5,13 +5,12 @@ import { newDb } from 'pg-mem';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
-import { OAuth2Client } from 'google-auth-library';
-import appleSignin from 'apple-signin-auth';
-import { Resend } from 'resend';
 import crypto from 'crypto';
 import { analyzeRepairStructured, chatWithCustomer, getAiStatus } from './ai.js';
 import { initManagedSchema } from './schema-managed.js';
 import { initSupportTicketSchema, registerSupportTicketRoutes } from './support-tickets.js';
+import { initHomeownerAdminSchema, registerHomeownerAdminRoutes } from './homeowner-admin-routes.js';
+import { registerFinanceRoutes } from './finance-routes.js';
 import {
   initSubscriptionPlansSchema,
   registerSubscriptionPlanRoutes,
@@ -20,9 +19,19 @@ import {
 import { registerManagedRoutes } from './managed-routes.js';
 import { registerPlatformRoutes } from './platform-routes.js';
 import { registerPayoutRoutes } from './payout-routes.js';
+import { registerReferralRoutes } from './referral-routes.js';
+import { applyReferralCode, ensureReferralCode } from './referrals.js';
 import { registerQuoteWorkspaceRoutes } from './quote-workspace-routes.js';
+import { registerAddressRoutes } from './address-routes.js';
 import { writeAudit } from './audit.js';
 import { getStripe, stripeConfigured } from './stripe.js';
+import {
+  RESET_ROLES,
+  findResetAccount,
+  issuePasswordReset,
+  completePasswordReset,
+} from './password-reset.js';
+import { mailStatus } from './mail.js';
 import {
   corsOriginDelegate,
   securityHeaders,
@@ -38,6 +47,7 @@ import {
   presetToAccessLevel,
   VALID_ROLE_PRESETS,
   permissionsForUser,
+  userHasPermission,
 } from './rbac.js';
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -64,8 +74,13 @@ if (isProduction && useInMemoryDb) {
 }
 
 if (isProduction && !stripeConfigured()) {
-  console.warn(
-    '[FixBridge API] STRIPE_SECRET_KEY is not set. Payment endpoints will return 503 (no simulation in production).'
+  throw new Error(
+    '[FATAL] STRIPE_SECRET_KEY is required in production. Refusing to start without payment secrets.'
+  );
+}
+if (isProduction && !String(process.env.STRIPE_WEBHOOK_SECRET || '').trim()) {
+  throw new Error(
+    '[FATAL] STRIPE_WEBHOOK_SECRET is required in production. Refusing to start without webhook verification secret.'
   );
 }
 
@@ -96,10 +111,13 @@ function createPool() {
   return new MemoryPool();
 }
 
-/** Demo accounts only outside production, and only when explicitly enabled (default on in non-prod). */
+/** Demo accounts only outside production, and only when explicitly enabled. */
 function allowDemoSeed() {
   if (isProduction) return false;
-  const flag = String(process.env.ENABLE_DEMO_SEED ?? 'true').toLowerCase();
+  // ENABLE_DEMO_USERS or ENABLE_DEMO_SEED; default OFF (explicit opt-in).
+  const flag = String(
+    process.env.ENABLE_DEMO_USERS ?? process.env.ENABLE_DEMO_SEED ?? 'false'
+  ).toLowerCase();
   return flag === 'true' || flag === '1' || flag === 'yes';
 }
 
@@ -141,7 +159,10 @@ const TRADE_MATCH_TERMS = {
   'Fences & Gates': ['fence', 'gate'],
   'Garage & Garage Doors': ['garage', 'door'],
   Handyman: ['handyman', 'general', 'maintenance'],
-  'Landscaping & Yard': ['landscape', 'landscaping', 'yard', 'lawn'],
+  'Landscaping & Yard': ['landscape', 'landscaping', 'lawn', 'yard', 'mulch', 'hedge', 'garden', 'leaf', 'mowing', 'trimming'],
+  Landscaping: ['landscape', 'landscaping', 'lawn', 'yard', 'mulch', 'hedge', 'garden', 'leaf', 'mowing', 'trimming'],
+  'Snow Removal': ['snow', 'snow removal', 'plow', 'plowing', 'shovel', 'de-ice', 'deice', 'salting', 'ice management'],
+  Snow: ['snow', 'snow removal', 'plow', 'plowing', 'shovel', 'de-ice', 'salting'],
   Lighting: ['lighting', 'light', 'electrical'],
   'Locks & Security': ['lock', 'security'],
   'Pest Control': ['pest', 'exterminat'],
@@ -151,7 +172,8 @@ const TRADE_MATCH_TERMS = {
   Kitchen: ['kitchen', 'appliance', 'plumbing'],
   'Water Damage': ['water damage', 'flood', 'restoration', 'mold'],
   'Drywall & Wall Repair': ['drywall', 'wall', 'plaster'],
-  Cleaning: ['cleaning', 'janitorial', 'clean'],
+  Cleaning: ['cleaning', 'clean', 'janitorial', 'maid', 'housekeeping', 'deep clean', 'move-out', 'move-in'],
+  Janitorial: ['cleaning', 'clean', 'janitorial', 'maid', 'housekeeping'],
   'Smart Home & Technology': ['smart home', 'technology', 'tech', 'low voltage'],
   Other: ['contractor', 'handyman', 'general'],
   Others: ['contractor', 'handyman', 'general'],
@@ -171,11 +193,51 @@ function contractorTradeMatchesCategory(contractorTrade, category) {
   return words.some((w) => normalizedTrade.includes(w));
 }
 
+const PRIMARY_ADMIN_EMAIL = process.env.PRIMARY_ADMIN_EMAIL?.trim() || 'ksdt2702@gmail.com';
+const LEGACY_ADMIN_EMAILS = ['admin@fixbridge.local'];
+
 const DEMO_USERS = [
   { role: 'homeowner',   name: 'Maria Santos', email: 'maria@example.com',       plainPassword: 'demo123',  is_admin: false, trade: null,             license_number: null },
   { role: 'contractor',  name: 'James Park',   email: 'james@yourcompany.com',   plainPassword: 'demo123',  is_admin: false, trade: 'Master Plumber', license_number: 'NY-00231847' },
-  { role: 'admin',       name: 'Ops Admin',    email: 'admin@fixbridge.local',  plainPassword: 'admin123', is_admin: true,  trade: null,             license_number: null },
+  { role: 'admin',       name: 'Ops Admin',    email: PRIMARY_ADMIN_EMAIL,       plainPassword: 'admin123', is_admin: true,  trade: null,             license_number: null },
 ];
+
+/** Move legacy demo admin email to PRIMARY_ADMIN_EMAIL and ensure super_admin access. */
+async function migratePrimaryAdminEmail() {
+  for (const legacy of LEGACY_ADMIN_EMAILS) {
+    if (legacy.toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase()) continue;
+    const { rows: legacyRows } = await pool.query(
+      `SELECT id FROM users WHERE role='admin' AND LOWER(email)=LOWER($1)`,
+      [legacy]
+    );
+    const { rows: targetRows } = await pool.query(
+      `SELECT id FROM users WHERE role='admin' AND LOWER(email)=LOWER($1)`,
+      [PRIMARY_ADMIN_EMAIL]
+    );
+    if (legacyRows[0] && !targetRows[0]) {
+      await pool.query(
+        `UPDATE users SET email=$1, is_admin=true, admin_access_level='read-write', admin_role_preset='super_admin'
+         WHERE id=$2`,
+        [PRIMARY_ADMIN_EMAIL, legacyRows[0].id]
+      );
+      console.log(`[FixBridge API] Migrated admin ${legacy} → ${PRIMARY_ADMIN_EMAIL}`);
+    } else if (legacyRows[0] && targetRows[0]) {
+      await pool.query(`DELETE FROM users WHERE id=$1`, [legacyRows[0].id]);
+      console.log(`[FixBridge API] Removed duplicate legacy admin ${legacy}`);
+    }
+  }
+  const { rows: primary } = await pool.query(
+    `SELECT id FROM users WHERE role='admin' AND LOWER(email)=LOWER($1)`,
+    [PRIMARY_ADMIN_EMAIL]
+  );
+  if (primary[0]) {
+    await pool.query(
+      `UPDATE users SET is_admin=true, admin_access_level='read-write', admin_role_preset='super_admin'
+       WHERE id=$1`,
+      [primary[0].id]
+    );
+  }
+}
 
 // ── Schema init ───────────────────────────────────────────────────────────────
 
@@ -224,6 +286,23 @@ async function ensureDemoUsers() {
             '(555) 204-8800',
           ]
         );
+      } else if (u.role === 'admin') {
+        await pool.query(
+          `INSERT INTO users (role,name,email,password,trade,license_number,is_admin,compliance_status,admin_access_level,admin_role_preset)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING`,
+          [
+            u.role,
+            u.name,
+            u.email,
+            hashed,
+            u.trade,
+            u.license_number,
+            u.is_admin,
+            'draft',
+            'read-write',
+            'super_admin',
+          ]
+        );
       } else {
         await pool.query(
           `INSERT INTO users (role,name,email,password,trade,license_number,is_admin,compliance_status)
@@ -266,7 +345,8 @@ async function ensureDemoUsers() {
 
     if (u.is_admin && row.is_admin !== true) {
       await pool.query(
-        'UPDATE users SET is_admin=true WHERE role=$1 AND LOWER(email)=LOWER($2)',
+        `UPDATE users SET is_admin=true, admin_access_level='read-write', admin_role_preset='super_admin'
+         WHERE role=$1 AND LOWER(email)=LOWER($2)`,
         [u.role, u.email]
       );
     }
@@ -303,8 +383,10 @@ export async function initDb() {
       console.log('[FixBridge API] DB already initialized, running managed schema checks...');
       await initManagedSchema(pool);
       await initSupportTicketSchema(pool);
+      await initHomeownerAdminSchema(pool);
       await initSubscriptionPlansSchema(pool);
-      await ensureDemoUsers();
+      await migratePrimaryAdminEmail();
+  await ensureDemoUsers();
       return;
     }
   } catch (e) {
@@ -467,6 +549,7 @@ export async function initDb() {
     )
   `);
 
+  await migratePrimaryAdminEmail();
   await ensureDemoUsers();
 
   // Migrate any remaining plaintext passwords for other users
@@ -503,6 +586,7 @@ export async function initDb() {
 
   await initManagedSchema(pool);
   await initSupportTicketSchema(pool);
+  await initHomeownerAdminSchema(pool);
   await initSubscriptionPlansSchema(pool);
 
   console.log('[FixBridge API] DB ready ✓');
@@ -512,11 +596,17 @@ export async function initDb() {
 
 // ── JWT helpers ───────────────────────────────────────────────────────────────
 
-function makeToken(user) {
+function makeToken(user, { authStage = 'complete', expiresIn = '7d' } = {}) {
   return jwt.sign(
-    { id: user.id, role: user.role, email: user.email, isAdmin: user.isAdmin === true },
+    {
+      id: user.id,
+      role: user.role,
+      email: user.email,
+      isAdmin: user.isAdmin === true,
+      authStage,
+    },
     JWT_SECRET,
-    { expiresIn: '7d', algorithm: 'HS256' }
+    { expiresIn, algorithm: 'HS256' }
   );
 }
 
@@ -558,10 +648,12 @@ async function requireAuth(req, res, next) {
       email: rows[0].email,
       name: rows[0].name,
       role: rows[0].role,
-      isAdmin: rows[0].role === 'admin' || rows[0].is_admin === true,
+      // P0-10: is_admin boolean alone must never grant admin / cross-user access
+      isAdmin: rows[0].role === 'admin',
       isBlocked: rows[0].is_blocked === true,
       adminAccessLevel: rows[0].admin_access_level || 'read-write',
       adminRolePreset: rows[0].admin_role_preset || null,
+      authStage: decoded.authStage || 'complete',
     };
     next();
   } catch {
@@ -573,6 +665,14 @@ async function requireAuth(req, res, next) {
 function requireAdmin(req, res, next) {
   if (req.authUser?.role !== 'admin') {
     return res.status(403).json({ ok: false, message: 'Admin access required. Use the staff admin login.' });
+  }
+  // P0-8: MFA-pending tokens cannot access admin APIs
+  if (req.authUser?.authStage === 'mfa_pending') {
+    return res.status(403).json({
+      ok: false,
+      code: 'mfa_required',
+      message: 'Multi-factor authentication required before accessing admin APIs.',
+    });
   }
   next();
 }
@@ -602,7 +702,7 @@ function requireAdminRead(req, res, next) {
 /** Legacy board jobs: can this user read/mutate this jobId? */
 async function getLegacyJobAccess(jobId, authUser) {
   if (!authUser) return { allowed: false, job: null, mutate: false };
-  if (authUser.role === 'admin' || authUser.isAdmin === true) {
+  if (authUser.role === 'admin') {
     const { rows } = await pool.query('SELECT * FROM jobs WHERE id=$1', [jobId]);
     return { allowed: true, job: rows[0] || null, mutate: true };
   }
@@ -712,6 +812,10 @@ function rowToUser(r, { includeDocumentData = true } = {}) {
     ...(r.photo_data_url           && { photoDataUrl: r.photo_data_url }),
     ...(r.phone                    && { phone: r.phone }),
     ...(r.address                  && { address: r.address }),
+    addressVerified: r.address_verified === true,
+    ...(r.address_verified_at && { addressVerifiedAt: r.address_verified_at }),
+    ...(r.address_verification_provider && { addressVerificationProvider: r.address_verification_provider }),
+    ...(r.postal_code_plus4 && { postalCodePlus4: r.postal_code_plus4 }),
     ...(r.contact_email            && { contactEmail: r.contact_email }),
     ...(r.company_name             && { companyName: r.company_name }),
     ...(r.company_details          && { companyDetails: r.company_details }),
@@ -734,7 +838,7 @@ function rowToUser(r, { includeDocumentData = true } = {}) {
     emails: asStringArray(r.profile_emails),
     phones: asStringArray(r.profile_phones),
     addresses: asStringArray(r.profile_addresses),
-    isAdmin: r.role === 'admin' || r.is_admin === true,
+    isAdmin: r.role === 'admin',
     isBlocked: r.is_blocked === true,
     isGoogleAccount: r.password === 'GOOGLE_OAUTH',
     isAppleAccount: r.password === 'APPLE_OAUTH',
@@ -910,11 +1014,20 @@ const signInLimiter = rateLimit({
 
 const forgotLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 5,
+  max: Number(process.env.FORGOT_RATE_LIMIT_MAX || 5),
   standardHeaders: true,
   legacyHeaders: false,
   handler: (_req, res) =>
-    res.status(429).json({ ok: false, message: 'Too many reset requests. Please wait 1 hour before trying again.' }),
+    res.status(429).json({ ok: false, message: 'Too many reset requests. Please wait before trying again.' }),
+});
+
+const resetLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: Number(process.env.RESET_RATE_LIMIT_MAX || 20),
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) =>
+    res.status(429).json({ ok: false, message: 'Too many reset attempts. Please wait before trying again.' }),
 });
 
 const reviewLimiter = rateLimit({
@@ -945,13 +1058,6 @@ const aiLimiter = rateLimit({
 });
 
 app.use('/api/', apiLimiter);
-
-// ── Resend email client (lazy) ─────────────────────────────────────────────
-
-function getResend() {
-  const key = process.env.RESEND_API_KEY;
-  return key ? new Resend(key) : null;
-}
 
 async function ensureUserReferralCode(pool, r) {
   if (r.referral_code) return r.referral_code;
@@ -996,15 +1102,13 @@ app.post('/api/auth/signin', signInLimiter, async (req, res) => {
       return res.status(403).json({ ok: false, message: 'This account has been blocked. Please contact support.' });
     }
 
-    // Block password login for OAuth-only accounts
-    if (rows[0].password === 'GOOGLE_OAUTH') {
-      return res.status(401).json({ ok: false, message: 'This account uses Google Sign-In. Please click "Continue with Google".' });
-    }
-    if (rows[0].password === 'APPLE_OAUTH') {
-      return res.status(401).json({ ok: false, message: 'This account uses Sign in with Apple. Please click "Continue with Apple".' });
-    }
-    if (rows[0].password === 'AUTH0_OAUTH') {
-      return res.status(401).json({ ok: false, message: 'This account uses Auth0. Please sign in with the button above.' });
+    // Former social-login accounts: no local password until they reset one
+    if (['GOOGLE_OAUTH', 'APPLE_OAUTH', 'AUTH0_OAUTH'].includes(String(rows[0].password))) {
+      return res.status(401).json({
+        ok: false,
+        message:
+          'Social login has been removed. Use Forgot password to set a password for this account, or contact support.',
+      });
     }
 
     const valid = await bcrypt.compare(password, rows[0].password);
@@ -1014,7 +1118,17 @@ app.post('/api/auth/signin', signInLimiter, async (req, res) => {
 
     await ensureUserReferralCode(pool, rows[0]);
     const user = rowToUser(rows[0]);
-    return res.json({ ok: true, token: makeToken(user), user });
+    // P0-8: admin credentials only yield an MFA-pending token until MFA succeeds
+    if (role === 'admin') {
+      return res.json({
+        ok: true,
+        mfaRequired: true,
+        token: makeToken(user, { authStage: 'mfa_pending', expiresIn: '15m' }),
+        user,
+        message: 'Credentials verified. Complete MFA to finish sign-in.',
+      });
+    }
+    return res.json({ ok: true, token: makeToken(user, { authStage: 'complete' }), user });
   } catch (e) {
     console.error('signin:', e);
     return res.status(500).json({ ok: false, message: 'Server error. Please try again.' });
@@ -1146,6 +1260,18 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
       ]
     );
     await ensureUserReferralCode(pool, rows[0]);
+    try {
+      const refCode =
+        typeof referredByCode === 'string' && referredByCode.trim()
+          ? referredByCode.trim()
+          : rows[0].referred_by_code;
+      if (refCode) {
+        await applyReferralCode(pool, rows[0].id, refCode, { actorId: rows[0].id });
+      }
+      await ensureReferralCode(pool, rows[0]);
+    } catch (refErr) {
+      console.error('referral on signup:', refErr);
+    }
     const user = rowToUser(rows[0]);
     if (role === 'contractor') {
       const uploaded = docs.filter((d) => d.data || d.name).map((d) => d.label);
@@ -1165,252 +1291,6 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
   } catch (e) {
     console.error('signup:', e);
     return res.status(500).json({ ok: false, message: 'Server error. Please try again.' });
-  }
-});
-
-/** Google OAuth — verifies Google ID token, finds or creates user (role from portal). */
-app.post('/api/auth/google', async (req, res) => {
-  try {
-    const { credential, role } = req.body;
-    if (!credential) return res.status(400).json({ ok: false, message: 'Google credential is required.' });
-    if (role !== 'homeowner' && role !== 'contractor') {
-      return res.status(400).json({ ok: false, message: 'A valid portal role is required.' });
-    }
-
-    const clientId = process.env.VITE_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID;
-    if (!clientId) return res.status(503).json({ ok: false, message: 'Google Sign-In is not configured on this server.' });
-
-    const client = new OAuth2Client(clientId);
-    const ticket = await client.verifyIdToken({ idToken: credential, audience: clientId });
-    const payload = ticket.getPayload();
-    if (!payload?.email) return res.status(400).json({ ok: false, message: 'Invalid Google token.' });
-
-    const email = String(payload.email).toLowerCase();
-    const displayName = (payload.name && String(payload.name).trim()) || email.split('@')[0];
-    const picture = typeof payload.picture === 'string' ? payload.picture : null;
-
-    let { rows } = await pool.query(
-      'SELECT * FROM users WHERE role=$1 AND LOWER(email)=LOWER($2)',
-      [role, email]
-    );
-
-    if (!rows.length) {
-      // Auto-create for the portal role that initiated Google auth (homeowner or contractor).
-      const compliance = role === 'contractor' ? 'draft' : null;
-      const result = await pool.query(
-        `INSERT INTO users (role,name,email,password,photo_data_url,compliance_status)
-         VALUES ($1,$2,$3,'GOOGLE_OAUTH',$4,$5) RETURNING *`,
-        [role, displayName, email, picture, compliance]
-      );
-      rows = result.rows;
-    } else {
-      // Refresh profile name / photo from Google when missing or still a Google-managed account.
-      const existing = rows[0];
-      const nextName = existing.name?.trim() ? existing.name : displayName;
-      const nextPhoto = existing.photo_data_url || picture;
-      if (nextName !== existing.name || nextPhoto !== existing.photo_data_url) {
-        const updated = await pool.query(
-          `UPDATE users SET name=$1, photo_data_url=COALESCE(photo_data_url, $2) WHERE id=$3 RETURNING *`,
-          [nextName, picture, existing.id]
-        );
-        rows = updated.rows;
-      }
-    }
-
-    if (rows[0].is_blocked === true) {
-      return res.status(403).json({ ok: false, message: 'This account has been blocked. Please contact support.' });
-    }
-
-    await ensureUserReferralCode(pool, rows[0]);
-    const user = rowToUser(rows[0]);
-    return res.json({ ok: true, token: makeToken(user), user });
-  } catch (e) {
-    console.error('google auth:', e);
-    return res.status(401).json({ ok: false, message: 'Google sign-in failed. Please try again.' });
-  }
-});
-
-/** Sign in with Apple — verifies Apple ID token, finds or creates user (role from portal). */
-app.post('/api/auth/apple', async (req, res) => {
-  try {
-    const { idToken, role, user: appleUser } = req.body;
-    if (!idToken) return res.status(400).json({ ok: false, message: 'Apple credential is required.' });
-    if (role !== 'homeowner' && role !== 'contractor') {
-      return res.status(400).json({ ok: false, message: 'A valid portal role is required.' });
-    }
-
-    const clientId = process.env.VITE_APPLE_CLIENT_ID || process.env.APPLE_CLIENT_ID;
-    if (!clientId) {
-      return res.status(503).json({ ok: false, message: 'Sign in with Apple is not configured on this server.' });
-    }
-
-    const payload = await appleSignin.verifyIdToken(idToken, {
-      audience: clientId,
-      ignoreExpiration: false,
-    });
-
-    const appleSub = payload.sub ? String(payload.sub) : null;
-    if (!appleSub) return res.status(400).json({ ok: false, message: 'Invalid Apple token.' });
-
-    const tokenEmail = payload.email ? String(payload.email).toLowerCase() : null;
-    const bodyEmail = appleUser?.email ? String(appleUser.email).toLowerCase() : null;
-    const email = tokenEmail || bodyEmail;
-
-    const firstName = appleUser?.name?.firstName ? String(appleUser.name.firstName).trim() : '';
-    const lastName = appleUser?.name?.lastName ? String(appleUser.name.lastName).trim() : '';
-    const fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
-    const displayName = fullName || (email ? email.split('@')[0] : 'Apple User');
-
-    let rows = [];
-
-    const bySub = await pool.query(
-      'SELECT * FROM users WHERE role=$1 AND oauth_apple_sub=$2',
-      [role, appleSub]
-    );
-    if (bySub.rows.length) {
-      rows = bySub.rows;
-    } else if (email) {
-      const byEmail = await pool.query(
-        'SELECT * FROM users WHERE role=$1 AND LOWER(email)=LOWER($2)',
-        [role, email]
-      );
-      rows = byEmail.rows;
-    }
-
-    if (!rows.length) {
-      if (!email) {
-        return res.status(400).json({
-          ok: false,
-          message: 'Apple did not share an email. Remove FixBridge from Apple ID settings and try again to grant email access.',
-        });
-      }
-
-      const result = await pool.query(
-        `INSERT INTO users (role, name, email, password, oauth_apple_sub)
-         VALUES ($1, $2, $3, 'APPLE_OAUTH', $4) RETURNING *`,
-        [role, displayName, email, appleSub]
-      );
-      rows = result.rows;
-    } else {
-      const existing = rows[0];
-      const nextName = existing.name?.trim() ? existing.name : displayName;
-      const nextSub = existing.oauth_apple_sub || appleSub;
-      if (nextName !== existing.name || nextSub !== existing.oauth_apple_sub) {
-        const updated = await pool.query(
-          `UPDATE users SET name=$1, oauth_apple_sub=COALESCE(oauth_apple_sub, $2) WHERE id=$3 RETURNING *`,
-          [nextName, appleSub, existing.id]
-        );
-        rows = updated.rows;
-      }
-    }
-
-    if (rows[0].is_blocked === true) {
-      return res.status(403).json({ ok: false, message: 'This account has been blocked. Please contact support.' });
-    }
-
-    await ensureUserReferralCode(pool, rows[0]);
-    const user = rowToUser(rows[0]);
-    return res.json({ ok: true, token: makeToken(user), user });
-  } catch (e) {
-    console.error('apple auth:', e);
-    return res.status(401).json({ ok: false, message: 'Apple sign-in failed. Please try again.' });
-  }
-});
-
-/** Auth0 — verifies access token via Auth0 userinfo, finds or creates user (role from portal). */
-app.post('/api/auth/auth0', async (req, res) => {
-  try {
-    const { accessToken, role } = req.body;
-    if (!accessToken) return res.status(400).json({ ok: false, message: 'Auth0 access token is required.' });
-    if (role !== 'homeowner') {
-      return res.status(400).json({ ok: false, message: 'Auth0 sign-in is only available for homeowners.' });
-    }
-
-    const domain = process.env.VITE_AUTH0_DOMAIN || process.env.AUTH0_DOMAIN;
-    if (!domain) {
-      return res.status(503).json({ ok: false, message: 'Auth0 is not configured on this server.' });
-    }
-
-    const userInfoRes = await fetch(`https://${domain}/userinfo`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (!userInfoRes.ok) {
-      return res.status(401).json({ ok: false, message: 'Invalid Auth0 token.' });
-    }
-
-    const profile = await userInfoRes.json();
-    const auth0Sub = profile.sub ? String(profile.sub) : null;
-    if (!auth0Sub) return res.status(400).json({ ok: false, message: 'Invalid Auth0 profile.' });
-
-    const email = profile.email ? String(profile.email).toLowerCase() : null;
-    const displayName =
-      (profile.name && String(profile.name).trim()) ||
-      (profile.nickname && String(profile.nickname).trim()) ||
-      (email ? email.split('@')[0] : 'Auth0 User');
-    const picture = typeof profile.picture === 'string' ? profile.picture : null;
-
-    let rows = [];
-
-    const bySub = await pool.query(
-      'SELECT * FROM users WHERE role=$1 AND oauth_auth0_sub=$2',
-      [role, auth0Sub]
-    );
-    if (bySub.rows.length) {
-      rows = bySub.rows;
-    } else if (email) {
-      const byEmail = await pool.query(
-        'SELECT * FROM users WHERE role=$1 AND LOWER(email)=LOWER($2)',
-        [role, email]
-      );
-      rows = byEmail.rows;
-    }
-
-    if (!rows.length) {
-      if (!email) {
-        return res.status(400).json({
-          ok: false,
-          message: 'Auth0 did not return an email for this account. Check your Auth0 application scopes.',
-        });
-      }
-
-      const result = await pool.query(
-        `INSERT INTO users (role, name, email, password, photo_data_url, oauth_auth0_sub, compliance_status)
-         VALUES ($1, $2, $3, 'AUTH0_OAUTH', $4, $5, $6) RETURNING *`,
-        [role, displayName, email, picture, auth0Sub, role === 'contractor' ? 'draft' : null]
-      );
-      rows = result.rows;
-    } else {
-      const existing = rows[0];
-      const nextName = existing.name?.trim() ? existing.name : displayName;
-      const nextPhoto = existing.photo_data_url || picture;
-      const nextSub = existing.oauth_auth0_sub || auth0Sub;
-      if (
-        nextName !== existing.name ||
-        nextPhoto !== existing.photo_data_url ||
-        nextSub !== existing.oauth_auth0_sub
-      ) {
-        const updated = await pool.query(
-          `UPDATE users
-           SET name=$1,
-               photo_data_url=COALESCE(photo_data_url, $2),
-               oauth_auth0_sub=COALESCE(oauth_auth0_sub, $3)
-           WHERE id=$4 RETURNING *`,
-          [nextName, picture, auth0Sub, existing.id]
-        );
-        rows = updated.rows;
-      }
-    }
-
-    if (rows[0].is_blocked === true) {
-      return res.status(403).json({ ok: false, message: 'This account has been blocked. Please contact support.' });
-    }
-
-    await ensureUserReferralCode(pool, rows[0]);
-    const user = rowToUser(rows[0]);
-    return res.json({ ok: true, token: makeToken(user), user });
-  } catch (e) {
-    console.error('auth0 auth:', e);
-    return res.status(401).json({ ok: false, message: 'Auth0 sign-in failed. Please try again.' });
   }
 });
 
@@ -1799,6 +1679,19 @@ app.put('/api/auth/profile', requireAuth, async (req, res) => {
       if (freshUser[0]) {
         updated = freshUser[0];
       }
+      if (body.addressVerified !== undefined || body.postalCodePlus4 !== undefined) {
+        await pool.query(
+          `UPDATE users SET
+             address_verified = $1,
+             address_verified_at = CASE WHEN $1::boolean THEN NOW() ELSE NULL END,
+             address_verification_provider = CASE WHEN $1::boolean THEN 'usps' ELSE NULL END,
+             postal_code_plus4 = COALESCE($2, postal_code_plus4)
+           WHERE id = $3`,
+          [body.addressVerified === true, body.postalCodePlus4 || null, req.authUser.id]
+        );
+        const { rows: refreshed } = await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id]);
+        if (refreshed[0]) updated = refreshed[0];
+      }
     }
     const changedLabels = [];
     if (licenseDoc.set && licenseDoc.data !== before.license_document_data) changedLabels.push('License');
@@ -1828,100 +1721,104 @@ app.put('/api/auth/profile', requireAuth, async (req, res) => {
   }
 });
 
-/** Forgot password — generates reset token and emails the link */
+/** Forgot password — generates hashed reset token and emails the link (enumeration-safe). */
 app.post('/api/auth/forgot-password', forgotLimiter, async (req, res) => {
   try {
-    const { email, role } = req.body;
-    if (!email || !role) return res.status(400).json({ ok: false });
+    const email = String(req.body?.email || '').trim();
+    const role = String(req.body?.role || '').toLowerCase();
+    if (!email || !RESET_ROLES.includes(role)) {
+      // Still generic — do not reveal validation details that help attackers
+      return res.json({ ok: true });
+    }
 
-    const { rows } = await pool.query(
-      `SELECT * FROM users WHERE role=$1 AND LOWER(email)=LOWER($2) AND password NOT IN ('GOOGLE_OAUTH', 'APPLE_OAUTH', 'AUTH0_OAUTH')`,
-      [role, email.trim()]
-    );
-
-    // Always return ok to prevent email enumeration attacks
-    if (!rows.length) return res.json({ ok: true });
-
-    const token = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
-
-    // Invalidate old unused tokens for this account
-    await pool.query(
-      'UPDATE password_reset_tokens SET used=true WHERE email=$1 AND role=$2 AND used=false',
-      [rows[0].email, role]
-    );
-    await pool.query(
-      'INSERT INTO password_reset_tokens (email,role,token,expires_at) VALUES ($1,$2,$3,$4)',
-      [rows[0].email, role, token, expiresAt]
-    );
-
-    const origin = (process.env.APP_URL || '').trim().replace(/\/$/, '') || 'http://localhost:5000';
-    const resetUrl = `${origin}/?action=reset-password&token=${token}&role=${role}`;
-    const userName = rows[0].name;
-    const portalLabel = role === 'homeowner' ? 'Homeowner' : 'Contractor';
-
-    const resend = getResend();
-    if (resend) {
-      const fromEmail = process.env.FROM_EMAIL || 'FixBridge <onboarding@resend.dev>';
-      await resend.emails.send({
-        from: fromEmail,
-        to: rows[0].email,
-        subject: `Reset your FixBridge ${portalLabel} password`,
-        html: `
-          <div style="font-family:'DM Sans',sans-serif;max-width:520px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;padding:40px;">
-            <div style="margin-bottom:24px;">
-              <span style="font-weight:900;font-size:22px;letter-spacing:0.05em;color:#111;">FIX</span><span style="font-weight:900;font-size:22px;letter-spacing:0.05em;color:#FF4D1C;">BRIDGE</span>
-              <span style="font-size:10px;background:#FF4D1C;color:#fff;padding:2px 6px;margin-left:6px;font-family:monospace;">AI</span>
-            </div>
-            <h2 style="font-size:24px;font-weight:900;text-transform:uppercase;letter-spacing:0.04em;color:#111;margin-bottom:8px;">Reset your password</h2>
-            <p style="color:#6b7280;margin-bottom:8px;">Hi ${userName},</p>
-            <p style="color:#6b7280;margin-bottom:24px;">We received a request to reset your <strong>${portalLabel} Portal</strong> password. Click the button below — this link expires in <strong>1 hour</strong>.</p>
-            <a href="${resetUrl}" style="display:inline-block;background:#FF4D1C;color:#fff;padding:13px 28px;text-decoration:none;font-weight:700;font-size:14px;letter-spacing:0.03em;">
-              RESET MY PASSWORD →
-            </a>
-            <p style="color:#9ca3af;font-size:12px;margin-top:32px;border-top:1px solid #e5e7eb;padding-top:16px;">
-              If you didn't request this, you can safely ignore this email. Your password won't change.
-            </p>
-          </div>
-        `,
-      });
-    } else {
-      // Dev mode: print link to server console (no email configured yet)
-      console.log(`\n[FixBridge DEV] Password reset link for ${rows[0].email}:\n${resetUrl}\n`);
+    const account = await findResetAccount(pool, role, email);
+    if (account) {
+      await issuePasswordReset(pool, account);
     }
 
     return res.json({ ok: true });
   } catch (e) {
     console.error('forgot-password:', e);
-    return res.status(500).json({ ok: false, message: 'Server error. Please try again.' });
+    // Enumeration-safe even on error
+    return res.json({ ok: true });
   }
 });
 
-/** Reset password — validates token and sets new hashed password */
-app.post('/api/auth/reset-password', async (req, res) => {
+/** Reset password — validates hashed token and sets new bcrypt password only (no role/data changes). */
+app.post('/api/auth/reset-password', resetLimiter, async (req, res) => {
   try {
-    const { token, role, password } = req.body;
-    if (!token || !role || !password) return res.status(400).json({ ok: false, message: 'Invalid request.' });
-    if (password.length < 6) return res.status(400).json({ ok: false, message: 'Password must be at least 6 characters.' });
-
-    const { rows } = await pool.query(
-      `SELECT * FROM password_reset_tokens WHERE token=$1 AND role=$2 AND used=false AND expires_at > NOW()`,
-      [token, role]
-    );
-    if (!rows.length) {
-      return res.status(400).json({ ok: false, message: 'This reset link is invalid or has expired. Please request a new one.' });
+    const token = String(req.body?.token || '');
+    const role = String(req.body?.role || '').toLowerCase();
+    const password = String(req.body?.password || '');
+    const result = await completePasswordReset(pool, { rawToken: token, role, password });
+    if (!result.ok) {
+      const status = result.code === 'weak_password' ? 400 : 400;
+      return res.status(status).json({
+        ok: false,
+        message: result.message || 'This reset link has expired or is no longer valid.',
+        code: result.code || 'invalid',
+      });
     }
-
-    const hashed = await bcrypt.hash(password, 10);
-    await pool.query('UPDATE users SET password=$1 WHERE LOWER(email)=LOWER($2) AND role=$3', [hashed, rows[0].email, role]);
-    await pool.query('UPDATE password_reset_tokens SET used=true WHERE token=$1', [token]);
-
     return res.json({ ok: true });
   } catch (e) {
     console.error('reset-password:', e);
     return res.status(500).json({ ok: false, message: 'Server error. Please try again.' });
   }
 });
+
+/**
+ * Admin triggers the same secure reset email for a user.
+ * Does not reveal or set passwords. Permission depends on target role.
+ */
+app.post(
+  '/api/admin/users/:userId/send-password-reset',
+  requireAuth,
+  requireAdmin,
+  requireAdminWrite,
+  async (req, res) => {
+    try {
+      const userId = Number(req.params.userId);
+      if (!Number.isFinite(userId) || userId <= 0) {
+        return res.status(400).json({ ok: false, message: 'Invalid user id.' });
+      }
+
+      const { rows } = await pool.query(`SELECT * FROM users WHERE id=$1`, [userId]);
+      if (!rows.length) {
+        return res.status(404).json({ ok: false, message: 'User not found.' });
+      }
+
+      const target = rows[0];
+      const role = String(target.role || '').toLowerCase();
+      const needed =
+        role === 'admin'
+          ? 'staff.edit'
+          : role === 'contractor'
+            ? 'contractors.edit'
+            : role === 'homeowner'
+              ? 'homeowners.edit'
+              : null;
+
+      if (!needed || !userHasPermission(req.authUser, needed)) {
+        return res.status(403).json({
+          ok: false,
+          code: 'FORBIDDEN_PERMISSION',
+          message: 'You do not have permission to send a password reset for this account.',
+        });
+      }
+
+      const account = await findResetAccount(pool, role, target.email);
+      if (!account) {
+        return res.status(400).json({ ok: false, message: 'Unable to send password reset for this account.' });
+      }
+
+      await issuePasswordReset(pool, account, { triggeredByUserId: req.authUser.id });
+      return res.json({ ok: true, message: 'Password reset email sent if the account can receive one.' });
+    } catch (e) {
+      console.error('admin send-password-reset:', e);
+      return res.status(500).json({ ok: false, message: 'Could not send password reset email.' });
+    }
+  }
+);
 
 // Requires a valid token. Returns only contractor public info (no passwords, no document file bytes).
 app.get('/api/users', requireAuth, async (req, res) => {
@@ -1946,7 +1843,8 @@ app.get('/api/admin/verify', requireAuth, requireAdmin, (_req, res) => {
 app.get('/api/admin/users', requireAuth, requireAdmin, async (_req, res) => {
   try {
     const { rows } = await pool.query(`SELECT * FROM users ORDER BY created_at DESC, role ASC, name ASC`);
-    return res.json({ ok: true, users: rows.map(rowToUser) });
+    // P0-12: metadata only — never return document bytes in list responses
+    return res.json({ ok: true, users: rows.map((r) => rowToUser(r, { includeDocumentData: false })) });
   } catch (e) {
     console.error('admin users:', e);
     return res.status(500).json({ ok: false, message: 'Server error' });
@@ -1957,12 +1855,52 @@ app.get('/api/admin/users/:userId', requireAuth, requireAdmin, async (req, res) 
   try {
     const { rows } = await pool.query(`SELECT * FROM users WHERE id=$1`, [req.params.userId]);
     if (!rows.length) return res.status(404).json({ ok: false, message: 'User not found.' });
-    return res.json({ ok: true, user: rowToUser(rows[0]) });
+    return res.json({ ok: true, user: rowToUser(rows[0], { includeDocumentData: false }) });
   } catch (e) {
     console.error('admin user detail:', e);
     return res.status(500).json({ ok: false, message: 'Server error' });
   }
 });
+
+app.get(
+  '/api/admin/users/:userId/documents',
+  requireAuth,
+  requireAdmin,
+  requirePermission('contractors.view'),
+  async (req, res) => {
+    try {
+      const { rows } = await pool.query(`SELECT * FROM users WHERE id=$1`, [req.params.userId]);
+      if (!rows.length) return res.status(404).json({ ok: false, message: 'User not found.' });
+      const u = rows[0];
+      const documents = [];
+      const push = (documentType, fileName, uploadedAt, data) => {
+        if (!fileName && !data) return;
+        documents.push({
+          documentType,
+          fileName: fileName || null,
+          uploadedAt: uploadedAt || null,
+          verificationStatus: u.compliance_status || null,
+          hasData: Boolean(data),
+          dataUrl: data || null,
+        });
+      };
+      push('license', u.license_document_name, u.license_expires_at, u.license_document_data);
+      push('insurance', u.insurance_document_name, u.insurance_expires_at, u.insurance_document_data);
+      push('government_id', u.id_document_name, null, u.id_document_data);
+      push('w9', u.w9_document_name, null, u.w9_document_data);
+      push('business_registration', u.business_registration_name, null, u.business_registration_data);
+      push('business_license', u.business_license_name, null, u.business_license_data);
+      push('diversity', u.diversity_document_name, null, u.diversity_document_data);
+      await writeAudit(pool, req.authUser.id, 'admin_view_user_documents', 'user', Number(req.params.userId), {
+        documentCount: documents.length,
+      });
+      return res.json({ ok: true, documents });
+    } catch (e) {
+      console.error('admin user documents:', e);
+      return res.status(500).json({ ok: false, message: 'Server error' });
+    }
+  }
+);
 
 app.put('/api/admin/users/:userId/block', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
   try {
@@ -2863,7 +2801,9 @@ app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
 
   registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser });
   registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
-registerSupportTicketRoutes(app, { pool, requireAuth, requireAdmin });
+registerSupportTicketRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
+registerHomeownerAdminRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
+registerFinanceRoutes(app, { pool, requireAuth, requireAdmin });
 registerSubscriptionPlanRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerPlatformRoutes(app, {
   pool,
@@ -2876,6 +2816,8 @@ registerPlatformRoutes(app, {
   rowToUser,
 });
 registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission });
+registerReferralRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
+registerAddressRoutes(app, { requireAuth });
 
 app.post('/api/ai/chat', requireAuth, aiLimiter, async (req, res) => {
   try {
@@ -2914,6 +2856,7 @@ app.get('/api/health', (_req, res) => {
     env: production ? 'production' : 'development',
     database: useInMemoryDb ? 'memory' : 'neon',
     stripeConfigured: stripeConfigured(),
+    gmail: mailStatus(),
     paymentsSimulateAllowed: !production && !stripeConfigured(),
     demoSeedAllowed: allowDemoSeed(),
   });

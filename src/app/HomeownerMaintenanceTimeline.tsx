@@ -183,21 +183,36 @@ export default function HomeownerMaintenanceTimeline({
   properties,
   jobs,
   onOpenJob,
+  embedded,
+  selectedPropertyId,
+  onSelectedPropertyIdChange,
+  hidePropertyPicker,
 }: {
   properties: Property[];
   jobs: ManagedJob[];
   onOpenJob?: (jobId: number) => void;
+  embedded?: boolean;
+  selectedPropertyId?: number | null;
+  onSelectedPropertyIdChange?: (id: number) => void;
+  hidePropertyPicker?: boolean;
 }) {
-  const [selectedId, setSelectedId] = useState<number | null>(properties[0]?.id ?? null);
+  const [internalId, setInternalId] = useState<number | null>(properties[0]?.id ?? null);
   const [receiptViewer, setReceiptViewer] = useState<PropertyDocument[] | null>(null);
   const [receiptIndex, setReceiptIndex] = useState(0);
 
+  const selectedId = selectedPropertyId != null ? selectedPropertyId : internalId;
+  const setSelectedId = (id: number) => {
+    if (onSelectedPropertyIdChange) onSelectedPropertyIdChange(id);
+    else setInternalId(id);
+  };
+
   useEffect(() => {
-    if (!selectedId && properties[0]) setSelectedId(properties[0].id);
-    if (selectedId && properties.length && !properties.some((p) => p.id === selectedId)) {
-      setSelectedId(properties[0]?.id ?? null);
+    if (selectedPropertyId != null) return;
+    if (!internalId && properties[0]) setInternalId(properties[0].id);
+    if (internalId && properties.length && !properties.some((p) => p.id === internalId)) {
+      setInternalId(properties[0]?.id ?? null);
     }
-  }, [properties, selectedId]);
+  }, [properties, internalId, selectedPropertyId]);
 
   const selected = useMemo(
     () => properties.find((p) => p.id === selectedId) || properties[0] || null,
@@ -219,15 +234,26 @@ export default function HomeownerMaintenanceTimeline({
   const currentReceipt = receiptViewer?.[receiptIndex] || null;
 
   return (
-    <section className="mx-auto max-w-5xl space-y-5">
-      <div>
-        <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight">
-          Maintenance Timeline
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Home history by property — services, costs, and receipts in one place.
-        </p>
-      </div>
+    <section className={embedded ? "space-y-4" : "mx-auto max-w-5xl space-y-5"}>
+      {!embedded ? (
+        <div>
+          <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight">
+            Maintenance Timeline
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Home history by property — services, costs, and receipts in one place.
+          </p>
+        </div>
+      ) : (
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+            Property Timeline
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            FixBridge jobs, previous repairs, inspections, and documents in one chronology.
+          </p>
+        </div>
+      )}
 
       {properties.length === 0 ? (
         <div className="rounded-[1.5rem] border border-dashed border-border bg-card px-6 py-12 text-center">
@@ -238,29 +264,31 @@ export default function HomeownerMaintenanceTimeline({
           </p>
         </div>
       ) : (
-        <div className="grid gap-5 lg:grid-cols-[200px_1fr]">
-          <div className="space-y-2">
-            {properties.map((p, idx) => {
-              const active = selected?.id === p.id;
-              return (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => setSelectedId(p.id)}
-                  className={`w-full rounded-2xl border px-3.5 py-3 text-left transition ${
-                    active ? "border-primary bg-primary/5 shadow-sm" : "border-border bg-card hover:border-primary/30"
-                  }`}
-                >
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                    Home {idx + 1}
-                  </p>
-                  <p className="mt-1 text-sm font-semibold leading-snug line-clamp-2">
-                    {p.label || p.addressLine1}
-                  </p>
-                </button>
-              );
-            })}
-          </div>
+        <div className={hidePropertyPicker ? "" : "grid gap-5 lg:grid-cols-[200px_1fr]"}>
+          {!hidePropertyPicker ? (
+            <div className="space-y-2">
+              {properties.map((p, idx) => {
+                const active = selected?.id === p.id;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setSelectedId(p.id)}
+                    className={`w-full rounded-2xl border px-3.5 py-3 text-left transition ${
+                      active ? "border-primary bg-primary/5 shadow-sm" : "border-border bg-card hover:border-primary/30"
+                    }`}
+                  >
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                      Home {idx + 1}
+                    </p>
+                    <p className="mt-1 text-sm font-semibold leading-snug line-clamp-2">
+                      {p.label || p.addressLine1}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
 
           <div className="rounded-[1.5rem] border border-border/70 bg-card p-5 shadow-sm sm:p-7">
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">

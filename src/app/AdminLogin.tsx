@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { ArrowRight, Shield, Loader2, KeyRound } from "lucide-react";
-import { signInUser, type AuthUser } from "./auth";
+import { signInUser, saveSession, type AuthUser } from "./auth";
 import { brand } from "../config/brand";
 import { startAdminMfa, verifyAdminMfa } from "./platformApi";
 import {
@@ -12,6 +12,7 @@ import {
   authInputClass,
 } from "./AuthShell";
 import { AuthEmailField, AuthPasswordField, AuthPrimaryButton } from "./AuthFormFields";
+import ForgotPasswordModal from "./ForgotPasswordModal";
 
 export default function AdminLogin({
   onLogin,
@@ -21,6 +22,7 @@ export default function AdminLogin({
   onBack: () => void;
 }) {
   const [showPass, setShowPass] = useState(false);
+  const [showForgot, setShowForgot] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [email, setEmail] = useState("");
@@ -79,7 +81,13 @@ export default function AdminLogin({
         setError("Invalid or expired code. Try again.");
         return;
       }
-      onLogin(pendingUser);
+      if (result.token && result.user) {
+        saveSession(result.token, result.user);
+        onLogin(result.user);
+      } else {
+        // Fallback: keep pending user only if server omitted token (should not happen)
+        onLogin(pendingUser);
+      }
     } catch {
       setLoading(false);
       setError("Verification failed. Please try again.");
@@ -155,6 +163,16 @@ export default function AdminLogin({
                   label="Password"
                 />
 
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setShowForgot(true)}
+                    className="text-sm font-medium text-primary hover:underline"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+
                 <AuthError message={error} />
 
                 <AuthPrimaryButton loading={loading}>
@@ -169,6 +187,13 @@ export default function AdminLogin({
                 </AuthPrimaryButton>
               </form>
             </AuthPanel>
+            {showForgot ? (
+              <ForgotPasswordModal
+                role="admin"
+                initialEmail={email}
+                onClose={() => setShowForgot(false)}
+              />
+            ) : null}
           </motion.div>
         ) : (
           <motion.div

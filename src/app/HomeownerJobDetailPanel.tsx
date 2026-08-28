@@ -1,45 +1,86 @@
-import { useRef, useState, type ReactNode } from "react";
-import { CheckCircle, HardHat, ImagePlus, Loader2, X } from "lucide-react";
-import HomeownerAccordion from "./HomeownerAccordion";
-import { StarRating, fileToReviewImage, MAX_REVIEW_IMAGES } from "./StarRating";
-import { useIsMobile } from "./components/ui/use-mobile";
-import { arrivalWindowLabel } from "./ServiceTrackingCard";
 import {
   approveProposal,
   confirmCompletion,
   formatMoney,
   payDispatchFee,
   payRetail,
+  prepareCheckout,
+  homeownerInvoiceCheckout,
+  updateHomeownerJob,
   type ManagedJob,
   type Property,
   type Proposal,
 } from "./managedJobs";
 import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
 import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
+import { HomeownerTipCheckout } from "./HomeownerTipCheckout";
+import ChangeOrderPanel from "./ChangeOrderPanel";
+
+const TIME_WINDOW_OPTIONS = [
+  { value: "9-11", label: "9–11 AM", period: "Morning" },
+  { value: "11-2", label: "11 AM–2 PM", period: "Midday" },
+  { value: "2-5", label: "2–5 PM", period: "Afternoon" },
+  { value: "5-7", label: "5–7 PM", period: "Evening" },
+] as const;
+
+const SERVICE_TIMING_OPTIONS = [
+  { value: "weekday", label: "Scheduled weekday", hint: "Best availability" },
+  { value: "same-day", label: "Same-day priority", hint: "Faster when slots open" },
+  { value: "evening-weekend", label: "Evening / weekend", hint: "After-hours & weekends" },
+] as const;
+
+function toDateInputValue(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function addDaysFromToday(days: number) {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() + days);
+  return toDateInputValue(d);
+}
+
+function formatDisplayDate(iso: string) {
+  const d = new Date(`${iso}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
 
 function DetailSection({
   mobile,
   title,
   defaultOpen,
   badge,
+  actions,
   children,
 }: {
   mobile: boolean;
   title: string;
   defaultOpen?: boolean;
   badge?: ReactNode;
+  actions?: ReactNode;
   children: ReactNode;
 }) {
   if (mobile) {
     return (
       <HomeownerAccordion title={title} defaultOpen={defaultOpen} badge={badge}>
+        {actions ? <div className="mb-3 flex flex-wrap justify-end gap-2">{actions}</div> : null}
         {children}
       </HomeownerAccordion>
     );
   }
   return (
     <div className="space-y-3 border-t border-border pt-4 first:border-t-0 first:pt-0">
-      <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
+        <div className="flex flex-wrap items-center gap-2">
+          {badge}
+          {actions}
+        </div>
+      </div>
       {children}
     </div>
   );
@@ -55,6 +96,8 @@ export default function HomeownerJobDetailPanel({
   onError,
   onRefresh,
   onNeedAddress,
+  forceEditSchedule = false,
+  onEditScheduleConsumed,
 }: {
   job: ManagedJob;
   proposal: Proposal | null;
@@ -73,9 +116,12 @@ export default function HomeownerJobDetailPanel({
     state: string;
     zip: string;
   }) => void;
+  forceEditSchedule?: boolean;
+  onEditScheduleConsumed?: () => void;
 }) {
   const isMobile = useIsMobile();
   const completionFileRef = useRef<HTMLInputElement>(null);
+  const editable = canEditHomeownerJob(job.status);
 
   const [completionRating, setCompletionRating] = useState(5);
   const [completionReview, setCompletionReview] = useState("");
@@ -83,6 +129,33 @@ export default function HomeownerJobDetailPanel({
   const [completionImages, setCompletionImages] = useState<string[]>([]);
   const [completionImageBusy, setCompletionImageBusy] = useState(false);
   const [dispatchCouponPreview, setDispatchCouponPreview] = useState<DispatchCouponPreview | null>(null);
+
+  const [editingSchedule, setEditingSchedule] = useState(false);
+  const [editingDetails, setEditingDetails] = useState(false);
+  const [serviceTiming, setServiceTiming] = useState(job.serviceTiming || "weekday");
+  const [preferredDate, setPreferredDate] = useState(job.preferredDate || "");
+  const [preferredTimeSlot, setPreferredTimeSlot] = useState(job.preferredTimeSlot || "9-11");
+  const [description, setDescription] = useState(job.description || "");
+  const [contactPhone, setContactPhone] = useState(job.contactPhone || "");
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setServiceTiming(job.serviceTiming || "weekday");
+    setPreferredDate(job.preferredDate || "");
+    setPreferredTimeSlot(job.preferredTimeSlot || "9-11");
+    setDescription(job.description || "");
+    setContactPhone(job.contactPhone || "");
+    setEditingSchedule(false);
+    setEditingDetails(false);
+    setSaveMsg(null);
+  }, [job.id, job.updatedAt, job.preferredDate, job.preferredTimeSlot, job.serviceTiming, job.description, job.contactPhone]);
+
+  useEffect(() => {
+    if (forceEditSchedule && editable) {
+      setEditingSchedule(true);
+      onEditScheduleConsumed?.();
+    }
+  }, [forceEditSchedule, editable, onEditScheduleConsumed]);
 
   const baseDispatchFee = job.visitFeeAmount ?? job.pricing?.contractor_visit_fee ?? 125;
   const dispatchHoldAmount = dispatchCouponPreview?.discountedAmount ?? baseDispatchFee;
@@ -96,12 +169,66 @@ export default function HomeownerJobDetailPanel({
   const showQuote =
     proposal != null &&
     ["proposal_sent", "awaiting_customer_approval", "approved"].includes(String(job.status));
+  const showInvoicePay =
+    job.invoiceId != null &&
+    String(job.invoiceStatus || "").toLowerCase() === "due" &&
+    Number(job.invoiceAmountDue || 0) > 0;
   const showCompletionReport = Boolean(job.completionReport);
   const showReviewForm = job.status === "customer_review_pending";
   const showLegacyComplete = job.status === "completed";
 
   const showAcceptQuoteFooter =
     isMobile && showQuote && proposal != null && proposal.status !== "approved";
+
+  const dateChips = [
+    { label: "Today", value: addDaysFromToday(0) },
+    { label: "Tomorrow", value: addDaysFromToday(1) },
+    { label: "In 2 days", value: addDaysFromToday(2) },
+    { label: "This weekend", value: addDaysFromToday(((6 - new Date().getDay()) + 7) % 7 || 7) },
+  ];
+
+  async function saveSchedule() {
+    onBusy(true);
+    onError(null);
+    setSaveMsg(null);
+    try {
+      const r = await updateHomeownerJob(job.id, {
+        serviceTiming,
+        preferredDate: preferredDate || null,
+        preferredTimeSlot,
+      });
+      if (!r.ok) {
+        onError(r.message || "Could not update schedule.");
+        return;
+      }
+      setEditingSchedule(false);
+      setSaveMsg("Schedule updated.");
+      await onRefresh();
+    } finally {
+      onBusy(false);
+    }
+  }
+
+  async function saveDetails() {
+    onBusy(true);
+    onError(null);
+    setSaveMsg(null);
+    try {
+      const r = await updateHomeownerJob(job.id, {
+        description: description.trim(),
+        contactPhone: contactPhone.trim(),
+      });
+      if (!r.ok) {
+        onError(r.message || "Could not update request details.");
+        return;
+      }
+      setEditingDetails(false);
+      setSaveMsg("Request details updated.");
+      await onRefresh();
+    } finally {
+      onBusy(false);
+    }
+  }
 
   const handleApproveProposal = async () => {
     onBusy(true);
@@ -115,38 +242,279 @@ export default function HomeownerJobDetailPanel({
       <span className="text-xs font-semibold tabular-nums text-primary">{formatMoney(proposal.retailAmount)}</span>
     ) : null;
 
+  const scheduleActions =
+    editable && !editingSchedule ? (
+      <button
+        type="button"
+        onClick={() => setEditingSchedule(true)}
+        className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:border-primary/40 hover:bg-primary/5"
+      >
+        <Pencil className="h-3 w-3" /> {arrival ? "Change" : "Set schedule"}
+      </button>
+    ) : null;
+
+  const detailsActions =
+    editable && !editingDetails ? (
+      <button
+        type="button"
+        onClick={() => setEditingDetails(true)}
+        className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:border-primary/40 hover:bg-primary/5"
+      >
+        <Pencil className="h-3 w-3" /> Edit
+      </button>
+    ) : null;
+
   const inner = (
     <>
-      <DetailSection mobile={isMobile} title="Service details" defaultOpen>
-        <p className="text-sm text-muted-foreground">{job.description || "No description provided."}</p>
-        <p className="mt-2 text-sm tabular-nums">
-          <span className="text-muted-foreground">Estimate: </span>
-          <span className="font-semibold">{estimateLabel}</span>
+      {saveMsg ? (
+        <p className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-800 dark:text-emerald-300">
+          {saveMsg}
         </p>
-        {!proposal && estimateLabel !== "Pending estimate" && !estimateLabel.includes("On-site assessment") ? (
-          <div className="mt-2 rounded-lg border border-amber-200/60 bg-amber-50/80 px-3 py-2 dark:border-amber-900/40 dark:bg-amber-950/25">
-            <AiEstimateDisclaimer compact />
+      ) : null}
+
+      <DetailSection mobile={isMobile} title="Service details" defaultOpen actions={detailsActions}>
+        {editingDetails ? (
+          <div className="space-y-3 rounded-2xl border border-primary/25 bg-primary/[0.03] p-4">
+            <label className="grid gap-1.5">
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                What&apos;s going on
+              </span>
+              <textarea
+                rows={4}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm outline-none focus:border-primary"
+                placeholder="Describe the issue…"
+              />
+            </label>
+            <label className="grid gap-1.5">
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Contact phone
+              </span>
+              <input
+                type="tel"
+                value={contactPhone}
+                onChange={(e) => setContactPhone(e.target.value)}
+                className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm outline-none focus:border-primary"
+                placeholder="(555) 555-5555"
+              />
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void saveDetails()}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+              >
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                Save changes
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setDescription(job.description || "");
+                  setContactPhone(job.contactPhone || "");
+                  setEditingDetails(false);
+                }}
+                className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
-        ) : null}
-        {job.category ? (
-          <p className="mt-2 text-xs text-muted-foreground">
-            Category: <span className="font-medium text-foreground">{job.category}</span>
-          </p>
-        ) : null}
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground">{job.description || "No description provided."}</p>
+            <p className="mt-2 text-sm tabular-nums">
+              <span className="text-muted-foreground">Estimate: </span>
+              <span className="font-semibold">{estimateLabel}</span>
+            </p>
+            {!proposal && estimateLabel !== "Pending estimate" && !estimateLabel.includes("On-site assessment") ? (
+              <div className="mt-2 rounded-lg border border-amber-200/60 bg-amber-50/80 px-3 py-2 dark:border-amber-900/40 dark:bg-amber-950/25">
+                <AiEstimateDisclaimer compact />
+              </div>
+            ) : null}
+            {job.category ? (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Category: <span className="font-medium capitalize text-foreground">{job.category}</span>
+              </p>
+            ) : null}
+          </>
+        )}
       </DetailSection>
 
-      <DetailSection mobile={isMobile} title="Appointment">
-        {arrival ? (
-          <p className="text-sm font-medium">{arrival}</p>
+      <DetailSection mobile={isMobile} title="Appointment" defaultOpen actions={scheduleActions}>
+        {editingSchedule ? (
+          <div className="space-y-4 rounded-2xl border border-primary/25 bg-primary/[0.03] p-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Timing preference</p>
+              <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                {SERVICE_TIMING_OPTIONS.map((opt) => {
+                  const selected = serviceTiming === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setServiceTiming(opt.value)}
+                      className={`rounded-xl border px-3 py-3 text-left transition ${
+                        selected
+                          ? "border-primary bg-primary/10 shadow-sm"
+                          : "border-border hover:border-primary/35"
+                      }`}
+                    >
+                      <p className="text-sm font-semibold">{opt.label}</p>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">{opt.hint}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Arrival window</p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {TIME_WINDOW_OPTIONS.map((opt) => {
+                  const selected = preferredTimeSlot === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setPreferredTimeSlot(opt.value)}
+                      className={`rounded-xl border px-3 py-3 text-left transition ${
+                        selected
+                          ? "border-primary bg-primary/10"
+                          : "border-border hover:border-primary/35"
+                      }`}
+                    >
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        {opt.period}
+                      </p>
+                      <p className="mt-0.5 text-sm font-semibold">{opt.label}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Preferred date</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {dateChips.map((chip) => {
+                  const selected = preferredDate === chip.value;
+                  return (
+                    <button
+                      key={chip.label}
+                      type="button"
+                      onClick={() => setPreferredDate(chip.value)}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                        selected
+                          ? "bg-primary text-white"
+                          : "border border-border hover:border-primary/40"
+                      }`}
+                    >
+                      {chip.label}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => setPreferredDate("")}
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                    !preferredDate ? "bg-primary text-white" : "border border-border hover:border-primary/40"
+                  }`}
+                >
+                  Flexible
+                </button>
+              </div>
+              <input
+                type="date"
+                min={addDaysFromToday(0)}
+                value={preferredDate}
+                onChange={(e) => setPreferredDate(e.target.value)}
+                className="mt-3 w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm outline-none focus:border-primary"
+              />
+              {preferredDate ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Selected · {formatDisplayDate(preferredDate)} ·{" "}
+                  {TIME_SLOT_LABELS[preferredTimeSlot] || preferredTimeSlot}
+                </p>
+              ) : (
+                <p className="mt-2 text-xs text-muted-foreground">Date flexible — we&apos;ll confirm when assigned.</p>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void saveSchedule()}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+              >
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                Save schedule
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setServiceTiming(job.serviceTiming || "weekday");
+                  setPreferredDate(job.preferredDate || "");
+                  setPreferredTimeSlot(job.preferredTimeSlot || "9-11");
+                  setEditingSchedule(false);
+                }}
+                className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         ) : (
-          <p className="text-sm text-muted-foreground">Not scheduled yet.</p>
+          <div className="space-y-3">
+            <div className="rounded-2xl border border-border bg-muted/20 p-4">
+              <div className="flex items-start gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                  <CalendarDays className="h-5 w-5" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold">{arrival || "Not scheduled yet"}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {job.serviceTiming
+                      ? SERVICE_TIMING_LABELS[job.serviceTiming] || job.serviceTiming
+                      : "No timing preference set"}
+                  </p>
+                  {editable ? (
+                    <button
+                      type="button"
+                      onClick={() => setEditingSchedule(true)}
+                      className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+                    >
+                      <Clock className="h-3.5 w-3.5" />
+                      {arrival ? "Reschedule preferred window" : "Choose a preferred date & time"}
+                    </button>
+                  ) : (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Schedule is locked while work is in progress.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {(job.fullAddress || job.cityStateZip) && (
+              <p className="flex items-start gap-2 text-sm text-muted-foreground">
+                <MapPin className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{job.fullAddress || job.cityStateZip}</span>
+              </p>
+            )}
+            {job.contactPhone ? (
+              <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Phone className="h-4 w-4 shrink-0" />
+                {job.contactPhone}
+              </p>
+            ) : null}
+          </div>
         )}
-        {job.fullAddress || job.cityStateZip ? (
-          <p className="mt-2 text-sm text-muted-foreground">{job.fullAddress || job.cityStateZip}</p>
-        ) : null}
-        {job.contactPhone ? (
-          <p className="mt-1 text-sm text-muted-foreground">Contact: {job.contactPhone}</p>
-        ) : null}
       </DetailSection>
 
       {job.mediaDataUrl ? (
@@ -235,10 +603,17 @@ export default function HomeownerJobDetailPanel({
                   }
                 }
                 onBusy(true);
-                const r = await payDispatchFee(
-                  job.id,
-                  dispatchCouponPreview?.code || job.discountCode || undefined
-                );
+                const code = dispatchCouponPreview?.code || job.discountCode || undefined;
+              const prepared = await prepareCheckout(job.id, {
+                discountCode: code || null,
+                clearCoupon: !code,
+              });
+              if (!prepared.ok) {
+                onError(prepared.message || "Could not prepare checkout.");
+                onBusy(false);
+                return;
+              }
+              const r = await payDispatchFee(job.id, code);
                 if (!r.ok) {
                   onError(r.message || "Payment failed.");
                   onBusy(false);
@@ -355,10 +730,70 @@ export default function HomeownerJobDetailPanel({
 
       {(job.status === "ai_review_complete" || job.status === "awaiting_service_payment") && !showQuote ? (
         <DetailSection mobile={isMobile} title="Next steps" defaultOpen>
-          <p className="text-sm text-muted-foreground">
-            FixBridge is reviewing your request and will contact a contractor using your photos and AI assessment.
-            You will receive a final quote to approve before any work begins. Payment is only due after the job is complete.
-          </p>
+          <div className="space-y-3 rounded-2xl border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
+            <p>
+              FixBridge is reviewing your request and will contact a contractor using your photos and AI assessment.
+              You will receive a final quote to approve before any work begins.
+            </p>
+            {editable ? (
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingSchedule(true)}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-background px-3 py-2 text-xs font-semibold hover:border-primary/40"
+                >
+                  <CalendarDays className="h-3.5 w-3.5" /> Update schedule
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingDetails(true)}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-background px-3 py-2 text-xs font-semibold hover:border-primary/40"
+                >
+                  <Pencil className="h-3.5 w-3.5" /> Edit issue details
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </DetailSection>
+      ) : null}
+
+      {["work_started", "change_order_pending", "work_completed", "customer_review_pending", "admin_review_pending", "payout_pending"].includes(
+        job.status
+      ) ? (
+        <DetailSection mobile={isMobile} title="Change orders" defaultOpen={false}>
+          <ChangeOrderPanel jobId={job.id} role="homeowner" />
+        </DetailSection>
+      ) : null}
+
+      {showInvoicePay ? (
+        <DetailSection mobile={isMobile} title="Invoice payment" defaultOpen badge="Due">
+          <div className="space-y-3 rounded-lg border border-primary/20 bg-primary/5 p-4">
+            {job.invoiceNumber ? (
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                {job.invoiceNumber}
+              </p>
+            ) : null}
+            <HomeownerTipCheckout
+              serviceTotal={Number(job.invoiceAmountDue || 0)}
+              busy={busy}
+              onPay={async (tipAmount) => {
+                onBusy(true);
+                onError(null);
+                try {
+                  const r = await homeownerInvoiceCheckout(Number(job.invoiceId), tipAmount);
+                  if (r.ok && r.checkoutUrl) {
+                    window.location.href = r.checkoutUrl;
+                    return;
+                  }
+                  onError(r.message || "Stripe checkout could not be started.");
+                } catch (err: unknown) {
+                  onError(err instanceof Error ? err.message : "Payment request failed.");
+                } finally {
+                  onBusy(false);
+                }
+              }}
+            />
+          </div>
         </DetailSection>
       ) : null}
 
@@ -576,8 +1011,34 @@ export default function HomeownerJobDetailPanel({
   }
 
   return (
-    <div className="space-y-3 rounded-[1.5rem] border border-border bg-card p-4">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Request details</h2>
+    <div className="space-y-3 rounded-[1.5rem] border border-border bg-card p-4 sm:p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Request details</h2>
+        {editable ? (
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setEditingSchedule(true);
+                setEditingDetails(false);
+              }}
+              className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:bg-muted/40"
+            >
+              <CalendarDays className="h-3.5 w-3.5" /> Schedule
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEditingDetails(true);
+                setEditingSchedule(false);
+              }}
+              className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:bg-muted/40"
+            >
+              <Pencil className="h-3.5 w-3.5" /> Edit details
+            </button>
+          </div>
+        ) : null}
+      </div>
       {inner}
     </div>
   );

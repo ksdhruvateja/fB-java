@@ -6,8 +6,8 @@
 [build.environment]
   NODE_VERSION = "20"
   # Vite embeds these at build time — also set them in the Netlify UI.
-  # VITE_GOOGLE_CLIENT_ID =
   # VITE_GEMINI_API_KEY =
+  # VITE_GOOGLE_MAPS_API_KEY =
 
 [functions]
   directory = "netlify/functions"

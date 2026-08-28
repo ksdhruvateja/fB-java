@@ -5,21 +5,29 @@
 export const PAYOUT_STATUS = {
   PENDING_JOB_COMPLETION: 'pending_job_completion',
   PENDING_APPROVAL: 'pending_approval',
+  ELIGIBLE: 'eligible',
+  ON_HOLD: 'on_hold',
   APPROVED: 'approved',
   PROCESSING: 'processing',
   PAID: 'paid',
   FAILED: 'failed',
   REFUNDED: 'refunded',
+  REVERSED: 'reversed',
+  PARTIALLY_REVERSED: 'partially_reversed',
 };
 
 export const PAYOUT_STATUS_LABELS = {
   pending_job_completion: 'Pending Job Completion',
   pending_approval: 'Pending Admin Approval',
+  eligible: 'Eligible',
+  on_hold: 'On Hold',
   approved: 'Approved',
   processing: 'Processing',
   paid: 'Paid',
   failed: 'Failed',
   refunded: 'Refunded / Adjusted',
+  reversed: 'Reversed',
+  partially_reversed: 'Partially Reversed',
 };
 
 /** @param {number|string} dollars */
@@ -199,6 +207,8 @@ export function serializePayout(row, extras = {}) {
     adjustmentsCents: Number(row.adjustments_cents || 0),
     netAmountCents: Number(row.net_amount_cents || 0),
     reserveAmountCents: Number(row.reserve_amount_cents || 0),
+    serviceContractorNetCents: Number(row.service_amount_cents || 0),
+    tipAmountCents: Number(row.tip_amount_cents || 0),
     payoutMethod: row.payout_method || 'standard',
     status: row.status,
     statusLabel: PAYOUT_STATUS_LABELS[row.status] || row.status,
@@ -212,5 +222,38 @@ export function serializePayout(row, extras = {}) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...extras,
+  };
+}
+
+/** Contractor-safe payout DTO — no FixBridge margin or reserve internals. */
+export function serializePayoutForContractor(row, extras = {}) {
+  const full = serializePayout(row, extras);
+  if (!full) return null;
+  const {
+    platformFeeCents: _platformFee,
+    reserveAmountCents: _reserve,
+    serviceContractorNetCents: _svc,
+    ...safe
+  } = full;
+  return {
+    ...safe,
+    earningsAmountCents: full.grossAmountCents,
+  };
+}
+
+/** Admin economics DTO — includes margin and service/tip breakdown. */
+export function serializePayoutAdmin(row, extras = {}) {
+  const base = serializePayout(row, extras);
+  if (!base) return null;
+  const contractorOriginalCents =
+    Math.max(0, Number(row.net_amount_cents || 0) - Number(row.adjustments_cents || 0));
+  return {
+    ...base,
+    contractorOriginalAmountCents: contractorOriginalCents,
+    contractorFinalAmountCents: Number(row.net_amount_cents || 0),
+    fixbridgeGrossMarginCents: Number(row.platform_fee_cents || 0),
+    contractorPayableNowCents: Number(row.net_amount_cents || 0),
+    alreadyReleasedCents: row.stripe_transfer_id ? Number(row.net_amount_cents || 0) : 0,
+    locked: Boolean(row.stripe_transfer_id),
   };
 }

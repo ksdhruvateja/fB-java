@@ -66,7 +66,7 @@ function prepareImageForAi(imageDataUrl) {
 export const STRUCTURED_PROMPT = `You are a property-repair assessment engine. Analyze the issue and photo if attached.
 Return ONLY valid JSON with this exact schema (no prices, no dollar amounts, no markdown):
 {
-  "category": "plumbing|electrical|hvac|painting|roofing|flooring|carpentry|others",
+  "category": "plumbing|electrical|hvac|painting|roofing|flooring|carpentry|snow_removal|landscaping|cleaning|others",
   "summary": "1-2 short sentences",
   "urgency": "low|medium|high|emergency",
   "confidence": 0.0,
@@ -264,7 +264,10 @@ export function fallbackStructuredAssessment({ category, description } = {}) {
   
   // Set default details based on category
   let resolvedCategory = 'others';
-  if (cat.includes('plumb')) resolvedCategory = 'plumbing';
+  if (cat.includes('snow') || cat.includes('plow') || cat.includes('de-ic') || cat.includes('salting')) resolvedCategory = 'snow_removal';
+  else if (cat.includes('landscape') || cat.includes('lawn') || cat.includes('yard') || cat.includes('mulch') || cat.includes('hedge')) resolvedCategory = 'landscaping';
+  else if (cat.includes('clean') || cat.includes('janitor') || cat.includes('maid')) resolvedCategory = 'cleaning';
+  else if (cat.includes('plumb')) resolvedCategory = 'plumbing';
   else if (cat.includes('electr')) resolvedCategory = 'electrical';
   else if (cat.includes('hvac')) resolvedCategory = 'hvac';
   else if (cat.includes('paint')) resolvedCategory = 'painting';
@@ -1100,6 +1103,177 @@ export async function analyzeRepairStructured(input) {
     model: result.model,
     error: result.error,
   };
+}
+
+const PROPERTY_DOC_EXTRACT_PROMPT = `You extract structured home-property document facts for FixBridge.
+Return ONLY valid JSON (no markdown) with this schema. Use null when unknown. Do not invent facts.
+{
+  "serviceType": "string|null",
+  "systemKey": "hvac|water_heater|roof|plumbing|electrical|pest|refrigerator|dishwasher|safety|other|null",
+  "systemLabel": "string|null",
+  "date": "YYYY-MM-DD|null",
+  "provider": "string|null",
+  "amount": "string|null",
+  "warrantyUntil": "YYYY-MM-DD|null",
+  "installationDate": "YYYY-MM-DD|null",
+  "inspectionFindings": ["string"],
+  "recommendedFollowUp": "string|null",
+  "recommendedFollowUpDate": "YYYY-MM-DD|null",
+  "confidence": 0.0,
+  "summary": "1 short sentence"
+}`;
+
+function parseJsonObjectFromText(text) {
+  if (!text || typeof text !== 'string') return null;
+  const trimmed = text.trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const m = trimmed.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    try {
+      return JSON.parse(m[0]);
+    } catch {
+      return null;
+    }
+  }
+}
+
+/**
+ * Extract useful fields from an uploaded property document (invoice, warranty, inspection).
+ * Homeowner should confirm before applying to home systems.
+ */
+export async function extractPropertyDocumentFields(input) {
+  const title = String(input?.title || '');
+  const notes = String(input?.notes || '');
+  const category = String(input?.category || 'other');
+  const fileName = String(input?.fileName || '');
+  const mimeType = String(input?.mimeType || '');
+  const dataUrl = typeof input?.dataUrl === 'string' ? input.dataUrl : null;
+
+  const heuristic = () => {
+    const hay = `${title} ${notes} ${fileName} ${category}`.toLowerCase();
+    let systemKey = null;
+    if (/hvac|furnace|ac\b|air condition/.test(hay)) systemKey = 'hvac';
+    else if (/water.?heater/.test(hay)) systemKey = 'water_heater';
+    else if (/roof|gutter/.test(hay)) systemKey = 'roof';
+    else if (/plumb|pipe|leak|drain/.test(hay)) systemKey = 'plumbing';
+    else if (/electric|panel|breaker/.test(hay)) systemKey = 'electrical';
+    else if (/pest/.test(hay)) systemKey = 'pest';
+    else if (/fridge|refrigerat/.test(hay)) systemKey = 'refrigerator';
+    else if (/dishwasher/.test(hay)) systemKey = 'dishwasher';
+
+    const dateMatch = `${title} ${notes} ${fileName}`.match(
+      /(\d{4}-\d{2}-\d{2})|((Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4})|(\d{1,2}\/\d{1,2}\/\d{2,4})/i
+    );
+    const followMatch = notes.match(
+      /recommend(?:ed|s)?[^.]*?(?:within|in|by)\s+(\d+)\s*(month|months|year|years)/i
+    );
+    let recommendedFollowUp = null;
+    let recommendedFollowUpDate = null;
+    if (followMatch) {
+      recommendedFollowUp = followMatch[0];
+      const n = Number(followMatch[1]);
+      const unit = followMatch[2].toLowerCase();
+      const base = new Date();
+      if (unit.startsWith('year')) base.setFullYear(base.getFullYear() + n);
+      else base.setMonth(base.getMonth() + n);
+      recommendedFollowUpDate = base.toISOString().slice(0, 10);
+    }
+
+    return {
+      serviceType: category || null,
+      systemKey,
+      systemLabel: systemKey,
+      date: dateMatch ? dateMatch[0] : null,
+      provider: null,
+      amount: null,
+      warrantyUntil: /warranty/i.test(hay) ? null : null,
+      installationDate: null,
+      inspectionFindings: notes ? [notes.slice(0, 200)] : [],
+      recommendedFollowUp,
+      recommendedFollowUpDate,
+      confidence: 0.35,
+      summary: 'Heuristic extract from document metadata. Confirm before saving.',
+    };
+  };
+
+  const resolved = resolveAiProvider();
+  if (!resolved) {
+    return { extraction: heuristic(), source: 'fallback' };
+  }
+
+  const prepared = prepareImageForAi(dataUrl);
+  const userText = [
+    `Document category: ${category}`,
+    `Title: ${title || '(none)'}`,
+    `File name: ${fileName || '(none)'}`,
+    `Notes: ${notes || '(none)'}`,
+    prepared.dropped ? '(Image too large; use text metadata only.)' : '',
+    'Extract only facts clearly supported by the document text/image.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  try {
+    let reply = null;
+    let model = resolved.model;
+    if (resolved.provider === 'gemini') {
+      // Reuse chat helper for text; if image present, fall back to analyze path via description
+      const chat = await chatWithCustomer({
+        messages: [
+          { role: 'system', content: PROPERTY_DOC_EXTRACT_PROMPT },
+          {
+            role: 'user',
+            content: prepared.imageDataUrl
+              ? `${userText}\n\n(Image attached as data URL length ${prepared.imageDataUrl.length}; if you cannot see it, use metadata.)`
+              : userText,
+          },
+        ],
+      });
+      reply = chat.reply;
+      model = chat.model || model;
+    } else {
+      const chat = await chatWithCustomer({
+        messages: [
+          { role: 'system', content: PROPERTY_DOC_EXTRACT_PROMPT },
+          { role: 'user', content: userText },
+        ],
+      });
+      reply = chat.reply;
+      model = chat.model || model;
+    }
+
+    const parsed = parseJsonObjectFromText(reply);
+    if (!parsed || typeof parsed !== 'object') {
+      return { extraction: heuristic(), source: 'fallback', model, error: 'Could not parse AI extraction' };
+    }
+    return {
+      extraction: {
+        serviceType: parsed.serviceType ?? null,
+        systemKey: parsed.systemKey ?? null,
+        systemLabel: parsed.systemLabel ?? null,
+        date: parsed.date ?? null,
+        provider: parsed.provider ?? null,
+        amount: parsed.amount ?? null,
+        warrantyUntil: parsed.warrantyUntil ?? null,
+        installationDate: parsed.installationDate ?? null,
+        inspectionFindings: Array.isArray(parsed.inspectionFindings) ? parsed.inspectionFindings : [],
+        recommendedFollowUp: parsed.recommendedFollowUp ?? null,
+        recommendedFollowUpDate: parsed.recommendedFollowUpDate ?? null,
+        confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.6,
+        summary: parsed.summary || 'Review extracted fields before saving.',
+      },
+      source: resolved.provider,
+      model,
+    };
+  } catch (err) {
+    return {
+      extraction: heuristic(),
+      source: 'fallback',
+      error: err instanceof Error ? err.message : 'Document extract failed',
+    };
+  }
 }
 
 const CHAT_SYSTEM = `# SYSTEM PROMPT

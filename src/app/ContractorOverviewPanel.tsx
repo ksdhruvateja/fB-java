@@ -48,7 +48,6 @@ export default function ContractorOverviewPanel({
   invites,
   jobs,
   monthEarnings,
-  rating,
   onOpenInvites,
   onOpenJobs,
   onOpenCompliance,
@@ -60,7 +59,6 @@ export default function ContractorOverviewPanel({
   invites: Invite[];
   jobs: ManagedJob[];
   monthEarnings: number;
-  rating: number;
   onOpenInvites: () => void;
   onOpenJobs: () => void;
   onOpenCompliance: () => void;
@@ -97,9 +95,8 @@ export default function ContractorOverviewPanel({
           { label: "Active jobs", value: String(activeJobs.length), onClick: onOpenJobs },
           { label: "This month earnings", value: formatMoney(monthEarnings), onClick: onOpenJobs },
           {
-            label: "Rating",
-            value: rating.toFixed(1),
-            icon: true,
+            label: "Compliance",
+            value: payoutAccountReady ? "Ready" : "Review",
             onClick: onOpenCompliance,
           },
         ].map((card) => (
@@ -111,7 +108,6 @@ export default function ContractorOverviewPanel({
           >
             <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{card.label}</p>
             <p className="mt-2 flex items-center gap-1.5 [font-family:'Barlow_Condensed',sans-serif] text-3xl font-black">
-              {card.icon ? <Star className="h-5 w-5 fill-amber-400 text-amber-400" /> : null}
               {card.value}
             </p>
           </button>

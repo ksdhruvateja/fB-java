@@ -63,6 +63,9 @@ const TRADE_LABELS: Record<string, string> = {
   roofing: "Roofing",
   flooring: "Flooring",
   carpentry: "Carpentry",
+  snow_removal: "Snow Removal",
+  landscaping: "Landscaping",
+  cleaning: "Cleaning",
   others: "Others",
 };
 

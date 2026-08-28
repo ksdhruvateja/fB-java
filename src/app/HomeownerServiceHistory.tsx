@@ -70,10 +70,12 @@ export default function HomeownerServiceHistory({
   jobs,
   properties,
   onOpenTracking,
+  embedded,
 }: {
   jobs: ManagedJob[];
   properties: Property[];
   onOpenTracking?: (jobId: number) => void;
+  embedded?: boolean;
 }) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [proposal, setProposal] = useState<Proposal | null>(null);
@@ -161,15 +163,17 @@ export default function HomeownerServiceHistory({
   const currentDoc = invoiceDocs?.[invoiceIndex] || null;
 
   return (
-    <section className="mx-auto max-w-5xl space-y-5">
-      <div>
-        <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight">
-          Service History
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Past and in-progress work — company, invoice, and full service details.
-        </p>
-      </div>
+    <section className={embedded ? "space-y-4" : "mx-auto max-w-5xl space-y-5"}>
+      {!embedded ? (
+        <div>
+          <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight">
+            Service History
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Past and in-progress work — company, invoice, and full service details.
+          </p>
+        </div>
+      ) : null}
 
       {historyJobs.length === 0 ? (
         <div className="rounded-[1.5rem] border border-dashed border-border bg-card px-6 py-12 text-center">

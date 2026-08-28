@@ -266,7 +266,11 @@ export default function Contractor360Profile({
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-sm">
               <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
-              <span className="font-semibold">{Number(contractor.rating) || 4.9}</span>
+              <span className="font-semibold">
+                {contractor.rating != null && Number(contractor.rating) > 0
+                  ? Number(contractor.rating).toFixed(1)
+                  : "—"}
+              </span>
               <span className="text-muted-foreground">rating (platform)</span>
             </div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">

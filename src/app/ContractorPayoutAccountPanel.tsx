@@ -88,7 +88,7 @@ export default function ContractorPayoutAccountPanel({
                 className="mt-4 inline-flex items-center gap-2 rounded-xl bg-neutral-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60 dark:bg-primary"
               >
                 {busy === "setup" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Landmark className="h-4 w-4" />}
-                {account?.connected ? "Complete payout setup" : "Set up payout account"}
+                {account?.connected ? "Complete Stripe Account Link" : "Set up payout account"}
               </button>
             </div>
           </div>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { brand } from "../config/brand";
+import ForgotPasswordModal from "./ForgotPasswordModal";
 
 type PartnerSession = {
   token: string;
@@ -29,6 +30,8 @@ export default function PartnerPortal({ onBack }: { onBack: () => void }) {
   const [session, setSession] = useState<PartnerSession | null>(() => loadSession());
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPass, setShowPass] = useState(false);
+  const [showForgot, setShowForgot] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [referrals, setReferrals] = useState<Referral[]>([]);
@@ -82,7 +85,7 @@ export default function PartnerPortal({ onBack }: { onBack: () => void }) {
   return (
     <div className="mx-auto min-h-screen max-w-3xl px-4 py-8">
       <button type="button" onClick={onBack} className="mb-6 text-sm text-muted-foreground underline">
-        ← Back to {brand.name}
+        ← Back to {brand.productName}
       </button>
       <h1 className="text-2xl font-semibold tracking-tight">Partner portal</h1>
       <p className="mt-1 text-sm text-muted-foreground">View your referral code and conversion status.</p>
@@ -102,15 +105,33 @@ export default function PartnerPortal({ onBack }: { onBack: () => void }) {
           </label>
           <label className="block text-sm">
             Password
-            <input
-              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoComplete="current-password"
-            />
+            <div className="relative mt-1">
+              <input
+                className="w-full rounded-md border border-border bg-background px-3 py-2 pr-16"
+                type={showPass ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete="current-password"
+              />
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-medium text-muted-foreground hover:text-foreground"
+                onClick={() => setShowPass((v) => !v)}
+              >
+                {showPass ? "Hide" : "Show"}
+              </button>
+            </div>
           </label>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => setShowForgot(true)}
+              className="text-sm font-medium text-primary hover:underline"
+            >
+              Forgot password?
+            </button>
+          </div>
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
           <button
             type="submit"
@@ -184,6 +205,13 @@ export default function PartnerPortal({ onBack }: { onBack: () => void }) {
           </div>
         </div>
       )}
+      {showForgot ? (
+        <ForgotPasswordModal
+          role="partner"
+          initialEmail={email}
+          onClose={() => setShowForgot(false)}
+        />
+      ) : null}
     </div>
   );
 }

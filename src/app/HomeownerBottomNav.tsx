@@ -9,9 +9,9 @@ const ITEMS: {
   icon: ElementType;
 }[] = [
   { id: "home", label: "Home", icon: Home },
-  { id: "jobs", label: "Jobs", icon: Briefcase },
-  { id: "request", label: "Request", icon: Plus },
-  { id: "inbox", label: "Inbox", icon: Inbox },
+  { id: "jobs", label: "Requests", icon: Briefcase },
+  { id: "request", label: "+", icon: Plus },
+  { id: "inbox", label: "Messages", icon: Inbox },
   { id: "more", label: "More", icon: MoreHorizontal },
 ];
 

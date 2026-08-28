@@ -12,9 +12,14 @@ import {
   parseJson,
   upgradeLegacyLineItems,
 } from './quote-document.js';
-import { sendEmailSafe, sendSmsSafe } from './notify.js';
+import { sendEmailSafe, sendSmsSafe, smsConfigured } from './notify.js';
 import { normalizePhone, renderInvoiceHtml } from './invoices.js';
 import { assertPaymentsAvailable, createCheckoutSession, appBaseUrl } from './stripe.js';
+import { calculateCustomerPaymentTotal, dollarsToCents } from './financial-calculations.js';
+import { recordPendingTip } from './tips.js';
+import { processSuccessfulPayment } from './payment-settlement.js';
+import { isAdminRole, isHomeownerOwner } from './auth-helpers.js';
+import { formatAddressLines, normalizeBillToAddress } from './address-format.js';
 
 async function audit(pool, actorUserId, action, entityType, entityId, detail) {
   try {
@@ -238,12 +243,13 @@ function serializeInvoiceRow(row) {
   });
   const paid = Number(row.paid) || 0;
   const total = row.total != null ? Number(row.total) : totals.total;
-  const amountDue = Math.max(0, round2(total - paid));
+  const amountDue = total <= 0 ? 0 : Math.max(0, round2(total - paid));
   return {
     id: Number(row.id),
     invoiceNumber: row.invoice_number,
     proposalId: row.proposal_id != null ? Number(row.proposal_id) : null,
     jobId: Number(row.job_id),
+    homeownerUserId: row.homeowner_user_id != null ? Number(row.homeowner_user_id) : null,
     status: row.status || 'draft',
     lineItems: totals.lineItems,
     additionalCharges: totals.additionalCharges,
@@ -327,7 +333,7 @@ function documentBodyFromRequest(body = {}, existing = {}) {
     termsConditions: body.termsConditions != null ? String(body.termsConditions) : existing.terms_conditions,
     internalNotes: body.internalNotes != null ? String(body.internalNotes) : existing.internal_notes,
     companyName: body.companyName != null ? String(body.companyName) : existing.company_name,
-    billTo: body.billTo != null ? body.billTo : parseJson(existing.bill_to, null),
+    billTo: body.billTo != null ? normalizeBillToAddress(body.billTo) : parseJson(existing.bill_to, null),
     warranty: body.warranty != null ? String(body.warranty) : existing.warranty,
     timeline: body.timeline != null ? String(body.timeline) : existing.timeline,
     scopeSummary: body.scopeSummary != null ? String(body.scopeSummary) : existing.scope_summary,
@@ -380,7 +386,9 @@ function renderQuoteEmailHtml(quote, { message, acceptUrl } = {}) {
     <p style="margin:0 0 6px;font-size:11px;text-transform:uppercase;color:#666;">Bill to</p>
     <p style="margin:0;font-weight:600;">${escapeHtml(quote.billTo?.name || '')}</p>
     ${quote.billTo?.email ? `<p style="margin:4px 0 0;color:#444;">${escapeHtml(quote.billTo.email)}</p>` : ''}
-    ${quote.billTo?.address || quote.billTo?.street ? `<p style="margin:4px 0 0;color:#444;">${escapeHtml(quote.billTo.address || quote.billTo.street)}</p>` : ''}
+    ${formatAddressLines(normalizeBillToAddress(quote.billTo || {}))
+      .map((line) => `<p style="margin:4px 0 0;color:#444;">${escapeHtml(line)}</p>`)
+      .join('')}
   </div>
   <table style="width:100%;border-collapse:collapse;font-size:14px;">${rows}</table>
   <table style="width:100%;margin-top:12px;font-size:14px;">
@@ -420,6 +428,7 @@ export async function markInvoicePaidFromStripe(pool, {
 
   const total = Number(rows[0].total || rows[0].amount_due) || 0;
   const paidAmt = amount != null ? Number(amount) : total;
+  const servicePaid = Math.min(paidAmt, total);
   await pool.query(
     `UPDATE homeowner_invoices SET
        status='paid',
@@ -431,7 +440,7 @@ export async function markInvoicePaidFromStripe(pool, {
        stripe_session_id=COALESCE($4, stripe_session_id),
        locked_at=COALESCE(locked_at, NOW())
      WHERE id=$5`,
-    [paidAmt, method, paymentIntentId || null, sessionId || null, invoiceId]
+    [servicePaid, method, paymentIntentId || null, sessionId || null, invoiceId]
   );
   if (rows[0].proposal_id) {
     await pool.query(`UPDATE proposals SET status='paid' WHERE id=$1`, [rows[0].proposal_id]);
@@ -497,8 +506,32 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
       const id = Number(req.params.id);
       const { rows } = await pool.query(`SELECT * FROM proposals WHERE id=$1`, [id]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Quote not found.' });
-      if (rows[0].locked_at && !['draft', 'sent', 'viewed', 'accepted', 'approved'].includes(String(rows[0].status).toLowerCase())) {
-        // still allow edits until converted/paid unless locked hard
+      if (rows[0].locked_at || ['accepted', 'approved', 'converted', 'paid', 'canceled', 'cancelled'].includes(String(rows[0].status).toLowerCase())) {
+        return res.status(409).json({
+          ok: false,
+          code: 'quote_locked',
+          message: 'This quote is locked and cannot be edited.',
+        });
+      }
+      const st = String(rows[0].status || '').toLowerCase();
+      if (['sent', 'viewed'].includes(st)) {
+        const changeReason = String(req.body?.changeReason || req.body?.revisionReason || '').trim();
+        if (!changeReason) {
+          return res.status(409).json({
+            ok: false,
+            code: 'revision_required',
+            message: 'Sent quotes cannot be silently overwritten. Provide changeReason to create a revision.',
+          });
+        }
+        const prevVersion = Number(rows[0].version_number || 1);
+        await pool.query(
+          `UPDATE proposals SET
+             version_number=$1,
+             previous_version_id=COALESCE(previous_version_id, id),
+             change_reason=$2
+           WHERE id=$3`,
+          [prevVersion + 1, changeReason, id]
+        );
       }
       const doc = documentBodyFromRequest(req.body || {}, rows[0]);
       const status = req.body?.status ? String(req.body.status) : rows[0].status;
@@ -611,6 +644,13 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
       const sendSms = req.body?.sendSms === true;
       if (!sendEmail && !sendSms) {
         return res.status(400).json({ ok: false, message: 'Choose email and/or SMS.' });
+      }
+      if (sendSms && !smsConfigured()) {
+        return res.status(400).json({
+          ok: false,
+          code: 'sms_not_configured',
+          message: 'SMS delivery is not currently configured.',
+        });
       }
 
       const { rows } = await pool.query(quoteSelectSql(`WHERE p.id=$1`), [id]);
@@ -783,25 +823,95 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
   });
 
   app.post('/api/admin/quotes/:id/convert-invoice', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    const client = await pool.connect();
     try {
       const id = Number(req.params.id);
-      const { rows } = await pool.query(quoteSelectSql(`WHERE p.id=$1`), [id]);
-      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Quote not found.' });
+      await client.query('BEGIN');
+      const { rows } = await client.query(`SELECT * FROM proposals WHERE id=$1 FOR UPDATE`, [id]);
+      if (!rows[0]) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ ok: false, message: 'Quote not found.' });
+      }
       if (rows[0].converted_invoice_id) {
-        const { rows: existing } = await pool.query(`SELECT * FROM homeowner_invoices WHERE id=$1`, [
+        const { rows: existing } = await client.query(`SELECT * FROM homeowner_invoices WHERE id=$1`, [
           rows[0].converted_invoice_id,
         ]);
+        await client.query('COMMIT');
+        const full = await pool.query(quoteSelectSql(`WHERE p.id=$1`), [id]);
         return res.json({
           ok: true,
           alreadyConverted: true,
-          quote: serializeQuoteDocument(rows[0]),
+          quote: serializeQuoteDocument(full.rows[0] || rows[0]),
           invoice: existing[0] ? serializeInvoiceRow(existing[0]) : null,
         });
       }
 
+      const qStatus = String(rows[0].status || '').toLowerCase();
+      const accepted = qStatus === 'accepted' || qStatus === 'approved';
+      const forceConvert = req.body?.forceConvert === true;
+      const forceReason = String(req.body?.forceReason || req.body?.reason || '').trim();
+      if (!accepted) {
+        if (!forceConvert) {
+          return res.status(409).json({
+            ok: false,
+            code: 'acceptance_required',
+            message: 'Quote must be accepted by the homeowner before converting to an invoice.',
+          });
+        }
+        if (!forceReason) {
+          return res.status(400).json({
+            ok: false,
+            message: 'Force convert requires a reason for the audit log.',
+          });
+        }
+        await audit(pool, req.authUser.id, 'quote_force_convert', 'proposal', id, {
+          reason: forceReason,
+          statusBefore: qStatus,
+        });
+      }
+
       const quote = serializeQuoteDocument(rows[0]);
+      const { rows: approvedCos } = await client.query(
+        `SELECT id, description, retail_amount, approved_snapshot, reason
+         FROM change_orders
+         WHERE job_id=$1 AND status='approved'
+         ORDER BY COALESCE(approved_at, created_at) ASC`,
+        [quote.jobId]
+      );
+      let invoiceLineItems = [...(quote.lineItems || [])];
+      const changeOrderLines = [];
+      for (const co of approvedCos) {
+        const snap = parseJson(co.approved_snapshot, null) || {};
+        const amount = Number(snap.retail_amount ?? co.retail_amount ?? 0);
+        if (!(amount > 0)) continue;
+        const label = String(snap.description || co.description || co.reason || 'Approved additional work').slice(0, 500);
+        changeOrderLines.push({
+          id: `change-order-${co.id}`,
+          description: label,
+          quantity: 1,
+          unitPrice: amount,
+          total: amount,
+          kind: 'change_order',
+        });
+      }
+      if (changeOrderLines.length) {
+        invoiceLineItems = [...invoiceLineItems, ...changeOrderLines];
+      }
+      const invoiceTotals = computeQuoteTotals({
+        lineItems: invoiceLineItems,
+        discountType: quote.discountType,
+        discountValue: quote.discountValue,
+        shippingAmount: quote.shippingAmount,
+        additionalCharges: quote.additionalCharges,
+        taxMode: quote.taxMode,
+        taxValue: quote.taxValue,
+      });
+      const invoiceSubtotal = invoiceTotals.subtotal;
+      const invoiceTotal = invoiceTotals.total;
+
       const invoiceNumber = ensureFbiNumber(quote.id);
-      const { rows: inv } = await pool.query(
+      const versionKey = rows[0].version_number || 1;
+      const { rows: inv } = await client.query(
         `INSERT INTO homeowner_invoices
           (invoice_number, job_id, homeowner_user_id, proposal_id, amount_due, subtotal, paid, total,
            line_items, additional_charges, discount_type, discount_value, discount_amount,
@@ -815,10 +925,10 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
           quote.jobId,
           quote.homeownerUserId,
           quote.id,
-          quote.total,
-          quote.subtotal,
-          quote.total,
-          JSON.stringify(quote.lineItems),
+          invoiceTotal,
+          invoiceSubtotal,
+          invoiceTotal,
+          JSON.stringify(invoiceLineItems),
           JSON.stringify(quote.additionalCharges),
           quote.discountType,
           quote.discountValue,
@@ -832,24 +942,38 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
           quote.termsConditions,
           JSON.stringify(quote.billTo),
           quote.customerNotes,
-          JSON.stringify({ quoteNumber: quote.quoteNumber, convertedAt: new Date().toISOString() }),
+          JSON.stringify({
+            quoteNumber: quote.quoteNumber,
+            convertedAt: new Date().toISOString(),
+            versionNumber: versionKey,
+            approvedChangeOrders: changeOrderLines.map((l) => ({
+              id: l.id,
+              description: l.description,
+              amount: l.total,
+            })),
+          }),
           quote.quoteValidUntil,
         ]
       );
 
-      await pool.query(
+      await client.query(
         `UPDATE proposals SET status='converted', converted_invoice_id=$1, locked_at=COALESCE(locked_at, NOW()) WHERE id=$2`,
         [inv[0].id, id]
       );
+      await client.query('COMMIT');
+
       await logQuoteActivity(pool, {
         proposalId: id,
         invoiceId: inv[0].id,
         jobId: quote.jobId,
         actorUserId: req.authUser.id,
         action: 'converted_to_invoice',
-        detail: { invoiceNumber },
+        detail: { invoiceNumber, versionNumber: versionKey },
       });
-      await audit(pool, req.authUser.id, 'quote_converted_invoice', 'proposal', id, { invoiceNumber });
+      await audit(pool, req.authUser.id, 'quote_converted_invoice', 'proposal', id, {
+        invoiceNumber,
+        idempotencyKey: `convert-${id}-v${versionKey}`,
+      });
 
       const { rows: refreshed } = await pool.query(quoteSelectSql(`WHERE p.id=$1`), [id]);
       res.json({
@@ -859,8 +983,15 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
         message: `Invoice ${invoiceNumber} created from ${quote.quoteNumber}.`,
       });
     } catch (e) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* ignore */
+      }
       console.error('convert invoice:', e);
       res.status(500).json({ ok: false, message: 'Could not convert quote to invoice.' });
+    } finally {
+      client.release();
     }
   });
 
@@ -880,6 +1011,13 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
       const id = Number(req.params.id);
       const sendEmail = req.body?.sendEmail !== false;
       const sendSms = req.body?.sendSms === true;
+      if (sendSms && !smsConfigured()) {
+        return res.status(400).json({
+          ok: false,
+          code: 'sms_not_configured',
+          message: 'SMS delivery is not currently configured.',
+        });
+      }
       const { rows } = await pool.query(`SELECT * FROM homeowner_invoices WHERE id=$1`, [id]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Invoice not found.' });
       const invoice = serializeInvoiceRow(rows[0]);
@@ -968,49 +1106,75 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
       const newPaid = round2((Number(rows[0].paid) || 0) + amountReceived);
       const total = invoice.total;
       const status = newPaid >= total - 0.009 ? 'paid' : 'partially_paid';
+      const idempotencyKey = `manual-invoice-${id}-${reference || paymentDate.toISOString()}`;
 
-      await pool.query(
-        `UPDATE homeowner_invoices SET
-           paid=$1,
-           amount_due=$2,
-           status=$3,
-           paid_at=$4,
-           paid_by=$5,
-           payment_method=$6,
-           payment_reference=$7,
-           payment_notes=$8,
-           locked_at=CASE WHEN $3='paid' THEN COALESCE(locked_at, NOW()) ELSE locked_at END
-         WHERE id=$9`,
-        [
-          newPaid,
-          Math.max(0, round2(total - newPaid)),
-          status,
-          paymentDate.toISOString(),
-          req.authUser.id,
-          method,
-          reference,
-          notes,
-          id,
-        ]
-      );
-
-      await pool.query(
-        `INSERT INTO payments (job_id, user_id, payment_type, amount, currency, status, simulated, meta)
-         VALUES ($1,$2,'invoice_manual',$3,'usd','succeeded',true,$4)`,
-        [
-          invoice.jobId,
-          req.authUser.id,
-          amountReceived,
-          JSON.stringify({
+      if (status === 'paid') {
+        try {
+          await processSuccessfulPayment(pool, {
+            source: 'manual_mark_paid',
+            jobId: invoice.jobId,
             invoiceId: id,
-            invoiceNumber: invoice.invoiceNumber,
+            proposalId: invoice.proposalId,
+            homeownerUserId: invoice.homeownerUserId,
+            paymentType: 'invoice_manual',
+            customerTotal: amountReceived,
+            serviceAmount: amountReceived,
+            tipAmount: 0,
+            actorUserId: req.authUser.id,
+            simulated: true,
+            idempotencyKey,
+            manualReference: reference,
+            paymentMethod: method,
+          });
+        } catch (settleErr) {
+          console.warn('[mark-paid] settlement:', settleErr.message);
+        }
+        await pool.query(
+          `UPDATE homeowner_invoices SET paid_by=$1, payment_reference=$2, payment_notes=$3 WHERE id=$4`,
+          [req.authUser.id, reference, notes, id]
+        );
+      } else {
+        await pool.query(
+          `UPDATE homeowner_invoices SET
+             paid=$1,
+             amount_due=$2,
+             status=$3,
+             paid_at=$4,
+             paid_by=$5,
+             payment_method=$6,
+             payment_reference=$7,
+             payment_notes=$8
+           WHERE id=$9`,
+          [
+            newPaid,
+            Math.max(0, round2(total - newPaid)),
+            status,
+            paymentDate.toISOString(),
+            req.authUser.id,
             method,
             reference,
             notes,
-            recordedBy: req.authUser.id,
-          }),
-        ]
-      );
+            id,
+          ]
+        );
+        await pool.query(
+          `INSERT INTO payments (job_id, user_id, payment_type, amount, currency, status, simulated, meta, service_amount, tip_amount)
+           VALUES ($1,$2,'invoice_manual',$3,'usd','succeeded',true,$4,$3,0)`,
+          [
+            invoice.jobId,
+            req.authUser.id,
+            amountReceived,
+            JSON.stringify({
+              invoiceId: id,
+              invoiceNumber: invoice.invoiceNumber,
+              method,
+              reference,
+              notes,
+              recordedBy: req.authUser.id,
+            }),
+          ]
+        );
+      }
 
       if (invoice.proposalId && status === 'paid') {
         await pool.query(`UPDATE proposals SET status='paid' WHERE id=$1`, [invoice.proposalId]);
@@ -1056,24 +1220,60 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
       }
 
       assertPaymentsAvailable();
-      const amountCents = Math.round(invoice.amountDue * 100);
+      const tipAmount = Math.max(0, Number(req.body?.tipAmount || 0));
+      const serviceAmount = Number(invoice.amountDue);
+      const totals = calculateCustomerPaymentTotal({
+        serviceAmountCents: dollarsToCents(serviceAmount),
+        tipAmountCents: dollarsToCents(tipAmount),
+      });
+      const amountCents = totals.customerTotalCents;
       if (amountCents < 50) {
         return res.status(400).json({ ok: false, message: 'Amount due is too small for Stripe Checkout.' });
       }
 
+      if (tipAmount > 0) {
+        await recordPendingTip(pool, {
+          jobId: invoice.jobId,
+          homeownerUserId: req.authUser.id,
+          contractorUserId: null,
+          amountDollars: tipAmount,
+          percentOfService: req.body?.tipPercent != null ? Number(req.body.tipPercent) : null,
+          actorUserId: req.authUser.id,
+        });
+      }
+
+      const lineItems = [
+        {
+          amountCents: totals.serviceAmountCents,
+          description: `${brand.productName} Invoice ${invoice.invoiceNumber}`,
+        },
+      ];
+      if (totals.tipAmountCents > 0) {
+        lineItems.push({
+          amountCents: totals.tipAmountCents,
+          description: 'Tip for contractor (100% to pro)',
+        });
+      }
+
       const session = await createCheckoutSession({
         amountCents,
+        lineItems,
         customerEmail: invoice.billTo?.email || undefined,
         successPath: `/homeowner?invoicePaid=${encodeURIComponent(invoice.invoiceNumber)}`,
         cancelPath: `/homeowner?invoice=${encodeURIComponent(invoice.invoiceNumber)}`,
         description: `${brand.productName} Invoice ${invoice.invoiceNumber}`,
         metadata: {
           paymentType: 'invoice_payment',
+          paymentSource: 'invoice_checkout',
           invoiceId: String(id),
           invoiceNumber: invoice.invoiceNumber,
           jobId: String(invoice.jobId),
+          homeownerId: String(invoice.homeownerUserId || req.authUser.id),
           proposalId: invoice.proposalId != null ? String(invoice.proposalId) : '',
+          serviceAmountCents: String(totals.serviceAmountCents),
+          tipAmountCents: String(totals.tipAmountCents),
         },
+        idempotencyKey: `checkout-${id}-v${invoice.status}-${totals.tipAmountCents}`,
       });
 
       await pool.query(
@@ -1094,7 +1294,12 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
           req.authUser.id,
           invoice.amountDue,
           session.sessionId,
-          JSON.stringify({ invoiceId: id, invoiceNumber: invoice.invoiceNumber }),
+          JSON.stringify({
+            invoiceId: id,
+            invoiceNumber: invoice.invoiceNumber,
+            serviceAmount: serviceAmount,
+            tipAmount,
+          }),
         ]
       );
 
@@ -1117,6 +1322,191 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
       console.error('payment link:', e);
       const status = e.status || 500;
       res.status(status).json({ ok: false, message: e.message || 'Could not create payment link.' });
+    }
+  });
+
+  /** Homeowner invoice checkout with optional tip — authoritative payment summary before Stripe. */
+  app.post('/api/homeowner/invoices/:id/checkout', requireAuth, async (req, res) => {
+    try {
+      if (req.authUser.role !== 'homeowner' && !isAdminRole(req.authUser)) {
+        return res.status(403).json({ ok: false, message: 'Homeowners only.' });
+      }
+      const id = Number(req.params.id);
+      const { rows } = await pool.query(`SELECT * FROM homeowner_invoices WHERE id=$1`, [id]);
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Invoice not found.' });
+      const invoice = serializeInvoiceRow(rows[0]);
+      if (!isAdminRole(req.authUser) && !isHomeownerOwner(req.authUser, invoice.homeownerUserId)) {
+        return res.status(403).json({ ok: false, message: 'Not allowed to pay this invoice.' });
+      }
+      if (invoice.status === 'paid') {
+        return res.status(400).json({ ok: false, message: 'Invoice is already paid.' });
+      }
+
+      const rawTip = req.body?.tipAmount;
+      const tipAmount =
+        rawTip === null || rawTip === '' || rawTip === undefined ? 0 : Math.max(0, Number(rawTip) || 0);
+      const maxTip = Math.max(500, Number(invoice.amountDue) * 2);
+      if (!Number.isFinite(tipAmount) || tipAmount < 0) {
+        return res.status(400).json({ ok: false, message: 'Invalid tip amount.' });
+      }
+      if (tipAmount > maxTip) {
+        return res.status(400).json({ ok: false, message: `Tip cannot exceed ${maxTip.toFixed(2)}.` });
+      }
+
+      const serviceAmount = Number(invoice.amountDue);
+      const totals = calculateCustomerPaymentTotal({
+        serviceAmountCents: dollarsToCents(serviceAmount),
+        tipAmountCents: dollarsToCents(tipAmount),
+      });
+
+      // $0 checkout — server-side settlement, no Stripe session
+      if (invoice.total <= 0 || (serviceAmount <= 0 && tipAmount <= 0) || totals.customerTotalCents <= 0) {
+        await processSuccessfulPayment(pool, {
+          source: 'zero_dollar_checkout',
+          jobId: invoice.jobId,
+          invoiceId: id,
+          proposalId: invoice.proposalId,
+          homeownerUserId: req.authUser.id,
+          paymentType: 'invoice_payment',
+          customerTotal: 0,
+          serviceAmount: 0,
+          tipAmount: 0,
+          paymentMethod: 'zero_dollar',
+          actorUserId: req.authUser.id,
+          idempotencyKey: `zero-checkout-${id}`,
+        });
+        const { rows: refreshed } = await pool.query(`SELECT * FROM homeowner_invoices WHERE id=$1`, [id]);
+        return res.json({
+          ok: true,
+          zeroDollar: true,
+          paid: true,
+          invoice: serializeInvoiceRow(refreshed[0]),
+          message: 'Invoice settled at $0 — no Stripe checkout required.',
+        });
+      }
+
+      assertPaymentsAvailable();
+      if (totals.customerTotalCents < 50) {
+        return res.status(400).json({ ok: false, message: 'Amount due is too small for Stripe Checkout.' });
+      }
+
+      if (tipAmount > 0) {
+        await recordPendingTip(pool, {
+          jobId: invoice.jobId,
+          homeownerUserId: req.authUser.id,
+          contractorUserId: null,
+          amountDollars: tipAmount,
+          percentOfService: req.body?.tipPercent != null ? Number(req.body.tipPercent) : null,
+          actorUserId: req.authUser.id,
+        });
+      }
+
+      const lineItems = [
+        { amountCents: totals.serviceAmountCents, description: `Service — Invoice ${invoice.invoiceNumber}` },
+      ];
+      if (totals.tipAmountCents > 0) {
+        lineItems.push({ amountCents: totals.tipAmountCents, description: 'Tip for contractor (100% to pro)' });
+      }
+
+      const session = await createCheckoutSession({
+        amountCents: totals.customerTotalCents,
+        lineItems,
+        customerEmail: invoice.billTo?.email || req.authUser.email || undefined,
+        successPath: `/homeowner?invoicePaid=${encodeURIComponent(invoice.invoiceNumber)}`,
+        cancelPath: `/homeowner?invoice=${encodeURIComponent(invoice.invoiceNumber)}`,
+        description: `${brand.productName} Invoice ${invoice.invoiceNumber}`,
+        metadata: {
+          paymentType: 'invoice_payment',
+          paymentSource: 'homeowner_checkout',
+          invoiceId: String(id),
+          invoiceNumber: invoice.invoiceNumber,
+          jobId: String(invoice.jobId),
+          homeownerId: String(invoice.homeownerUserId || req.authUser.id),
+          proposalId: invoice.proposalId != null ? String(invoice.proposalId) : '',
+          serviceAmountCents: String(totals.serviceAmountCents),
+          tipAmountCents: String(totals.tipAmountCents),
+        },
+        idempotencyKey: `checkout-${id}-homeowner-${totals.tipAmountCents}`,
+      });
+
+      await pool.query(
+        `UPDATE homeowner_invoices SET stripe_session_id=$1, stripe_payment_link_url=$2 WHERE id=$3`,
+        [session.sessionId, session.url, id]
+      );
+      await pool.query(
+        `INSERT INTO payments (job_id, user_id, payment_type, amount, currency, status, stripe_session_id, simulated, meta, service_amount, tip_amount)
+         VALUES ($1,$2,'invoice_payment',$3,'usd','pending',$4,false,$5,$6,$7)`,
+        [
+          invoice.jobId,
+          req.authUser.id,
+          serviceAmount + tipAmount,
+          session.sessionId,
+          JSON.stringify({ invoiceId: id, serviceAmount, tipAmount, source: 'homeowner_checkout' }),
+          serviceAmount,
+          tipAmount,
+        ]
+      );
+
+      res.json({
+        ok: true,
+        checkoutUrl: session.url,
+        summary: {
+          serviceTotal: serviceAmount,
+          tipAmount,
+          customerTotal: serviceAmount + tipAmount,
+        },
+        invoice: serializeInvoiceRow({ ...rows[0], stripe_payment_link_url: session.url }),
+      });
+    } catch (e) {
+      console.error('homeowner checkout:', e);
+      res.status(e.status || 500).json({ ok: false, message: e.message || 'Could not start checkout.' });
+    }
+  });
+
+  app.get('/api/homeowner/invoices/:id', requireAuth, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { rows } = await pool.query(`SELECT * FROM homeowner_invoices WHERE id=$1`, [id]);
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Invoice not found.' });
+      const invoice = serializeInvoiceRow(rows[0]);
+      if (req.authUser.role === 'homeowner' && !isHomeownerOwner(req.authUser, invoice.homeownerUserId)) {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      if (req.authUser.role === 'contractor') {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      res.json({ ok: true, invoice });
+    } catch {
+      res.status(500).json({ ok: false, message: 'Server error' });
+    }
+  });
+
+  /** Poll payment settlement — authoritative; do not trust return URL alone. */
+  app.get('/api/homeowner/invoices/by-number/:num/payment-status', requireAuth, async (req, res) => {
+    try {
+      if (req.authUser.role !== 'homeowner' && !isAdminRole(req.authUser)) {
+        return res.status(403).json({ ok: false, message: 'Homeowners only.' });
+      }
+      const num = String(req.params.num || '').trim();
+      const { rows } = await pool.query(`SELECT * FROM homeowner_invoices WHERE invoice_number=$1`, [num]);
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Invoice not found.' });
+      const invoice = serializeInvoiceRow(rows[0]);
+      if (req.authUser.role === 'homeowner' && !isHomeownerOwner(req.authUser, invoice.homeownerUserId)) {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      const status = String(invoice.status || '').toLowerCase();
+      const paid = status === 'paid' || Number(invoice.paid || 0) >= Number(invoice.total || 0);
+      res.json({
+        ok: true,
+        invoiceNumber: invoice.invoiceNumber,
+        status: invoice.status,
+        paid,
+        amountPaid: invoice.paid,
+        total: invoice.total,
+        jobId: invoice.jobId,
+      });
+    } catch {
+      res.status(500).json({ ok: false, message: 'Server error' });
     }
   });
 }

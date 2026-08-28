@@ -1,13 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft, LogOut, Loader2, Shield, DollarSign, Users, Briefcase,
   Settings2, Link2, BarChart3, Sparkles, Menu, X, LayoutDashboard,
   Search, Check, Copy, MapPin, ChevronRight, Ban, BadgeCheck,
-  Sun, Moon, ChevronDown, Bell, ListTodo, ScrollText, Mail, Receipt,
+  Sun, Moon, ChevronDown, Bell, ListTodo, ScrollText, Mail, Receipt, Gift,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { loadAllUsers, type AuthUser } from "./auth";
 import { brand } from "../config/brand";
+import AppBackButton from "./AppBackButton";
+import { type AdminNavFrame } from "./navigation";
+import { useDashboardNavigation } from "./useDashboardNavigation";
 import {
   contractorSearchBlob,
   fetchAdminUser,
@@ -22,10 +25,16 @@ import AdminContractorPayoutsPanel from "./AdminContractorPayoutsPanel";
 import AdminPayoutSettingsPanel from "./AdminPayoutSettingsPanel";
 import AdminOrderLedgerPanel from "./AdminOrderLedgerPanel";
 import AdminAuditLogsPanel from "./AdminAuditLogsPanel";
+import AdminFinancePanel from "./AdminFinancePanel";
 import AdminSupportTicketsPanel from "./AdminSupportTicketsPanel";
 import AdminSubscriptionPlansPanel from "./AdminSubscriptionPlansPanel";
 import AdminVisitFeePanel from "./AdminVisitFeePanel";
+import AdminReferralsPanel from "./AdminReferralsPanel";
 import AdminHomeownerInvoicePanel from "./AdminHomeownerInvoicePanel";
+import AdminHomeownerProfile from "./AdminHomeownerProfile";
+import AdminHomeownerRecordFocus, {
+  type HomeownerRecordFocus,
+} from "./AdminHomeownerRecordFocus";
 import AdminContractorEditPanel from "./AdminContractorEditPanel";
 import Contractor360Profile from "./Contractor360Profile";
 import {
@@ -52,6 +61,7 @@ import {
   loadStaffAdmins,
   updateStaffAccess,
   createStaffAdmin,
+  adminSendPasswordReset,
 } from "./platformApi";
 import {
   listAdminSubscriptionPlans,
@@ -99,13 +109,11 @@ type Tab =
   | "work-queue"
   | "dispatch"
   | "pricing"
-  | "payments"
-  | "contractor-payouts"
+  | "finance"
   | "payout-settings"
   | "contractors"
   | "partners"
-  | "ai"
-  | "reporting"
+  | "referrals"
   | "platform"
   | "subscriptions"
   | "access"
@@ -123,33 +131,29 @@ const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React
     items: [
       { id: "work-queue", label: "Work Queue", icon: ListTodo },
       { id: "dispatch", label: "Dispatch", icon: Briefcase },
-      { id: "ai", label: "AI Estimates", icon: Sparkles },
     ],
   },
   {
     label: "People",
     items: [
-      { id: "contractors", label: "Contractors", icon: Users },
-      { id: "partners", label: "Partners", icon: Link2 },
       { id: "subscriptions", label: "Homeowners", icon: Users },
+      { id: "contractors", label: "Contractors", icon: Briefcase },
+      { id: "partners", label: "Partners", icon: Link2 },
+      { id: "referrals", label: "Referrals", icon: Gift },
     ],
   },
   {
     label: "Finance",
-    items: [
-      { id: "payments", label: "Payments", icon: DollarSign },
-      { id: "contractor-payouts", label: "Payouts", icon: DollarSign },
-      { id: "visit-fee", label: "Visit Fee", icon: Receipt },
-      { id: "pricing", label: "Pricing Rules", icon: Settings2 },
-      { id: "payout-settings", label: "Payout Settings", icon: Settings2 },
-      { id: "reporting", label: "Profitability", icon: BarChart3 },
-    ],
+    items: [{ id: "finance", label: "Finance", icon: DollarSign }],
+  },
+  {
+    label: "Support",
+    items: [{ id: "support-tickets", label: "Tickets", icon: Mail }],
   },
   {
     label: "Administration",
     items: [
       { id: "pro-plans", label: "Pro Plans", icon: Sparkles },
-      { id: "support-tickets", label: "Support Tickets", icon: Mail },
       { id: "access", label: "Team & Roles", icon: Shield },
       { id: "audit-logs", label: "Audit Logs", icon: ScrollText },
       { id: "platform", label: "Settings", icon: Settings2 },
@@ -165,6 +169,9 @@ const TRADE_LABELS: Record<string, string> = {
   roofing: "Roofing",
   flooring: "Flooring",
   carpentry: "Carpentry",
+  snow_removal: "Snow Removal",
+  landscaping: "Landscaping",
+  cleaning: "Cleaning",
   others: "Others",
 };
 
@@ -320,7 +327,7 @@ const viewDocument = (name: string, dataUrl: string | undefined) => {
 };
 
 export default function AdminPanel({
-  onBack,
+  onBack: _onBack,
   onSignOut,
   user,
   isDark,
@@ -353,10 +360,19 @@ export default function AdminPanel({
       id: number;
       name: string;
       email: string;
+      phone?: string | null;
       planCode: string;
+      accountStatus?: string;
       createdAt: string;
+      isTrial?: boolean;
+      trialDaysLeft?: number;
+      currentPeriodEnd?: string | null;
     }[];
   } | null>(null);
+  const [homeownerSearch, setHomeownerSearch] = useState("");
+  const [selectedHomeownerProfileId, setSelectedHomeownerProfileId] = useState<number | null>(null);
+  const [homeownerRecordFocus, setHomeownerRecordFocus] = useState<HomeownerRecordFocus | null>(null);
+  const [selectedSupportTicket, setSelectedSupportTicket] = useState<string | null>(null);
   const [payments, setPayments] = useState<unknown[]>([]);
   const [transfers, setTransfers] = useState<unknown[]>([]);
   const [partners, setPartners] = useState<
@@ -443,6 +459,51 @@ export default function AdminPanel({
   const [staff, setStaff] = useState<AuthUser[]>([]);
   const [busyStaffId, setBusyStaffId] = useState<number | null>(null);
 
+  const applyNavFrame = useCallback((f: AdminNavFrame) => {
+    setTab(f.tab as Tab);
+    if (f.selectedJobId !== undefined) setSelectedJobId(f.selectedJobId);
+    if (f.drawerOpen !== undefined) setDrawerOpen(f.drawerOpen);
+    if (f.selectedHomeownerProfileId !== undefined) setSelectedHomeownerProfileId(f.selectedHomeownerProfileId);
+    if (f.homeownerRecordFocus !== undefined) {
+      setHomeownerRecordFocus((f.homeownerRecordFocus as HomeownerRecordFocus | null) ?? null);
+    }
+    if (f.expandedContractorId !== undefined) setExpandedContractorId(f.expandedContractorId);
+    if (f.selectedSupportTicket !== undefined) setSelectedSupportTicket(f.selectedSupportTicket);
+    if (f.mobileNav !== undefined) setMobileNav(f.mobileNav);
+    if (f.cmdOpen !== undefined) setCmdOpen(f.cmdOpen);
+    if (f.notifOpen !== undefined) setNotifOpen(f.notifOpen);
+  }, []);
+
+  const navFrame = useMemo(
+    (): AdminNavFrame => ({
+      role: "admin",
+      tab,
+      selectedJobId,
+      drawerOpen,
+      selectedHomeownerProfileId,
+      homeownerRecordFocus,
+      expandedContractorId,
+      selectedSupportTicket,
+      mobileNav,
+      cmdOpen,
+      notifOpen,
+    }),
+    [
+      tab,
+      selectedJobId,
+      drawerOpen,
+      selectedHomeownerProfileId,
+      homeownerRecordFocus,
+      expandedContractorId,
+      selectedSupportTicket,
+      mobileNav,
+      cmdOpen,
+      notifOpen,
+    ]
+  );
+
+  const { goHome, goBack, canBack } = useDashboardNavigation("admin", "admin", navFrame, applyNavFrame);
+
   async function refreshStaff() {
     const r = await loadStaffAdmins();
     if (r.ok) setStaff(r.staff || []);
@@ -469,9 +530,12 @@ export default function AdminPanel({
         setStaffNameInput("");
         setMessage("Subscription updated successfully.");
         // Refresh stats
-        const r = await getSubscriptionStats();
-        if (r.ok) {
-          setSubStats(r.stats ? r : null);
+        const r = await getSubscriptionStats(homeownerSearch);
+        if (r.ok && r.stats) {
+          setSubStats({
+            ...r.stats,
+            customers: r.customers || [],
+          });
         }
       } else {
         alert(res.message || "Failed to update subscription.");
@@ -549,20 +613,12 @@ export default function AdminPanel({
       });
     }
     if (tab === "subscriptions") {
-      void getSubscriptionStats().then((r) => {
+      void getSubscriptionStats(homeownerSearch).then((r) => {
         if (r.ok && r.stats) {
           setSubStats({
             ...r.stats,
             customers: r.customers || [],
           });
-        }
-      });
-    }
-    if (tab === "payments") {
-      void adminPayments().then((r) => {
-        if (r.ok) {
-          setPayments(r.payments || []);
-          setTransfers(r.transfers || []);
         }
       });
     }
@@ -573,7 +629,7 @@ export default function AdminPanel({
         if (d.ok) setDiscounts(d.discounts || []);
       });
     }
-    if (tab === "overview" || tab === "reporting") {
+    if (tab === "overview") {
       void adminReporting().then((r) => {
         if (r.ok) setReport(r);
       });
@@ -592,10 +648,24 @@ export default function AdminPanel({
     }
   }, [tab]);
 
+  useEffect(() => {
+    if (tab !== "subscriptions") return;
+    const handle = window.setTimeout(() => {
+      void getSubscriptionStats(homeownerSearch).then((r) => {
+        if (r.ok && r.stats) {
+          setSubStats({
+            ...r.stats,
+            customers: r.customers || [],
+          });
+        }
+      });
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [homeownerSearch, tab]);
+
   const filteredDispatch = useMemo(() => {
     const queue = jobs.filter((j) =>
       [
-        "ai_review_complete",
         "paid_for_dispatch",
         "awaiting_contractor",
         "contractor_invited",
@@ -621,7 +691,7 @@ export default function AdminPanel({
   const dispatchQueueCount = useMemo(
     () =>
       jobs.filter((j) =>
-        ["ai_review_complete", "paid_for_dispatch", "awaiting_contractor", "contractor_invited", "awaiting_bid", "bid_received", "approved"].includes(
+        ["paid_for_dispatch", "awaiting_contractor", "contractor_invited", "awaiting_bid", "bid_received", "approved"].includes(
           j.status
         )
       ).length,
@@ -809,8 +879,8 @@ export default function AdminPanel({
         setTab("work-queue");
         setMessage("Open a job from Work Queue → Quotes to edit the professional quotation.");
       } },
-      { id: "payouts", label: "Open Payouts", group: "Navigate", run: () => setTab("contractor-payouts") },
-      { id: "payments", label: "Open Payments", group: "Navigate", run: () => setTab("payments") },
+      { id: "payouts", label: "Open Finance — Payouts", group: "Navigate", run: () => setTab("finance") },
+      { id: "payments", label: "Open Finance", group: "Navigate", run: () => setTab("finance") },
       { id: "pricing", label: "Pricing Controls", group: "Navigate", run: () => setTab("pricing") },
       { id: "contractors", label: "Find Contractors", group: "Navigate", run: () => setTab("contractors") },
       {
@@ -891,27 +961,7 @@ export default function AdminPanel({
       setMobileNav(false);
       return;
     }
-    if (cmdOpen) {
-      setCmdOpen(false);
-      return;
-    }
-    if (notifOpen) {
-      setNotifOpen(false);
-      return;
-    }
-    if (drawerOpen) {
-      setDrawerOpen(false);
-      return;
-    }
-    if (expandedContractorId != null) {
-      setExpandedContractorId(null);
-      return;
-    }
-    if (tab !== "overview") {
-      setTab("overview");
-      return;
-    }
-    onBack();
+    goBack();
   };
 
   const handleSignOutClick = () => {
@@ -924,15 +974,15 @@ export default function AdminPanel({
       {/* Mobile top bar */}
       <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-background/95 px-4 py-3 backdrop-blur lg:hidden">
         <div className="flex items-center gap-2">
-          <button type="button" onClick={handleBack} className="rounded-md p-2 hover:bg-muted" aria-label="Back">
-            <ArrowLeft className="h-4 w-4" />
-          </button>
-          <div>
+          {(canBack || mobileNav) && (
+            <AppBackButton onBack={handleBack} className="-ml-1 shrink-0 p-2" />
+          )}
+          <button type="button" onClick={goHome} className="text-left outline-none focus-visible:ring-2 focus-visible:ring-primary/40 rounded-md" aria-label="Go to dashboard">
             <p className="flex items-center gap-1.5 font-[family-name:var(--font-display)] text-lg tracking-wide text-[#FF4D1C]">
               <Shield className="h-4 w-4" /> {brand.productName} Control
             </p>
             <p className="text-xs text-muted-foreground">Admin · Managed network pilot</p>
-          </div>
+          </button>
         </div>
         <div className="flex items-center gap-1">
           {onToggleDark && (
@@ -952,9 +1002,11 @@ export default function AdminPanel({
           <button type="button" className="absolute inset-0 bg-black/40" aria-label="Close menu" onClick={() => setMobileNav(false)} />
           <aside className="absolute inset-y-0 left-0 flex w-72 flex-col border-r border-border bg-background shadow-xl">
             <div className="border-b border-border px-4 py-4">
-              <p className="flex items-center gap-2 font-[family-name:var(--font-display)] text-xl tracking-wide text-[#FF4D1C]">
-                <Shield className="h-5 w-5" /> {brand.productName} Control
-              </p>
+              <button type="button" onClick={goHome} className="text-left outline-none focus-visible:ring-2 focus-visible:ring-primary/40 rounded-md" aria-label="Go to dashboard">
+                <p className="flex items-center gap-2 font-[family-name:var(--font-display)] text-xl tracking-wide text-[#FF4D1C]">
+                  <Shield className="h-5 w-5" /> {brand.productName} Control
+                </p>
+              </button>
               <p className="text-xs text-muted-foreground">Admin · Managed network pilot</p>
             </div>
             {sidebarNav}
@@ -965,9 +1017,11 @@ export default function AdminPanel({
                   {isDark ? "Light mode" : "Dark mode"}
                 </button>
               )}
-              <button type="button" onClick={handleBack} className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm hover:bg-muted">
-                <ArrowLeft className="h-4 w-4" /> Back
-              </button>
+              {canBack && (
+                <button type="button" onClick={handleBack} className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm hover:bg-muted">
+                  <ArrowLeft className="h-4 w-4" /> Back
+                </button>
+              )}
               <button type="button" onClick={handleSignOutClick} className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm hover:bg-muted">
                 <LogOut className="h-4 w-4" /> Sign out
               </button>
@@ -980,9 +1034,11 @@ export default function AdminPanel({
         {/* Desktop left sidebar */}
         <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-card lg:flex">
           <div className="border-b border-border px-4 py-5">
-            <p className="flex items-center gap-2 font-[family-name:var(--font-display)] text-xl tracking-wide text-[#FF4D1C]">
-              <Shield className="h-5 w-5" /> {brand.productName} Control
-            </p>
+            <button type="button" onClick={goHome} className="text-left outline-none focus-visible:ring-2 focus-visible:ring-primary/40 rounded-md" aria-label="Go to dashboard">
+              <p className="flex items-center gap-2 font-[family-name:var(--font-display)] text-xl tracking-wide text-[#FF4D1C]">
+                <Shield className="h-5 w-5" /> {brand.productName} Control
+              </p>
+            </button>
             <p className="mt-1 text-xs text-muted-foreground">Admin · Managed network pilot</p>
           </div>
           <div className="flex-1 overflow-y-auto">{sidebarNav}</div>
@@ -993,9 +1049,11 @@ export default function AdminPanel({
                 {isDark ? "Light mode" : "Dark mode"}
               </button>
             )}
-            <button type="button" onClick={handleBack} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition hover:bg-muted hover:translate-x-0.5">
-              <ArrowLeft className="h-4 w-4" /> Back
-            </button>
+            {canBack && (
+              <button type="button" onClick={handleBack} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition hover:bg-muted hover:translate-x-0.5">
+                <ArrowLeft className="h-4 w-4" /> Back
+              </button>
+            )}
             <button type="button" onClick={handleSignOutClick} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition hover:bg-muted hover:translate-x-0.5">
               <LogOut className="h-4 w-4" /> Sign out
             </button>
@@ -1226,7 +1284,12 @@ export default function AdminPanel({
                         <p className="font-medium">{job.title}</p>
                         <StatusBadge status={job.status} />
                       </div>
-                      <p className="mt-1 text-xs text-muted-foreground">{job.bookingId}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">{job.bookingId}
+                      {job.workQueueStatus === "PAID_NEEDS_REVIEW" || job.status === "paid_for_dispatch" || job.status === "awaiting_contractor" ? (
+                        <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700">
+                          PAID — NEEDS REVIEW
+                        </span>
+                      ) : null}</p>
                       <p className="mt-2 text-sm tabular-nums text-foreground/90">
                         Retail {formatMoney(job.customerRetailEstimateLow)}–{formatMoney(job.customerRetailEstimateHigh)}
                       </p>
@@ -1704,7 +1767,9 @@ export default function AdminPanel({
           />
         )}
 
-        {tab === "payments" && (
+        {tab === "finance" && <AdminFinancePanel onMessage={setMessage} />}
+
+        {false && tab === "payments_legacy" && (
           <section className="space-y-4">
             <SectionHeader
               title="Payments"
@@ -1858,7 +1923,7 @@ export default function AdminPanel({
           </section>
         )}
 
-        {tab === "contractor-payouts" && <AdminContractorPayoutsPanel />}
+        {false && tab === "contractor-payouts_legacy" && <AdminContractorPayoutsPanel />}
 
         {tab === "payout-settings" && <AdminPayoutSettingsPanel />}
 
@@ -2024,6 +2089,30 @@ export default function AdminPanel({
                             )}
                             {expanded ? "Hide application" : "View full application"}
                           </button>
+                          <button
+                            type="button"
+                            className={btnSecondary}
+                            disabled={isReadOnly || !c.id}
+                            onClick={async () => {
+                              if (!c.id) return;
+                              setComplianceBusyId(Number(c.id));
+                              try {
+                                const r = await adminSendPasswordReset(Number(c.id));
+                                if (r.ok) {
+                                  setMessage(`Password reset email sent to ${c.email || c.name}.`);
+                                } else {
+                                  alert(r.message || "Could not send password reset.");
+                                }
+                              } catch (err: any) {
+                                alert(err.message || "Could not send password reset.");
+                              } finally {
+                                setComplianceBusyId(null);
+                              }
+                            }}
+                          >
+                            <Mail className="h-4 w-4" />
+                            Send Password Reset Email
+                          </button>
                           {missingInfo.length > 0 && (
                             <button
                               type="button"
@@ -2132,6 +2221,8 @@ export default function AdminPanel({
             )}
           </section>
         )}
+
+        {tab === "referrals" && <AdminReferralsPanel />}
 
         {tab === "partners" && (
           <section className="space-y-5">
@@ -2518,7 +2609,7 @@ export default function AdminPanel({
           </section>
         )}
 
-        {tab === "ai" && (
+        {false && tab === "ai_legacy" && (
           <section className="space-y-4">
             <SectionHeader
               title="AI Review"
@@ -2782,7 +2873,7 @@ export default function AdminPanel({
                 <h2 className="font-semibold">Integration status</h2>
                 {platformInfo ? (
                   <ul className="space-y-1 text-sm text-muted-foreground">
-                    {["stripe", "resend", "twilio", "places", "slackOrN8n", "sentry", "posthog", "storage", "authMode"].map(
+                    {["stripe", "gmail", "places", "slackOrN8n", "sentry", "posthog", "storage", "authMode"].map(
                       (k) => (
                         <li key={k} className="flex justify-between gap-2">
                           <span className="capitalize">{k}</span>
@@ -2858,7 +2949,7 @@ export default function AdminPanel({
           </section>
         )}
 
-        {tab === "reporting" && (
+        {false && tab === "reporting_legacy" && (
           report ? (
             <section className="space-y-6">
               <SectionHeader
@@ -2916,9 +3007,62 @@ export default function AdminPanel({
 
         {tab === "subscriptions" && (
           <section className="space-y-6">
+            {selectedHomeownerProfileId != null ? (
+              homeownerRecordFocus ? (
+                <AdminHomeownerRecordFocus
+                  homeownerUserId={selectedHomeownerProfileId}
+                  focus={homeownerRecordFocus}
+                  onBack={() => setHomeownerRecordFocus(null)}
+                  onMessage={setMessage}
+                  onOpenJob={(jobId) => {
+                    setHomeownerRecordFocus(null);
+                    setSelectedJobId(jobId);
+                    setTab("dispatch");
+                  }}
+                />
+              ) : (
+              <AdminHomeownerProfile
+                userId={selectedHomeownerProfileId}
+                onBack={() => {
+                  setHomeownerRecordFocus(null);
+                  setSelectedHomeownerProfileId(null);
+                }}
+                onOpenProperty={(propertyId) => {
+                  if (!propertyId) return;
+                  setHomeownerRecordFocus({ type: "property", propertyId: Number(propertyId) });
+                }}
+                onOpenJob={(jobId) => {
+                  setSelectedJobId(jobId);
+                  setTab("dispatch");
+                }}
+                onOpenQuote={(quoteId) => {
+                  if (!quoteId) return;
+                  setHomeownerRecordFocus({ type: "quote", quoteId: Number(quoteId) });
+                }}
+                onOpenInvoice={(invoiceId, proposalId) => {
+                  if (!invoiceId) return;
+                  setHomeownerRecordFocus({
+                    type: "invoice",
+                    invoiceId: Number(invoiceId),
+                    proposalId: proposalId != null ? Number(proposalId) : null,
+                  });
+                }}
+                onOpenPayment={(paymentId) => {
+                  if (!paymentId) return;
+                  setHomeownerRecordFocus({ type: "payment", paymentId: Number(paymentId) });
+                }}
+                onOpenTab={(t) => setTab(t as Tab)}
+                onOpenTicket={(ticketNumber) => {
+                  setSelectedSupportTicket(ticketNumber);
+                  setTab("support-tickets");
+                }}
+              />
+              )
+            ) : (
+              <>
             <SectionHeader
-              title="Subscriptions Management"
-              subtitle="Monitor memberships, trial rates, and customize subscription prices."
+              title="Homeowners"
+              subtitle="Search customers, open profiles, and manage memberships."
             />
 
             <div className="grid gap-4 sm:grid-cols-3">
@@ -2996,17 +3140,30 @@ export default function AdminPanel({
             </div>
 
             <div className={`${cardClass} overflow-hidden`}>
-              <div className="border-b border-border/60 bg-muted/30 px-6 py-4">
-                <h3 className="font-semibold">Homeowner Customer List</h3>
-                <p className="text-xs text-muted-foreground">Detailed subscription statuses of all registered homeowners.</p>
+              <div className="border-b border-border/60 bg-muted/30 px-6 py-4 space-y-3">
+                <div>
+                  <h3 className="font-semibold">Customer search</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Search by name, phone, email, or customer ID.
+                  </p>
+                </div>
+                <div className="relative max-w-lg">
+                  <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <input
+                    type="search"
+                    value={homeownerSearch}
+                    onChange={(e) => setHomeownerSearch(e.target.value)}
+                    placeholder="Search customers..."
+                    className={`${fieldClass} pl-9`}
+                  />
+                </div>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse text-sm">
                   <thead>
                     <tr className="border-b border-border bg-muted/20 text-muted-foreground text-xs font-medium uppercase">
-                      <th className="px-6 py-3">ID</th>
-                      <th className="px-6 py-3">Name</th>
-                      <th className="px-6 py-3">Email</th>
+                      <th className="px-6 py-3">Customer</th>
+                      <th className="px-6 py-3">Contact</th>
                       <th className="px-6 py-3">Membership Plan</th>
                       <th className="px-6 py-3">Joined Date</th>
                       <th className="px-6 py-3 text-right">Actions</th>
@@ -3016,15 +3173,21 @@ export default function AdminPanel({
                     {subStats?.customers && subStats.customers.length > 0 ? (
                       subStats.customers.map((c) => (
                         <tr key={c.id} className="hover:bg-muted/10">
-                          <td className="px-6 py-4 font-mono text-xs text-muted-foreground">#{c.id}</td>
-                          <td className="px-6 py-4 font-medium">{c.name}</td>
-                          <td className="px-6 py-4">{c.email}</td>
+                          <td className="px-6 py-4">
+                            <p className="font-medium">{c.name}</p>
+                            <p className="font-mono text-[11px] text-muted-foreground">#{c.id}</p>
+                          </td>
+                          <td className="px-6 py-4">
+                            <p>{c.email}</p>
+                            <p className="text-xs text-muted-foreground">{c.phone || "—"}</p>
+                          </td>
                           <td className="px-6 py-4">
                             {c.planCode === "pro_membership" ? (
                               <div className="flex flex-col gap-0.5">
                                 <span className="inline-flex items-center self-start gap-1 rounded-full bg-amber-500/10 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400">
-                                  Pro Member
+                                  FixBridge Pro
                                 </span>
+                                <span className="text-[10px] text-emerald-600 font-semibold pl-1">Active</span>
                                 {c.isTrial ? (
                                   <span className="text-[10px] text-teal-600 dark:text-teal-400 font-semibold pl-1">
                                     Trial: {c.trialDaysLeft} {c.trialDaysLeft === 1 ? "day" : "days"} left
@@ -3052,6 +3215,36 @@ export default function AdminPanel({
                           </td>
                           <td className="px-6 py-4 text-right">
                             <div className="flex flex-wrap items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setHomeownerRecordFocus(null);
+                                  setSelectedHomeownerProfileId(c.id);
+                                }}
+                                className="inline-flex items-center gap-1 rounded bg-foreground px-3 py-1.5 text-xs font-semibold text-background hover:opacity-90 transition"
+                              >
+                                Open Profile
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isReadOnly}
+                                onClick={async () => {
+                                  try {
+                                    const r = await adminSendPasswordReset(c.id);
+                                    if (r.ok) {
+                                      setMessage(`Password reset email sent to ${c.email}.`);
+                                    } else {
+                                      alert(r.message || "Could not send password reset.");
+                                    }
+                                  } catch (err: any) {
+                                    alert(err.message || "Could not send password reset.");
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1 rounded border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted/40 transition disabled:opacity-50"
+                              >
+                                <Mail className="h-3.5 w-3.5" />
+                                Send Password Reset Email
+                              </button>
                               <button
                                 type="button"
                                 onClick={async () => {
@@ -3095,7 +3288,9 @@ export default function AdminPanel({
                     ) : (
                       <tr>
                         <td colSpan={5} className="px-6 py-8 text-center text-muted-foreground">
-                          No customer homeowners registered yet.
+                          {homeownerSearch.trim()
+                            ? "No customers match that search."
+                            : "No customer homeowners registered yet."}
                         </td>
                       </tr>
                     )}
@@ -3103,12 +3298,14 @@ export default function AdminPanel({
                 </table>
               </div>
             </div>
+              </>
+            )}
           </section>
         )}
 
         {tab === "audit-logs" && <AdminAuditLogsPanel />}
 
-        {tab === "support-tickets" && <AdminSupportTicketsPanel />}
+        {tab === "support-tickets" && <AdminSupportTicketsPanel initialTicket={selectedSupportTicket} />}
 
         {tab === "pro-plans" && <AdminSubscriptionPlansPanel readOnly={isReadOnly} />}
 
@@ -3251,6 +3448,7 @@ export default function AdminPanel({
                       <th className="px-6 py-4">Email</th>
                       <th className="px-6 py-4">Current Access Level</th>
                       <th className="px-6 py-4">Assign Permissions</th>
+                      <th className="px-6 py-4 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/60">
@@ -3277,7 +3475,7 @@ export default function AdminPanel({
                           </td>
                           <td className="px-6 py-4">
                             <select
-                              disabled={busyStaffId === s.id || isReadOnly || s.email === "admin@fixbridge.local"}
+                              disabled={busyStaffId === s.id || isReadOnly || s.email === "ksdt2702@gmail.com"}
                               className="rounded-lg border border-border bg-background px-2.5 py-1 text-xs outline-none focus:border-[#FF4D1C] disabled:opacity-60 text-foreground"
                               value={s.adminAccessLevel || "read-write"}
                               onChange={async (e) => {
@@ -3286,7 +3484,7 @@ export default function AdminPanel({
                                 try {
                                   const r = await updateStaffAccess(s.id, level);
                                   if (r.ok) {
-                                    alert(`Permissions updated successfully for ${s.name}!`);
+                                    setMessage(`Permissions updated for ${s.name}.`);
                                     await refreshStaff();
                                   } else {
                                     alert(r.message || "Failed to update permissions.");
@@ -3303,11 +3501,41 @@ export default function AdminPanel({
                               <option value="read-write">Read + Write (full)</option>
                             </select>
                           </td>
+                          <td className="px-6 py-4 text-right">
+                            <button
+                              type="button"
+                              disabled={busyStaffId === s.id || isReadOnly || !s.id}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-semibold transition hover:bg-muted disabled:opacity-50"
+                              onClick={async () => {
+                                if (!s.id) return;
+                                setBusyStaffId(s.id);
+                                try {
+                                  const r = await adminSendPasswordReset(Number(s.id));
+                                  if (r.ok) {
+                                    setMessage(`Password reset email sent to ${s.email}.`);
+                                  } else {
+                                    alert(r.message || "Could not send password reset.");
+                                  }
+                                } catch (err: any) {
+                                  alert(err.message || "Could not send password reset.");
+                                } finally {
+                                  setBusyStaffId(null);
+                                }
+                              }}
+                            >
+                              {busyStaffId === s.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Mail className="h-3.5 w-3.5" />
+                              )}
+                              Send Password Reset Email
+                            </button>
+                          </td>
                         </tr>
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={5} className="px-6 py-8 text-center text-muted-foreground">
+                        <td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">
                           No staff admin accounts found.
                         </td>
                       </tr>
@@ -3486,15 +3714,15 @@ export default function AdminPanel({
         }}
         onOpenPayments={() => {
           setDrawerOpen(false);
-          setTab("payments");
+          setTab("finance");
         }}
         onOpenPayouts={() => {
           setDrawerOpen(false);
-          setTab("contractor-payouts");
+          setTab("finance");
         }}
         onOpenAiEstimate={() => {
           setDrawerOpen(false);
-          setTab("ai");
+          setTab("dispatch");
         }}
         dispatchCouponCode={dispatchCouponCode}
         onDispatchCouponCodeChange={setDispatchCouponCode}

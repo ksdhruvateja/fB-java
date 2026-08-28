@@ -189,7 +189,8 @@ export function permissionsForAccessLevel(level?: string | null, rolePreset?: st
   const l = String(level || "read-write").toLowerCase();
   if (l === "read") return new Set(ROLE_PRESETS.read_only.permissions);
   if (l in ROLE_PRESETS) return new Set(ROLE_PRESETS[l as AdminRolePreset].permissions);
-  return new Set(ROLE_PRESETS.super_admin.permissions);
+  // P0-9: conservative default — never imply super_admin
+  return new Set(ROLE_PRESETS.operations_admin.permissions);
 }
 
 export function can(perms: Set<AdminPermission>, permission: AdminPermission) {

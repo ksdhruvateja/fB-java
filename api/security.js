@@ -61,7 +61,7 @@ export function securityHeaders(_req, res, next) {
   res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
   if (process.env.NODE_ENV === 'production') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-    // Light CSP: allow Stripe.js / Auth0 / self. Avoid breaking Checkout / OAuth.
+    // Light CSP: allow Stripe.js / self. Avoid breaking Checkout.
     res.setHeader(
       'Content-Security-Policy',
       [
@@ -72,9 +72,9 @@ export function securityHeaders(_req, res, next) {
         "img-src 'self' data: blob: https:",
         "font-src 'self' data: https:",
         "style-src 'self' 'unsafe-inline' https:",
-        "script-src 'self' 'unsafe-inline' https://js.stripe.com https://cdn.jsdelivr.net https://*.auth0.com",
-        "connect-src 'self' https://api.stripe.com https://*.stripe.com https://*.auth0.com https://*.neon.tech https:",
-        "frame-src 'self' https://js.stripe.com https://hooks.stripe.com https://*.auth0.com",
+        "script-src 'self' 'unsafe-inline' https://js.stripe.com https://cdn.jsdelivr.net",
+        "connect-src 'self' https://api.stripe.com https://*.stripe.com https://*.neon.tech https:",
+        "frame-src 'self' https://js.stripe.com https://hooks.stripe.com",
       ].join('; ')
     );
   }

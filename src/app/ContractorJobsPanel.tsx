@@ -1,4 +1,6 @@
 import { useMemo, useRef, useState } from "react";
+import AppBackButton from "./AppBackButton";
+import { useIsMobile } from "./components/ui/use-mobile";
 import {
   Camera,
   CheckCircle2,
@@ -20,6 +22,7 @@ import {
   type ContractorPayout,
   type PayoutAccount,
 } from "./managedJobs";
+import ChangeOrderPanel from "./ChangeOrderPanel";
 import { JobEarningsCard } from "./ContractorPayoutsPanel";
 
 type JobFilter = "all" | "active" | "scheduled" | "awaiting" | "completed" | "cancelled";
@@ -80,6 +83,7 @@ export default function ContractorJobsPanel({
   const [notes, setNotes] = useState("");
   const beforePhotoRef = useRef<HTMLInputElement>(null);
   const afterPhotoRef = useRef<HTMLInputElement>(null);
+  const isMobile = useIsMobile();
 
   const filtered = useMemo(() => jobs.filter((j) => matchesFilter(j, filter)), [jobs, filter]);
   const selected = useMemo(
@@ -124,7 +128,7 @@ export default function ContractorJobsPanel({
         </p>
       ) : (
         <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
-          <div className="space-y-2">
+          <div className={`space-y-2 ${isMobile && selectedId ? "hidden" : ""}`}>
             {filtered.length === 0 && (
               <p className="text-sm text-muted-foreground px-1">No jobs in this filter.</p>
             )}
@@ -156,7 +160,17 @@ export default function ContractorJobsPanel({
           </div>
 
           {selected && (
-            <div className="space-y-4 rounded-[1.5rem] border border-border bg-card p-5 sm:p-6">
+            <div className={`space-y-4 rounded-[1.5rem] border border-border bg-card p-5 sm:p-6 ${isMobile && !selectedId ? "hidden" : ""}`}>
+              {isMobile && selectedId && (
+                <AppBackButton
+                  onBack={() => {
+                    setSelectedId(null);
+                    setCompleteOpen(false);
+                  }}
+                  label="Back to Jobs"
+                  className="-ml-1"
+                />
+              )}
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                   Job workspace · {selected.bookingId || `FB-${selected.id}`}
@@ -272,6 +286,10 @@ export default function ContractorJobsPanel({
                   )}
                 </div>
               </div>
+
+              {["work_started", "change_order_pending", "contractor_en_route"].includes(selected.status) ? (
+                <ChangeOrderPanel jobId={selected.id} role="contractor" onChanged={onRefresh} />
+              ) : null}
 
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground mb-2">Job actions</p>

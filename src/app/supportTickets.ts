@@ -14,11 +14,42 @@ export type SupportTicket = {
   channel: SupportChannel;
   subject: string;
   message: string;
+  category?: string | null;
+  priority?: string;
+  assignedTo?: string | null;
+  relatedPropertyId?: number | null;
   relatedJobId?: number | null;
+  relatedQuoteId?: number | null;
+  relatedInvoiceId?: number | null;
+  relatedPaymentId?: number | null;
   context?: SupportTicketContext;
   status: string;
   createdAt: string;
   updatedAt: string;
+  resolvedAt?: string | null;
+  closedAt?: string | null;
+};
+
+export type TicketMessage = {
+  id: number;
+  ticketId: number;
+  senderUserId?: number | null;
+  senderRole: string;
+  senderName?: string | null;
+  message: string;
+  isInternal: boolean;
+  createdAt: string;
+};
+
+export type TicketActivity = {
+  id: number;
+  ticketId: number;
+  actorUserId?: number | null;
+  actorRole?: string | null;
+  action: string;
+  oldValue?: string | null;
+  newValue?: string | null;
+  createdAt: string;
 };
 
 export type TicketDelivery = {
@@ -80,7 +111,12 @@ export async function createSupportTicket(input: {
   channel: SupportChannel;
   subject: string;
   message: string;
+  category?: string;
+  priority?: string;
   relatedJobId?: number | null;
+  relatedPropertyId?: number | null;
+  relatedQuoteId?: number | null;
+  relatedInvoiceId?: number | null;
 }) {
   return supportApi<{
     ok: boolean;
@@ -94,41 +130,64 @@ export async function createSupportTicket(input: {
   });
 }
 
-export async function listMySupportTickets() {
-  return supportApi<{ ok: boolean; tickets: SupportTicket[] }>("/api/support/tickets");
+export async function listMySupportTickets(status?: string) {
+  const q = status ? `?status=${encodeURIComponent(status)}` : "";
+  return supportApi<{ ok: boolean; tickets: SupportTicket[] }>(`/api/support/tickets${q}`);
 }
 
 export async function getMySupportTicket(ticketNumber: string) {
   return supportApi<{
     ok: boolean;
     ticket: SupportTicket;
+    messages: TicketMessage[];
     deliveries: TicketDelivery[];
     context?: SupportTicketContext;
   }>(`/api/support/tickets/${encodeURIComponent(ticketNumber)}`);
 }
 
-export async function listAdminSupportTickets(status?: string) {
-  const q = status ? `?status=${encodeURIComponent(status)}` : "";
-  return supportApi<{ ok: boolean; tickets: SupportTicket[] }>(`/api/admin/support/tickets${q}`);
+export async function replySupportTicket(ticketNumber: string, message: string) {
+  return supportApi<{ ok: boolean; message: TicketMessage }>(
+    `/api/support/tickets/${encodeURIComponent(ticketNumber)}/reply`,
+    { method: "POST", body: JSON.stringify({ message }) }
+  );
+}
+
+export async function listAdminSupportTickets(status?: string, q?: string) {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (q) params.set("q", q);
+  const qs = params.toString() ? `?${params.toString()}` : "";
+  return supportApi<{ ok: boolean; tickets: SupportTicket[] }>(`/api/admin/support/tickets${qs}`);
 }
 
 export async function getAdminSupportTicket(ticketNumber: string) {
   return supportApi<{
     ok: boolean;
     ticket: SupportTicket;
+    messages: TicketMessage[];
+    activity: TicketActivity[];
     deliveries: TicketDelivery[];
     context?: SupportTicketContext;
   }>(`/api/admin/support/tickets/${encodeURIComponent(ticketNumber)}`);
 }
 
-export async function updateAdminSupportTicketStatus(ticketNumber: string, status: string) {
+export async function updateAdminSupportTicket(ticketNumber: string, fields: Record<string, unknown>) {
   return supportApi<{ ok: boolean; ticket: SupportTicket }>(
     `/api/admin/support/tickets/${encodeURIComponent(ticketNumber)}`,
-    {
-      method: "PATCH",
-      body: JSON.stringify({ status }),
-    }
+    { method: "PATCH", body: JSON.stringify(fields) }
   );
+}
+
+export async function replyAdminSupportTicket(ticketNumber: string, message: string, internal = false) {
+  return supportApi<{ ok: boolean; message: TicketMessage }>(
+    `/api/admin/support/tickets/${encodeURIComponent(ticketNumber)}/reply`,
+    { method: "POST", body: JSON.stringify({ message, internal }) }
+  );
+}
+
+/** @deprecated use updateAdminSupportTicket */
+export async function updateAdminSupportTicketStatus(ticketNumber: string, status: string) {
+  return updateAdminSupportTicket(ticketNumber, { status });
 }
 
 export function buildLocalContextPreview(

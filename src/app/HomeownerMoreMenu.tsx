@@ -42,8 +42,8 @@ export default function HomeownerMoreMenu({
             <Sparkles size={18} />
           </span>
           <span className="min-w-0 flex-1">
-            <p className="text-sm font-semibold">Go Pro</p>
-            <p className="text-xs text-muted-foreground">Compare subscription plans</p>
+            <p className="text-sm font-semibold">FixBridge Pro</p>
+            <p className="text-xs text-muted-foreground">Advanced insights & priority support</p>
           </span>
           <ChevronRight size={18} className="text-muted-foreground" />
         </button>

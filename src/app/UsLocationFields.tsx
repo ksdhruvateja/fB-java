@@ -106,6 +106,18 @@ export async function lookupZipUs(zip: string): Promise<{ city: string; state: s
   const key = zip.replace(/\D/g, "").slice(0, 5);
   if (key.length !== 5) return null;
   try {
+    const { lookupCityStateFromApi } = await import("./addressApi");
+    const { getStoredToken } = await import("./auth");
+    if (getStoredToken()) {
+      const usps = await lookupCityStateFromApi(key);
+      if (usps.ok && usps.city && usps.state) {
+        return { city: usps.city, state: usps.state };
+      }
+    }
+  } catch {
+    /* fall through to public fallback */
+  }
+  try {
     const res = await fetch(`https://api.zippopotam.us/us/${key}`);
     if (!res.ok) return null;
     const data = await res.json();
@@ -238,6 +250,86 @@ export function SearchableSelect({
   );
 }
 
+/** Full structured US address: Line 1 *, Line 2 (optional), City *, State *, ZIP *. */
+export function StructuredAddressFields({
+  addressLine1,
+  addressLine2,
+  city,
+  state,
+  zip,
+  onAddressLine1Change,
+  onAddressLine2Change,
+  onCityChange,
+  onStateChange,
+  onZipChange,
+  disabled,
+  zipRequired = true,
+  idPrefix = "addr",
+}: {
+  addressLine1: string;
+  addressLine2?: string;
+  city: string;
+  state: string;
+  zip: string;
+  onAddressLine1Change: (v: string) => void;
+  onAddressLine2Change?: (v: string) => void;
+  onCityChange: (v: string) => void;
+  onStateChange: (v: string) => void;
+  onZipChange: (v: string) => void;
+  disabled?: boolean;
+  zipRequired?: boolean;
+  idPrefix?: string;
+}) {
+  return (
+    <div className="grid gap-3">
+      <label className="grid gap-1.5" htmlFor={`${idPrefix}-line1`}>
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Address Line 1 <span className="text-red-500">*</span>
+        </span>
+        <input
+          id={`${idPrefix}-line1`}
+          type="text"
+          required
+          disabled={disabled}
+          placeholder="e.g. 123 Main Street"
+          className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#FF4D1C] text-foreground"
+          value={addressLine1}
+          onChange={(e) => onAddressLine1Change(e.target.value)}
+          autoComplete="address-line1"
+        />
+      </label>
+      {onAddressLine2Change ? (
+        <label className="grid gap-1.5" htmlFor={`${idPrefix}-line2`}>
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Address Line 2{" "}
+            <span className="font-normal normal-case tracking-normal">(optional)</span>
+          </span>
+          <input
+            id={`${idPrefix}-line2`}
+            type="text"
+            disabled={disabled}
+            placeholder="Apartment, suite, unit, etc."
+            className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#FF4D1C] text-foreground"
+            value={addressLine2 || ""}
+            onChange={(e) => onAddressLine2Change(e.target.value)}
+            autoComplete="address-line2"
+          />
+        </label>
+      ) : null}
+      <UsLocationFields
+        city={city}
+        state={state}
+        zip={zip}
+        onCityChange={onCityChange}
+        onStateChange={onStateChange}
+        onZipChange={onZipChange}
+        disabled={disabled}
+        zipRequired={zipRequired}
+      />
+    </div>
+  );
+}
+
 export function UsLocationFields({
   city,
   state,
@@ -281,7 +373,7 @@ export function UsLocationFields({
     <>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <SearchableSelect
-          label="State (US)"
+          label="State"
           required
           placeholder="Search state…"
           value={normalizeUsStateCode(state)}

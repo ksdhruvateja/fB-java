@@ -3,6 +3,7 @@ import { Bell, MessageSquare, PlusCircle } from "lucide-react";
 import type { InboxSegment, JobsSegment } from "./homeownerNav";
 import type { ManagedJob } from "./managedJobs";
 import { STATUS_LABELS } from "./managedJobs";
+import type { HomeUpdateItem } from "./homeUpdates";
 
 const SEGMENTS: { id: InboxSegment; label: string }[] = [
   { id: "messages", label: "Messages" },
@@ -11,49 +12,66 @@ const SEGMENTS: { id: InboxSegment; label: string }[] = [
 
 export default function HomeownerInboxPanel({
   jobs,
+  homeUpdates = [],
   onOpenJob,
   onRequestService,
+  onOpenHomeUpdates,
 }: {
   jobs: ManagedJob[];
+  homeUpdates?: HomeUpdateItem[];
   onOpenJob: (jobId: number, segment?: JobsSegment) => void;
   onRequestService: () => void;
+  onOpenHomeUpdates?: () => void;
 }) {
   const [segment, setSegment] = useState<InboxSegment>("messages");
 
-  const notifications = jobs.flatMap((job) => {
-    const items: { id: string; type: string; title: string; body: string; jobId: number; action: string }[] = [];
-    if (["proposal_sent", "awaiting_customer_approval"].includes(job.status)) {
-      items.push({
-        id: `quote-${job.id}`,
-        type: "QUOTE",
-        title: "Your quote is ready",
-        body: job.title || job.category || "Service request",
-        jobId: job.id,
-        action: "Review Quote",
-      });
-    }
-    if (["contractor_en_route", "work_started"].includes(job.status)) {
-      items.push({
-        id: `service-${job.id}`,
-        type: "SERVICE",
-        title: job.status === "contractor_en_route" ? "Contractor is on the way" : "Work in progress",
-        body: job.title || job.category || "Active job",
-        jobId: job.id,
-        action: "Track",
-      });
-    }
-    if (["customer_review_pending", "work_completed"].includes(job.status)) {
-      items.push({
-        id: `pay-${job.id}`,
-        type: "PAYMENT",
-        title: "Review & complete payment",
-        body: job.title || job.category || "Completed service",
-        jobId: job.id,
-        action: "View Job",
-      });
-    }
-    return items;
-  });
+  const notifications = [
+    ...homeUpdates
+      .filter((u) => u.level === "high_priority" || u.level === "attention" || u.level === "due")
+      .slice(0, 5)
+      .map((u) => ({
+        id: `home-${u.id}`,
+        type: "HOME_UPDATE",
+        title: "FixBridge Home Update",
+        body: `${u.systemLabel}: ${u.title}`,
+        jobId: 0,
+        action: "Review",
+      })),
+    ...jobs.flatMap((job) => {
+      const items: { id: string; type: string; title: string; body: string; jobId: number; action: string }[] = [];
+      if (["proposal_sent", "awaiting_customer_approval"].includes(job.status)) {
+        items.push({
+          id: `quote-${job.id}`,
+          type: "QUOTE",
+          title: "Your quote is ready",
+          body: job.title || job.category || "Service request",
+          jobId: job.id,
+          action: "Review Quote",
+        });
+      }
+      if (["contractor_en_route", "work_started"].includes(job.status)) {
+        items.push({
+          id: `service-${job.id}`,
+          type: "SERVICE",
+          title: job.status === "contractor_en_route" ? "Contractor is on the way" : "Work in progress",
+          body: job.title || job.category || "Active job",
+          jobId: job.id,
+          action: "Track",
+        });
+      }
+      if (["customer_review_pending", "work_completed"].includes(job.status)) {
+        items.push({
+          id: `pay-${job.id}`,
+          type: "PAYMENT",
+          title: "Review & complete payment",
+          body: job.title || job.category || "Completed service",
+          jobId: job.id,
+          action: "View Job",
+        });
+      }
+      return items;
+    }),
+  ];
 
   function segmentForType(type: string): JobsSegment {
     if (type === "QUOTE") return "quotes";
@@ -152,7 +170,13 @@ export default function HomeownerInboxPanel({
                     <p className="mt-0.5 text-xs text-muted-foreground">{n.body}</p>
                     <button
                       type="button"
-                      onClick={() => onOpenJob(n.jobId, segmentForType(n.type))}
+                      onClick={() => {
+                        if (n.type === "HOME_UPDATE" && onOpenHomeUpdates) {
+                          onOpenHomeUpdates();
+                          return;
+                        }
+                        onOpenJob(n.jobId, segmentForType(n.type));
+                      }}
                       className="mt-3 text-sm font-semibold text-primary hover:underline"
                     >
                       {n.action} →

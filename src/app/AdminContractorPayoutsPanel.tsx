@@ -3,10 +3,12 @@ import { Loader2, Check, AlertCircle } from "lucide-react";
 import {
   adminApprovePayout,
   adminAdjustPayout,
+  adminGetPayoutDetail,
   adminListPayouts,
   adminPayoutsSummary,
   formatCents,
   type ContractorPayout,
+  type PayoutAuditLog,
 } from "./managedJobs";
 
 const TABS = [
@@ -31,6 +33,11 @@ function payoutStatusBadge(status: string) {
   );
 }
 
+function econAmount(cents: number | null | undefined) {
+  if (cents == null) return "Pending";
+  return formatCents(cents);
+}
+
 export default function AdminContractorPayoutsPanel() {
   const [tab, setTab] = useState<string>("pending_approval");
   const [payouts, setPayouts] = useState<ContractorPayout[]>([]);
@@ -44,8 +51,11 @@ export default function AdminContractorPayoutsPanel() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<ContractorPayout | null>(null);
   const [adjustment, setAdjustment] = useState("");
+  const [adjustmentReason, setAdjustmentReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [auditLogs, setAuditLogs] = useState<PayoutAuditLog[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -59,11 +69,44 @@ export default function AdminContractorPayoutsPanel() {
     load();
   }, [tab]);
 
+  useEffect(() => {
+    if (!selected) {
+      setAuditLogs([]);
+      return;
+    }
+    let cancelled = false;
+    setDetailLoading(true);
+    adminGetPayoutDetail(selected.id).then((r) => {
+      if (cancelled) return;
+      if (r.ok) {
+        setSelected(r.payout);
+        setAuditLogs(r.auditLogs || []);
+      }
+      setDetailLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected?.id]);
+
   const approve = async (id: number) => {
     setBusy(true);
     setMessage("");
     const adj = adjustment.trim() ? Math.round(Number(adjustment) * 100) : undefined;
-    const r = await adminApprovePayout(id, adj);
+    if (adj != null && adj !== 0) {
+      if (!adjustmentReason.trim()) {
+        setBusy(false);
+        setMessage("Adjustment reason is required before release.");
+        return;
+      }
+      const adjusted = await adminAdjustPayout(id, adj, adjustmentReason.trim());
+      if (!adjusted.ok) {
+        setBusy(false);
+        setMessage("Could not save adjustment.");
+        return;
+      }
+    }
+    const r = await adminApprovePayout(id, undefined, adjustmentReason.trim() || undefined);
     setBusy(false);
     if (!r.ok) {
       setMessage("Could not approve payout.");
@@ -72,13 +115,19 @@ export default function AdminContractorPayoutsPanel() {
     setMessage("Payout approved and transfer initiated.");
     setSelected(null);
     setAdjustment("");
+    setAdjustmentReason("");
     await load();
   };
 
   const adjustOnly = async (id: number) => {
     setBusy(true);
     const cents = Math.round(Number(adjustment || 0) * 100);
-    const r = await adminAdjustPayout(id, cents);
+    if (cents !== 0 && !adjustmentReason.trim()) {
+      setBusy(false);
+      setMessage("Adjustment reason is required.");
+      return;
+    }
+    const r = await adminAdjustPayout(id, cents, adjustmentReason.trim() || undefined);
     setBusy(false);
     if (r.ok) {
       setMessage("Payout adjusted.");
@@ -186,20 +235,116 @@ export default function AdminContractorPayoutsPanel() {
 
       {selected && (
         <div className="rounded-2xl border border-border bg-card p-5 space-y-4">
-          <h3 className="text-lg font-semibold">
-            Payout · {selected.jobRef} · {selected.contractorName}
-          </h3>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-lg font-semibold">
+              JOB {selected.jobRef} · {selected.contractorName}
+            </h3>
+            {detailLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+          </div>
+
+          {selected.connectStatus && !selected.connectStatus.transfersEligible && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-200">
+              Stripe Connect: {selected.connectStatus.blockedReason?.replace(/_/g, " ") || "Onboarding incomplete"} —
+              contractor must complete Stripe onboarding before release.
+            </div>
+          )}
+
+          {selected.economics && (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <section className="rounded-xl border border-border/70 p-4 space-y-2 text-sm">
+                <h4 className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Homeowner</h4>
+                <div className="flex justify-between"><span>Contract / proposal</span><span className="tabular-nums">{econAmount(selected.economics.homeowner.contractProposalCents)}</span></div>
+                <div className="flex justify-between"><span>Approved change orders</span><span className="tabular-nums">{econAmount(selected.economics.homeowner.approvedChangeOrdersCents)}</span></div>
+                <div className="flex justify-between"><span>Visit fees</span><span className="tabular-nums">{econAmount(selected.economics.homeowner.visitFeesCents)}</span></div>
+                <div className="flex justify-between"><span>Refunds</span><span className="tabular-nums text-red-600">-{econAmount(selected.economics.homeowner.refundsCents)}</span></div>
+                <div className="flex justify-between border-t border-border pt-2 font-semibold"><span>Total charged</span><span className="tabular-nums">{econAmount(selected.economics.homeowner.totalChargedCents)}</span></div>
+                <div className="flex justify-between font-semibold"><span>Total received</span><span className="tabular-nums">{econAmount(selected.economics.homeowner.totalReceivedCents)}</span></div>
+              </section>
+
+              <section className="rounded-xl border border-border/70 p-4 space-y-2 text-sm">
+                <h4 className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Payment costs</h4>
+                <div className="flex justify-between">
+                  <span>Stripe processing fees</span>
+                  <span className="tabular-nums">
+                    {selected.economics.paymentCosts.stripeProcessingFeeStatus === "pending"
+                      ? "Pending"
+                      : econAmount(selected.economics.paymentCosts.stripeProcessingFeeCents)}
+                  </span>
+                </div>
+              </section>
+
+              <section className="rounded-xl border border-border/70 p-4 space-y-2 text-sm">
+                <h4 className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Contractor</h4>
+                <div className="flex justify-between"><span>Original agreed amount</span><span className="tabular-nums">{econAmount(selected.economics.contractor.originalAgreedAmountCents)}</span></div>
+                <div className="flex justify-between"><span>Admin adjustment</span><span className="tabular-nums">{econAmount(selected.economics.contractor.adminAdjustmentCents)}</span></div>
+                <div className="flex justify-between border-t border-border pt-2 font-semibold"><span>Contractor payable</span><span className="tabular-nums text-emerald-700">{econAmount(selected.economics.contractor.contractorPayableCents)}</span></div>
+                {selected.economics.contractor.payoutMethod === "instant" && (
+                  <>
+                    <div className="flex justify-between"><span>Instant payout fee</span><span className="tabular-nums">{econAmount(selected.economics.contractor.instantPayoutFeeCents)}</span></div>
+                    <div className="flex justify-between font-semibold"><span>Contractor receives</span><span className="tabular-nums">{econAmount(selected.economics.contractor.contractorNetPayoutCents)}</span></div>
+                  </>
+                )}
+              </section>
+
+              <section className="rounded-xl border border-border/70 p-4 space-y-2 text-sm">
+                <h4 className="text-xs font-bold uppercase tracking-wide text-muted-foreground">FixBridge</h4>
+                <div className="flex justify-between"><span>Gross margin</span><span className="tabular-nums">{econAmount(selected.economics.fixbridge.grossMarginCents)}</span></div>
+                <div className="flex justify-between"><span>Processing fees</span><span className="tabular-nums">{econAmount(selected.economics.fixbridge.stripeProcessingFeeCents)}</span></div>
+                {selected.economics.contractor.payoutMethod === "instant" && (
+                  <div className="flex justify-between"><span>Instant payout fee</span><span className="tabular-nums">{econAmount(selected.economics.fixbridge.instantPayoutFeeCents)}</span></div>
+                )}
+                <div className="flex justify-between border-t border-border pt-2 font-bold"><span>FixBridge net</span><span className="tabular-nums">{econAmount(selected.economics.fixbridge.fixbridgeNetCents)}</span></div>
+              </section>
+            </div>
+          )}
+
+          {selected.economics?.refundReconciliations?.length ? (
+            <div className="rounded-xl border border-red-200 bg-red-50/50 p-4 text-sm dark:border-red-900/40 dark:bg-red-950/20">
+              <p className="font-semibold text-red-800 dark:text-red-300">Refund reconciliation required</p>
+              {selected.economics.refundReconciliations.map((r) => (
+                <p key={r.id} className="mt-1 text-red-700 dark:text-red-400">
+                  Refund {formatCents(r.refundAmountCents)} · Platform exposure {formatCents(r.platformExposureCents)} · {r.status}
+                </p>
+              ))}
+            </div>
+          ) : null}
+
+          {auditLogs.length > 0 && (
+            <div className="border-t border-border pt-4">
+              <h4 className="text-sm font-semibold mb-2">Adjustment history</h4>
+              <ul className="space-y-2 text-xs text-muted-foreground">
+                {auditLogs.map((log) => (
+                  <li key={log.id} className="rounded-lg bg-muted/20 px-3 py-2">
+                    <span className="font-medium text-foreground">{log.action}</span>
+                    {" · "}
+                    {new Date(log.createdAt).toLocaleString()}
+                    {log.metadata && typeof log.metadata === "object" && "reason" in log.metadata && log.metadata.reason ? (
+                      <span> — {String(log.metadata.reason)}</span>
+                    ) : null}
+                    {log.metadata && typeof log.metadata === "object" && "previousNetAmountCents" in log.metadata ? (
+                      <span>
+                        {" "}
+                        ({formatCents(Number(log.metadata.previousNetAmountCents))} →{" "}
+                        {formatCents(Number(log.metadata.netAmountCents))})
+                      </span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <dl className="grid gap-2 sm:grid-cols-2 text-sm">
             <div className="flex justify-between rounded-lg bg-muted/20 px-3 py-2">
-              <dt>Customer payment</dt>
+              <dt>Contractor entitlement (gross)</dt>
               <dd className="font-semibold tabular-nums">{formatCents(selected.grossAmountCents)}</dd>
             </div>
             <div className="flex justify-between rounded-lg bg-muted/20 px-3 py-2">
-              <dt>Platform fee</dt>
+              <dt>FixBridge gross margin</dt>
               <dd className="font-semibold tabular-nums text-red-600">-{formatCents(selected.platformFeeCents)}</dd>
             </div>
             <div className="flex justify-between rounded-lg bg-muted/20 px-3 py-2 sm:col-span-2">
-              <dt>Contractor net earnings</dt>
+              <dt>Contractor payable now</dt>
               <dd className="font-bold tabular-nums text-emerald-700">{formatCents(selected.netAmountCents)}</dd>
             </div>
           </dl>
@@ -215,6 +360,16 @@ export default function AdminContractorPayoutsPanel() {
                   onChange={(e) => setAdjustment(e.target.value)}
                   placeholder="0.00"
                   className="mt-1 w-full max-w-xs rounded-xl border border-border bg-background px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="font-medium">Adjustment reason</span>
+                <input
+                  type="text"
+                  value={adjustmentReason}
+                  onChange={(e) => setAdjustmentReason(e.target.value)}
+                  placeholder="Required when adjustment is non-zero"
+                  className="mt-1 w-full max-w-md rounded-xl border border-border bg-background px-3 py-2 text-sm"
                 />
               </label>
               <div className="flex flex-wrap gap-2">

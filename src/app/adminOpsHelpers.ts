@@ -8,7 +8,55 @@ export type AttentionKind =
   | "payments"
   | "payouts";
 
-export type QueueFilter = "all" | "mine" | "urgent" | "waiting" | "today" | AttentionKind;
+export type WorkQueueSectionId =
+  | "new_requests"
+  | "waiting_contractor_quote"
+  | "needs_admin_pricing"
+  | "quote_sent"
+  | "homeowner_accepted"
+  | "ready_to_dispatch"
+  | "active"
+  | "payment_pending"
+  | "payout_ready"
+  | "attention_required";
+
+export type QueueFilter = "all" | "urgent" | "waiting" | "today" | AttentionKind | WorkQueueSectionId;
+
+const SECTION_STATUS_MAP: Record<WorkQueueSectionId, string[]> = {
+  new_requests: ["draft", "ai_review_complete", "awaiting_service_payment", "paid_for_dispatch", "awaiting_contractor"],
+  waiting_contractor_quote: ["contractor_invited", "awaiting_bid", "contractor_accepted"],
+  needs_admin_pricing: ["bid_received"],
+  quote_sent: ["proposal_sent", "awaiting_customer_approval"],
+  homeowner_accepted: ["approved"],
+  ready_to_dispatch: ["scheduled"],
+  active: ["contractor_en_route", "work_started", "change_order_pending", "diagnosing"],
+  payment_pending: ["work_completed", "customer_review_pending"],
+  payout_ready: ["admin_review_pending", "payout_pending"],
+  attention_required: [],
+};
+
+export function jobWorkQueueSection(job: ManagedJob): WorkQueueSectionId | null {
+  if (["closed", "canceled", "refunded", "paid_out"].includes(job.status)) return null;
+  if (job.workQueueStatus === "PAID_NEEDS_REVIEW") return "new_requests";
+  for (const [section, statuses] of Object.entries(SECTION_STATUS_MAP) as [WorkQueueSectionId, string[]][]) {
+    if (statuses.includes(job.status)) return section;
+  }
+  if (isEmergencyJob(job)) return "attention_required";
+  return "attention_required";
+}
+
+export const WORK_QUEUE_SECTION_LABELS: Record<WorkQueueSectionId, string> = {
+  new_requests: "New Requests",
+  waiting_contractor_quote: "Waiting Contractor Quote",
+  needs_admin_pricing: "Needs Admin Pricing",
+  quote_sent: "Quote Sent",
+  homeowner_accepted: "Homeowner Accepted",
+  ready_to_dispatch: "Ready to Dispatch",
+  active: "Active Jobs",
+  payment_pending: "Payment Pending",
+  payout_ready: "Payout Ready",
+  attention_required: "Attention Required",
+};
 
 export type LifecycleStep = {
   id: string;
@@ -51,7 +99,7 @@ export function jobQueueHeadline(job: ManagedJob): string {
   switch (job.status) {
     case "paid_for_dispatch":
     case "awaiting_contractor":
-      return "New request · needs contractors";
+      return "PAID — NEEDS REVIEW";
     case "contractor_invited":
     case "awaiting_bid":
       return "Waiting on contractor quote";
@@ -167,18 +215,14 @@ export function filterWorkQueue(
       const t = j.updatedAt || j.createdAt;
       return t ? new Date(t) >= start : false;
     });
-  } else if (filter === "mine") {
-    // Placeholder until assignment exists — show actionable ops items
-    list = list.filter((j) =>
-      [
-        "paid_for_dispatch",
-        "awaiting_contractor",
-        "bid_received",
-        "approved",
-        "payout_pending",
-        "admin_review_pending",
-      ].includes(j.status),
-    );
+  } else if (
+    filter !== "all" &&
+    filter !== "urgent" &&
+    filter !== "waiting" &&
+    filter !== "today" &&
+    WORK_QUEUE_SECTION_LABELS[filter as WorkQueueSectionId]
+  ) {
+    list = list.filter((j) => jobWorkQueueSection(j) === filter);
   } else if (filter !== "all" && attention[filter as AttentionKind]) {
     const ids = new Set(attention[filter as AttentionKind].map((j) => j.id));
     list = list.filter((j) => ids.has(j.id));
