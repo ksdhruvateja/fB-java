@@ -367,6 +367,8 @@ export async function createPublicGuestJob(jobData: {
   mediaType?: string | null;
   fullAddress?: string;
   streetAddress?: string;
+  addressLine1?: string;
+  addressLine2?: string;
   city?: string;
   state?: string;
   zip?: string;

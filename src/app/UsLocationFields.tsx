@@ -250,10 +250,10 @@ export function SearchableSelect({
   );
 }
 
-/** Full structured US address: Line 1 *, Line 2 (optional), City *, State *, ZIP *. */
+/** Full structured US address: Line 1 *, Line 2, City *, State *, ZIP *. */
 export function StructuredAddressFields({
   addressLine1,
-  addressLine2,
+  addressLine2 = "",
   city,
   state,
   zip,
@@ -272,7 +272,7 @@ export function StructuredAddressFields({
   state: string;
   zip: string;
   onAddressLine1Change: (v: string) => void;
-  onAddressLine2Change?: (v: string) => void;
+  onAddressLine2Change: (v: string) => void;
   onCityChange: (v: string) => void;
   onStateChange: (v: string) => void;
   onZipChange: (v: string) => void;
@@ -298,24 +298,21 @@ export function StructuredAddressFields({
           autoComplete="address-line1"
         />
       </label>
-      {onAddressLine2Change ? (
-        <label className="grid gap-1.5" htmlFor={`${idPrefix}-line2`}>
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Address Line 2{" "}
-            <span className="font-normal normal-case tracking-normal">(optional)</span>
-          </span>
-          <input
-            id={`${idPrefix}-line2`}
-            type="text"
-            disabled={disabled}
-            placeholder="Apartment, suite, unit, etc."
-            className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#FF4D1C] text-foreground"
-            value={addressLine2 || ""}
-            onChange={(e) => onAddressLine2Change(e.target.value)}
-            autoComplete="address-line2"
-          />
-        </label>
-      ) : null}
+      <label className="grid gap-1.5" htmlFor={`${idPrefix}-line2`}>
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Address Line 2
+        </span>
+        <input
+          id={`${idPrefix}-line2`}
+          type="text"
+          disabled={disabled}
+          placeholder="Apartment, suite, unit, building, floor, etc."
+          className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#FF4D1C] text-foreground"
+          value={addressLine2}
+          onChange={(e) => onAddressLine2Change(e.target.value)}
+          autoComplete="address-line2"
+        />
+      </label>
       <UsLocationFields
         city={city}
         state={state}

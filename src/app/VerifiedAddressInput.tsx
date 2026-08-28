@@ -28,7 +28,7 @@ type Props = {
   state: string;
   zip: string;
   onAddressLine1Change: (v: string) => void;
-  onAddressLine2Change?: (v: string) => void;
+  onAddressLine2Change: (v: string) => void;
   onCityChange: (v: string) => void;
   onStateChange: (v: string) => void;
   onZipChange: (v: string) => void;
@@ -57,7 +57,7 @@ function formatBlock(a?: StructuredAddress | null) {
 
 export function VerifiedAddressFields({
   addressLine1,
-  addressLine2,
+  addressLine2 = "",
   city,
   state,
   zip,
@@ -139,7 +139,7 @@ export function VerifiedAddressFields({
     if (skipVerification) return;
     if (!fieldsComplete(current)) {
       setStatus("incomplete");
-      setErrorMessage("Complete street, city, state, and ZIP before verifying.");
+      setErrorMessage("Complete Address Line 1, city, state, and ZIP before verifying.");
       emit({
         status: "incomplete",
         addressVerified: false,
@@ -214,7 +214,7 @@ export function VerifiedAddressFields({
     const s = verifyResult?.standardized;
     if (!s) return;
     onAddressLine1Change(s.addressLine1);
-    onAddressLine2Change?.(s.addressLine2 || "");
+    onAddressLine2Change(s.addressLine2 || "");
     onCityChange(s.city);
     onStateChange(s.state);
     onZipChange(s.zip);

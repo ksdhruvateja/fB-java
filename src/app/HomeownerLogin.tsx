@@ -18,6 +18,7 @@ import {
   Zap,
 } from "lucide-react";
 import { signInUser, signUpUser, createPublicGuestJob, type AuthUser } from "./auth";
+import { StructuredAddressFields } from "./UsLocationFields";
 import ForgotPasswordModal from "./ForgotPasswordModal";
 import {
   AuthShell,
@@ -38,7 +39,7 @@ import {
   type HomeownerArea,
   type HomeownerService,
 } from "./homeownerCategories";
-import { isValidUsZip, normalizeZip, zipInputProps } from "./zipCode";
+import { isValidUsZip, normalizeZip } from "./zipCode";
 
 type ReportStep = 0 | 1 | 2 | 3;
 
@@ -73,7 +74,8 @@ export default function HomeownerLogin({
   const [areaSearch, setAreaSearch] = useState("");
   const [serviceSearch, setServiceSearch] = useState("");
   const [reportDescription, setReportDescription] = useState("");
-  const [reportStreet, setReportStreet] = useState("");
+  const [reportAddressLine1, setReportAddressLine1] = useState("");
+  const [reportAddressLine2, setReportAddressLine2] = useState("");
   const [reportCity, setReportCity] = useState("");
   const [reportState, setReportState] = useState("");
   const [reportZip, setReportZip] = useState("");
@@ -126,7 +128,7 @@ export default function HomeownerLogin({
         setError("Add a short description of the problem.");
         return;
       }
-      if (!reportStreet || !reportCity || !reportState || !reportZip) {
+      if (!reportAddressLine1 || !reportCity || !reportState || !reportZip) {
         setError("Fill in the service address to continue.");
         return;
       }
@@ -173,7 +175,7 @@ export default function HomeownerLogin({
           !reportEmail ||
           !reportName ||
           !reportDescription ||
-          !reportStreet ||
+          !reportAddressLine1 ||
           !reportCity ||
           !reportState ||
           !reportZip
@@ -193,7 +195,8 @@ export default function HomeownerLogin({
           description: reportDescription,
           mediaDataUrl,
           mediaType,
-          streetAddress: reportStreet,
+          streetAddress: reportAddressLine1,
+          addressLine2: reportAddressLine2.trim() || undefined,
           city: reportCity,
           state: reportState,
           zip: normalizeZip(reportZip),
@@ -524,52 +527,19 @@ export default function HomeownerLogin({
                     </div>
                     <div className="space-y-3 rounded-2xl border border-border/70 bg-muted/15 p-3.5">
                       <p className="text-xs font-semibold text-muted-foreground">Service address</p>
-                      <div>
-                        <AuthFieldLabel required>Street</AuthFieldLabel>
-                        <input
-                          type="text"
-                          placeholder="Street address"
-                          value={reportStreet}
-                          onChange={(e) => setReportStreet(e.target.value)}
-                          required
-                          className={authInputClass}
-                        />
-                      </div>
-                      <div className="grid grid-cols-2 gap-2.5">
-                        <div>
-                          <AuthFieldLabel required>City</AuthFieldLabel>
-                          <input
-                            type="text"
-                            placeholder="City"
-                            value={reportCity}
-                            onChange={(e) => setReportCity(e.target.value)}
-                            required
-                            className={authInputClass}
-                          />
-                        </div>
-                        <div>
-                          <AuthFieldLabel required>State</AuthFieldLabel>
-                          <input
-                            type="text"
-                            placeholder="State"
-                            value={reportState}
-                            onChange={(e) => setReportState(e.target.value)}
-                            required
-                            className={authInputClass}
-                          />
-                        </div>
-                        <div>
-                          <AuthFieldLabel required>ZIP</AuthFieldLabel>
-                          <input
-                            type="text"
-                            {...zipInputProps()}
-                            value={reportZip}
-                            onChange={(e) => setReportZip(normalizeZip(e.target.value))}
-                            required
-                            className={authInputClass}
-                          />
-                        </div>
-                      </div>
+                      <StructuredAddressFields
+                        idPrefix="report-guest"
+                        addressLine1={reportAddressLine1}
+                        addressLine2={reportAddressLine2}
+                        city={reportCity}
+                        state={reportState}
+                        zip={reportZip}
+                        onAddressLine1Change={setReportAddressLine1}
+                        onAddressLine2Change={setReportAddressLine2}
+                        onCityChange={setReportCity}
+                        onStateChange={setReportState}
+                        onZipChange={(v) => setReportZip(normalizeZip(v))}
+                      />
                     </div>
                   </motion.div>
                 )}
@@ -589,7 +559,9 @@ export default function HomeownerLogin({
                       </p>
                       <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{reportDescription}</p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {[reportStreet, reportCity, reportState, reportZip].filter(Boolean).join(", ")}
+                        {[reportAddressLine1, reportAddressLine2, reportCity, reportState, reportZip]
+                          .filter(Boolean)
+                          .join(", ")}
                       </p>
                     </div>
                     <div className="flex items-center gap-2 text-sm font-semibold">

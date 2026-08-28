@@ -1837,7 +1837,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const email = typeof b.email === 'string' ? b.email.trim() : '';
       const name = typeof b.contactName === 'string' ? b.contactName.trim() : '';
       const phone = typeof b.contactPhone === 'string' ? b.contactPhone.trim() : '';
-      const streetAddress = typeof b.streetAddress === 'string' ? b.streetAddress.trim() : '';
+      const streetAddress =
+        typeof b.addressLine1 === 'string'
+          ? b.addressLine1.trim()
+          : typeof b.streetAddress === 'string'
+            ? b.streetAddress.trim()
+            : '';
+      const addressLine2 = typeof b.addressLine2 === 'string' ? b.addressLine2.trim() : '';
       const city = typeof b.city === 'string' ? b.city.trim() : '';
       const state = typeof b.state === 'string' ? b.state.trim() : '';
       const zip = typeof b.zip === 'string' ? b.zip.trim() : '';
@@ -1848,7 +1854,8 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         (typeof b.title === 'string' && b.title.trim()) ||
         `${category} issue`;
 
-      const fullAddress = [streetAddress, city, state, zip, country].filter(Boolean).join(', ') || 'TBD';
+      const fullAddress =
+        [streetAddress, addressLine2, city, state, zip, country].filter(Boolean).join(', ') || 'TBD';
       const cityStateZip = [city, state, zip].filter(Boolean).join(', ') || 'TBD';
 
       if (!email || !name) {
@@ -1905,9 +1912,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           propertyId = existingProps[0].id;
         } else {
           const { rows: newProps } = await pool.query(
-            `INSERT INTO properties (owner_user_id, label, address_line1, city, state, zip, country, street_address)
-             VALUES ($1, 'Home', $2, $3, $4, $5, $6, $7) RETURNING id`,
-            [user.id, streetAddress, city, state, zip, country, streetAddress]
+            `INSERT INTO properties (owner_user_id, label, address_line1, address_line2, city, state, zip, country, street_address)
+             VALUES ($1, 'Home', $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+            [user.id, streetAddress, addressLine2 || null, city, state, zip, country, streetAddress]
           );
           propertyId = newProps[0].id;
         }

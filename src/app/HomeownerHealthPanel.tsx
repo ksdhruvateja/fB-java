@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { chatWithAi } from "./geminiAssessment";
 import type { ManagedJob, Property } from "./managedJobs";
+import { StructuredAddressFields } from "./UsLocationFields";
 import {
   PROPERTY_SYSTEMS,
   analyzePropertyHealthProfile,
@@ -78,6 +79,7 @@ export default function HomeownerHealthPanel({
   onSave: (propertyId: number, next: PropertyHealthProfile) => Promise<void> | void;
   onAddProperty: (input: {
     addressLine1: string;
+    addressLine2?: string;
     city?: string;
     state?: string;
     zip?: string;
@@ -88,6 +90,7 @@ export default function HomeownerHealthPanel({
   const [selectedId, setSelectedId] = useState<number | null>(properties[0]?.id ?? null);
   const [showAdd, setShowAdd] = useState(false);
   const [newAddress, setNewAddress] = useState("");
+  const [newAddressLine2, setNewAddressLine2] = useState("");
   const [newCity, setNewCity] = useState("");
   const [newState, setNewState] = useState("");
   const [newZip, setNewZip] = useState("");
@@ -247,6 +250,7 @@ export default function HomeownerHealthPanel({
     if (!newAddress.trim()) return;
     const created = await onAddProperty({
       addressLine1: newAddress.trim(),
+      addressLine2: newAddressLine2.trim() || undefined,
       city: newCity.trim() || undefined,
       state: newState.trim() || undefined,
       zip: newZip.trim() || undefined,
@@ -256,6 +260,7 @@ export default function HomeownerHealthPanel({
       setSelectedId(created.id);
       setShowAdd(false);
       setNewAddress("");
+      setNewAddressLine2("");
       setNewCity("");
       setNewState("");
       setNewZip("");
@@ -566,34 +571,19 @@ export default function HomeownerHealthPanel({
             value={newLabel}
             onChange={(e) => setNewLabel(e.target.value)}
           />
-          <input
-            required
-            className="rounded-xl border border-border bg-background px-3 py-2.5 text-sm sm:col-span-2"
-            placeholder="Street address"
-            value={newAddress}
-            onChange={(e) => setNewAddress(e.target.value)}
-          />
-          <input
-            className="rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-            placeholder="City"
-            value={newCity}
-            onChange={(e) => setNewCity(e.target.value)}
-          />
-          <div className="grid grid-cols-2 gap-3">
-            <input
-              className="rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-              placeholder="State"
-              value={newState}
-              onChange={(e) => setNewState(e.target.value)}
-            />
-            <input
-              className="rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-              placeholder="ZIP"
-              value={newZip}
-              onChange={(e) => setNewZip(e.target.value.replace(/[^\d-]/g, "").slice(0, 10))}
-              inputMode="numeric"
-              maxLength={10}
-              autoComplete="postal-code"
+          <div className="sm:col-span-2">
+            <StructuredAddressFields
+              idPrefix="health-add-home"
+              addressLine1={newAddress}
+              addressLine2={newAddressLine2}
+              city={newCity}
+              state={newState}
+              zip={newZip}
+              onAddressLine1Change={setNewAddress}
+              onAddressLine2Change={setNewAddressLine2}
+              onCityChange={setNewCity}
+              onStateChange={setNewState}
+              onZipChange={setNewZip}
             />
           </div>
           <div className="sm:col-span-2 flex gap-2">
