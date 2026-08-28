@@ -15,8 +15,8 @@ import {
   HardDrive,
 } from "lucide-react";
 import { ScrollReveal, Counter } from "./shared";
-import { Icon3D } from "./Icon3D";
 import { BrandLogo } from "./BrandLogo";
+import { FeatureTileIcon } from "./FeatureTileIcon";
 import CustomerTrustSection from "./CustomerTrustSection";
 import { brand } from "../config/brand";
 
@@ -248,7 +248,7 @@ export default function CustomerPage({
                   ].join(" ")}
                 >
                   <div className="mb-3 sm:mb-6 flex justify-center sm:justify-start">
-                    <Icon3D icon={f.icon} tone={f.tone} size="responsive" />
+                    <FeatureTileIcon icon={f.icon} tone={f.tone} />
                   </div>
                   {"year" in f && f.year ? (
                     <div className="hidden sm:flex flex-wrap items-end gap-3 sm:gap-4 mb-4">
@@ -302,7 +302,9 @@ export default function CustomerPage({
           <div className="md:hidden space-y-5">
             <ScrollReveal>
               <div className="rounded-3xl bg-[#1d1d1f] border border-white/[0.08] p-5 flex items-center gap-4">
-                <BrandLogo variant="mark" tone="white" className="!h-12 !w-12 shrink-0" />
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary/15 ring-1 ring-primary/30">
+                  <Zap className="h-6 w-6 text-primary" strokeWidth={1.75} aria-hidden />
+                </div>
                 <div className="min-w-0">
                   <p className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase text-xl tracking-wide">
                     {brand.productName}
@@ -441,7 +443,9 @@ export default function CustomerPage({
 
             <BentoCard className="min-h-0 md:[grid-area:e]" delay={0.12}>
               <div className="flex flex-col items-center justify-center gap-5 py-4 h-full">
-                <BrandLogo variant="mark" tone="white" className="!h-20 !w-20 opacity-95" />
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.06]">
+                  <BadgeCheck className="h-8 w-8 text-primary" strokeWidth={1.5} aria-hidden />
+                </div>
                 <div>
                   <p className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase text-3xl md:text-4xl tracking-wide text-white">
                     {brand.productName}

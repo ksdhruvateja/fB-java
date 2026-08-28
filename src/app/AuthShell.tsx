@@ -212,10 +212,10 @@ function MascotAside({
   );
 }
 
-/** Matches marketing nav logo chip (home screen when scrolled). */
+/** Same plain logo as marketing nav — no chip/background wrapper. */
 function AuthHeaderLogo() {
   return (
-    <div className="inline-flex shrink-0 items-center rounded-lg border border-border/80 bg-card px-2.5 py-1.5 shadow-sm dark:border-white/10 dark:bg-[#141414]">
+    <div className="shrink-0">
       <BrandLogo variant="nav" />
     </div>
   );

@@ -10,6 +10,8 @@ export const brand = {
   logoUrl: _env.VITE_BRAND_LOGO_URL?.trim() || "/fixbridge-logo.png",
   logoLockupUrl: _env.VITE_BRAND_LOGO_LOCKUP_URL?.trim() || "/fixbridge-logo-lockup.png",
   logoMarkUrl: _env.VITE_BRAND_LOGO_MARK_URL?.trim() || "/fixbridge-mark.png",
+  /** Black lockup for marketing nav when scrolled over light content */
+  logoLockupBlackUrl: _env.VITE_BRAND_LOGO_LOCKUP_BLACK_URL?.trim() || "/fixbridge-logo-lockup-black.png",
   domain: typeof window !== "undefined" ? window.location.host : "localhost:5000",
 } as const;
 

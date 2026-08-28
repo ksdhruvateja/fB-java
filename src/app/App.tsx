@@ -154,29 +154,17 @@ function Nav({
   const muted = overHero ? "text-white/65 hover:text-white" : "text-muted-foreground hover:text-foreground";
   const active = overHero ? "text-white" : "text-foreground";
   const border = overHero ? "border-white/30" : "border-border";
-
-  const navSolid = scrolled || menuOpen;
+  const navLogoTone = !overHero && !isDark ? "black" : "color";
 
   return (
-    <nav
-      className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 pt-[env(safe-area-inset-top)] ${
-        navSolid
-          ? "border-b border-border bg-background/98 shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-lg dark:shadow-[0_4px_24px_rgba(0,0,0,0.35)]"
-          : "bg-transparent"
-      }`}
-    >
+    <nav className="fixed top-0 left-0 right-0 z-50 bg-transparent pt-[env(safe-area-inset-top)] transition-colors duration-300">
       <div className="relative w-full px-5 sm:px-6 lg:px-10 xl:px-12 2xl:px-16 py-2.5 sm:py-3.5 min-h-[3.25rem] flex items-center">
-        {/* Logo — padded backdrop for contrast on hero and when scrolled */}
         <button
           onClick={() => onNavigate("home")}
-          className={`relative z-10 flex shrink-0 items-center min-w-0 rounded-lg transition-all duration-300 ${
-            navSolid
-              ? "border border-border/80 bg-card px-2.5 py-1.5 shadow-sm"
-              : "border border-white/15 bg-black/45 px-2.5 py-1.5 shadow-[0_4px_20px_rgba(0,0,0,0.25)] backdrop-blur-md"
-          }`}
+          className="relative z-10 flex shrink-0 items-center min-w-0"
           aria-label={brand.productName}
         >
-          <BrandLogo variant="nav" />
+          <BrandLogo variant="nav" tone={navLogoTone} className="transition-opacity duration-300" />
         </button>
 
         {/* Desktop center links — truly centered in the viewport */}
@@ -371,13 +359,13 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
   ];
 
   return (
-    <footer className="border-t border-border bg-muted/35 px-4 py-10 sm:px-6 sm:py-12 md:py-16 pb-[max(2.5rem,env(safe-area-inset-bottom))] dark:bg-[#0a0a0a]">
+    <footer className="border-t border-border bg-background px-4 py-10 sm:px-6 sm:py-12 md:py-16 pb-[max(2.5rem,env(safe-area-inset-bottom))]">
       <div className="max-w-7xl mx-auto">
         {/* Brand */}
         <div className="pb-8 mb-8 border-b border-border/70 lg:border-0 lg:pb-0 lg:mb-0">
           <div className="lg:hidden">
-            <div className="mb-4 inline-flex rounded-xl border border-border/80 bg-card px-4 py-3 shadow-sm dark:border-white/10 dark:bg-[#141414]">
-              <BrandLogo variant="footer" />
+            <div className="mb-4">
+              <BrandLogo variant="nav" />
             </div>
             <p className="text-sm text-muted-foreground max-w-sm leading-relaxed mb-3">
               The middle layer between homeowners and licensed local contractors — handling
@@ -393,8 +381,8 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
         {/* Desktop / tablet: brand + 3 columns · Mobile: 2-column link split */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-x-4 gap-y-8 sm:gap-x-8 sm:gap-y-10 mb-8 sm:mb-10 md:mb-12">
           <div className="hidden lg:block lg:col-span-2 pr-6">
-            <div className="mb-4 inline-flex rounded-xl border border-border/80 bg-card px-4 py-3 shadow-sm dark:border-white/10 dark:bg-[#141414]">
-              <BrandLogo variant="footer" />
+            <div className="mb-4">
+              <BrandLogo variant="nav" />
             </div>
             <p className="text-sm text-muted-foreground max-w-xs leading-relaxed mb-4">
               The middle layer between homeowners and licensed local contractors — handling

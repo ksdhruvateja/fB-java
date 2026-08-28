@@ -36,28 +36,30 @@ const VARIANT: Record<
   },
 };
 
-function logoSrc(kind: "mark" | "lockup" | "full") {
+function logoSrc(kind: "mark" | "lockup" | "full", tone: "color" | "black") {
+  if (tone === "black" && kind === "lockup") return brand.logoLockupBlackUrl;
   if (kind === "mark") return brand.logoMarkUrl;
   if (kind === "lockup") return brand.logoLockupUrl;
   return brand.logoUrl;
 }
 
-/** Full-color FixBridge logo — preserves silver/orange wordmark from brand assets. */
+/** Full-color FixBridge logo — black lockup available for scrolled marketing nav. */
 export function BrandLogo({
   variant = "nav",
-  tone: _tone = "auto",
+  tone = "color",
   className = "",
   showName: _showName,
 }: {
   variant?: BrandLogoVariant;
-  /** @deprecated Color logo ignores tone; kept for call-site compatibility. */
-  tone?: "white" | "black" | "auto";
+  /** `black` uses the monochrome lockup (marketing nav when scrolled). */
+  tone?: "white" | "black" | "color" | "auto";
   className?: string;
   /** @deprecated Wordmark is baked into lockup/full assets. */
   showName?: boolean;
 }) {
   const cfg = VARIANT[variant];
-  const src = logoSrc(cfg.src);
+  const resolvedTone = tone === "black" ? "black" : "color";
+  const src = logoSrc(cfg.src, resolvedTone);
 
   return (
     <img

@@ -8,6 +8,7 @@ import {
 import { ScrollReveal, Counter, SectionLabel } from "./shared";
 import { Icon3D } from "./Icon3D";
 import { BrandLogo } from "./BrandLogo";
+import { FeatureTileIcon } from "./FeatureTileIcon";
 import ContractorReviewsSection from "./ContractorReviewsSection";
 import { brand } from "../config/brand";
 
@@ -304,7 +305,7 @@ export default function ContractorPage({
                 <ScrollReveal key={i} delay={i * 0.08} className="h-full">
                   <div className="border border-border p-2.5 sm:p-5 hover:border-primary/40 transition-colors duration-200 bg-background h-full flex flex-col items-center sm:items-start text-center sm:text-left">
                     <div className="mb-2 sm:mb-4">
-                      <Icon3D
+                      <FeatureTileIcon
                         icon={icon}
                         tone={i % 2 === 0 ? "coral" : "sand"}
                         size="sm"
@@ -345,11 +346,9 @@ export default function ContractorPage({
           {TRADES.map(({ icon, label }, i) => (
             <ScrollReveal key={i} delay={i * 0.07}>
               <div className="border-r border-b border-border p-5 sm:p-8 flex flex-col items-center gap-3 sm:gap-4 text-center group hover:bg-card transition-colors duration-200 cursor-default">
-                <Icon3D
+                <FeatureTileIcon
                   icon={icon}
                   tone={i % 3 === 0 ? "coral" : i % 3 === 1 ? "ink" : "steel"}
-                  size="responsive"
-                  label={label}
                 />
                 <p className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase text-sm sm:text-base text-foreground tracking-wide">
                   {label}
