@@ -99,3 +99,17 @@ export async function addressApiStatus() {
     specVersion?: string;
   }>("/api/address/status");
 }
+
+export async function checkServiceAreaCoverage(zip: string) {
+  try {
+    const res = await fetch(`/api/public/service-area/check?zip=${encodeURIComponent(zip)}`);
+    return (await res.json()) as {
+      ok?: boolean;
+      covered?: boolean;
+      market?: string;
+      message?: string;
+    };
+  } catch {
+    return { ok: false, covered: null as boolean | null };
+  }
+}

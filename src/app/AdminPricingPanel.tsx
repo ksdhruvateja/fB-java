@@ -30,10 +30,13 @@ export type PricingRules = {
   urgency_surcharges: Record<string, number>;
   after_hours_surcharge: number;
   subscription_discount: number;
+  standard_coordination_fee?: number;
+  homecare_pro_coordination_fee?: number;
   assessment_credit: number;
   default_visit_fee?: number;
   default_emergency_visit_fee?: number;
   pro_subscription_price?: number;
+  homecare_subscription_price?: number;
   customer_display_adjustment?: {
     type?: string;
     value?: number;
@@ -720,6 +723,23 @@ export default function AdminPricingPanel({
                   suffix="$"
                   dirty={isDirtyPath("subscription_discount")}
                 />
+                <NumField
+                  label="Free coordination fee"
+                  value={Number(pricingRules.standard_coordination_fee ?? 125)}
+                  onChange={(n) => setPricingRules({ ...pricingRules, standard_coordination_fee: n })}
+                  suffix="$"
+                  dirty={isDirtyPath("standard_coordination_fee")}
+                />
+                <NumField
+                  label="HomeCare Pro coordination fee"
+                  value={Number(pricingRules.homecare_pro_coordination_fee ?? 99)}
+                  onChange={(n) => setPricingRules({ ...pricingRules, homecare_pro_coordination_fee: n })}
+                  suffix="$"
+                  dirty={isDirtyPath("homecare_pro_coordination_fee")}
+                />
+                <p className="sm:col-span-2 text-xs text-muted-foreground">
+                  Coordination fees apply to new quotes only. Existing accepted quotes keep their snapshotted amounts.
+                </p>
                 <NumField
                   label="Assessment credit"
                   value={pricingRules.assessment_credit}

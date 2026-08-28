@@ -59,7 +59,12 @@ export type PropertyHealthProfile = {
     snoozedUntil?: Record<string, string>;
     history?: Array<Record<string, unknown>>;
   };
+  /** Property Passport structured data (locations, warranties, extended home details) */
+  passport?: import("./propertyPassport").PropertyPassportData;
 };
+
+import type { HomeownerArea, HomeownerService } from "./homeownerCategories";
+import { SERVICE_TRADE_OPTIONS } from "./serviceRequestFlow";
 
 export const REQUEST_SYSTEM_OPTIONS: {
   id: string;
@@ -67,19 +72,32 @@ export const REQUEST_SYSTEM_OPTIONS: {
   service: HomeownerService;
   area: HomeownerArea;
   iconHint: string;
-}[] = [
-  { id: "plumbing", label: "Plumbing", service: "Plumbing", area: "Kitchen", iconHint: "droplet" },
-  { id: "electrical", label: "Electrical", service: "Electrical", area: "Kitchen", iconHint: "zap" },
-  { id: "hvac", label: "HVAC", service: "HVAC & Heating/Cooling", area: "Garage", iconHint: "wind" },
-  { id: "appliance", label: "Appliance", service: "Appliances", area: "Kitchen", iconHint: "refrigerator" },
-  { id: "handyman", label: "Handyman", service: "Handyman", area: "Garage", iconHint: "hammer" },
-  { id: "pest", label: "Pest", service: "Pest Control", area: "Garage", iconHint: "bug" },
-  { id: "roofing", label: "Roofing", service: "Roofing & Gutters", area: "Gutters", iconHint: "home" },
-  { id: "landscaping", label: "Landscaping", service: "Landscaping", area: "Yard & Exterior", iconHint: "trees" },
-  { id: "snow", label: "Snow Removal", service: "Snow Removal", area: "Yard & Exterior", iconHint: "snowflake" },
-  { id: "cleaning", label: "Cleaning", service: "Cleaning", area: "Kitchen", iconHint: "cleaning" },
-  { id: "other", label: "Something Else", service: "Other", area: "Kitchen", iconHint: "more" },
-];
+}[] = SERVICE_TRADE_OPTIONS.map((t) => ({
+  id: t.id,
+  label: t.label,
+  service:
+    t.id === "plumbing"
+      ? "Plumbing"
+      : t.id === "electrical"
+        ? "Electrical"
+        : t.id === "hvac"
+          ? "HVAC & Heating/Cooling"
+          : t.id === "appliance"
+            ? "Appliances"
+            : t.id === "handyman"
+              ? "Handyman"
+              : t.id === "pest"
+                ? "Pest Control"
+                : t.id === "roofing"
+                  ? "Roofing & Gutters"
+                  : t.id === "cleaning"
+                    ? "Cleaning"
+                    : t.id === "landscaping"
+                      ? "Landscaping"
+                      : "Other",
+  area: "Kitchen",
+  iconHint: t.iconHint,
+}));
 
 export function serviceToSystem(category?: string | null, title?: string | null): PropertySystem | null {
   const hay = `${category || ""} ${title || ""}`.toLowerCase();

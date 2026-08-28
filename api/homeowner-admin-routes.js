@@ -2,6 +2,8 @@
  * Admin homeowner profile workspace — stats, notes, activity.
  */
 import { clampString } from './security.js';
+import { isPaidHomeCarePlan } from './subscription-catalog.js';
+import { getHomeCareConfig, reportEligibilityMs } from './homecare-config.js';
 
 export async function initHomeownerAdminSchema(pool) {
   await pool.query(`
@@ -200,8 +202,62 @@ export async function loadHomeownerProfileExtras(pool, userId) {
 
   activity.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
 
+  const { rows: userRow } = await pool.query(
+    `SELECT plan_code, current_period_end FROM users WHERE id=$1`,
+    [userId]
+  );
+  const planCode = userRow[0]?.plan_code || null;
+  let subscriptionStatus = null;
+  let proStartedAt = null;
+  try {
+    const { rows: subs } = await pool.query(
+      `SELECT status, created_at, current_period_end FROM subscriptions WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1`,
+      [userId]
+    );
+    subscriptionStatus = subs[0]?.status || null;
+    proStartedAt = subs[0]?.created_at || null;
+  } catch {
+    /* optional */
+  }
+  const { rows: recurring } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM recurring_services WHERE owner_user_id=$1 AND status='active'`,
+    [userId]
+  );
+  const { rows: household } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM household_memberships hm
+     JOIN properties p ON p.id = hm.property_id WHERE p.owner_user_id=$1`,
+    [userId]
+  );
+  const { rows: reports } = await pool.query(
+    `SELECT generated_at FROM home_health_reports WHERE owner_user_id=$1 ORDER BY generated_at DESC LIMIT 1`,
+    [userId]
+  );
+  const config = await getHomeCareConfig(pool);
+  const lastReportAt = reports[0]?.generated_at || null;
+  let reportEligible = false;
+  if (isPaidHomeCarePlan(planCode) && config.homeHealthReport.enabled) {
+    if (!lastReportAt) reportEligible = true;
+    else {
+      const last = new Date(lastReportAt).getTime();
+      reportEligible = Date.now() - last >= reportEligibilityMs(config);
+    }
+  }
+
+  const homeCarePro = {
+    planCode,
+    isPro: isPaidHomeCarePlan(planCode),
+    subscriptionStatus,
+    proStartedAt,
+    renewalAt: userRow[0]?.current_period_end || null,
+    recurringServicesCount: recurring[0]?.n || 0,
+    householdMembersCount: household[0]?.n || 0,
+    lastReportAt,
+    reportEligible,
+  };
+
   return {
     stats,
+    homeCarePro,
     quotes: quotes.map((q) => ({
       id: Number(q.id),
       quoteNumber: q.quote_number,

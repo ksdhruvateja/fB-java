@@ -45,6 +45,10 @@ export const DEFAULT_PRICING_RULES = {
   },
   after_hours_surcharge: 0.15,
   subscription_discount: 0,
+  /** Customer coordination / visit fee for FixBridge Free homeowners */
+  standard_coordination_fee: 125,
+  /** Reduced coordination fee for HomeCare Pro homeowners */
+  homecare_pro_coordination_fee: 99,
   assessment_credit: 0,
   pro_subscription_price: 0,
   /** Flat homeowner visit / dispatch fee charged before a pro is sent. Credited on the final bill. */
@@ -621,11 +625,21 @@ export function getDispatchFee(serviceTiming, rules = DEFAULT_PRICING_RULES) {
   return fees.weekday;
 }
 
-/** Admin-configured homeowner visit fee (what the customer authorizes for dispatch). */
-export function resolveCustomerVisitFee(rules = DEFAULT_PRICING_RULES, { emergency = false } = {}) {
+/** Admin-configured homeowner visit / coordination fee (customer-facing dispatch fee). */
+export function resolveCustomerVisitFee(rules = DEFAULT_PRICING_RULES, { emergency = false, homeCarePro = false } = {}) {
+  if (!emergency && homeCarePro) {
+    const proFee = num(rules?.homecare_pro_coordination_fee, num(rules?.default_visit_fee, 125));
+    return Math.max(0, Math.round(proFee * 100) / 100);
+  }
   const key = emergency ? 'default_emergency_visit_fee' : 'default_visit_fee';
-  const raw = num(rules?.[key], num(rules?.default_visit_fee, 125));
+  const standard = num(rules?.standard_coordination_fee, num(rules?.[key], num(rules?.default_visit_fee, 125)));
+  const raw = emergency ? num(rules?.[key], standard) : standard;
   return Math.max(0, Math.round(raw * 100) / 100);
+}
+
+/** Legacy alias — coordination fee for quotes/invoices */
+export function resolveCoordinationFee(rules = DEFAULT_PRICING_RULES, { homeCarePro = false } = {}) {
+  return resolveCustomerVisitFee(rules, { emergency: false, homeCarePro });
 }
 
 /** Final amount due after applying a previously paid/authorized visit fee credit. */

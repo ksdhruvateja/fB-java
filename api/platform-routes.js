@@ -18,6 +18,9 @@ import {
 import { isAdminRole } from './auth-helpers.js';
 import { reconcileRefundForJob } from './payment-settlement.js';
 import { FINANCIAL_EVENT, recordFinancialEvent } from './financial-ledger.js';
+import { isPaidHomeCarePlan, PAID_HOME_CARE_PLAN_CODE } from './subscription-catalog.js';
+import { writeAudit } from './audit.js';
+import { sendEmailSafe, sendSmsSafe, notifyOps, mailStatus } from './notify.js';
 
 const PARTNER_JWT_SECRET = process.env.SESSION_SECRET || (!process.env.NETLIFY && process.env.NODE_ENV !== 'production' ? 'local-dev-secret' : undefined);
 
@@ -93,12 +96,19 @@ async function resolveSubscriptionPlan(pool, planCode, lookupManagedPlan) {
       interval: managed.interval === 'year' ? 'year' : 'month',
     };
   }
-  if (planCode === 'pro_membership') {
+  if (planCode === PAID_HOME_CARE_PLAN_CODE || planCode === 'pro_membership' || planCode === 'homecare') {
     const { rows: ruleRows } = await pool.query(`SELECT rules FROM pricing_rules WHERE id='default'`);
     const rules = ruleRows[0]?.rules || {};
+    const amount = Number(
+      rules.homecare_subscription_price != null
+        ? rules.homecare_subscription_price
+        : rules.pro_subscription_price != null
+          ? rules.pro_subscription_price
+          : 0
+    );
     return {
-      amount: Number(rules.pro_subscription_price != null ? rules.pro_subscription_price : 0),
-      label: 'Pro Membership',
+      amount,
+      label: planCode === PAID_HOME_CARE_PLAN_CODE ? 'HomeCare Pro' : 'Pro Membership',
       family: 'diy',
       trialDays: 7,
       unlocksDiy: true,
@@ -134,6 +144,11 @@ async function startSubscriptionCheckout(pool, {
   }
 
   let { amount, label, family, trialDays, unlocksDiy, interval } = plan;
+  if (amount <= 0) {
+    const err = new Error('This plan is included with your account — no checkout needed.');
+    err.status = 400;
+    throw err;
+  }
   assertPaymentsAvailable();
 
   const successPath = jobId
@@ -168,9 +183,6 @@ async function startSubscriptionCheckout(pool, {
   );
   return { simulated: false, url: checkout.url };
 }
-
-import { writeAudit } from './audit.js';
-import { sendEmailSafe, sendSmsSafe, notifyOps, mailStatus } from './notify.js';
 
 export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, pushStatus, getSubscriptionPlanByCode, makeToken, rowToUser }) {
   const statusPush = typeof pushStatus === 'function' ? pushStatus : pushStatusLocal;
@@ -217,7 +229,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       );
 
       const totalHomeowners = homeowners.length;
-      const subscribedCount = homeowners.filter(h => h.plan_code === 'pro_membership').length;
+      const subscribedCount = homeowners.filter((h) => isPaidHomeCarePlan(h.plan_code)).length;
       const nonSubscribedCount = totalHomeowners - subscribedCount;
 
       const needle = q.toLowerCase();
@@ -230,7 +242,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
         const now = new Date();
         const end = h.current_period_end ? new Date(h.current_period_end) : null;
         
-        if (h.plan_code === 'pro_membership' && end && end > now) {
+        if (isPaidHomeCarePlan(h.plan_code) && end && end > now) {
           const meta = h.sub_meta ? (typeof h.sub_meta === 'string' ? JSON.parse(h.sub_meta) : h.sub_meta) : {};
           if (meta.isLocalTrial) {
             isTrial = true;
@@ -413,6 +425,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
           joinedAt: u.created_at,
         },
         stats: extras.stats,
+        homeCarePro: extras.homeCarePro || null,
         addresses: props.map((p, idx) => ({
           propertyId: Number(p.id),
           label: p.label || (idx === 0 ? 'Primary Property' : `Property ${idx + 1}`),
@@ -505,7 +518,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
           let description = 'Payment';
           let typeLabel = p.payment_type;
           if (p.payment_type === 'subscription') {
-            description = planCode === 'pro_membership' ? 'FixBridge Pro' : planCode || 'Subscription';
+            description = isPaidHomeCarePlan(planCode) ? 'HomeCare Pro' : planCode || 'Subscription';
             typeLabel = 'Subscription Payment';
           } else if (p.payment_type === 'dispatch_fee') {
             description = 'Dispatch / visit fee';
@@ -556,13 +569,12 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
         return res.status(400).json({ ok: false, message: 'Staff name is required for audit logs.' });
       }
 
-      // Update users table plan_code
+      const activePlan = isPaidHomeCarePlan(planCode) ? planCode : null;
       await pool.query(
         `UPDATE users SET plan_code=$1 WHERE id=$2 AND role='homeowner'`,
-        [planCode === 'pro_membership' ? 'pro_membership' : null, homeownerUserId]
+        [activePlan, homeownerUserId]
       );
 
-      // Log subscription record
       const meta = JSON.stringify({
         isLocalTrial: false,
         editedByStaffName: staffName.trim(),
@@ -570,18 +582,22 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
         editedAt: new Date().toISOString(),
       });
 
-      if (planCode === 'pro_membership') {
-        // Insert active subscription
+      if (activePlan) {
+        await pool.query(
+          `UPDATE subscriptions SET status='canceled', meta=$1
+           WHERE user_id=$2 AND status='active' AND plan_code = ANY($3::text[])`,
+          [meta, homeownerUserId, ['pro_membership', 'homecare', PAID_HOME_CARE_PLAN_CODE]]
+        );
         await pool.query(
           `INSERT INTO subscriptions (user_id, plan_code, plan_family, status, simulated, current_period_end, meta)
-           VALUES ($1, 'pro_membership', 'pro_membership', 'active', TRUE, NOW() + INTERVAL '1 year', $2)`,
-          [homeownerUserId, meta]
+           VALUES ($1, $2, $2, 'active', TRUE, NOW() + INTERVAL '1 year', $3)`,
+          [homeownerUserId, activePlan, meta]
         );
       } else {
-        // Deactivate active subscriptions
         await pool.query(
-          `UPDATE subscriptions SET status='canceled', meta=$1 WHERE user_id=$2 AND plan_code='pro_membership'`,
-          [meta, homeownerUserId]
+          `UPDATE subscriptions SET status='canceled', meta=$1
+           WHERE user_id=$2 AND status='active' AND plan_code = ANY($3::text[])`,
+          [meta, homeownerUserId, ['pro_membership', 'homecare', PAID_HOME_CARE_PLAN_CODE]]
         );
       }
 
@@ -603,8 +619,22 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
     try {
       const { rows } = await pool.query(`SELECT rules FROM pricing_rules WHERE id='default'`);
       const rules = rows[0]?.rules || {};
-      const proPrice = Number(rules.pro_subscription_price != null ? rules.pro_subscription_price : 0);
+      const proPrice = Number(
+        rules.homecare_subscription_price != null
+          ? rules.homecare_subscription_price
+          : rules.pro_subscription_price != null
+            ? rules.pro_subscription_price
+            : 0
+      );
       const plans = Object.entries(PLAN_CATALOG).map(([code, p]) => ({ code, ...p }));
+      plans.push({
+        code: PAID_HOME_CARE_PLAN_CODE,
+        family: 'diy',
+        label: 'HomeCare Pro',
+        amount: proPrice,
+        interval: 'month',
+        trialDays: 7,
+      });
       plans.push({
         code: 'pro_membership',
         family: 'diy',
@@ -1537,7 +1567,27 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
     return process.env.GOOGLE_PLACES_API_KEY?.trim() || process.env.GOOGLE_MAPS_API_KEY?.trim() || '';
   }
 
-  app.get('/api/places/autocomplete', requireAuth, async (req, res) => {
+  function parseGeocodeComponents(components = []) {
+    const pick = (type, short = false) => {
+      const c = components.find((x) => x.types?.includes(type));
+      return short ? c?.short_name || '' : c?.long_name || '';
+    };
+    const streetNumber = pick('street_number');
+    const route = pick('route');
+    return {
+      streetAddress: [streetNumber, route].filter(Boolean).join(' '),
+      city:
+        pick('locality') ||
+        pick('sublocality') ||
+        pick('postal_town') ||
+        pick('administrative_area_level_3'),
+      state: pick('administrative_area_level_1', true),
+      county: pick('administrative_area_level_2'),
+      zip: pick('postal_code').slice(0, 5),
+    };
+  }
+
+  async function handlePlacesAutocomplete(req, res) {
     try {
       const key = mapsApiKey();
       const input = String(req.query.input || '').trim();
@@ -1555,9 +1605,9 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Places lookup failed.' });
     }
-  });
+  }
 
-  app.get('/api/places/reverse-geocode', requireAuth, async (req, res) => {
+  async function handleReverseGeocode(req, res) {
     try {
       const key = mapsApiKey();
       const address = String(req.query.address || '').trim();
@@ -1566,7 +1616,18 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
 
       if (!key) {
         const fakeZip = address.match(/\b(\d{5})\b/)?.[1] || '10001';
-        return res.json({ ok: true, simulated: true, lat: 40.75, lng: -73.99, zip: fakeZip });
+        return res.json({
+          ok: true,
+          simulated: true,
+          lat: 40.75,
+          lng: -73.99,
+          zip: fakeZip,
+          city: 'New York',
+          state: 'NY',
+          county: 'New York County',
+          streetAddress: address.split(',')[0]?.trim() || address,
+          formattedAddress: address || null,
+        });
       }
 
       let url;
@@ -1583,21 +1644,30 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       if (!result) return res.json({ ok: false, message: 'No results' });
 
       const loc = result.geometry?.location;
-      const zipComp = (result.address_components || []).find((c) => c.types?.includes('postal_code'));
-      const zip = zipComp?.long_name?.slice(0, 5) || zipComp?.short_name?.slice(0, 5) || null;
+      const parsed = parseGeocodeComponents(result.address_components || []);
 
       res.json({
         ok: true,
         simulated: false,
         lat: loc?.lat ?? null,
         lng: loc?.lng ?? null,
-        zip,
+        zip: parsed.zip || null,
+        city: parsed.city || null,
+        state: parsed.state || null,
+        county: parsed.county || null,
+        streetAddress: parsed.streetAddress || null,
         formattedAddress: result.formatted_address || null,
       });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Geocode failed.' });
     }
-  });
+  }
+
+  app.get('/api/places/autocomplete', requireAuth, handlePlacesAutocomplete);
+  app.get('/api/public/places/autocomplete', handlePlacesAutocomplete);
+
+  app.get('/api/places/reverse-geocode', requireAuth, handleReverseGeocode);
+  app.get('/api/public/places/reverse-geocode', handleReverseGeocode);
 
   app.post('/api/places/scan-zips', requireAuth, async (req, res) => {
     try {
@@ -1896,12 +1966,20 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
   app.get('/api/admin/work-queue', requireAuth, requireAdmin, async (_req, res) => {
     try {
       const { rows } = await pool.query(
-        `SELECT id, booking_id, title, category, status, work_queue_status, homeowner_user_id,
-                assigned_contractor_user_id, city_state_zip, zip, updated_at, created_at,
-                invite_deadline_at, ai_assessment
-         FROM managed_jobs
-         WHERE status NOT IN ('closed','canceled','cancelled','refunded')
-         ORDER BY updated_at DESC NULLS LAST
+        `SELECT j.id, j.booking_id, j.title, j.category, j.status, j.work_queue_status, j.homeowner_user_id,
+                j.assigned_contractor_user_id, j.city_state_zip, j.zip, j.updated_at, j.created_at,
+                j.invite_deadline_at, j.ai_assessment, j.priority_tier, u.plan_code AS homeowner_plan_code
+         FROM managed_jobs j
+         LEFT JOIN users u ON u.id = j.homeowner_user_id
+         WHERE j.status NOT IN ('closed','canceled','cancelled','refunded')
+         ORDER BY
+           CASE
+             WHEN j.priority_tier = 'emergency' THEN 0
+             WHEN j.priority_tier = 'homecare_pro_high' THEN 1
+             WHEN j.priority_tier = 'homecare_pro' THEN 2
+             ELSE 3
+           END,
+           j.updated_at DESC NULLS LAST
          LIMIT 500`
       );
       const { buildWorkQueueSections, WORK_QUEUE_SECTIONS } = await import('./work-queue.js');

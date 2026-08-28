@@ -15,6 +15,10 @@ import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCoupo
 import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 import { HomeownerTipCheckout } from "./HomeownerTipCheckout";
 import ChangeOrderPanel from "./ChangeOrderPanel";
+import { useProFeature } from "./ProFeatureProvider";
+import { requestQuoteSecondOpinion, type QuoteSecondOpinion } from "./homecareProApi";
+import { Loader2, Sparkles } from "lucide-react";
+import { useState } from "react";
 
 const TIME_WINDOW_OPTIONS = [
   { value: "9-11", label: "9–11 AM", period: "Morning" },
@@ -138,6 +142,9 @@ export default function HomeownerJobDetailPanel({
   const [description, setDescription] = useState(job.description || "");
   const [contactPhone, setContactPhone] = useState(job.contactPhone || "");
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const { isPro, requestFeature } = useProFeature();
+  const [secondOpinion, setSecondOpinion] = useState<QuoteSecondOpinion | null>(null);
+  const [secondOpinionBusy, setSecondOpinionBusy] = useState(false);
 
   useEffect(() => {
     setServiceTiming(job.serviceTiming || "weekday");
@@ -681,6 +688,32 @@ export default function HomeownerJobDetailPanel({
                 Approve proposal
               </button>
             )}
+            <button
+              type="button"
+              className="inline-flex items-center gap-2 rounded-xl border border-border px-4 py-2.5 text-sm font-semibold hover:bg-muted disabled:opacity-60"
+              disabled={secondOpinionBusy || busy}
+              onClick={() => {
+                if (!requestFeature("quote_second_opinion", "job-quote")) return;
+                setSecondOpinionBusy(true);
+                void requestQuoteSecondOpinion(job.id).then((r) => {
+                  setSecondOpinionBusy(false);
+                  if (!r.ok) onError(r.message || "Could not get AI second opinion.");
+                  else if (r.opinion) setSecondOpinion(r.opinion);
+                });
+              }}
+            >
+              {secondOpinionBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              Get AI Second Opinion
+            </button>
+            {secondOpinion ? (
+              <div className="mt-3 w-full space-y-2 rounded-xl border border-border bg-muted/20 p-3 text-sm">
+                {secondOpinion.summary ? <p><span className="font-semibold">Summary: </span>{secondOpinion.summary}</p> : null}
+                {secondOpinion.scopeReview ? <p><span className="font-semibold">Scope review: </span>{secondOpinion.scopeReview}</p> : null}
+                {secondOpinion.pricingContext ? <p><span className="font-semibold">Pricing context: </span>{secondOpinion.pricingContext}</p> : null}
+                {secondOpinion.recommendation ? <p><span className="font-semibold">Recommendation: </span>{secondOpinion.recommendation}</p> : null}
+                <p className="text-xs text-muted-foreground">{secondOpinion.disclaimer}</p>
+              </div>
+            ) : null}
             {proposal.status === "approved" && job.status === "approved" && (
               <p className="text-sm text-muted-foreground">
                 Quote approved. FixBridge will schedule your contractor and notify you when dispatch is confirmed.

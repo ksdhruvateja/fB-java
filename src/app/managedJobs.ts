@@ -1,5 +1,6 @@
 import { getStoredToken } from "./auth";
 import { brand } from "../config/brand";
+import { emitFeatureDisabled, emitProSubscriptionRequired, parseEntitlementDeniedResponse } from "./proFeatureEvents";
 
 
 export type CheckoutBreakdown = {
@@ -98,6 +99,7 @@ export type ManagedJob = {
   contactName?: string | null;
   contactPhone?: string | null;
   propertyId?: number | null;
+  priorityTier?: string | null;
   aiAssessment?: StructuredAssessment | null;
   showRetailPrice?: boolean;
   customerRetailEstimateLow?: number | null;
@@ -198,9 +200,21 @@ export type PropertyDocument = {
 export type HomeSystemRecord = {
   key: string;
   name: string;
+  /** system = HVAC, roof, etc.; appliance = fridge, washer, etc. */
+  category?: "system" | "appliance";
   brand?: string;
   model?: string;
+  modelSource?: string;
+  modelConfirmed?: boolean;
+  serialNumber?: string;
+  serialSource?: string;
+  serialConfirmed?: boolean;
   installedYear?: string | number | null;
+  installationDate?: string | null;
+  manufactureDate?: string | null;
+  approximateAge?: string | null;
+  location?: string | null;
+  filterSize?: string | null;
   warrantyUntil?: string | null;
   lastService?: string | null;
   lastInspection?: string | null;
@@ -347,11 +361,19 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     const res = await fetch(path, { ...init, headers });
     const text = await res.text();
+    let parsed: unknown;
     try {
-      return JSON.parse(text) as T;
+      parsed = JSON.parse(text) as T;
     } catch {
-      return { ok: false, message: text || res.statusText || "Request failed." } as T;
+      parsed = { ok: false, message: text || res.statusText || "Request failed." } as T;
     }
+    const denied = parseEntitlementDeniedResponse(res.status, parsed);
+    if (denied?.disabled) {
+      emitFeatureDisabled(denied);
+    } else if (denied) {
+      emitProSubscriptionRequired(denied);
+    }
+    return parsed as T;
   } catch (err) {
     const aborted = err instanceof Error && err.name === "AbortError";
     return {

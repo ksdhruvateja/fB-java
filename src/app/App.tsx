@@ -17,6 +17,7 @@ import SubscriptionSuccessModal from "./SubscriptionSuccessModal";
 import SubscriptionCancelModal from "./SubscriptionCancelModal";
 import { getStoredUser, validateToken, clearSession, loadAllUsers, saveSession, type AuthUser, type UserRole, type ResetRole } from "./auth";
 import { brand } from "../config/brand";
+import { PAID_HOME_CARE_PLAN_CODE, isPaidHomeCarePlan } from "./subscriptionCatalog";
 import { BrandLogo } from "./BrandLogo";
 import {
   type AppHistoryState,
@@ -335,7 +336,7 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
         { label: "AI Assessment", page: "home" as Page },
         { label: "Find a Contractor", page: "home" as Page },
         { label: "Pricing", page: "go-pro" as Page },
-        { label: "Go Pro Plans", page: "go-pro" as Page },
+        { label: "HomeCare Plans", page: "go-pro" as Page },
       ],
     },
     {
@@ -608,8 +609,11 @@ export default function App() {
               setPage("homeowner-dashboard");
             }
             // Plan activates only after verified webhook — poll until plan_code matches.
-            const expected = planCode || "pro_membership";
-            if (result.user.planCode === expected) {
+            const expected = planCode || PAID_HOME_CARE_PLAN_CODE;
+            if (
+              result.user.planCode === expected ||
+              (isPaidHomeCarePlan(expected) && isPaidHomeCarePlan(result.user.planCode))
+            ) {
               setSubscriptionActivating(false);
             }
           }
@@ -751,7 +755,7 @@ export default function App() {
   // After Stripe Checkout return, poll until webhook activates plan_code.
   useEffect(() => {
     if (!showSubscriptionSuccess || !subscriptionActivating) return;
-    const expected = subscriptionSuccessPlan || "pro_membership";
+    const expected = subscriptionSuccessPlan || PAID_HOME_CARE_PLAN_CODE;
     let cancelled = false;
     let attempts = 0;
     const tick = async () => {
@@ -760,7 +764,7 @@ export default function App() {
       if (cancelled) return;
       if (result.ok) {
         setCurrentUser(result.user);
-        if (result.user.planCode === expected || attempts >= 20) {
+        if (result.user.planCode === expected || (isPaidHomeCarePlan(expected) && isPaidHomeCarePlan(result.user.planCode)) || attempts >= 20) {
           setSubscriptionActivating(false);
           return;
         }

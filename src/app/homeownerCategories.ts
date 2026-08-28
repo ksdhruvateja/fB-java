@@ -150,6 +150,13 @@ export function servicesForArea(area: HomeownerArea | ""): HomeownerService[] {
 }
 
 export function jobTitleForHomeowner(area: string, service: string, subServiceLabel?: string) {
-  if (subServiceLabel) return `${area} · ${service} · ${subServiceLabel}`;
-  return `${area} · ${service}`;
+  const a = String(area || "").trim();
+  const s = String(service || "").trim();
+  if (subServiceLabel) {
+    if (a && a.toLowerCase() !== s.toLowerCase()) return `${a} · ${s} · ${subServiceLabel}`;
+    return `${s} · ${subServiceLabel}`;
+  }
+  if (!a) return s || "Service request";
+  if (!s || a.toLowerCase() === s.toLowerCase()) return a;
+  return `${a} · ${s}`;
 }

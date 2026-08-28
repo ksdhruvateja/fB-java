@@ -80,6 +80,9 @@ export async function deleteAdminSubscriptionPlan(id: number) {
 }
 
 export function formatPlanPrice(amount: number, interval?: string) {
+  if (!amount || amount <= 0) {
+    return { label: "Free", suffix: "" };
+  }
   const label = formatMoney(amount).replace(/\.00$/, "");
   const suffix = interval === "year" ? "/yr" : "/mo";
   return { label, suffix };

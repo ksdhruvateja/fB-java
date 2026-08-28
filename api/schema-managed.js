@@ -70,6 +70,16 @@ export async function initManagedSchema(pool) {
   }
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS homecare_settings (
+      id              TEXT PRIMARY KEY DEFAULT 'default',
+      config          JSONB NOT NULL,
+      config_version  INT NOT NULL DEFAULT 1,
+      updated_at      TIMESTAMPTZ DEFAULT NOW(),
+      updated_by      INT
+    )
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS managed_jobs (
       id                              BIGSERIAL PRIMARY KEY,
       booking_id                      TEXT UNIQUE,
@@ -1350,6 +1360,74 @@ export async function initManagedSchema(pool) {
       AND (admin_role_preset IS NULL OR TRIM(admin_role_preset)='')
       AND admin_access_level='read'
   `);
+
+  // ── HomeCare Pro feature tables ───────────────────────────────────────────
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS priority_tier TEXT DEFAULT 'standard'`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS quote_second_opinion JSONB`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS recurring_services (
+      id BIGSERIAL PRIMARY KEY,
+      owner_user_id INT NOT NULL,
+      property_id INT NOT NULL,
+      service_type TEXT NOT NULL,
+      recurrence TEXT NOT NULL,
+      preferred_day TEXT,
+      preferred_time_window TEXT,
+      start_date DATE,
+      status TEXT NOT NULL DEFAULT 'active',
+      next_service_date DATE,
+      assigned_contractor_user_id INT,
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_recurring_services_owner ON recurring_services (owner_user_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_recurring_services_property ON recurring_services (property_id)`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS household_invitations (
+      id BIGSERIAL PRIMARY KEY,
+      property_id INT NOT NULL,
+      owner_user_id INT NOT NULL,
+      invite_email TEXT NOT NULL,
+      permission_level TEXT NOT NULL DEFAULT 'viewer',
+      token TEXT NOT NULL UNIQUE,
+      expires_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS household_invite_property_email_idx
+    ON household_invitations (property_id, invite_email)
+    WHERE status = 'pending'
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS household_memberships (
+      id BIGSERIAL PRIMARY KEY,
+      property_id INT NOT NULL,
+      user_id INT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'viewer',
+      invited_by_user_id INT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(property_id, user_id)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS home_health_reports (
+      id BIGSERIAL PRIMARY KEY,
+      property_id INT NOT NULL,
+      owner_user_id INT NOT NULL,
+      report_year INT,
+      content JSONB NOT NULL,
+      generated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_home_health_reports_property ON home_health_reports (property_id, generated_at DESC)`);
 
   console.log('[API] Managed schema ready');
 }

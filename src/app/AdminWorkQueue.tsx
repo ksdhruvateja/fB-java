@@ -127,7 +127,14 @@ export default function AdminWorkQueue({
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-baseline justify-between gap-2">
                         <p className="font-mono text-xs font-semibold text-[#FF4D1C]">{jobBookingLabel(job)}</p>
-                        <p className="text-xs text-muted-foreground">{relativeTime(job.updatedAt || job.createdAt)}</p>
+                        <div className="flex items-center gap-2">
+                          {(job.priorityTier === "homecare_pro" || job.priorityTier === "homecare_pro_high") && (
+                            <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700 dark:text-sky-300">
+                              {job.priorityTier === "homecare_pro_high" ? "Priority" : "HomeCare Pro"}
+                            </span>
+                          )}
+                          <p className="text-xs text-muted-foreground">{relativeTime(job.updatedAt || job.createdAt)}</p>
+                        </div>
                       </div>
                       <p className="mt-0.5 truncate font-semibold">{job.title || job.category || "Service request"}</p>
                       <p className="mt-0.5 text-sm text-muted-foreground">{jobQueueHeadline(job)}</p>

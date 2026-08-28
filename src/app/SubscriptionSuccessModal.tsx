@@ -18,7 +18,7 @@ export default function SubscriptionSuccessModal({
   if (!open) return null;
 
   const included = plan?.features.filter((f) => f.included) || [];
-  const planName = plan?.name || "FixBridge Pro";
+  const planName = plan?.name || "HomeCare Pro";
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
@@ -63,10 +63,11 @@ export default function SubscriptionSuccessModal({
               {(included.length
                 ? included
                 : [
-                    { label: "Service request tracking", included: true },
-                    { label: "Property health score", included: true },
-                    { label: "Live chat & support", included: true },
-                    { label: "AI DIY Action Plans", included: true },
+                    { label: "Property-aware AI", included: true },
+                    { label: "Maintenance calendar", included: true },
+                    { label: "Warranty & document vault", included: true },
+                    { label: "Priority request routing", included: true },
+                    { label: "Annual AI Home Health Report", included: true },
                   ]
               ).map((f) => (
                 <li key={f.label} className="flex items-center gap-2 text-sm">
@@ -84,7 +85,7 @@ export default function SubscriptionSuccessModal({
               }}
               className="mt-5 inline-flex w-full items-center justify-center rounded-xl bg-[#FF4D1C] px-4 py-3 text-sm font-semibold text-white"
             >
-              Start using your Pro features
+              Start using HomeCare Pro
             </button>
           </>
         ) : (

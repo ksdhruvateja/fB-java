@@ -16,13 +16,15 @@ const emptyForm = (): ManagedSubscriptionPlan => ({
   theme: "light",
   sortOrder: 0,
   features: [
-    { label: "Service request tracking", included: true },
-    { label: "Property health score", included: false },
-    { label: "Live chat & support", included: true },
-    { label: "AI DIY Action Plans", included: false },
+    { label: "AI assessment", included: true },
+    { label: "Safe DIY guidance", included: true },
+    { label: "Service requests", included: true },
+    { label: "Property-aware AI", included: false },
+    { label: "Maintenance calendar", included: false },
+    { label: "Annual AI Home Health Report", included: false },
   ],
   highlight: false,
-  unlocksDiy: false,
+  unlocksDiy: true,
   trialDays: 0,
   active: true,
   ctaLabel: "Select",
@@ -126,10 +128,10 @@ export default function AdminSubscriptionPlansPanel({ readOnly }: { readOnly?: b
       };
       if (editingId != null) {
         await updateAdminSubscriptionPlan(editingId, payload);
-        setMessage("Plan updated — homeowner Go Pro will show the new details.");
+        setMessage("Plan updated — the HomeCare subscription page will show the new details.");
       } else {
         await createAdminSubscriptionPlan(payload);
-        setMessage("Plan created — it now appears on the homeowner Go Pro page.");
+        setMessage("Plan created — it now appears on the homeowner HomeCare page.");
       }
       setFormOpen(false);
       await reload();
@@ -161,10 +163,10 @@ export default function AdminSubscriptionPlansPanel({ readOnly }: { readOnly?: b
     <section className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Pro Subscription Plans</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">HomeCare Subscription Plans</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Add or edit the plans shown on the homeowner Go Pro page. Price, name, features, and DIY unlock
-            update live for homeowners.
+            Launch with two plans: <strong>FixBridge Free</strong> and <strong>HomeCare Pro</strong>. Set price,
+            benefits, and button labels here — homeowners see updates on the HomeCare page immediately.
           </p>
         </div>
         {!readOnly && (
@@ -202,7 +204,7 @@ export default function AdminSubscriptionPlansPanel({ readOnly }: { readOnly?: b
               {sorted.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
-                    No plans yet. Add Personal, Pro, and HomeCare (or your own tiers).
+                    No plans yet. The server seeds FixBridge Free + HomeCare Pro on startup.
                   </td>
                 </tr>
               ) : (
@@ -212,10 +214,19 @@ export default function AdminSubscriptionPlansPanel({ readOnly }: { readOnly?: b
                     <td className="px-4 py-3">
                       <p className="font-semibold">{p.name}</p>
                       <p className="font-mono text-[11px] text-muted-foreground">{p.code}</p>
+                      {p.description ? (
+                        <p className="mt-0.5 text-[11px] text-muted-foreground line-clamp-2">{p.description}</p>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3">
-                      ${Number(p.amount).toFixed(2)}
-                      <span className="text-muted-foreground">/{p.interval === "year" ? "yr" : "mo"}</span>
+                      {Number(p.amount) <= 0 ? (
+                        <span>Free</span>
+                      ) : (
+                        <>
+                          ${Number(p.amount).toFixed(2)}
+                          <span className="text-muted-foreground">/{p.interval === "year" ? "yr" : "mo"}</span>
+                        </>
+                      )}
                     </td>
                     <td className="px-4 py-3 capitalize">{p.theme}</td>
                     <td className="px-4 py-3 text-xs">
@@ -263,6 +274,15 @@ export default function AdminSubscriptionPlansPanel({ readOnly }: { readOnly?: b
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <label className="grid gap-1 text-sm sm:col-span-2">
+              <span className="font-medium">Core value (tagline)</span>
+              <input
+                className="rounded-xl border border-border bg-background px-3 py-2"
+                value={form.description || ""}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                placeholder="FixBridge helps manage the home all year."
+              />
+            </label>
             <label className="grid gap-1 text-sm">
               <span className="font-medium">Name</span>
               <input
@@ -270,7 +290,7 @@ export default function AdminSubscriptionPlansPanel({ readOnly }: { readOnly?: b
                 className="rounded-xl border border-border bg-background px-3 py-2"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="Pro"
+                placeholder="HomeCare Pro"
               />
             </label>
             <label className="grid gap-1 text-sm">
@@ -280,12 +300,12 @@ export default function AdminSubscriptionPlansPanel({ readOnly }: { readOnly?: b
                 className="rounded-xl border border-border bg-background px-3 py-2 font-mono text-xs"
                 value={form.code}
                 onChange={(e) => setForm({ ...form, code: e.target.value })}
-                placeholder="pro_membership"
+                placeholder="homecare_pro"
                 disabled={editingId != null}
               />
             </label>
             <label className="grid gap-1 text-sm">
-              <span className="font-medium">Monthly price ($)</span>
+              <span className="font-medium">Price ($) — use 0 for Free</span>
               <input
                 required
                 type="number"
@@ -364,7 +384,7 @@ export default function AdminSubscriptionPlansPanel({ readOnly }: { readOnly?: b
                 checked={form.unlocksDiy}
                 onChange={(e) => setForm({ ...form, unlocksDiy: e.target.checked })}
               />
-              Unlocks DIY Action Plans
+              Unlocks DIY / guided repair content
             </label>
             <label className="inline-flex items-center gap-2">
               <input

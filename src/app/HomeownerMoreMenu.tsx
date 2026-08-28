@@ -1,5 +1,9 @@
 import { ChevronRight, LogOut, Moon, Sparkles, Sun } from "lucide-react";
 import { MORE_MENU_SECTIONS, type DashTab } from "./homeownerNav";
+import { isPaidHomeCarePlan } from "./subscriptionCatalog";
+import LockedProBadge from "./LockedProBadge";
+
+const PRO_LOCKED_MENU_TABS = new Set<DashTab>(["documents"]);
 
 export default function HomeownerMoreMenu({
   userName,
@@ -42,8 +46,8 @@ export default function HomeownerMoreMenu({
             <Sparkles size={18} />
           </span>
           <span className="min-w-0 flex-1">
-            <p className="text-sm font-semibold">FixBridge Pro</p>
-            <p className="text-xs text-muted-foreground">Advanced insights & priority support</p>
+            <p className="text-sm font-semibold">HomeCare Pro</p>
+            <p className="text-xs text-muted-foreground">Year-round maintenance, vault & priority routing</p>
           </span>
           <ChevronRight size={18} className="text-muted-foreground" />
         </button>
@@ -63,7 +67,12 @@ export default function HomeownerMoreMenu({
                 className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition hover:bg-muted/50"
               >
                 <span className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold">{item.label}</p>
+                  <p className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+                    {item.label}
+                    {PRO_LOCKED_MENU_TABS.has(item.tab) && !isPaidHomeCarePlan(planCode) ? (
+                      <LockedProBadge compact />
+                    ) : null}
+                  </p>
                   {item.description ? (
                     <p className="text-xs text-muted-foreground">{item.description}</p>
                   ) : null}

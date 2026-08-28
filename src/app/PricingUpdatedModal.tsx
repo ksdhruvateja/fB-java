@@ -28,7 +28,7 @@ export default function PricingUpdatedModal({
           <div>
             <h2 className="text-lg font-semibold">We&apos;ve updated our pricing</h2>
             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              Our Go Pro plan prices have changed. Review the updated plans below before you subscribe.
+              Our HomeCare Pro price has changed. Review the updated plans before you subscribe.
               Existing subscribers keep their current rate until renewal.
             </p>
             <button

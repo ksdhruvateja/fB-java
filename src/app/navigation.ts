@@ -122,8 +122,27 @@ export function resolveParentFrame(frame: NavFrame): NavFrame | null {
           role: "homeowner",
           tab: "report",
           reportStep: "intake",
-          intakePhase: "whats",
+          intakePhase: "describe",
         };
+      }
+      if (frame.reportStep === "intake" && frame.intakePhase === "describe") {
+        return {
+          role: "homeowner",
+          tab: "report",
+          reportStep: "intake",
+          intakePhase: "location",
+        };
+      }
+      if (frame.reportStep === "intake" && frame.intakePhase === "location") {
+        return {
+          role: "homeowner",
+          tab: "report",
+          reportStep: "intake",
+          intakePhase: "trade",
+        };
+      }
+      if (frame.reportStep === "intake" && frame.intakePhase === "trade") {
+        return { role: "homeowner", tab: "overview" };
       }
       if (frame.reportStep === "intake") {
         return { role: "homeowner", tab: "overview" };

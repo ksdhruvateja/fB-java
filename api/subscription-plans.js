@@ -1,58 +1,12 @@
 import { clampString } from './security.js';
+import {
+  LAUNCH_SUBSCRIPTION_PLANS,
+  PAID_HOME_CARE_PLAN_CODE,
+  DEPRECATED_LAUNCH_PLAN_CODES,
+  isPaidHomeCarePlan,
+} from './subscription-catalog.js';
 
-const DEFAULT_PLANS = [
-  {
-    code: 'personal',
-    name: 'Personal',
-    amount: 19,
-    interval: 'month',
-    theme: 'light',
-    sortOrder: 1,
-    highlight: false,
-    unlocksDiy: false,
-    trialDays: 0,
-    features: [
-      { label: 'Service request tracking', included: true },
-      { label: 'Property health score', included: false },
-      { label: 'Live chat & support', included: true },
-      { label: 'AI DIY Action Plans', included: false },
-    ],
-  },
-  {
-    code: 'pro_membership',
-    name: 'Pro',
-    amount: 39,
-    interval: 'month',
-    theme: 'blue',
-    sortOrder: 2,
-    highlight: true,
-    unlocksDiy: true,
-    trialDays: 7,
-    features: [
-      { label: 'Service request tracking', included: true },
-      { label: 'Property health score', included: true },
-      { label: 'Live chat & support', included: true },
-      { label: 'AI DIY Action Plans', included: true },
-    ],
-  },
-  {
-    code: 'homecare',
-    name: 'HomeCare',
-    amount: 49,
-    interval: 'month',
-    theme: 'plum',
-    sortOrder: 3,
-    highlight: false,
-    unlocksDiy: true,
-    trialDays: 0,
-    features: [
-      { label: 'Service request tracking', included: true },
-      { label: 'Property health score', included: true },
-      { label: 'Live chat & support', included: true },
-      { label: 'AI DIY Action Plans', included: true },
-    ],
-  },
-];
+const DEFAULT_PLANS = LAUNCH_SUBSCRIPTION_PLANS;
 
 function normalizeFeatures(raw) {
   if (!Array.isArray(raw)) return [];
@@ -110,38 +64,12 @@ export async function initSubscriptionPlansSchema(pool) {
 
   const { rows } = await pool.query(`SELECT COUNT(*)::int AS n FROM subscription_plans`);
   if ((rows[0]?.n || 0) === 0) {
-    // Seed defaults; prefer admin-configured Pro price if present
-    let proAmount = 39;
-    try {
-      const { rows: ruleRows } = await pool.query(`SELECT rules FROM pricing_rules WHERE id='default'`);
-      const rules = ruleRows[0]?.rules || {};
-      const fromRules = Number(rules.pro_subscription_price);
-      if (Number.isFinite(fromRules) && fromRules > 0) proAmount = fromRules;
-    } catch {
-      // ignore
-    }
-
+    const paidAmount = (await readHomeCarePriceFromRules(pool)) ?? 29;
     for (const p of DEFAULT_PLANS) {
-      const amount = p.code === 'pro_membership' ? proAmount : p.amount;
-      await pool.query(
-        `INSERT INTO subscription_plans
-          (code, name, amount, interval, theme, sort_order, features, highlight, unlocks_diy, trial_days, active, cta_label)
-         VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,TRUE,'Select')
-         ON CONFLICT (code) DO NOTHING`,
-        [
-          p.code,
-          p.name,
-          amount,
-          p.interval,
-          p.theme,
-          p.sortOrder,
-          JSON.stringify(p.features),
-          p.highlight,
-          p.unlocksDiy,
-          p.trialDays,
-        ]
-      );
+      await upsertLaunchPlan(pool, p, paidAmount);
     }
+  } else {
+    await ensureLaunchSubscriptionPlans(pool);
   }
 }
 
@@ -171,10 +99,14 @@ export async function getSubscriptionPlanByCode(pool, code) {
   return rows[0] ? rowToPlan(rows[0]) : null;
 }
 
-async function syncProPriceToRules(pool, amount) {
+async function syncHomeCarePriceToRules(pool, amount) {
   try {
     const { rows } = await pool.query(`SELECT rules FROM pricing_rules WHERE id='default'`);
-    const rules = { ...(rows[0]?.rules || {}), pro_subscription_price: Number(amount) || 0 };
+    const rules = {
+      ...(rows[0]?.rules || {}),
+      homecare_subscription_price: Number(amount) || 0,
+      pro_subscription_price: Number(amount) || 0,
+    };
     await pool.query(
       `INSERT INTO pricing_rules (id, rules, updated_at)
        VALUES ('default', $1::jsonb, NOW())
@@ -182,8 +114,77 @@ async function syncProPriceToRules(pool, amount) {
       [JSON.stringify(rules)]
     );
   } catch (e) {
-    console.warn('sync pro price to pricing_rules:', e.message);
+    console.warn('sync homecare price to pricing_rules:', e.message);
   }
+}
+
+async function readHomeCarePriceFromRules(pool) {
+  try {
+    const { rows } = await pool.query(`SELECT rules FROM pricing_rules WHERE id='default'`);
+    const rules = rows[0]?.rules || {};
+    const fromHome = Number(rules.homecare_subscription_price);
+    if (Number.isFinite(fromHome) && fromHome > 0) return fromHome;
+    const fromLegacy = Number(rules.pro_subscription_price);
+    if (Number.isFinite(fromLegacy) && fromLegacy > 0) return fromLegacy;
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+async function upsertLaunchPlan(pool, plan, paidAmount) {
+  const amount = plan.code === PAID_HOME_CARE_PLAN_CODE ? paidAmount : plan.amount;
+  await pool.query(
+    `INSERT INTO subscription_plans
+      (code, name, amount, interval, theme, sort_order, features, highlight, unlocks_diy, trial_days, active, cta_label, description)
+     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,TRUE,$11,$12)
+     ON CONFLICT (code) DO UPDATE SET
+       name=EXCLUDED.name,
+       amount=EXCLUDED.amount,
+       interval=EXCLUDED.interval,
+       theme=EXCLUDED.theme,
+       sort_order=EXCLUDED.sort_order,
+       features=EXCLUDED.features,
+       highlight=EXCLUDED.highlight,
+       unlocks_diy=EXCLUDED.unlocks_diy,
+       trial_days=EXCLUDED.trial_days,
+       active=TRUE,
+       cta_label=EXCLUDED.cta_label,
+       description=EXCLUDED.description,
+       updated_at=NOW()`,
+    [
+      plan.code,
+      plan.name,
+      amount,
+      plan.interval,
+      plan.theme,
+      plan.sortOrder,
+      JSON.stringify(plan.features),
+      plan.highlight,
+      plan.unlocksDiy,
+      plan.trialDays,
+      plan.ctaLabel || 'Select',
+      plan.description || null,
+    ]
+  );
+}
+
+export async function ensureLaunchSubscriptionPlans(pool) {
+  const paidAmount = (await readHomeCarePriceFromRules(pool)) ?? 29;
+  for (const p of DEFAULT_PLANS) {
+    await upsertLaunchPlan(pool, p, paidAmount);
+  }
+  if (DEPRECATED_LAUNCH_PLAN_CODES.length) {
+    await pool.query(
+      `UPDATE subscription_plans SET active=FALSE, updated_at=NOW()
+       WHERE code = ANY($1::text[])`,
+      [DEPRECATED_LAUNCH_PLAN_CODES]
+    );
+  }
+}
+
+async function syncProPriceToRules(pool, amount) {
+  return syncHomeCarePriceToRules(pool, amount);
 }
 
 function parsePlanBody(body, { partial = false } = {}) {
@@ -291,7 +292,7 @@ export function registerSubscriptionPlanRoutes(app, { pool, requireAuth, require
           p.description || null,
         ]
       );
-      if (p.code === 'pro_membership') await syncProPriceToRules(pool, p.amount);
+      if (isPaidHomeCarePlan(p.code)) await syncHomeCarePriceToRules(pool, p.amount);
       return res.json({ ok: true, plan: rowToPlan(rows[0]) });
     } catch (e) {
       if (e.code === '23505') {
@@ -352,7 +353,7 @@ export function registerSubscriptionPlanRoutes(app, { pool, requireAuth, require
         ]
       );
 
-      if (next.code === 'pro_membership') await syncProPriceToRules(pool, next.amount);
+      if (isPaidHomeCarePlan(next.code)) await syncHomeCarePriceToRules(pool, next.amount);
       return res.json({ ok: true, plan: rowToPlan(rows[0]) });
     } catch (e) {
       if (e.code === '23505') {

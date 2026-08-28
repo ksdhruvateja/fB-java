@@ -28,6 +28,7 @@ import AdminAuditLogsPanel from "./AdminAuditLogsPanel";
 import AdminFinancePanel from "./AdminFinancePanel";
 import AdminSupportTicketsPanel from "./AdminSupportTicketsPanel";
 import AdminSubscriptionPlansPanel from "./AdminSubscriptionPlansPanel";
+import AdminHomeCareProPanel from "./AdminHomeCareProPanel";
 import AdminVisitFeePanel from "./AdminVisitFeePanel";
 import AdminReferralsPanel from "./AdminReferralsPanel";
 import AdminHomeownerInvoicePanel from "./AdminHomeownerInvoicePanel";
@@ -44,7 +45,7 @@ import {
   listAdminCredentialAlerts,
 } from "./contractorExpiry";
 import { listContractorMissingInfo } from "./contractorApplication";
-import { ROLE_PRESETS } from "./adminPermissions";
+import { ROLE_PRESETS, permissionsForAccessLevel } from "./adminPermissions";
 import {
   holdTransfer,
   listOverdueOps,
@@ -67,6 +68,11 @@ import {
   listAdminSubscriptionPlans,
   updateAdminSubscriptionPlan,
 } from "./subscriptionPlansApi";
+import {
+  PAID_HOME_CARE_PLAN_CODE,
+  displayPlanLabel,
+  isPaidHomeCarePlan,
+} from "./subscriptionCatalog";
 import {
   STATUS_LABELS,
   adminAiOverride,
@@ -120,6 +126,7 @@ type Tab =
   | "audit-logs"
   | "support-tickets"
   | "pro-plans"
+  | "homecare-pro"
   | "visit-fee";
 
 const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React.ElementType }[] }[] = [
@@ -153,7 +160,8 @@ const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React
   {
     label: "Administration",
     items: [
-      { id: "pro-plans", label: "Pro Plans", icon: Sparkles },
+      { id: "pro-plans", label: "HomeCare Plans", icon: Sparkles },
+      { id: "homecare-pro", label: "HomeCare Pro", icon: Shield },
       { id: "access", label: "Team & Roles", icon: Shield },
       { id: "audit-logs", label: "Audit Logs", icon: ScrollText },
       { id: "platform", label: "Settings", icon: Settings2 },
@@ -341,6 +349,10 @@ export default function AdminPanel({
 }) {
   const [tab, setTab] = useState<Tab>("overview");
   const isReadOnly = user?.adminAccessLevel === "read";
+  const adminPermissions = useMemo(
+    () => permissionsForAccessLevel(user?.adminAccessLevel, (user as { adminRolePreset?: string })?.adminRolePreset),
+    [user?.adminAccessLevel, user]
+  );
   const [jobs, setJobs] = useState<ManagedJob[]>([]);
   const [contractors, setContractors] = useState<AuthUser[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
@@ -510,8 +522,10 @@ export default function AdminPanel({
   }
 
   useEffect(() => {
-    if (pricingRules?.pro_subscription_price !== undefined) {
-      setProPriceInput(String(pricingRules.pro_subscription_price));
+    const rules = pricingRules as PricingRules | null;
+    const price = rules?.homecare_subscription_price ?? rules?.pro_subscription_price;
+    if (price !== undefined) {
+      setProPriceInput(String(price));
     }
   }, [pricingRules]);
 
@@ -3083,25 +3097,31 @@ export default function AdminPanel({
             <div className={`${cardClass} p-6`}>
               <h2 className="text-lg font-semibold mb-2">Subscription Settings</h2>
               <p className="text-sm text-muted-foreground mb-4">
-                Manage plan names, prices, features, and DIY unlocks in{" "}
+                Manage plan names, prices, benefits, and DIY unlocks in{" "}
                 <button type="button" className="font-semibold text-[#FF4D1C] hover:underline" onClick={() => setTab("pro-plans")}>
-                  Administration → Pro Plans
+                  Administration → HomeCare Plans
                 </button>
-                . Changes appear on the homeowner Go Pro page. You can still set a quick Pro Membership price here.
+                . Changes appear on the homeowner HomeCare page. Set a quick HomeCare Pro monthly price here.
               </p>
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
                   if (!pricingRules) return;
                   setBusy(true);
-                  const nextRules = { ...pricingRules, pro_subscription_price: Number(proPriceInput) };
+                  const amount = Number(proPriceInput);
+                  const nextRules = {
+                    ...pricingRules,
+                    homecare_subscription_price: amount,
+                    pro_subscription_price: amount,
+                  };
                   const r = await adminSavePricingRules(nextRules as unknown as Record<string, unknown>);
-                  // Keep managed pro_membership plan in sync when present
                   try {
                     const plansRes = await listAdminSubscriptionPlans();
-                    const pro = (plansRes.plans || []).find((p) => p.code === "pro_membership");
-                    if (pro?.id != null) {
-                      await updateAdminSubscriptionPlan(pro.id, { amount: Number(proPriceInput) });
+                    const paid =
+                      (plansRes.plans || []).find((p) => p.code === PAID_HOME_CARE_PLAN_CODE) ||
+                      (plansRes.plans || []).find((p) => p.code === "pro_membership");
+                    if (paid?.id != null) {
+                      await updateAdminSubscriptionPlan(paid.id, { amount });
                     }
                   } catch {
                     // ignore sync errors; pricing rules still saved
@@ -3109,7 +3129,7 @@ export default function AdminPanel({
                   setBusy(false);
                   if (r.ok) {
                     setPricingRules(r.rules as PricingRules);
-                    setMessage("Pro Subscription price saved successfully.");
+                    setMessage("HomeCare Pro price saved successfully.");
                   } else {
                     setMessage("Could not save pricing rules.");
                   }
@@ -3118,7 +3138,7 @@ export default function AdminPanel({
               >
                 <div className="w-48">
                   <label className="block text-xs font-semibold text-muted-foreground mb-1">
-                    Monthly Price ($)
+                    HomeCare Pro monthly price ($)
                   </label>
                   <div className="relative">
                     <span className="absolute left-3 top-2.5 text-muted-foreground text-sm">$</span>
@@ -3134,7 +3154,7 @@ export default function AdminPanel({
                   </div>
                 </div>
                 <button type="submit" disabled={busy} className={btnPrimary}>
-                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save Subscription Price"}
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save HomeCare Pro Price"}
                 </button>
               </form>
             </div>
@@ -3182,10 +3202,10 @@ export default function AdminPanel({
                             <p className="text-xs text-muted-foreground">{c.phone || "—"}</p>
                           </td>
                           <td className="px-6 py-4">
-                            {c.planCode === "pro_membership" ? (
+                            {isPaidHomeCarePlan(c.planCode) ? (
                               <div className="flex flex-col gap-0.5">
                                 <span className="inline-flex items-center self-start gap-1 rounded-full bg-amber-500/10 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400">
-                                  FixBridge Pro
+                                  {displayPlanLabel(c.planCode)}
                                 </span>
                                 <span className="text-[10px] text-emerald-600 font-semibold pl-1">Active</span>
                                 {c.isTrial ? (
@@ -3202,7 +3222,7 @@ export default function AdminPanel({
                               </div>
                             ) : (
                               <span className="inline-flex items-center rounded-full bg-slate-500/10 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:text-slate-400">
-                                Free Tier
+                                {displayPlanLabel(c.planCode)}
                               </span>
                             )}
                           </td>
@@ -3266,7 +3286,7 @@ export default function AdminPanel({
                               >
                                 Send invoice
                               </button>
-                            {c.planCode !== "pro_membership" ? (
+                            {!isPaidHomeCarePlan(c.planCode) ? (
                               <button
                                 type="button"
                                 onClick={() => {
@@ -3276,10 +3296,10 @@ export default function AdminPanel({
                                 }}
                                 className="inline-flex items-center gap-1 rounded bg-[#FF4D1C] hover:bg-[#FF4D1C]/90 px-3 py-1.5 text-xs font-semibold text-white transition shadow-sm"
                               >
-                                Upgrade to Pro
+                                Upgrade to HomeCare Pro
                               </button>
                             ) : (
-                              <span className="text-xs text-muted-foreground italic">Already Pro</span>
+                              <span className="text-xs text-muted-foreground italic">HomeCare Pro active</span>
                             )}
                             </div>
                           </td>
@@ -3308,6 +3328,10 @@ export default function AdminPanel({
         {tab === "support-tickets" && <AdminSupportTicketsPanel initialTicket={selectedSupportTicket} />}
 
         {tab === "pro-plans" && <AdminSubscriptionPlansPanel readOnly={isReadOnly} />}
+
+        {tab === "homecare-pro" && (
+          <AdminHomeCareProPanel permissions={adminPermissions} onMessage={setMessage} />
+        )}
 
         {tab === "access" && (
           <section className="space-y-6">
@@ -3570,7 +3594,9 @@ export default function AdminPanel({
 
               <form onSubmit={handleOverrideSubscription} className="space-y-4 text-sm">
                 <p className="text-muted-foreground">
-                  You are overriding the subscription plan for <strong className="text-foreground">{overrideHomeownerName}</strong> to <strong className="text-[#FF4D1C]">Pro Member</strong>.
+                  You are overriding the subscription plan for{" "}
+                  <strong className="text-foreground">{overrideHomeownerName}</strong> to{" "}
+                  <strong className="text-[#FF4D1C]">HomeCare Pro</strong>.
                 </p>
 
                 <label className="grid gap-1.5">

@@ -41,6 +41,11 @@ export type DashTab =
   | "go-pro";
 
 export type PropertyCareSection =
+  | "passport"
+  | "hub"
+  | "maintenance"
+  | "reminders"
+  /** @deprecated legacy aliases — mapped in propertyCareSectionForTab */
   | "overview"
   | "systems"
   | "timeline"
@@ -63,7 +68,7 @@ export const NAV_SECTIONS: {
     items: [
       { id: "property", label: "My Property", icon: Home },
       { id: "jobs", label: "Service Requests", icon: Wrench },
-      { id: "property-care", label: "Property Care", icon: Sparkles },
+      { id: "property-care", label: "Property Passport", icon: Sparkles },
       { id: "protection", label: "Home Protection", icon: Shield },
     ],
   },
@@ -161,9 +166,9 @@ const PROPERTY_CARE_LEGACY = new Set<DashTab>([
 export function propertyCareSectionForTab(id: DashTab): PropertyCareSection {
   if (id === "timeline" || id === "history") return "timeline";
   if (id === "home-updates") return "recommendations";
-  if (id === "maintenance") return "upcoming";
-  if (id === "health") return "overview";
-  return "overview";
+  if (id === "maintenance") return "maintenance";
+  if (id === "health") return "passport";
+  return "passport";
 }
 
 export const MORE_MENU_SECTIONS: {
@@ -174,7 +179,7 @@ export const MORE_MENU_SECTIONS: {
     title: "My Home",
     items: [
       { tab: "properties", label: "My Property", description: "Addresses & systems" },
-      { tab: "property-care", label: "Property Care", description: "History, systems & reminders" },
+      { tab: "property-care", label: "Property Passport", description: "Home details, systems & maintenance" },
       { tab: "protection", label: "Home Protection" },
     ],
   },
@@ -198,7 +203,7 @@ export const MORE_MENU_SECTIONS: {
     title: "Account",
     items: [
       { tab: "profile", label: "Settings" },
-      { tab: "go-pro", label: "FixBridge Pro", description: "Plans & DIY guidance" },
+      { tab: "go-pro", label: "HomeCare", description: "Free & Pro plans" },
     ],
   },
 ];
@@ -243,7 +248,7 @@ export function mobileHeaderTitle(tab: DashTab): string {
     case "health":
     case "home-updates":
     case "property-care":
-      return "Property Care";
+      return "Property Passport";
     case "properties":
     case "property":
       return "My Property";
@@ -263,7 +268,7 @@ export function mobileHeaderTitle(tab: DashTab): string {
     case "protection":
       return "Home Protection";
     case "go-pro":
-      return "FixBridge Pro";
+      return "HomeCare";
     default:
       return "FixBridge";
   }

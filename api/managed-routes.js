@@ -19,6 +19,14 @@ import {
   saveMarketSnapshot,
 } from './market-intelligence.js';
 import { zip5 } from './usps-address.js';
+import { isPaidHomeCarePlan } from './subscription-catalog.js';
+import {
+  createRequireHomeCareFeature,
+  getHomeCareConfig,
+  priorityTierForConfig,
+  resolveFeatureEntitlement,
+} from './homecare-config.js';
+import { buildPropertyAIContext } from './property-ai-context.js';
 import { analyzeRepairStructured, extractPropertyDocumentFields } from './ai.js';
 import {
   stripeConfigured,
@@ -350,6 +358,7 @@ function serializeJob(row, viewer) {
       ? row.contact_phone
       : null,
     propertyId: row.property_id,
+    priorityTier: row.priority_tier || 'standard',
     homeownerUserId: isAdmin ? row.homeowner_user_id : undefined,
     aiAssessment: parseJson(row.ai_assessment),
     showRetailPrice: row.show_retail_price !== false,
@@ -708,15 +717,25 @@ async function loadAssessContext(pool, job, rules, assessment = null) {
 
 async function runManagedJobAssessment(pool, job, viewer) {
   const rules = await loadPricingRules(pool);
+  const { rows: hoRows } = await pool.query(`SELECT plan_code FROM users WHERE id=$1`, [job.homeowner_user_id]);
+  const homeCarePro = isPaidHomeCarePlan(hoRows[0]?.plan_code);
 
   // Phase 1: preliminary context for AI (ZIP + property + coarse market)
   const preCtx = await loadAssessContext(pool, job, rules, null);
+
+  let propertyAiContext = '';
+  if (homeCarePro && job.property_id) {
+    const ctx = await buildPropertyAIContext(pool, job.property_id, job.homeowner_user_id);
+    propertyAiContext = ctx?.text || '';
+  }
 
   const result = await analyzeRepairStructured({
     category: job.category,
     description: job.description,
     imageDataUrl: job.media_data_url,
-    locationContext: preCtx.locationContext,
+    locationContext: propertyAiContext
+      ? `${preCtx.locationContext}\n\nProperty Passport (HomeCare Pro):\n${propertyAiContext}`
+      : preCtx.locationContext,
     zip: preCtx.zip,
     city: preCtx.city,
     state: preCtx.state,
@@ -736,11 +755,13 @@ async function runManagedJobAssessment(pool, job, viewer) {
     urgency: assessment.urgency,
     zip: ctx.zip || job.zip || null,
     marketProfile: ctx.marketProfile,
+    subscriptionDiscount: homeCarePro ? (Number(rules.subscription_discount) || 0) : 0,
   });
   pricing.contractor_visit_fee = resolveCustomerVisitFee(rules, {
     emergency:
       job.service_timing === 'emergency' ||
       String(assessment.urgency || '').toLowerCase().includes('emerg'),
+    homeCarePro,
   });
 
   const discount = await resolveJobDiscount(pool, job);
@@ -966,6 +987,7 @@ async function ensureQuoteNumber(pool, proposalId) {
 }
 
 export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser }) {
+  const requireHomeCareFeature = createRequireHomeCareFeature(pool);
   const need = typeof requirePermission === 'function'
     ? requirePermission
     : () => (_req, _res, next) => next();
@@ -1324,8 +1346,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     return rows;
   }
 
-  async function serializeOwnedProperty(row, ownerUserId) {
-    const docs = await loadPropertyDocuments(row.id, ownerUserId);
+  async function serializeOwnedProperty(row, ownerUserId, planCode) {
+    const vault = await resolveFeatureEntitlement(pool, {
+      user: { planCode },
+      feature: 'document_vault',
+      planCode,
+    });
+    const includeVault = vault.allowed;
+    const docs = includeVault ? await loadPropertyDocuments(row.id, ownerUserId) : [];
     return serializeProperty(row, docs);
   }
 
@@ -1337,7 +1365,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       );
       const properties = [];
       for (const row of rows) {
-        properties.push(await serializeOwnedProperty(row, req.authUser.id));
+        properties.push(await serializeOwnedProperty(row, req.authUser.id, req.authUser.planCode));
       }
       res.json({ ok: true, properties });
     } catch (e) {
@@ -1394,7 +1422,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       );
       res.json({
         ok: true,
-        property: await serializeOwnedProperty(rows[0], req.authUser.id),
+        property: await serializeOwnedProperty(rows[0], req.authUser.id, req.authUser.planCode),
       });
     } catch (e) {
       console.error(e);
@@ -1521,15 +1549,16 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           propertyId,
         ]
       );
-      res.json({ ok: true, property: await serializeOwnedProperty(rows[0], req.authUser.id) });
+      res.json({ ok: true, property: await serializeOwnedProperty(rows[0], req.authUser.id, req.authUser.planCode) });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, message: 'Server error' });
     }
   });
 
-  app.post('/api/properties/:id/documents', requireAuth, async (req, res) => {
+  app.post('/api/properties/:id/documents', requireAuth, requireHomeCareFeature('document_vault'), async (req, res) => {
     try {
+      const config = await getHomeCareConfig(pool);
       const propertyId = Number(req.params.id);
       const b = req.body || {};
       const { rows: owned } = await pool.query(
@@ -1537,9 +1566,23 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         [propertyId, req.authUser.id]
       );
       if (!owned[0]) return res.status(404).json({ ok: false, message: 'Property not found.' });
+      const { rows: docCount } = await pool.query(
+        `SELECT COUNT(*)::int AS n FROM property_documents WHERE property_id=$1`,
+        [propertyId]
+      );
+      if ((docCount[0]?.n || 0) >= config.documents.maxDocumentsPerProperty) {
+        return res.status(409).json({
+          ok: false,
+          message: `Document limit reached (${config.documents.maxDocumentsPerProperty} per property).`,
+        });
+      }
       const dataUrl = String(b.dataUrl || '');
-      if (!dataUrl.startsWith('data:') || dataUrl.length > 6_000_000) {
-        return res.status(400).json({ ok: false, message: 'Document file is required (max ~4MB).' });
+      const maxBytes = config.documents.maxFileSizeMb * 1024 * 1024 * 1.4;
+      if (!dataUrl.startsWith('data:') || dataUrl.length > maxBytes) {
+        return res.status(400).json({
+          ok: false,
+          message: `Document file is required (max ~${config.documents.maxFileSizeMb}MB).`,
+        });
       }
       const category = String(b.category || 'other').slice(0, 40);
       const { rows } = await pool.query(
@@ -1579,7 +1622,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
-  app.delete('/api/properties/:id/documents/:docId', requireAuth, async (req, res) => {
+  app.delete('/api/properties/:id/documents/:docId', requireAuth, requireHomeCareFeature('document_vault'), async (req, res) => {
     try {
       const propertyId = Number(req.params.id);
       const docId = Number(req.params.docId);
@@ -1596,7 +1639,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
-  app.post('/api/properties/:id/documents/:docId/analyze', requireAuth, async (req, res) => {
+  app.post('/api/properties/:id/documents/:docId/analyze', requireAuth, requireHomeCareFeature('property_aware_ai'), async (req, res) => {
     try {
       const propertyId = Number(req.params.id);
       const docId = Number(req.params.docId);
@@ -1630,7 +1673,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
-  app.post('/api/properties/:id/documents/:docId/apply-extract', requireAuth, async (req, res) => {
+  app.post('/api/properties/:id/documents/:docId/apply-extract', requireAuth, requireHomeCareFeature('document_vault'), async (req, res) => {
     try {
       const propertyId = Number(req.params.id);
       const docId = Number(req.params.docId);
@@ -1738,7 +1781,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           propertyId,
         ]
       );
-      res.json({ ok: true, property: await serializeOwnedProperty(rows[0], req.authUser.id) });
+      res.json({ ok: true, property: await serializeOwnedProperty(rows[0], req.authUser.id, req.authUser.planCode) });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Server error' });
     }
@@ -2135,6 +2178,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       await pool.query(`UPDATE managed_jobs SET booking_id=$1 WHERE id=$2`, [bookingId, job.id]);
       job = { ...job, booking_id: bookingId };
 
+      const config = await getHomeCareConfig(pool);
+      const priorityTier = priorityTierForConfig(config, req.authUser.planCode);
+      await pool.query(`UPDATE managed_jobs SET priority_tier=$1 WHERE id=$2`, [priorityTier, job.id]);
+      job.priority_tier = priorityTier;
+
       const partnerCode = (b.partnerCode || '').trim();
       if (partnerCode) {
         await processReferralAward(pool, req.authUser, partnerCode);
@@ -2469,7 +2517,10 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       job.service_timing === 'emergency' ||
       String(job.title || '').toLowerCase().includes('emerg') ||
       String(job.description || '').toLowerCase().includes('emerg');
-    const serviceFee = resolveCustomerVisitFee(rules, { emergency: isEmergency });
+    const serviceFee = resolveCustomerVisitFee(rules, {
+      emergency: isEmergency,
+      homeCarePro: job.priority_tier === 'homecare_pro' || job.priority_tier === 'homecare_pro_high',
+    });
     const estLow = job.customer_retail_estimate_low != null ? Number(job.customer_retail_estimate_low) : null;
     const estHigh = job.customer_retail_estimate_high != null ? Number(job.customer_retail_estimate_high) : null;
     const serviceAmount =

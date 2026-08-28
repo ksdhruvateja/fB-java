@@ -23,7 +23,7 @@ const VARIANT: Record<
   },
   auth: {
     src: "lockup",
-    className: "h-8 w-auto max-h-8 sm:h-9 sm:max-h-9 max-w-[9.5rem] sm:max-w-[11rem]",
+    className: "h-auto w-[10.75rem] sm:w-[12rem] max-h-11 object-contain object-left",
   },
   footer: {
     src: "lockup",

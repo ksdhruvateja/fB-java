@@ -7,6 +7,7 @@ import {
   storePricingRevision,
   type ManagedSubscriptionPlan,
 } from "./subscriptionPlansApi";
+import { FREE_PLAN_CODE, isFreeTierPlan, isPaidHomeCarePlan } from "./subscriptionCatalog";
 import GoProSubscribeModal from "./GoProSubscribeModal";
 import PricingUpdatedModal from "./PricingUpdatedModal";
 import type { AuthUser } from "./auth";
@@ -15,8 +16,10 @@ export type GoProPlanCard = {
   id: string;
   planCode: string;
   name: string;
+  tagline?: string;
   priceLabel: string;
   interval: string;
+  amount: number;
   theme: "light" | "blue" | "plum" | string;
   features: { label: string; included: boolean }[];
   cta: string;
@@ -31,8 +34,10 @@ function toCard(plan: ManagedSubscriptionPlan): GoProPlanCard {
     id: plan.code,
     planCode: plan.code,
     name: plan.name,
+    tagline: plan.description || undefined,
     priceLabel: label,
     interval: suffix,
+    amount: Number(plan.amount) || 0,
     theme: plan.theme || "light",
     features: Array.isArray(plan.features) ? plan.features : [],
     cta: plan.ctaLabel || "Select",
@@ -53,7 +58,10 @@ function PlanCard({
   currentPlanCode?: string | null;
   onSelect: (plan: GoProPlanCard) => void;
 }) {
-  const isCurrent = Boolean(plan.planCode && currentPlanCode === plan.planCode);
+  const isCurrent =
+    Boolean(plan.planCode && currentPlanCode === plan.planCode) ||
+    (plan.planCode === FREE_PLAN_CODE && isFreeTierPlan(currentPlanCode));
+  const isFreePlan = plan.amount <= 0;
   const isLight = plan.theme === "light";
   const isBlue = plan.theme === "blue";
 
@@ -83,11 +91,16 @@ function PlanCard({
       }`}
     >
       <h3 className="text-[1.35rem] font-bold tracking-tight">{plan.name}</h3>
+      {plan.tagline ? (
+        <p className={`mt-1 text-sm leading-snug ${isLight ? "text-slate-600" : "text-white/80"}`}>{plan.tagline}</p>
+      ) : null}
       <p className={`mt-3 flex items-baseline gap-0.5 ${priceColor}`}>
         <span className="text-5xl font-extrabold leading-none tracking-tight">{plan.priceLabel}</span>
-        <span className={`text-sm font-medium ${isLight ? "text-slate-400" : "text-white/70"}`}>
-          {plan.interval}
-        </span>
+        {!isFreePlan ? (
+          <span className={`text-sm font-medium ${isLight ? "text-slate-400" : "text-white/70"}`}>
+            {plan.interval}
+          </span>
+        ) : null}
       </p>
       {plan.trialDays && plan.trialDays > 0 ? (
         <p className={`mt-2 text-xs font-semibold ${isLight ? "text-[#FF6B2C]" : "text-white/90"}`}>
@@ -113,12 +126,12 @@ function PlanCard({
 
       <button
         type="button"
-        disabled={busy || isCurrent || !plan.planCode}
+        disabled={busy || isCurrent || !plan.planCode || isFreePlan}
         onClick={() => onSelect(plan)}
         className={`mt-8 inline-flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-base font-semibold transition active:scale-[0.98] disabled:cursor-default disabled:opacity-70 ${buttonClass}`}
       >
         {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-        {isCurrent ? "Current plan" : plan.cta}
+        {isCurrent ? "Current plan" : isFreePlan ? "Included" : plan.cta}
       </button>
     </article>
   );
@@ -236,6 +249,8 @@ export default function HomeownerGoProPlans({
   }, [checkPricingUpdates]);
 
   function handlePlanSelect(plan: GoProPlanCard) {
+    if (plan.amount <= 0) return;
+    if (isPaidHomeCarePlan(plan.planCode) && currentPlanCode === plan.planCode) return;
     if (onSelectPlan && isAuthenticated) {
       onSelectPlan(plan);
       return;
@@ -293,10 +308,11 @@ export default function HomeownerGoProPlans({
         {!compact && (
           <div className="text-center sm:text-left">
             <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight sm:text-4xl">
-              Go Pro
+              HomeCare Subscription
             </h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Choose the plan that fits your home — unlock DIY plans, health insights, and priority support.
+            <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
+              FixBridge Free covers repairs when something breaks. HomeCare Pro adds year-round property
+              management — maintenance, documents, recurring services, and priority routing.
             </p>
           </div>
         )}
@@ -304,8 +320,8 @@ export default function HomeownerGoProPlans({
         <div
           className={`grid gap-5 ${
             compact
-              ? "grid-cols-1 sm:grid-cols-3"
-              : "grid-cols-1 md:grid-cols-3 md:items-stretch md:gap-6"
+              ? "grid-cols-1 sm:grid-cols-2"
+              : "grid-cols-1 md:grid-cols-2 md:items-stretch md:gap-8 max-w-4xl mx-auto"
           }`}
         >
           {plans.map((plan) => (

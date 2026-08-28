@@ -23,6 +23,8 @@ export const ALL_PERMISSIONS = [
   'payouts.approve',
   'pricing.view',
   'pricing.edit',
+  'homecare.view',
+  'homecare.manage',
   'settings.view',
   'settings.edit',
   'staff.view',
@@ -64,6 +66,7 @@ export const ROLE_PRESETS = {
       'payouts.view',
       'ai.override',
       'audit.view',
+      'homecare.view',
     ],
   },
   dispatcher: {
@@ -79,10 +82,12 @@ export const ROLE_PRESETS = {
       'payouts.view',
       'payouts.approve',
       'pricing.view',
+      'pricing.edit',
       'profitability.view',
       'audit.view',
       'homeowners.view',
       'contractors.view',
+      'homecare.view',
     ],
   },
   contractor_manager: {
@@ -126,6 +131,7 @@ export const ROLE_PRESETS = {
       'staff.view',
       'settings.view',
       'profitability.view',
+      'homecare.view',
     ],
   },
 };

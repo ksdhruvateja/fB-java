@@ -29,9 +29,11 @@ export default function GoProSubscribeModal({
 
   if (!open || !plan) return null;
 
+  const isFreePlan = plan.amount <= 0;
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!plan?.planCode) return;
+    if (!plan?.planCode || isFreePlan) return;
     setError(null);
 
     if (isAuthenticated) {

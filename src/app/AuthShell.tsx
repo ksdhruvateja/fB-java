@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { ArrowLeft } from "lucide-react";
 import { motion } from "motion/react";
 import { BrandLogo } from "./BrandLogo";
+import { brand } from "../config/brand";
 import AuthMascot from "./AuthMascot";
 import { AuthMascotProvider, useAuthMascot, type AuthMascotVariant } from "./AuthMascotContext";
 
@@ -212,12 +213,28 @@ function MascotAside({
   );
 }
 
-/** Same plain logo as marketing nav — no chip/background wrapper. */
-function AuthHeaderLogo() {
+/** Login header logo — crisp black lockup on light auth chrome, color in dark mode. */
+function AuthHeaderLogo({ onHome }: { onHome?: () => void }) {
+  const logo = (
+    <>
+      <BrandLogo variant="auth" tone="black" className="dark:hidden" />
+      <BrandLogo variant="auth" tone="color" className="hidden dark:block" />
+    </>
+  );
+
+  if (!onHome) {
+    return <div className="shrink-0">{logo}</div>;
+  }
+
   return (
-    <div className="shrink-0">
-      <BrandLogo variant="nav" />
-    </div>
+    <button
+      type="button"
+      onClick={onHome}
+      className="shrink-0 rounded-md outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-primary/40"
+      aria-label={`${brand.productName} home`}
+    >
+      {logo}
+    </button>
   );
 }
 
@@ -263,7 +280,7 @@ export function AuthShell({
           <div className="relative flex min-h-screen flex-col bg-white dark:bg-background">
             <div className="border-b border-neutral-100 px-5 py-4 dark:border-border sm:px-8">
               <div className="mx-auto flex max-w-xl items-center justify-between gap-3">
-                <AuthHeaderLogo />
+                <AuthHeaderLogo onHome={onBack} />
                 <button
                   type="button"
                   onClick={onBack}
@@ -315,7 +332,7 @@ export function AuthShell({
 
       <div className="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-5 sm:px-6 lg:px-8">
         <header className="mb-5 flex items-center justify-between gap-3 sm:mb-7">
-          <AuthHeaderLogo />
+          <AuthHeaderLogo onHome={onBack} />
           <button
             type="button"
             onClick={onBack}

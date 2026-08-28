@@ -2,6 +2,7 @@
  * Client helpers for platform expansion APIs.
  */
 import { getStoredToken } from "./auth";
+import { PAID_HOME_CARE_PLAN_CODE } from "./subscriptionCatalog";
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getStoredToken();
@@ -180,26 +181,32 @@ export async function convertInspection(reportText: string) {
   );
 }
 
-export async function placesAutocomplete(input: string) {
+export async function placesAutocomplete(input: string, opts?: { public?: boolean }) {
+  const base = opts?.public ? "/api/public/places/autocomplete" : "/api/places/autocomplete";
   return api<{ ok: boolean; predictions?: Array<{ description: string; place_id?: string }>; simulated?: boolean }>(
-    `/api/places/autocomplete?input=${encodeURIComponent(input)}`
+    `${base}?input=${encodeURIComponent(input)}`
   );
 }
 
-export async function reverseGeocode(address?: string, lat?: number, lng?: number) {
+export async function reverseGeocode(address?: string, lat?: number, lng?: number, opts?: { public?: boolean }) {
   const params = new URLSearchParams();
   if (address) params.set("address", address);
   if (lat != null) params.set("lat", String(lat));
   if (lng != null) params.set("lng", String(lng));
+  const base = opts?.public ? "/api/public/places/reverse-geocode" : "/api/places/reverse-geocode";
   return api<{
     ok: boolean;
     simulated?: boolean;
     lat?: number | null;
     lng?: number | null;
     zip?: string | null;
+    city?: string | null;
+    state?: string | null;
+    county?: string | null;
+    streetAddress?: string | null;
     formattedAddress?: string | null;
     message?: string;
-  }>(`/api/places/reverse-geocode?${params.toString()}`);
+  }>(`${base}?${params.toString()}`);
 }
 
 export async function scanZipsInRadius(lat: number, lng: number, radiusMiles: number) {
@@ -429,7 +436,7 @@ export async function getMyTransactions() {
 export async function updateSubscriptionOverride(userId: number, staffName: string) {
   return api<{ ok: boolean; message?: string }>("/api/admin/subscriptions/update", {
     method: "POST",
-    body: JSON.stringify({ homeownerUserId: userId, planCode: 'pro_membership', staffName }),
+    body: JSON.stringify({ homeownerUserId: userId, planCode: PAID_HOME_CARE_PLAN_CODE, staffName }),
   });
 }
 

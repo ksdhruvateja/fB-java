@@ -180,7 +180,7 @@ export default function HomeownerOverview({
               {homeUpdates.summary.needsInfo} need more information
             </p>
           </div>
-          <span className="shrink-0 text-sm font-semibold text-primary">View Property Care →</span>
+          <span className="shrink-0 text-sm font-semibold text-primary">Open Property Passport →</span>
         </button>
       ) : null}
 

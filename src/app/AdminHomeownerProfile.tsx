@@ -231,6 +231,15 @@ export default function AdminHomeownerProfile({
           <dl className="rounded-2xl border border-border bg-card p-5 text-sm space-y-3">
             <div><dt className="text-xs uppercase text-muted-foreground">Contact</dt><dd className="mt-1">{c.name} · {c.email} · {c.phone || "—"}</dd></div>
             <div><dt className="text-xs uppercase text-muted-foreground">Account</dt><dd className="mt-1 capitalize">{c.accountStatus}</dd></div>
+            <div><dt className="text-xs uppercase text-muted-foreground">HomeCare Pro</dt><dd className="mt-1">{(data as { homeCarePro?: { isPro?: boolean; subscriptionStatus?: string | null; renewalAt?: string | null; recurringServicesCount?: number; householdMembersCount?: number; reportEligible?: boolean } }).homeCarePro?.isPro ? "Active" : "Free"}</dd></div>
+            {(data as { homeCarePro?: { isPro?: boolean; renewalAt?: string | null; recurringServicesCount?: number; householdMembersCount?: number; reportEligible?: boolean; lastReportAt?: string | null } }).homeCarePro?.isPro && (
+              <>
+                <div><dt className="text-xs uppercase text-muted-foreground">Renewal</dt><dd className="mt-1">{fmtDate((data as { homeCarePro?: { renewalAt?: string | null } }).homeCarePro?.renewalAt)}</dd></div>
+                <div><dt className="text-xs uppercase text-muted-foreground">Recurring services</dt><dd className="mt-1">{(data as { homeCarePro?: { recurringServicesCount?: number } }).homeCarePro?.recurringServicesCount ?? 0}</dd></div>
+                <div><dt className="text-xs uppercase text-muted-foreground">Household members</dt><dd className="mt-1">{(data as { homeCarePro?: { householdMembersCount?: number } }).homeCarePro?.householdMembersCount ?? 0}</dd></div>
+                <div><dt className="text-xs uppercase text-muted-foreground">Health report</dt><dd className="mt-1">{(data as { homeCarePro?: { reportEligible?: boolean; lastReportAt?: string | null } }).homeCarePro?.reportEligible ? "Eligible now" : `Last ${fmtDate((data as { homeCarePro?: { lastReportAt?: string | null } }).homeCarePro?.lastReportAt)}`}</dd></div>
+              </>
+            )}
             <div><dt className="text-xs uppercase text-muted-foreground">Recent service</dt><dd className="mt-1">{data.serviceHistory?.[0]?.title || "—"}</dd></div>
             <div><dt className="text-xs uppercase text-muted-foreground">Recent quote</dt><dd className="mt-1">{quotes[0]?.quoteNumber || "—"}</dd></div>
             <div><dt className="text-xs uppercase text-muted-foreground">Recent invoice</dt><dd className="mt-1">{invoices[0]?.invoiceNumber || "—"}</dd></div>

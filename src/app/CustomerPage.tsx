@@ -157,15 +157,19 @@ export default function CustomerPage({
             className="max-w-xl mb-6 sm:mb-10 md:mb-14"
           >
             <h1
-              className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase text-white leading-[0.92] mb-3 sm:mb-5 tracking-tight"
+              className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase text-white leading-[0.92] mb-3 sm:mb-4 tracking-tight"
               style={{ fontSize: "clamp(2.25rem,8vw,4.5rem)" }}
             >
-              Home repair,
+              Describe the problem.
               <br />
-              fixed by AI.
+              {brand.productName} handles the rest.
             </h1>
+            <p className="font-mono text-[10px] sm:text-[11px] tracking-[0.22em] uppercase text-white/55 mb-3 sm:mb-4">
+              Home repair, made simple by AI.
+            </p>
             <p className="text-white/70 text-sm sm:text-base md:text-lg leading-relaxed mb-5 sm:mb-8 max-w-md">
-              Describe the problem. Get an AI assessment. Receive real bids from vetted local contractors.
+              Get an AI assessment, guided DIY help when safe, or book a trusted local pro for repairs,
+              cleaning, landscaping, and home care.
             </p>
             <div className="flex flex-col sm:flex-row flex-wrap gap-2.5 sm:gap-3 w-full sm:w-auto">
               <button

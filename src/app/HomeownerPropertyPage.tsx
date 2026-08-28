@@ -405,7 +405,7 @@ export default function HomeownerPropertyPage({
             My Property
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Build a digital passport for each home — systems, warranties, and records in one place.
+            Build a Property Passport for each home — systems, warranties, and records in one place.
           </p>
         </div>
         <button
@@ -467,7 +467,7 @@ export default function HomeownerPropertyPage({
         <div className="rounded-[1.5rem] border border-dashed border-border bg-card px-6 py-12 text-center">
           <Home className="mx-auto h-8 w-8 text-primary" />
           <p className="mt-3 text-sm font-medium">No homes yet</p>
-          <p className="mt-1 text-xs text-muted-foreground">Add your first property to start the maintenance passport.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Add your first property to start the Property Passport.</p>
         </div>
       ) : (
         <div className="grid gap-5 lg:grid-cols-[220px_1fr]">

@@ -97,14 +97,40 @@ async function main() {
   const schedOwner = await fetch(`${API}/api/managed/jobs/${jobId}/payment-schedule`, { headers: homeH }).then(json);
   ok('owner can list payment-schedule', schedOwner.ok === true, schedOwner.message);
 
-  // Property units IDOR
+  // Property units + Property Passport IDOR
   const props = await fetch(`${API}/api/properties`, { headers: homeH }).then(json);
   const propId = (props.properties || props || [])[0]?.id || props.properties?.[0]?.id;
   if (propId) {
     const unitsPeer = await fetch(`${API}/api/properties/${propId}/units`, { headers: peerH }).then(json);
     ok('peer blocked from property units', unitsPeer.status === 403, `status=${unitsPeer.status}`);
+
+    const healthPeer = await fetch(`${API}/api/properties/${propId}/health`, {
+      method: 'PUT',
+      headers: peerH,
+      body: JSON.stringify({ healthProfile: { systems: [], maintenance: [] } }),
+    }).then(json);
+    ok('peer blocked from property health update', healthPeer.status === 404, `status=${healthPeer.status}`);
+
+    const healthOwner = await fetch(`${API}/api/properties/${propId}/health`, {
+      method: 'PUT',
+      headers: homeH,
+      body: JSON.stringify({
+        healthProfile: {
+          systems: [],
+          maintenance: [],
+        },
+      }),
+    }).then(json);
+    ok('owner can update property health', healthOwner.ok === true, healthOwner.message);
+
+    const docPeer = await fetch(`${API}/api/properties/${propId}/documents`, {
+      method: 'POST',
+      headers: peerH,
+      body: JSON.stringify({ dataUrl: 'data:text/plain;base64,dGVzdA==', category: 'other' }),
+    }).then(json);
+    ok('peer blocked from property document upload', docPeer.status === 404, `status=${docPeer.status}`);
   } else {
-    ok('property units IDOR skipped (no property)', true);
+    ok('property IDOR checks skipped (no property)', true);
   }
 
   // Guest public job must not use password123 / must not attach to existing email

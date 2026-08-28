@@ -17,12 +17,15 @@ import {
   getSubscriptionPlanByCode,
 } from './subscription-plans.js';
 import { registerManagedRoutes } from './managed-routes.js';
+import { registerHomeCareProRoutes } from './homecare-pro-routes.js';
+import { registerHomeCareAdminRoutes, initHomeCareSettingsSchema } from './homecare-admin-routes.js';
 import { registerPlatformRoutes } from './platform-routes.js';
 import { registerPayoutRoutes } from './payout-routes.js';
 import { registerReferralRoutes } from './referral-routes.js';
 import { applyReferralCode, ensureReferralCode } from './referrals.js';
 import { registerQuoteWorkspaceRoutes } from './quote-workspace-routes.js';
 import { registerAddressRoutes } from './address-routes.js';
+import { registerServiceAreaRoutes } from './service-area.js';
 import { writeAudit } from './audit.js';
 import { getStripe, stripeConfigured } from './stripe.js';
 import {
@@ -382,6 +385,7 @@ export async function initDb() {
     if (check.rows.length > 0) {
       console.log('[FixBridge API] DB already initialized, running managed schema checks...');
       await initManagedSchema(pool);
+      await initHomeCareSettingsSchema(pool);
       await initSupportTicketSchema(pool);
       await initHomeownerAdminSchema(pool);
       await initSubscriptionPlansSchema(pool);
@@ -585,6 +589,7 @@ export async function initDb() {
   }
 
   await initManagedSchema(pool);
+  await initHomeCareSettingsSchema(pool);
   await initSupportTicketSchema(pool);
   await initHomeownerAdminSchema(pool);
   await initSubscriptionPlansSchema(pool);
@@ -648,6 +653,7 @@ async function requireAuth(req, res, next) {
       email: rows[0].email,
       name: rows[0].name,
       role: rows[0].role,
+      planCode: planCode || null,
       // P0-10: is_admin boolean alone must never grant admin / cross-user access
       isAdmin: rows[0].role === 'admin',
       isBlocked: rows[0].is_blocked === true,
@@ -2800,6 +2806,8 @@ app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
 });
 
   registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser });
+  registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin });
+  registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdmin });
   registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerSupportTicketRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerHomeownerAdminRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
@@ -2818,6 +2826,7 @@ registerPlatformRoutes(app, {
 registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission });
 registerReferralRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerAddressRoutes(app, { requireAuth });
+registerServiceAreaRoutes(app);
 
 app.post('/api/ai/chat', requireAuth, aiLimiter, async (req, res) => {
   try {
