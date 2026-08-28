@@ -45,6 +45,7 @@ export function ProFeatureProvider({
   const isPro = hasProEntitlement(planCode);
   const [modalFeature, setModalFeature] = useState<ProFeatureId | null>(null);
   const [modalSource, setModalSource] = useState<string | undefined>();
+  const [pendingFeature, setPendingFeature] = useState<ProFeatureId | null>(null);
   const [disabledNotice, setDisabledNotice] = useState<string | null>(null);
   const prevProRef = useRef(isPro);
 
