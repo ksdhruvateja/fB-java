@@ -18,7 +18,8 @@ const VARIANT: Record<
   },
   nav: {
     src: "lockup",
-    className: "h-9 w-auto max-h-9 md:h-10 md:max-h-10 max-w-[10.5rem] md:max-w-[12rem]",
+    // Fixed width keeps wordmark size stable when swapping color/black assets on scroll.
+    className: "h-auto w-[10.75rem] sm:w-[12rem] max-h-11 object-contain object-left",
   },
   auth: {
     src: "lockup",

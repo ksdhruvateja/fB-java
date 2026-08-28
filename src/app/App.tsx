@@ -164,7 +164,11 @@ function Nav({
           className="relative z-10 flex shrink-0 items-center min-w-0"
           aria-label={brand.productName}
         >
-          <BrandLogo variant="nav" tone={navLogoTone} className="transition-opacity duration-300" />
+          <BrandLogo
+            variant="nav"
+            tone={navLogoTone}
+            className="transition-opacity duration-300 shrink-0"
+          />
         </button>
 
         {/* Desktop center links — truly centered in the viewport */}
