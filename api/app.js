@@ -55,8 +55,16 @@ import {
   userHasPermission,
 } from './rbac.js';
 
-const isProduction =
-  process.env.NODE_ENV === 'production' || process.env.CONTEXT === 'production';
+const isProduction = process.env.NODE_ENV === 'production';
+
+/** Netlify may run with NODE_ENV unset; use hosting signals for health/status only. */
+function isDeployedProduction() {
+  return (
+    isProduction ||
+    process.env.CONTEXT === 'production' ||
+    process.env.FIXBRIDGE_HOSTING === 'netlify'
+  );
+}
 const useInMemoryDb = !process.env.NEON_DATABASE_URL;
 
 // ── Require SESSION_SECRET at startup ─────────────────────────────────────────
@@ -2866,7 +2874,7 @@ app.post('/api/ai/chat', requireAuth, aiLimiter, async (req, res) => {
 });
 
 app.get('/api/health', async (_req, res) => {
-  const production = isProduction;
+  const production = isDeployedProduction();
   let dbOk = true;
   if (!useInMemoryDb) {
     try {
