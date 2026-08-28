@@ -6,6 +6,7 @@ import {
   payRetail,
   prepareCheckout,
   homeownerInvoiceCheckout,
+  repeatManagedService,
   updateHomeownerJob,
   type ManagedJob,
   type Property,
@@ -15,10 +16,14 @@ import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCoupo
 import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 import { HomeownerTipCheckout } from "./HomeownerTipCheckout";
 import ChangeOrderPanel from "./ChangeOrderPanel";
+import HomeownerAccordion from "./HomeownerAccordion";
 import { useProFeature } from "./ProFeatureProvider";
 import { requestQuoteSecondOpinion, type QuoteSecondOpinion } from "./homecareProApi";
-import { Loader2, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { setPreferredProvider } from "./homeAssistantApi";
+import { arrivalWindowLabel, canEditHomeownerJob } from "./ServiceTrackingCard";
+import { useIsMobile } from "./components/ui/use-mobile";
+import { CalendarDays, Loader2, Pencil, Sparkles } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 const TIME_WINDOW_OPTIONS = [
   { value: "9-11", label: "9–11 AM", period: "Morning" },
@@ -866,6 +871,45 @@ export default function HomeownerJobDetailPanel({
                 )}
               </div>
             )}
+            {["completed", "closed", "customer_review_pending", "work_completed", "payout_pending"].includes(
+              String(job.status).toLowerCase()
+            ) ? (
+              <div className="flex flex-wrap gap-2 pt-2">
+                <button
+                  type="button"
+                  className="rounded-lg border border-primary/40 px-3 py-1.5 text-xs font-semibold text-primary"
+                  disabled={busy}
+                  onClick={async () => {
+                    onBusy(true);
+                    const r = await repeatManagedService(job.id, true);
+                    onBusy(false);
+                    if (!r.ok) onError(r.message || "Could not repeat service.");
+                    else await onRefresh();
+                  }}
+                >
+                  Repeat this service
+                </button>
+                {job.assignedContractorUserId && job.propertyId ? (
+                  <button
+                    type="button"
+                    className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold"
+                    disabled={busy}
+                    onClick={async () => {
+                      onBusy(true);
+                      const r = await setPreferredProvider(job.propertyId!, {
+                        contractorUserId: job.assignedContractorUserId!,
+                        serviceType: String(job.category || "general").toLowerCase(),
+                        isFavorite: true,
+                      });
+                      onBusy(false);
+                      if (!r.ok) onError(r.message || "Could not save preferred provider.");
+                    }}
+                  >
+                    Save as preferred provider
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </DetailSection>
       ) : null}

@@ -12,6 +12,7 @@ import {
   patchHomeCareConfig,
   toPublicHomeCareConfig,
 } from './homecare-config.js';
+import { processDueServiceReminders, verifyReminderCronAuth, getReminderSchedulerStatus } from './service-reminders.js';
 
 async function ensureHomeCareSettingsRow(pool) {
   const { rows } = await pool.query(`SELECT id FROM homecare_settings WHERE id='default'`);
@@ -184,6 +185,51 @@ export function registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdm
       } catch (e) {
         console.error('admin homecare pricing patch:', e);
         res.status(500).json({ ok: false, message: 'Could not update coordination fees.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/admin/service-reminders/process',
+    requireAuth,
+    requireAdmin,
+    requirePermission('homecare.manage'),
+    async (_req, res) => {
+      try {
+        const result = await processDueServiceReminders(pool);
+        res.json({ ok: true, ...result });
+      } catch (e) {
+        console.error('process service reminders:', e);
+        res.status(500).json({ ok: false, message: 'Could not process reminders.' });
+      }
+    }
+  );
+
+  app.post('/api/internal/service-reminders/process', async (req, res) => {
+    if (!verifyReminderCronAuth(req)) {
+      return res.status(401).json({ ok: false, message: 'Unauthorized.' });
+    }
+    try {
+      const result = await processDueServiceReminders(pool);
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error('cron process service reminders:', e);
+      res.status(500).json({ ok: false, message: 'Could not process reminders.' });
+    }
+  });
+
+  app.get(
+    '/api/admin/service-reminders/status',
+    requireAuth,
+    requireAdmin,
+    requirePermission('homecare.manage'),
+    async (_req, res) => {
+      try {
+        const status = await getReminderSchedulerStatus(pool);
+        res.json({ ok: true, ...status });
+      } catch (e) {
+        console.error('service reminder status:', e);
+        res.status(500).json({ ok: false, message: 'Could not load reminder status.' });
       }
     }
   );

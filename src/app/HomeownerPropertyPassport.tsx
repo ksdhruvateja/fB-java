@@ -27,6 +27,13 @@ import LockedProBadge from "./LockedProBadge";
 import ProLockedShell from "./ProLockedShell";
 import type { ProFeatureId } from "./proFeatures";
 import HomeownerServiceHistory from "./HomeownerServiceHistory";
+import PropertyTimelinePanel from "./PropertyTimelinePanel";
+import {
+  confirmMemorySuggestion,
+  ignoreMemorySuggestion,
+  listMemorySuggestions,
+  type MemorySuggestion,
+} from "./homeAssistantApi";
 import {
   ADD_INFORMATION_OPTIONS,
   APPLIANCE_TYPES,
@@ -179,6 +186,7 @@ export default function HomeownerPropertyPassport({
   const [extractDoc, setExtractDoc] = useState<PropertyDocument | null>(null);
   const [extractDraft, setExtractDraft] = useState<PropertyDocumentExtraction | null>(null);
   const [extractBusy, setExtractBusy] = useState(false);
+  const [memorySuggestions, setMemorySuggestions] = useState<MemorySuggestion[]>([]);
   const [docCategory, setDocCategory] = useState("warranty");
   const [docTitle, setDocTitle] = useState("");
   const [docSystemKey, setDocSystemKey] = useState("");
@@ -195,6 +203,16 @@ export default function HomeownerPropertyPassport({
     if (isProPassportSection(id) && !requestFeature(proFeatureForSection(id), "property-passport")) return;
     setSection(id);
   }
+
+  useEffect(() => {
+    if (!property?.id || !isPro) {
+      setMemorySuggestions([]);
+      return;
+    }
+    void listMemorySuggestions(property.id).then((r) => {
+      if (r.ok && r.suggestions) setMemorySuggestions(r.suggestions);
+    });
+  }, [property?.id, isPro]);
 
   useEffect(() => {
     if (isProPassportSection(initialSection) && !isPro) {
@@ -503,6 +521,52 @@ export default function HomeownerPropertyPassport({
 
       {section === "overview" && property ? (
         <>
+          {memorySuggestions.length > 0 ? (
+            <div className="space-y-2 rounded-[1.25rem] border border-primary/30 bg-primary/5 p-4">
+              <p className="flex items-center gap-2 text-sm font-semibold">
+                <Sparkles className="h-4 w-4 text-primary" /> Suggested updates for Property Passport
+              </p>
+              {memorySuggestions.map((sug) => {
+                const eq = sug.payload?.equipment || {};
+                return (
+                  <div key={sug.id} className="rounded-xl border border-border/70 bg-card p-3 text-sm">
+                    <p className="font-medium">{String(eq.name || sug.payload?.jobTitle || "Equipment update")}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {[eq.manufacturer, eq.model, eq.serial, eq.filterSize].filter(Boolean).join(" · ") || "Review details before saving."}
+                    </p>
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white"
+                        onClick={() =>
+                          void confirmMemorySuggestion(property.id, sug.id).then((r) => {
+                            if (r.ok) {
+                              setMemorySuggestions((prev) => prev.filter((x) => x.id !== sug.id));
+                              void onRefresh();
+                            }
+                          })
+                        }
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold"
+                        onClick={() =>
+                          void ignoreMemorySuggestion(property.id, sug.id).then((r) => {
+                            if (r.ok) setMemorySuggestions((prev) => prev.filter((x) => x.id !== sug.id));
+                          })
+                        }
+                      >
+                        Ignore
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+
           <div className="grid gap-2 rounded-[1.25rem] border border-border/70 bg-muted/20 p-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
             {summary.systemsCount > 0 ? <p>{summary.systemsCount} systems recorded</p> : null}
             {summary.appliancesCount > 0 ? <p>{summary.appliancesCount} appliances</p> : null}
@@ -785,8 +849,9 @@ export default function HomeownerPropertyPassport({
       {section === "service-history" && property ? (
         <div className="space-y-4">
           <p className="text-xs text-muted-foreground">
-            Completed FixBridge jobs appear here automatically. Historical records cannot be edited.
+            Unified property timeline — jobs, recurring visits, documents, and completed care in one place.
           </p>
+          <PropertyTimelinePanel propertyId={property.id} onOpenJob={onOpenJob} />
           <HomeownerServiceHistory
             jobs={serviceJobs}
             properties={property ? [property] : properties}

@@ -21,6 +21,7 @@ import { FINANCIAL_EVENT, recordFinancialEvent } from './financial-ledger.js';
 import { isPaidHomeCarePlan, PAID_HOME_CARE_PLAN_CODE } from './subscription-catalog.js';
 import { writeAudit } from './audit.js';
 import { sendEmailSafe, sendSmsSafe, notifyOps, mailStatus } from './notify.js';
+import { lookupTimezoneFromCoordinates, isValidIanaTimezone } from './property-timezone.js';
 
 const PARTNER_JWT_SECRET = process.env.SESSION_SECRET || (!process.env.NETLIFY && process.env.NODE_ENV !== 'production' ? 'local-dev-secret' : undefined);
 
@@ -1645,6 +1646,10 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
 
       const loc = result.geometry?.location;
       const parsed = parseGeocodeComponents(result.address_components || []);
+      let timezone = null;
+      if (loc?.lat != null && loc?.lng != null) {
+        timezone = await lookupTimezoneFromCoordinates(loc.lat, loc.lng);
+      }
 
       res.json({
         ok: true,
@@ -1657,6 +1662,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
         county: parsed.county || null,
         streetAddress: parsed.streetAddress || null,
         formattedAddress: result.formatted_address || null,
+        timezone: isValidIanaTimezone(timezone) ? timezone : null,
       });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Geocode failed.' });

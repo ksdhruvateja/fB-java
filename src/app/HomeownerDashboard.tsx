@@ -91,6 +91,8 @@ import HomeownerJobDetailPanel from "./HomeownerJobDetailPanel";
 import HomeownerPaymentsPanel from "./HomeownerPaymentsPanel";
 import HomeownerDocumentsPanel from "./HomeownerDocumentsPanel";
 import HomeownerSupportPanel from "./HomeownerSupportPanel";
+import HomeAssistantPanel from "./HomeAssistantPanel";
+import { clearAssistantHandoff, readAssistantHandoff } from "./assistantHandoff";
 import HomeownerGoProPlans, { type GoProPlanCard } from "./HomeownerGoProPlans";
 import SubscriptionSuccessModal from "./SubscriptionSuccessModal";
 import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
@@ -735,15 +737,25 @@ export default function HomeownerDashboard({
  }
 
  function openRequestService(prefill?: HomeUpdateItem["requestPrefill"]) {
+ const handoff = readAssistantHandoff();
+ if (handoff) {
+ if (handoff.propertyId) setPropertyId(handoff.propertyId);
+ if (handoff.category) setCategory(handoff.category);
+ if (handoff.description) setDescription(handoff.description);
+ if (handoff.issueArea) setIssueArea(handoff.issueArea);
+ if (handoff.requestSystemId) setRequestSystemId(handoff.requestSystemId);
+ clearAssistantHandoff();
+ } else {
  if (prefill?.systemId) setRequestSystemId(prefill.systemId);
  if (prefill?.area) setIssueArea(prefill.area);
  if (prefill?.service) setCategory(prefill.service);
  if (prefill?.description) setDescription(prefill.description);
+ }
  navigateTo({
  role: "homeowner",
  tab: "report",
  reportStep: "intake",
- intakePhase: prefill?.description ? "details" : "trade",
+ intakePhase: (handoff?.description || prefill?.description) ? "details" : "trade",
  reportPath: null,
  jobId: null,
  });
@@ -1826,9 +1838,19 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  )}
  {tab === "messages" &&
  comingSoon("Messages", "Chat with FixBridge and your assigned contractors will land here.")}
- {tab === "assistant" && (
- <HomeownerSupportPanel channel="assistant" user={user} properties={properties} jobs={jobs} />
- )}
+{tab === "assistant" && (
+ <HomeAssistantPanel
+ properties={properties}
+ propertyId={typeof propertyId === "number" ? propertyId : primaryPropertyId}
+ jobs={jobs}
+ onStartReport={() => setTab("report")}
+ onOpenRecurring={() => setTab("property-care")}
+ onOpenJob={(id) => {
+ setSelectedJobId(id);
+ setTab("jobs");
+ }}
+ />
+)}
  {tab === "help" && (
  <HomeownerSupportPanel channel="help" user={user} properties={properties} jobs={jobs} />
  )}

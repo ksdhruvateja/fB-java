@@ -29,6 +29,22 @@ import {
 import { buildPropertyAIContext } from './property-ai-context.js';
 import { analyzeRepairStructured, extractPropertyDocumentFields } from './ai.js';
 import {
+  normalizeStructuredEquipment,
+  hasStructuredEquipmentData,
+  equipmentFromExtraction,
+} from './contractor-equipment.js';
+import {
+  upsertServiceReminderEligibility,
+  cancelServiceReminderForJob,
+  resetReminderOnReschedule,
+  TERMINAL_JOB_STATUSES,
+} from './service-reminders.js';
+import {
+  resolveServiceAtUtc,
+  resolveAndPersistPropertyTimezone,
+  normalizeTimezoneInput,
+} from './property-timezone.js';
+import {
   stripeConfigured,
   shouldSimulatePayment,
   assertPaymentsAvailable,
@@ -378,6 +394,8 @@ function serializeJob(row, viewer) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     assignedContractorUserId: row.assigned_contractor_user_id,
+    preferredContractorUserId: row.preferred_contractor_user_id || null,
+    sourceRecurringServiceId: row.source_recurring_service_id || null,
     activeProposalId: row.active_proposal_id,
     streetAddress: isAdmin || isOwner || (isAssignedContractor && addressUnlocked(row.status)) ? (row.street_address || null) : null,
     city: isAdmin || isOwner || isAssignedContractor || role === 'contractor' ? (row.city || null) : null,
@@ -385,6 +403,10 @@ function serializeJob(row, viewer) {
     zip: isAdmin || isOwner || (isAssignedContractor && addressUnlocked(row.status)) ? (row.zip || null) : null,
     country: isAdmin || isOwner || (isAssignedContractor && addressUnlocked(row.status)) ? (row.country || null) : null,
   };
+
+  if (isAdmin) {
+    base.preferredByHomeowner = Boolean(row.preferred_contractor_user_id);
+  }
 
   if ((isOwner || isAdmin) && row.assigned_contractor_user_id) {
     const ratingRaw = row.tech_rating != null ? Number(row.tech_rating) : null;
@@ -1293,6 +1315,90 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       JSON.stringify(nextProfile),
       job.property_id,
     ]);
+
+    try {
+      const memorySource = report?.completedBy?.role === 'admin' ? 'admin' : 'contractor';
+      await createMemorySuggestionFromJobCompletion(pool, job, report, systemKey, { memorySource });
+    } catch (_e) {
+      /* non-fatal */
+    }
+  }
+
+  async function createMemorySuggestionFromJobCompletion(
+    pool,
+    job,
+    report,
+    systemKey,
+    { memorySource = 'contractor' } = {}
+  ) {
+    if (!job.property_id) return;
+    const rawEq = report?.structuredEquipment || report?.equipmentUpdate || null;
+    const eu = rawEq ? normalizeStructuredEquipment(job, rawEq) : null;
+    if (!hasStructuredEquipmentData(eu)) return;
+
+    const equipment = {
+      key: eu.key || systemKey || 'other_system',
+      name: eu.name || systemKey || 'Equipment',
+      manufacturer: eu.manufacturer || eu.brand,
+      model: eu.model,
+      serial: eu.serial,
+      filterSize: eu.filterSize,
+      installationYear: eu.installationYear || eu.installedYear,
+      capacity: eu.capacity,
+      fuelType: eu.fuelType,
+      equipmentType: eu.equipmentType || eu.applianceType,
+      roofMaterial: eu.roofMaterial,
+      notes: eu.notes || (report?.summary ? String(report.summary).slice(0, 200) : undefined),
+    };
+
+    const source = String(memorySource || 'contractor').slice(0, 40);
+    const { rows: existing } = await pool.query(
+      `SELECT id FROM property_memory_suggestions
+       WHERE property_id=$1 AND owner_user_id=$2 AND source_ref=$3 AND status='pending'
+         AND source IN ('contractor','completed_job','admin','ai_extraction')`,
+      [job.property_id, job.homeowner_user_id, String(job.id)]
+    );
+    if (existing.length) return;
+
+    await pool.query(
+      `INSERT INTO property_memory_suggestions
+        (property_id, owner_user_id, source, source_ref, status, payload, confidence)
+       VALUES ($1,$2,$3,$4,'pending',$5,$6)`,
+      [
+        job.property_id,
+        job.homeowner_user_id,
+        source,
+        String(job.id),
+        JSON.stringify({ equipment, jobTitle: job.title || job.category, trade: eu.trade }),
+        eu?.confidence != null ? Number(eu.confidence) : 0.85,
+      ]
+    );
+  }
+
+  async function maybeCreateEquipmentSuggestionFromLabelPhoto(pool, job, report) {
+    if (!job.property_id || !report?.equipmentLabelPhotoUrl) return;
+    try {
+      const result = await extractPropertyDocumentFields({
+        category: 'equipment_label',
+        title: job.title || 'Equipment label',
+        fileName: 'equipment-label.jpg',
+        mimeType: 'image/jpeg',
+        dataUrl: report.equipmentLabelPhotoUrl,
+        systemKey: job.category,
+      });
+      const eq = equipmentFromExtraction(result.extraction, job.category);
+      if (!hasStructuredEquipmentData(eq)) return;
+      const suggestionReport = {
+        ...report,
+        structuredEquipment: eq,
+        summary: report.summary,
+      };
+      await createMemorySuggestionFromJobCompletion(pool, job, suggestionReport, eq.key, {
+        memorySource: 'ai_extraction',
+      });
+    } catch (e) {
+      console.warn('[equipment-label-extract]', e.message);
+    }
   }
 
   function serializeProperty(r, documents = []) {
@@ -1333,6 +1439,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         createdAt: d.created_at,
       })),
       healthProfile,
+      timezone: r.timezone || null,
+      latitude: r.latitude != null ? Number(r.latitude) : null,
+      longitude: r.longitude != null ? Number(r.longitude) : null,
     };
   }
 
@@ -1420,9 +1529,24 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           verified ? 'usps' : null,
         ]
       );
+      const propertyId = rows[0].id;
+      try {
+        await resolveAndPersistPropertyTimezone(pool, propertyId, {
+          timezone: b.timezone,
+          latitude: b.latitude,
+          longitude: b.longitude,
+          addressLine1: b.addressLine1,
+          city: b.city,
+          state: b.state,
+          zip: zipVal,
+        });
+      } catch (_e) {
+        /* non-fatal */
+      }
+      const { rows: fresh } = await pool.query(`SELECT * FROM properties WHERE id=$1`, [propertyId]);
       res.json({
         ok: true,
-        property: await serializeOwnedProperty(rows[0], req.authUser.id, req.authUser.planCode),
+        property: await serializeOwnedProperty(fresh[0] || rows[0], req.authUser.id, req.authUser.planCode),
       });
     } catch (e) {
       console.error(e);
@@ -1493,6 +1617,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
       const zipVal = b.zip != null ? zip5(b.zip) : null;
 
+      let nextTimezone = cur.timezone;
+      if (b.timezone !== undefined) {
+        nextTimezone = normalizeTimezoneInput(b.timezone);
+      }
+
       const { rows } = await pool.query(
         `UPDATE properties SET
            label=COALESCE($1, label),
@@ -1514,8 +1643,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
            postal_code_plus4=$17,
            address_verified=$18,
            address_verified_at=$19,
-           address_verification_provider=$20
-         WHERE id=$21
+           address_verification_provider=$20,
+           timezone=$21
+         WHERE id=$22
          RETURNING *`,
         [
           b.label != null ? String(b.label).slice(0, 80) : null,
@@ -1546,10 +1676,30 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           nextVerified,
           nextVerifiedAt,
           nextProvider,
+          nextTimezone,
           propertyId,
         ]
       );
-      res.json({ ok: true, property: await serializeOwnedProperty(rows[0], req.authUser.id, req.authUser.planCode) });
+      if (addressFieldsTouched || b.latitude != null || b.longitude != null) {
+        try {
+          await resolveAndPersistPropertyTimezone(pool, propertyId, {
+            timezone: b.timezone,
+            latitude: b.latitude ?? cur.latitude,
+            longitude: b.longitude ?? cur.longitude,
+            addressLine1: b.addressLine1 ?? cur.address_line1,
+            city: b.city ?? cur.city,
+            state: b.state ?? cur.state,
+            zip: zipVal ?? cur.zip,
+          });
+        } catch (_e) {
+          /* non-fatal */
+        }
+      }
+      const { rows: freshRows } = await pool.query(`SELECT * FROM properties WHERE id=$1`, [propertyId]);
+      res.json({
+        ok: true,
+        property: await serializeOwnedProperty(freshRows[0] || rows[0], req.authUser.id, req.authUser.planCode),
+      });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, message: 'Server error' });
@@ -1851,7 +2001,18 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (rows.length === 0) {
         return res.status(404).json({ ok: false, message: 'Property not found.' });
       }
-      const r = rows[0];
+      try {
+        await resolveAndPersistPropertyTimezone(pool, Number(id), {
+          addressLine1: addressLine1.trim(),
+          city: city.trim(),
+          state: state.trim(),
+          zip: zip5(zip),
+        });
+      } catch (_e) {
+        /* non-fatal */
+      }
+      const { rows: freshAddr } = await pool.query(`SELECT * FROM properties WHERE id=$1`, [id]);
+      const r = freshAddr[0] || rows[0];
       res.json({
         ok: true,
         property: {
@@ -1865,6 +2026,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           postalCodePlus4: r.postal_code_plus4 || null,
           addressVerified: r.address_verified === true,
           addressVerificationProvider: r.address_verification_provider || null,
+          timezone: r.timezone || null,
         },
       });
     } catch (e) {
@@ -2325,6 +2487,89 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
+  app.post('/api/managed/jobs/:id/repeat-service', requireAuth, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      const source = rows[0];
+      if (!source) return res.status(404).json({ ok: false, message: 'Job not found.' });
+      if (Number(source.homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      const completedStatuses = ['completed', 'closed', 'customer_review_pending', 'work_completed', 'payout_pending'];
+      if (!completedStatuses.includes(String(source.status).toLowerCase())) {
+        return res.status(400).json({ ok: false, message: 'Only completed or in-review jobs can be repeated.' });
+      }
+
+      const requestSameProvider = req.body?.requestSameProvider !== false;
+      let preferredId = null;
+      let providerNote = '';
+      if (requestSameProvider && source.assigned_contractor_user_id) {
+        const { rows: contractors } = await pool.query(
+          `SELECT id, name, company_name, is_blocked FROM users WHERE id=$1 AND role='contractor'`,
+          [source.assigned_contractor_user_id]
+        );
+        const c = contractors[0];
+        if (c && !c.is_blocked) {
+          preferredId = Number(c.id);
+          providerNote = `Preferred provider: ${c.company_name || c.name} (user #${c.id}).`;
+        }
+      }
+
+      const description = [
+        source.description || '',
+        providerNote,
+        'Repeated from prior FixBridge service — new quote and pricing required.',
+      ]
+        .filter(Boolean)
+        .join('\n')
+        .slice(0, 2000);
+
+      const { rows: created } = await pool.query(
+        `INSERT INTO managed_jobs
+          (homeowner_user_id, property_id, status, category, service_subcategory, title, description,
+           full_address, city_state_zip, street_address, city, state, zip, country,
+           contact_name, contact_phone, preferred_date, preferred_time_slot, service_timing, preferred_contractor_user_id)
+         VALUES ($1,$2,'draft',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+         RETURNING *`,
+        [
+          req.authUser.id,
+          source.property_id,
+          source.category || 'Others',
+          source.service_subcategory || null,
+          source.title || `${source.category || 'Service'} (repeat)`,
+          description,
+          source.full_address || 'TBD',
+          source.city_state_zip || 'TBD',
+          source.street_address || null,
+          source.city || null,
+          source.state || null,
+          source.zip || null,
+          source.country || 'US',
+          source.contact_name || req.authUser.name || 'Customer',
+          source.contact_phone || '',
+          null,
+          source.preferred_time_slot || null,
+          source.service_timing || 'weekday',
+          preferredId,
+        ]
+      );
+      let job = created[0];
+      const bookingId = formatBookingId(job.id, job.created_at);
+      await pool.query(`UPDATE managed_jobs SET booking_id=$1 WHERE id=$2`, [bookingId, job.id]);
+      job = { ...job, booking_id: bookingId };
+
+      const config = await getHomeCareConfig(pool);
+      const priorityTier = priorityTierForConfig(config, req.authUser.planCode);
+      await pool.query(`UPDATE managed_jobs SET priority_tier=$1 WHERE id=$2`, [priorityTier, job.id]);
+
+      res.json({ ok: true, job: serializeJob({ ...job, priority_tier: priorityTier }, req.authUser) });
+    } catch (e) {
+      console.error('repeat-service:', e);
+      res.status(500).json({ ok: false, message: 'Could not repeat service.' });
+    }
+  });
+
   app.get('/api/managed/jobs/:id', requireAuth, async (req, res) => {
     try {
       const job = await fetchJobWithTech(pool, Number(req.params.id));
@@ -2434,6 +2679,22 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           ]
         );
       } catch {
+        /* non-fatal */
+      }
+
+      try {
+        const { serviceAt: previousServiceAt } = await resolveServiceAtUtc(pool, job);
+        const dateChanged =
+          String(nextDate || '').slice(0, 10) !== String(job.preferred_date || '').slice(0, 10) ||
+          String(nextSlot || '') !== String(job.preferred_time_slot || '');
+        if (dateChanged) {
+          await resetReminderOnReschedule(pool, updated[0], previousServiceAt);
+        } else {
+          await upsertServiceReminderEligibility(pool, updated[0], {
+            recurringServiceId: updated[0].source_recurring_service_id,
+          });
+        }
+      } catch (_e) {
         /* non-fatal */
       }
 
@@ -3891,6 +4152,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
       await pushStatus(pool, jobId, job.status, toStatus, req.authUser.id, req.body?.note || null);
 
+      if (TERMINAL_JOB_STATUSES.has(toStatus)) {
+        try {
+          await cancelServiceReminderForJob(pool, jobId);
+        } catch (_e) {
+          /* non-fatal */
+        }
+      }
+
       // Handle pre-authorization capture/release rules
       if (toStatus === 'diagnosing') {
         const { rows: pmts } = await pool.query(
@@ -3964,44 +4233,106 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
       const job = rows[0];
       const isContractor = Number(job.assigned_contractor_user_id) === Number(req.authUser.id);
-      if (!isContractor && req.authUser.role !== 'admin') {
+      const isAdmin = req.authUser.role === 'admin';
+      if (!isContractor && !isAdmin) {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
+      const structuredRaw = req.body?.structuredEquipment || req.body?.equipmentUpdate || null;
+      const structuredEquipment = structuredRaw
+        ? normalizeStructuredEquipment(job, structuredRaw)
+        : null;
+
       const report = {
         summary: req.body?.summary || '',
         materialsUsed: req.body?.materialsUsed || '',
         beforePhotoUrl: req.body?.beforePhotoUrl || null,
         afterPhotoUrl: req.body?.afterPhotoUrl || null,
+        equipmentLabelPhotoUrl: req.body?.equipmentLabelPhotoUrl || null,
         warranty: req.body?.warranty || '',
         healthUpdate: req.body?.healthUpdate || null,
+        structuredEquipment: hasStructuredEquipmentData(structuredEquipment) ? structuredEquipment : null,
         completedAt: new Date().toISOString(),
+        completedBy: {
+          userId: req.authUser.id,
+          role: isAdmin ? 'admin' : 'contractor',
+          at: new Date().toISOString(),
+        },
       };
       await pool.query(
         `UPDATE managed_jobs SET completion_report=$1, updated_at=NOW() WHERE id=$2`,
         [JSON.stringify(report), jobId]
       );
-      await pushStatus(pool, jobId, job.status, 'work_completed', req.authUser.id, 'Work completed with proof');
+      const completionNote = isAdmin
+        ? `Work completed by admin (user ${req.authUser.id})`
+        : 'Work completed with proof';
+      await pushStatus(pool, jobId, job.status, 'work_completed', req.authUser.id, completionNote);
       await pushStatus(pool, jobId, 'work_completed', 'customer_review_pending', req.authUser.id, 'Awaiting customer confirmation');
 
-      // Apply property health + home system history from completed FixBridge work
       try {
-        await syncPropertyHistoryFromCompletedJob(pool, job, report);
+        await syncPropertyHistoryFromCompletedJob(pool, { ...job, completion_report: JSON.stringify(report) }, report);
       } catch (_e) {
         /* non-fatal */
       }
 
-      // Email homeowner — work done, please confirm
+      try {
+        if (!hasStructuredEquipmentData(structuredEquipment) && report.equipmentLabelPhotoUrl) {
+          await maybeCreateEquipmentSuggestionFromLabelPhoto(pool, job, report);
+        }
+      } catch (_e) {
+        /* non-fatal — structured equipment suggestions handled in syncPropertyHistoryFromCompletedJob */
+      }
+
+      try {
+        await cancelServiceReminderForJob(pool, jobId);
+      } catch (_e) {
+        /* non-fatal */
+      }
+
+      const isRecurring =
+        job.source_recurring_service_id != null ||
+        /recurring|cleaning|landscap/i.test(String(job.title || job.category || ''));
+      const serviceLabel = isRecurring
+        ? job.title?.toLowerCase().includes('landscap')
+          ? 'landscaping service'
+          : job.title?.toLowerCase().includes('clean')
+            ? 'cleaning service'
+            : 'home service'
+        : job.title || 'service';
+      const appUrl = process.env.APP_URL || 'https://fixbridge.netlify.app';
+      const jobLink = `${appUrl}/?job=${jobId}`;
+      const photoNote =
+        report.beforePhotoUrl || report.afterPhotoUrl
+          ? `<p><a href="${jobLink}">View before &amp; after photos</a></p>`
+          : '';
+
       try {
         const { rows: hw } = await pool.query('SELECT email, name FROM users WHERE id=$1', [job.homeowner_user_id]);
         if (hw[0]) {
-          const rpt = report;
           await sendNotificationEmail({
             to: hw[0].email,
-            subject: `Work complete — please confirm your ${brand.productName} job`,
-            html: `<p>Hi ${hw[0].name || 'there'},</p><p>Your contractor has marked <strong>${job.title}</strong> as complete${rpt.summary ? ': ' + rpt.summary : ''}.</p><p>Log in to review the work and pay FixBridge to finalize your job.</p>`,
+            subject: isRecurring
+              ? `Your ${serviceLabel} is complete — ${brand.productName}`
+              : `Work complete — please confirm your ${brand.productName} job`,
+            html: isRecurring
+              ? `<p>Hi ${hw[0].name || 'there'},</p><p>Your <strong>${serviceLabel}</strong> has been marked complete${report.summary ? ': ' + report.summary : ''}.</p>${photoNote}<p><a href="${jobLink}">View service details</a></p>`
+              : `<p>Hi ${hw[0].name || 'there'},</p><p>Your contractor has marked <strong>${job.title}</strong> as complete${report.summary ? ': ' + report.summary : ''}.</p>${photoNote}<p><a href="${jobLink}">Review and confirm your job</a></p>`,
           });
         }
-      } catch (_e) { /* non-fatal */ }
+        await pool.query(
+          `INSERT INTO notifications (user_id, job_id, type, title, message)
+           VALUES ($1,$2,'job_completed',$3,$4)`,
+          [
+            job.homeowner_user_id,
+            jobId,
+            isRecurring ? `${serviceLabel} complete` : 'Service marked complete',
+            isRecurring
+              ? `Your ${serviceLabel} is complete.${report.summary ? ' ' + report.summary : ''}`
+              : `${job.title || 'Your service'} is complete — review and confirm when ready.`,
+          ]
+        );
+      } catch (_e) {
+        /* non-fatal */
+      }
 
       const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       res.json({ ok: true, job: serializeJob(fresh[0], req.authUser) });

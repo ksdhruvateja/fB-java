@@ -330,8 +330,48 @@ export default function AdminHomeCareProPanel({
             <select className={`${fieldClass} mt-1`} disabled value="manual">
               <option value="manual">Manual — homeowner requests next visit</option>
             </select>
-            <p className="text-xs text-muted-foreground mt-1">Automatic scheduling is not available until a scheduler is configured.</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Automatic scheduling: unavailable until a scheduler/worker is configured in production.
+            </p>
           </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              disabled={!canManage}
+              checked={config.recurring.remindersEnabled !== false}
+              onChange={(e) =>
+                setConfig({
+                  ...config,
+                  recurring: { ...config.recurring, remindersEnabled: e.target.checked },
+                })
+              }
+            />
+            Service reminders (in-app + email)
+          </label>
+          <label className="block text-sm">
+            Reminder lead time (hours before service)
+            <input
+              className={`${fieldClass} mt-1`}
+              type="number"
+              min={1}
+              max={168}
+              disabled={!canManage}
+              value={Number((config.recurring as { reminderLeadHours?: number }).reminderLeadHours ?? 24)}
+              onChange={(e) =>
+                setConfig({
+                  ...config,
+                  recurring: { ...config.recurring, reminderLeadHours: Number(e.target.value) },
+                })
+              }
+            />
+          </label>
+          <p className="text-xs text-muted-foreground">
+            Reminder delivery configured for real scheduled jobs (after Request Next Visit), not theoretical plan dates.
+            Production on Netlify uses the scheduled function <code className="text-[11px]">process-service-reminders</code> (every 15 min).
+            Local persistent API may use <code className="text-[11px]">ENABLE_SERVICE_REMINDER_POLL=true</code>.
+            External cron may call <code className="text-[11px]">POST /api/internal/service-reminders/process</code> with{" "}
+            <code className="text-[11px]">X-Service-Reminder-Secret</code>.
+          </p>
           {canManage && (
             <button type="button" className="inline-flex items-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-2 text-sm font-medium text-white" disabled={busy} onClick={() => void saveConfig()}>
               Save recurring settings

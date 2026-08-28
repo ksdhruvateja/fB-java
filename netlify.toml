@@ -17,6 +17,9 @@
   # caused production 502s: Runtime.ImportModuleError Cannot find module 'express'.
   node_bundler = "esbuild"
 
+[functions."process-service-reminders"]
+  schedule = "*/15 * * * *"
+
 # Express API (serverless-http) — keep before the SPA catch-all
 [[redirects]]
   from = "/api/*"

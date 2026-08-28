@@ -11,6 +11,7 @@ import {
 } from './homecare-config.js';
 import { buildPropertyAIContext, sanitizeQuoteForSecondOpinion } from './property-ai-context.js';
 import { chatWithCustomer } from './ai.js';
+import { upsertServiceReminderEligibility } from './service-reminders.js';
 
 function addRecurrenceDays(dateStr, recurrence) {
   const d = new Date(dateStr || Date.now());
@@ -21,7 +22,27 @@ function addRecurrenceDays(dateStr, recurrence) {
   return d.toISOString().slice(0, 10);
 }
 
+function recurringFeatureFor(row) {
+  return row?.service_type === 'recurring_landscaping' ? 'recurring_landscaping' : 'recurring_cleaning';
+}
+
+async function assertRecurringServiceAccess(pool, req, row) {
+  if (!row) return { ok: false, status: 404, message: 'Recurring service not found.' };
+  const feature = recurringFeatureFor(row);
+  const gate = await resolveFeatureEntitlement(pool, { user: req.authUser, feature });
+  if (!gate.allowed) {
+    return { ok: false, status: 403, payload: entitlementDeniedPayload(gate) };
+  }
+  return { ok: true, feature };
+}
+
 function serializeRecurring(row) {
+  let metadata = {};
+  try {
+    metadata = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata || {};
+  } catch {
+    metadata = {};
+  }
   return {
     id: Number(row.id),
     propertyId: Number(row.property_id),
@@ -34,6 +55,7 @@ function serializeRecurring(row) {
     nextServiceDate: row.next_service_date ? String(row.next_service_date).slice(0, 10) : null,
     assignedContractorUserId: row.assigned_contractor_user_id != null ? Number(row.assigned_contractor_user_id) : null,
     notes: row.notes || null,
+    metadata,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -87,12 +109,14 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
         return res.status(404).json({ ok: false, message: 'Property not found.' });
       }
       const startDate = b.startDate || new Date().toISOString().slice(0, 10);
-      const nextServiceDate = addRecurrenceDays(startDate, recurrence);
+      const featureId = serviceType === 'recurring_landscaping' ? 'recurring_landscaping' : 'recurring_cleaning';
+      const gate = await resolveFeatureEntitlement(pool, { user: req.authUser, feature: featureId });
+      if (!gate.allowed) return res.status(403).json(entitlementDeniedPayload(gate));
       const { rows } = await pool.query(
         `INSERT INTO recurring_services
           (owner_user_id, property_id, service_type, recurrence, preferred_day, preferred_time_window,
-           start_date, status, next_service_date, notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9)
+           start_date, status, next_service_date, notes, metadata)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$7,$8,'{}')
          RETURNING *`,
         [
           req.authUser.id,
@@ -101,7 +125,6 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
           recurrence,
           b.preferredDay ? String(b.preferredDay).slice(0, 40) : null,
           b.preferredTimeWindow ? String(b.preferredTimeWindow).slice(0, 40) : null,
-          startDate,
           startDate,
           b.notes ? String(b.notes).slice(0, 500) : null,
         ]
@@ -157,6 +180,160 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, message: 'Could not update recurring service.' });
+    }
+  });
+
+  app.post('/api/recurring-services/:id/skip', requireAuth, requireHomeCareFeature('recurring_cleaning'), async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { rows: existing } = await pool.query(
+        `SELECT * FROM recurring_services WHERE id=$1 AND owner_user_id=$2`,
+        [id, req.authUser.id]
+      );
+      if (!existing[0]) return res.status(404).json({ ok: false, message: 'Recurring service not found.' });
+      const row = existing[0];
+      const access = await assertRecurringServiceAccess(pool, req, row);
+      if (!access.ok) {
+        return res.status(access.status).json(access.payload || { ok: false, message: access.message });
+      }
+      const skipDate = req.body?.date || row.next_service_date;
+      if (!skipDate) return res.status(400).json({ ok: false, message: 'No upcoming date to skip.' });
+      let metadata = {};
+      try {
+        metadata = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata || {};
+      } catch {
+        metadata = {};
+      }
+      const skippedDates = Array.isArray(metadata.skippedDates) ? metadata.skippedDates : [];
+      const dateStr = String(skipDate).slice(0, 10);
+      if (!skippedDates.includes(dateStr)) skippedDates.push(dateStr);
+      metadata.skippedDates = skippedDates.slice(-24);
+      const nextDate = addRecurrenceDays(dateStr, row.recurrence);
+      const { rows } = await pool.query(
+        `UPDATE recurring_services SET metadata=$3, next_service_date=$4, updated_at=NOW()
+         WHERE id=$1 AND owner_user_id=$2 RETURNING *`,
+        [id, req.authUser.id, JSON.stringify(metadata), nextDate]
+      );
+      res.json({ ok: true, service: serializeRecurring(rows[0]) });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Could not skip service.' });
+    }
+  });
+
+  app.post('/api/recurring-services/:id/reschedule', requireAuth, requireHomeCareFeature('recurring_cleaning'), async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const newDate = String(req.body?.newDate || '').slice(0, 10);
+      if (!newDate) return res.status(400).json({ ok: false, message: 'newDate required.' });
+      const { rows: existing } = await pool.query(
+        `SELECT * FROM recurring_services WHERE id=$1 AND owner_user_id=$2`,
+        [id, req.authUser.id]
+      );
+      if (!existing[0]) return res.status(404).json({ ok: false, message: 'Recurring service not found.' });
+      const row = existing[0];
+      const access = await assertRecurringServiceAccess(pool, req, row);
+      if (!access.ok) {
+        return res.status(access.status).json(access.payload || { ok: false, message: access.message });
+      }
+      let metadata = {};
+      try {
+        metadata = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata || {};
+      } catch {
+        metadata = {};
+      }
+      const reschedules = Array.isArray(metadata.reschedules) ? metadata.reschedules : [];
+      reschedules.push({
+        from: row.next_service_date ? String(row.next_service_date).slice(0, 10) : null,
+        to: newDate,
+        at: new Date().toISOString(),
+      });
+      metadata.reschedules = reschedules.slice(-24);
+      const { rows } = await pool.query(
+        `UPDATE recurring_services SET metadata=$3, next_service_date=$4, updated_at=NOW()
+         WHERE id=$1 AND owner_user_id=$2 RETURNING *`,
+        [id, req.authUser.id, JSON.stringify(metadata), newDate]
+      );
+      res.json({ ok: true, service: serializeRecurring(rows[0]) });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Could not reschedule service.' });
+    }
+  });
+
+  app.post('/api/recurring-services/:id/request-visit', requireAuth, requireHomeCareFeature('recurring_cleaning'), async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { rows: existing } = await pool.query(
+        `SELECT rs.*, p.address_line1, p.city, p.state, p.zip
+         FROM recurring_services rs
+         JOIN properties p ON p.id = rs.property_id
+         WHERE rs.id=$1 AND rs.owner_user_id=$2`,
+        [id, req.authUser.id]
+      );
+      const rs = existing[0];
+      if (!rs) return res.status(404).json({ ok: false, message: 'Recurring service not found.' });
+      const access = await assertRecurringServiceAccess(pool, req, rs);
+      if (!access.ok) {
+        return res.status(access.status).json(access.payload || { ok: false, message: access.message });
+      }
+      if (rs.status !== 'active') {
+        return res.status(400).json({ ok: false, message: 'Recurring service is not active.' });
+      }
+      const category = rs.service_type === 'recurring_landscaping' ? 'landscaping' : 'cleaning';
+      const title =
+        rs.service_type === 'recurring_landscaping' ? 'Recurring landscaping visit' : 'Recurring cleaning visit';
+      const visitDate = rs.next_service_date || new Date().toISOString().slice(0, 10);
+      const serviceType = rs.service_type === 'recurring_landscaping' ? 'landscaping' : 'cleaning';
+      let preferredContractorId = rs.assigned_contractor_user_id || null;
+      if (!preferredContractorId) {
+        try {
+          const { rows: pref } = await pool.query(
+            `SELECT contractor_user_id FROM preferred_contractors
+             WHERE property_id=$1 AND owner_user_id=$2 AND service_type=$3
+             ORDER BY is_favorite DESC, created_at DESC LIMIT 1`,
+            [rs.property_id, req.authUser.id, serviceType]
+          );
+          preferredContractorId = pref[0]?.contractor_user_id || null;
+        } catch {
+          /* optional */
+        }
+      }
+      const { rows: jobRows } = await pool.query(
+        `INSERT INTO managed_jobs
+          (homeowner_user_id, property_id, job_mode, status, category, title, description,
+           full_address, city_state_zip, preferred_date, preferred_time_slot, source_recurring_service_id, preferred_contractor_user_id)
+         VALUES ($1,$2,'managed','draft',$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         RETURNING *`,
+        [
+          req.authUser.id,
+          rs.property_id,
+          category,
+          title,
+          `Recurring ${rs.recurrence} service. ${rs.notes || ''}`.trim().slice(0, 500),
+          rs.address_line1,
+          [rs.city, rs.state, rs.zip].filter(Boolean).join(', '),
+          visitDate,
+          rs.preferred_time_window || null,
+          id,
+          preferredContractorId,
+        ]
+      );
+      const job = jobRows[0];
+      const nextDate = addRecurrenceDays(visitDate, rs.recurrence);
+      await pool.query(`UPDATE recurring_services SET next_service_date=$2, updated_at=NOW() WHERE id=$1`, [
+        id,
+        nextDate,
+      ]);
+      try {
+        await upsertServiceReminderEligibility(pool, job, { recurringServiceId: id });
+      } catch (_e) {
+        /* non-fatal */
+      }
+      res.json({ ok: true, jobId: Number(job.id), nextServiceDate: nextDate, preferredContractorUserId: preferredContractorId });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Could not create service visit request.' });
     }
   });
 

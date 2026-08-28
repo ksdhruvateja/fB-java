@@ -19,6 +19,8 @@ import {
 import { registerManagedRoutes } from './managed-routes.js';
 import { registerHomeCareProRoutes } from './homecare-pro-routes.js';
 import { registerHomeCareAdminRoutes, initHomeCareSettingsSchema } from './homecare-admin-routes.js';
+import { registerHomeAssistantRoutes, initPropertyMemorySchema } from './home-assistant-routes.js';
+import { initServiceReminderSchema, getReminderSchedulerStatus } from './service-reminders.js';
 import { registerPlatformRoutes } from './platform-routes.js';
 import { registerPayoutRoutes } from './payout-routes.js';
 import { registerReferralRoutes } from './referral-routes.js';
@@ -104,7 +106,7 @@ function createPool() {
     return new Pool({
       connectionString,
       ssl: postgresSslOptions(),
-      max: 10,
+      max: process.env.NETLIFY || process.env.NETLIFY_DEV ? 3 : 10,
     });
   }
 
@@ -386,6 +388,8 @@ export async function initDb() {
       console.log('[FixBridge API] DB already initialized, running managed schema checks...');
       await initManagedSchema(pool);
       await initHomeCareSettingsSchema(pool);
+      await initPropertyMemorySchema(pool);
+      await initServiceReminderSchema(pool);
       await initSupportTicketSchema(pool);
       await initHomeownerAdminSchema(pool);
       await initSubscriptionPlansSchema(pool);
@@ -590,6 +594,8 @@ export async function initDb() {
 
   await initManagedSchema(pool);
   await initHomeCareSettingsSchema(pool);
+  await initPropertyMemorySchema(pool);
+  await initServiceReminderSchema(pool);
   await initSupportTicketSchema(pool);
   await initHomeownerAdminSchema(pool);
   await initSubscriptionPlansSchema(pool);
@@ -2808,6 +2814,7 @@ app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
   registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser });
   registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin });
   registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdmin });
+  registerHomeAssistantRoutes(app, { pool, requireAuth });
   registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerSupportTicketRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerHomeownerAdminRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
@@ -2857,17 +2864,34 @@ app.post('/api/ai/chat', requireAuth, aiLimiter, async (req, res) => {
   }
 });
 
-app.get('/api/health', (_req, res) => {
+app.get('/api/health', async (_req, res) => {
   const production = process.env.NODE_ENV === 'production';
+  let dbOk = true;
+  if (!useInMemoryDb) {
+    try {
+      await pool.query('SELECT 1');
+    } catch {
+      dbOk = false;
+    }
+  }
+  let reminders = null;
+  try {
+    reminders = await getReminderSchedulerStatus(pool);
+  } catch {
+    reminders = { deliveryConfigured: false };
+  }
   res.json({
-    ok: true,
+    ok: dbOk,
     service: 'fixbridge-api',
+    version: process.env.npm_package_version || '0.0.2',
+    build: process.env.COMMIT_REF || process.env.DEPLOY_ID || null,
     env: production ? 'production' : 'development',
-    database: useInMemoryDb ? 'memory' : 'neon',
+    database: useInMemoryDb ? 'memory' : dbOk ? 'neon' : 'neon_unreachable',
     stripeConfigured: stripeConfigured(),
     gmail: mailStatus(),
     paymentsSimulateAllowed: !production && !stripeConfigured(),
     demoSeedAllowed: allowDemoSeed(),
+    reminders,
   });
 });
 

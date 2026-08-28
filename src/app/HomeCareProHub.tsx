@@ -12,7 +12,10 @@ import {
   inviteHouseholdMember,
   listRecurringServices,
   removeHouseholdMember,
+  requestRecurringVisit,
+  rescheduleRecurringService,
   revokeHouseholdInvite,
+  skipRecurringService,
   updateRecurringService,
   type RecurringService,
 } from "./homecareProApi";
@@ -219,22 +222,96 @@ export default function HomeCareProHub({
                     <p className="font-semibold">{s.serviceType === "recurring_cleaning" ? "Cleaning" : "Landscaping"}</p>
                     <p className="text-xs text-muted-foreground">
                       {RECURRENCE_LABELS[s.recurrence] || s.recurrence}
-                      {s.nextServiceDate ? ` · Next: ${s.nextServiceDate}` : ""}
+                      {s.nextServiceDate ? ` · Next plan date: ${s.nextServiceDate}` : ""}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Manual fulfillment — visits are not auto-booked. Use <strong>Request Next Visit</strong> to create a service job.
                     </p>
                     <p className="mt-1 text-xs capitalize text-muted-foreground">Status: {s.status}</p>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     {s.status === "active" ? (
-                      <button type="button" className="text-xs font-semibold text-primary" onClick={() => void updateRecurringService(s.id, { status: "paused" }).then((r) => r.ok && setServices((prev) => prev.map((x) => (x.id === s.id ? { ...x, status: "paused" } : x))))}>
-                        Pause
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          className="text-xs font-semibold text-primary"
+                          onClick={() => {
+                            setLoading(true);
+                            void requestRecurringVisit(s.id).then((r) => {
+                              setLoading(false);
+                              if (!r.ok) setError(r.message || "Could not request visit.");
+                              else void listRecurringServices().then((lr) => lr.ok && lr.services && setServices(lr.services));
+                            });
+                          }}
+                        >
+                          Request Next Visit
+                        </button>
+                        <button
+                          type="button"
+                          className="text-xs font-semibold text-primary"
+                          onClick={() => {
+                            if (!s.nextServiceDate) return;
+                            setLoading(true);
+                            void skipRecurringService(s.id, s.nextServiceDate).then((r) => {
+                              setLoading(false);
+                              if (!r.ok) setError(r.message || "Could not skip.");
+                              else if (r.service) setServices((prev) => prev.map((x) => (x.id === s.id ? r.service! : x)));
+                            });
+                          }}
+                        >
+                          Skip next
+                        </button>
+                        <button
+                          type="button"
+                          className="text-xs font-semibold text-primary"
+                          onClick={() => {
+                            const newDate = window.prompt("Reschedule next visit to (YYYY-MM-DD):", s.nextServiceDate || "");
+                            if (!newDate) return;
+                            setLoading(true);
+                            void rescheduleRecurringService(s.id, newDate).then((r) => {
+                              setLoading(false);
+                              if (!r.ok) setError(r.message || "Could not reschedule.");
+                              else if (r.service) setServices((prev) => prev.map((x) => (x.id === s.id ? r.service! : x)));
+                            });
+                          }}
+                        >
+                          Reschedule
+                        </button>
+                        <button
+                          type="button"
+                          className="text-xs font-semibold text-primary"
+                          onClick={() =>
+                            void updateRecurringService(s.id, { status: "paused" }).then(
+                              (r) => r.ok && setServices((prev) => prev.map((x) => (x.id === s.id ? { ...x, status: "paused" } : x)))
+                            )
+                          }
+                        >
+                          Pause
+                        </button>
+                      </>
                     ) : s.status === "paused" ? (
-                      <button type="button" className="text-xs font-semibold text-primary" onClick={() => void updateRecurringService(s.id, { status: "active" }).then((r) => r.ok && setServices((prev) => prev.map((x) => (x.id === s.id ? { ...x, status: "active" } : x))))}>
+                      <button
+                        type="button"
+                        className="text-xs font-semibold text-primary"
+                        onClick={() =>
+                          void updateRecurringService(s.id, { status: "active" }).then(
+                            (r) => r.ok && setServices((prev) => prev.map((x) => (x.id === s.id ? { ...x, status: "active" } : x)))
+                          )
+                        }
+                      >
                         Resume
                       </button>
                     ) : null}
                     {s.status !== "cancelled" ? (
-                      <button type="button" className="text-xs font-semibold text-red-600" onClick={() => void updateRecurringService(s.id, { status: "cancelled" }).then((r) => r.ok && setServices((prev) => prev.map((x) => (x.id === s.id ? { ...x, status: "cancelled" } : x))))}>
+                      <button
+                        type="button"
+                        className="text-xs font-semibold text-red-600"
+                        onClick={() =>
+                          void updateRecurringService(s.id, { status: "cancelled" }).then(
+                            (r) => r.ok && setServices((prev) => prev.map((x) => (x.id === s.id ? { ...x, status: "cancelled" } : x)))
+                          )
+                        }
+                      >
                         Cancel
                       </button>
                     ) : null}

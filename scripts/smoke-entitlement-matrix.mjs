@@ -1,10 +1,13 @@
 /**
  * HomeCare Pro entitlement matrix smoke test.
  * Usage: node --env-file=.env scripts/smoke-entitlement-matrix.mjs
+ *
+ * Pro tests use SMOKE_PRO_HOMEOWNER_EMAIL/PASSWORD when set (no admin MFA required).
  */
-import { spawn } from 'node:child_process';
+import { smokeCredentials, missingCredsMessage } from './smoke-credentials.mjs';
 
-const API = process.env.API_BASE || 'http://127.0.0.1:3001';
+const creds = smokeCredentials();
+const API = creds.api;
 
 async function json(res) {
   const text = await res.text();
@@ -39,10 +42,12 @@ const MATRIX = [
 
 async function main() {
   console.log(`\nEntitlement matrix @ ${API}\n`);
-  const maria = await login('homeowner', 'maria@example.com', 'demo123');
-  const admin = await login('admin', 'ksdt2702@gmail.com', 'admin123');
+  if (!creds.hasHomeowner) {
+    ok('credentials', false, missingCredsMessage());
+    return;
+  }
+  const maria = await login('homeowner', creds.homeownerEmail, creds.homeownerPassword);
   const freeH = { Authorization: `Bearer ${maria.token}`, 'Content-Type': 'application/json' };
-  const adminH = { Authorization: `Bearer ${admin.token}`, 'Content-Type': 'application/json' };
   const props = await fetch(`${API}/api/properties`, { headers: freeH }).then(json);
   const pid = props.properties?.[0]?.id;
 
@@ -55,13 +60,13 @@ async function main() {
     ok(`FREE blocked ${row.feature}`, r.status === 403 && r.code === 'PRO_SUBSCRIPTION_REQUIRED', `status=${r.status}`);
   }
 
-  await fetch(`${API}/api/admin/subscriptions/update`, {
-    method: 'POST',
-    headers: adminH,
-    body: JSON.stringify({ homeownerUserId: maria.user?.id, planCode: 'homecare_pro', staffName: 'Matrix Smoke' }),
-  }).then(json);
+  if (!creds.hasPro) {
+    ok('PRO entitlement tests', false, 'SKIPPED — set SMOKE_PRO_HOMEOWNER_EMAIL/PASSWORD (pre-configured Pro account)');
+    console.log('\nDone.\n');
+    return;
+  }
 
-  const pro = await login('homeowner', 'maria@example.com', 'demo123');
+  const pro = await login('homeowner', creds.proEmail, creds.proPassword);
   const proH = { Authorization: `Bearer ${pro.token}`, 'Content-Type': 'application/json' };
 
   for (const row of MATRIX) {
@@ -72,12 +77,6 @@ async function main() {
     }).then(json);
     ok(`PRO allowed ${row.feature}`, r.status !== 403 || r.code !== 'PRO_SUBSCRIPTION_REQUIRED', `status=${r.status}`);
   }
-
-  await fetch(`${API}/api/admin/subscriptions/update`, {
-    method: 'POST',
-    headers: adminH,
-    body: JSON.stringify({ homeownerUserId: maria.user?.id, planCode: 'free', staffName: 'Matrix Smoke' }),
-  }).then(json);
 
   console.log('\nDone.\n');
 }

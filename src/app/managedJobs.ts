@@ -111,6 +111,9 @@ export type ManagedJob = {
   estimateConfidence?: string | null;
   preferredTimeNote?: string;
   assignedContractorUserId?: number | null;
+  preferredContractorUserId?: number | null;
+  preferredByHomeowner?: boolean;
+  sourceRecurringServiceId?: number | null;
   homeownerUserId?: number | null;
   technician?: {
     id: number;
@@ -480,6 +483,13 @@ export async function createManagedJob(body: Record<string, unknown>) {
   return api<{ ok: boolean; job?: ManagedJob; message?: string }>("/api/managed/jobs", {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+export async function repeatManagedService(jobId: number, requestSameProvider = true) {
+  return api<{ ok: boolean; job?: ManagedJob; message?: string }>(`/api/managed/jobs/${jobId}/repeat-service`, {
+    method: "POST",
+    body: JSON.stringify({ requestSameProvider }),
   });
 }
 

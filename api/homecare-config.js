@@ -95,6 +95,8 @@ export const DEFAULT_HOMECARE_CONFIG = {
     fulfillmentMode: 'manual',
     schedulerAvailable: false,
     leadTimeDays: 7,
+    remindersEnabled: true,
+    reminderLeadHours: 24,
   },
   maintenance: {
     enabled: true,
@@ -237,6 +239,8 @@ export function mergeHomeCareConfig(raw) {
       fulfillmentMode: rec.fulfillmentMode === 'automatic' && rec.schedulerAvailable ? 'automatic' : 'manual',
       schedulerAvailable: Boolean(rec.schedulerAvailable),
       leadTimeDays: clampInt(rec.leadTimeDays, 1, 90, d.recurring.leadTimeDays),
+      remindersEnabled: rec.remindersEnabled !== false,
+      reminderLeadHours: clampInt(rec.reminderLeadHours, 1, 168, d.recurring.reminderLeadHours),
     },
     maintenance: {
       enabled: maint.enabled !== false,
@@ -461,6 +465,9 @@ export function toPublicHomeCareConfig(config, { planCode } = {}) {
       landscapingEnabled: config.recurring.landscapingEnabled,
       frequencies: config.recurring.frequencies,
       fulfillmentMode: config.recurring.fulfillmentMode,
+      schedulerAvailable: config.recurring.schedulerAvailable,
+      remindersEnabled: config.recurring.remindersEnabled,
+      reminderLeadHours: config.recurring.reminderLeadHours,
     },
     maintenance: { enabled: config.maintenance.enabled },
     documents: {

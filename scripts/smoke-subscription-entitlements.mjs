@@ -2,7 +2,10 @@
  * HomeCare Pro entitlement smoke tests.
  * Usage: node --env-file=.env scripts/smoke-subscription-entitlements.mjs
  */
-const API = process.env.API_BASE || 'http://127.0.0.1:3001';
+import { smokeCredentials, missingCredsMessage } from './smoke-credentials.mjs';
+
+const creds = smokeCredentials();
+const API = creds.api;
 
 async function json(res) {
   const text = await res.text();
@@ -30,11 +33,13 @@ async function login(role, email, password) {
 
 async function main() {
   console.log(`\nFixBridge HomeCare Pro entitlements @ ${API}\n`);
+  if (!creds.hasHomeowner) {
+    ok('credentials', false, missingCredsMessage());
+    return;
+  }
 
-  const maria = await login('homeowner', 'maria@example.com', 'demo123');
-  const admin = await login('admin', 'ksdt2702@gmail.com', 'admin123');
+  const maria = await login('homeowner', creds.homeownerEmail, creds.homeownerPassword);
   const freeH = { Authorization: `Bearer ${maria.token}`, 'Content-Type': 'application/json' };
-  const adminH = { Authorization: `Bearer ${admin.token}`, 'Content-Type': 'application/json' };
 
   const props = await fetch(`${API}/api/properties`, { headers: freeH }).then(json);
   ok('free user can list properties', props.ok === true, props.message);
@@ -63,23 +68,18 @@ async function main() {
   ok('upload rejection includes feature', uploadAttempt.feature === 'document_vault');
 
   const mariaUserId = maria.user?.id;
-  ok('maria user id available', Boolean(mariaUserId));
+  ok('homeowner user id available', Boolean(mariaUserId));
 
-  const grantPro = await fetch(`${API}/api/admin/subscriptions/update`, {
-    method: 'POST',
-    headers: adminH,
-    body: JSON.stringify({
-      homeownerUserId: mariaUserId,
-      planCode: 'homecare_pro',
-      staffName: 'Entitlement Smoke',
-    }),
-  }).then(json);
-  ok('admin can grant pro for smoke', grantPro.ok === true, grantPro.message);
+  if (!creds.hasPro) {
+    ok('pro user document upload allowed', false, 'SKIPPED — set SMOKE_PRO_HOMEOWNER_EMAIL/PASSWORD');
+    console.log('\nDone.\n');
+    return;
+  }
 
-  let docId = null;
-  const mariaPro = await login('homeowner', 'maria@example.com', 'demo123');
+  const mariaPro = await login('homeowner', creds.proEmail, creds.proPassword);
   const proH = { Authorization: `Bearer ${mariaPro.token}`, 'Content-Type': 'application/json' };
 
+  let docId = null;
   const proUpload = await fetch(`${API}/api/properties/${propertyId}/documents`, {
     method: 'POST',
     headers: proH,
@@ -103,31 +103,6 @@ async function main() {
       'pro user document analyze not blocked by entitlement',
       analyze.status !== 403 || analyze.code !== 'PRO_SUBSCRIPTION_REQUIRED',
       analyze.message || `status=${analyze.status}`
-    );
-  }
-
-  await fetch(`${API}/api/admin/subscriptions/update`, {
-    method: 'POST',
-    headers: adminH,
-    body: JSON.stringify({
-      homeownerUserId: mariaUserId,
-      planCode: 'free',
-      staffName: 'Entitlement Smoke',
-    }),
-  }).then(json);
-
-  const mariaFreeAgain = await login('homeowner', 'maria@example.com', 'demo123');
-  const freeAgainH = { Authorization: `Bearer ${mariaFreeAgain.token}`, 'Content-Type': 'application/json' };
-
-  if (docId) {
-    const analyzeBlocked = await fetch(`${API}/api/properties/${propertyId}/documents/${docId}/analyze`, {
-      method: 'POST',
-      headers: freeAgainH,
-    }).then(json);
-    ok(
-      'restored free user analyze rejected',
-      analyzeBlocked.status === 403 && analyzeBlocked.code === 'PRO_SUBSCRIPTION_REQUIRED',
-      `status=${analyzeBlocked.status} code=${analyzeBlocked.code}`
     );
   }
 

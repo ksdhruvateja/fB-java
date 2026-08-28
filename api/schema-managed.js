@@ -385,6 +385,9 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS address_verified BOOLEAN DEFAULT FALSE`);
   await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS address_verified_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS address_verification_provider TEXT`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS timezone TEXT`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION`);
 
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS postal_code_plus4 TEXT`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS address_verified BOOLEAN DEFAULT FALSE`);

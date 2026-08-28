@@ -1497,6 +1497,15 @@ export default function AdminPanel({
                         </button>
                       </div>
                     </div>
+                    {selectedJob.preferredContractorUserId ? (
+                      <p className="rounded-xl bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
+                        Preferred by homeowner: contractor ID #{selectedJob.preferredContractorUserId}
+                        {contractors.find((c) => Number(c.id) === Number(selectedJob.preferredContractorUserId))
+                          ? ` · ${contractors.find((c) => Number(c.id) === Number(selectedJob.preferredContractorUserId))?.name}`
+                          : ""}
+                        . Assignment is not guaranteed — verify eligibility and availability.
+                      </p>
+                    ) : null}
                     <p className="text-sm font-medium">Invite contractor</p>
                     {selectedJob.assignedContractorUserId ? (
                       <p className="rounded-xl bg-teal-500/10 px-3 py-2 text-sm text-teal-800">
@@ -1513,13 +1522,23 @@ export default function AdminPanel({
                         onChange={(e) => setInviteContractorId(e.target.value ? Number(e.target.value) : "")}
                       >
                         <option value="">Select contractor</option>
-                        {contractors.map((c) => {
+                        {contractors
+                          .slice()
+                          .sort((a, b) => {
+                            const pref = Number(selectedJob.preferredContractorUserId || 0);
+                            if (Number(a.id) === pref) return -1;
+                            if (Number(b.id) === pref) return 1;
+                            return (a.name || "").localeCompare(b.name || "");
+                          })
+                          .map((c) => {
                           const compliance = String(c.complianceStatus || "approved").toLowerCase();
                           const blocked = ["draft", "under_review", "suspended", "rejected", "blocked"].includes(
                             compliance
                           );
+                          const isPreferred = Number(c.id) === Number(selectedJob.preferredContractorUserId);
                           return (
                             <option key={String(c.id)} value={Number(c.id)} disabled={blocked}>
+                              {isPreferred ? "★ Preferred · " : ""}
                               {c.name} · {c.trade || "trade?"} · {c.email}
                               {compliance !== "approved" ? ` (${compliance})` : ""}
                             </option>

@@ -68,6 +68,27 @@ export async function updateRecurringService(
   });
 }
 
+export async function skipRecurringService(id: number, date?: string) {
+  return api<{ ok: boolean; service?: RecurringService; message?: string }>(`/api/recurring-services/${id}/skip`, {
+    method: "POST",
+    body: JSON.stringify(date ? { date } : {}),
+  });
+}
+
+export async function rescheduleRecurringService(id: number, newDate: string) {
+  return api<{ ok: boolean; service?: RecurringService; message?: string }>(`/api/recurring-services/${id}/reschedule`, {
+    method: "POST",
+    body: JSON.stringify({ newDate }),
+  });
+}
+
+export async function requestRecurringVisit(id: number) {
+  return api<{ ok: boolean; jobId?: number; nextServiceDate?: string; message?: string }>(
+    `/api/recurring-services/${id}/request-visit`,
+    { method: "POST" }
+  );
+}
+
 export async function savePropertyMaintenance(propertyId: number, maintenance: Array<{ label: string; dueDate?: string; system?: string; completed?: boolean; skipped?: boolean }>) {
   return api<{ ok: boolean; maintenance?: unknown[]; message?: string }>(`/api/properties/${propertyId}/maintenance`, {
     method: "PUT",

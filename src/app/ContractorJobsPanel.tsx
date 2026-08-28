@@ -24,6 +24,12 @@ import {
 } from "./managedJobs";
 import ChangeOrderPanel from "./ChangeOrderPanel";
 import { JobEarningsCard } from "./ContractorPayoutsPanel";
+import {
+  buildStructuredEquipmentPayload,
+  equipmentDraftHasData,
+  equipmentFieldsForJob,
+  type EquipmentDraft,
+} from "./contractorEquipmentFields";
 
 type JobFilter = "all" | "active" | "scheduled" | "awaiting" | "completed" | "cancelled";
 
@@ -80,9 +86,12 @@ export default function ContractorJobsPanel({
   const [healthNextAction, setHealthNextAction] = useState("");
   const [beforePhotoUrl, setBeforePhotoUrl] = useState<string | null>(null);
   const [afterPhotoUrl, setAfterPhotoUrl] = useState<string | null>(null);
+  const [equipmentLabelPhotoUrl, setEquipmentLabelPhotoUrl] = useState<string | null>(null);
+  const [equipmentDraft, setEquipmentDraft] = useState<EquipmentDraft>({});
   const [notes, setNotes] = useState("");
   const beforePhotoRef = useRef<HTMLInputElement>(null);
   const afterPhotoRef = useRef<HTMLInputElement>(null);
+  const labelPhotoRef = useRef<HTMLInputElement>(null);
   const isMobile = useIsMobile();
 
   const filtered = useMemo(() => jobs.filter((j) => matchesFilter(j, filter)), [jobs, filter]);
@@ -389,16 +398,49 @@ export default function ContractorJobsPanel({
                       {afterPhotoUrl && <img src={afterPhotoUrl} alt="" className="mt-2 h-24 w-full rounded-lg object-cover" />}
                     </div>
                   </div>
+                  <div>
+                    <input ref={labelPhotoRef} type="file" accept="image/*" className="hidden" onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = () => setEquipmentLabelPhotoUrl(String(reader.result));
+                      reader.readAsDataURL(file);
+                    }} />
+                    <button type="button" className="w-full rounded-xl border border-dashed border-border px-3 py-3 text-sm" onClick={() => labelPhotoRef.current?.click()}>
+                      {equipmentLabelPhotoUrl ? "Replace equipment label photo" : "Upload equipment label photo (optional)"}
+                    </button>
+                    {equipmentLabelPhotoUrl ? <img src={equipmentLabelPhotoUrl} alt="" className="mt-2 h-24 w-full rounded-lg object-cover" /> : null}
+                  </div>
+                  <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Equipment details (optional)</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Homeowner will confirm before this updates Property Passport.</p>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      {equipmentFieldsForJob(selected).map((field) => (
+                        <label key={field.key} className="grid gap-1 text-xs">
+                          {field.label}
+                          <input
+                            className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                            placeholder={field.placeholder}
+                            value={equipmentDraft[field.key] || ""}
+                            onChange={(e) => setEquipmentDraft((prev) => ({ ...prev, [field.key]: e.target.value }))}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                   <button
                     type="button"
                     disabled={busy || !completeSummary.trim()}
                     className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
                     onClick={async () => {
                       onError(null);
+                      const structuredEquipment = buildStructuredEquipmentPayload(selected, equipmentDraft);
                       const r = await completeJob(selected.id, {
                         summary: completeSummary.trim(),
                         beforePhotoUrl,
                         afterPhotoUrl,
+                        equipmentLabelPhotoUrl,
+                        structuredEquipment: equipmentDraftHasData(equipmentDraft) ? structuredEquipment : undefined,
                         notes: notes.trim() || undefined,
                         healthUpdate: {
                           system: healthSystem,
@@ -415,6 +457,8 @@ export default function ContractorJobsPanel({
                       setCompleteSummary("");
                       setBeforePhotoUrl(null);
                       setAfterPhotoUrl(null);
+                      setEquipmentLabelPhotoUrl(null);
+                      setEquipmentDraft({});
                       await onRefresh();
                     }}
                   >
