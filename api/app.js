@@ -93,8 +93,8 @@ if (isProduction && !stripeConfigured()) {
   );
 }
 if (isProduction && !String(process.env.STRIPE_WEBHOOK_SECRET || '').trim()) {
-  throw new Error(
-    '[FATAL] STRIPE_WEBHOOK_SECRET is required in production. Refusing to start without webhook verification secret.'
+  console.warn(
+    '[FixBridge API] STRIPE_WEBHOOK_SECRET not set — Stripe webhooks will fail until configured in Netlify env vars.'
   );
 }
 
