@@ -55,7 +55,8 @@ import {
   userHasPermission,
 } from './rbac.js';
 
-const isProduction = process.env.NODE_ENV === 'production';
+const isProduction =
+  process.env.NODE_ENV === 'production' || process.env.CONTEXT === 'production';
 const useInMemoryDb = !process.env.NEON_DATABASE_URL;
 
 // ── Require SESSION_SECRET at startup ─────────────────────────────────────────
@@ -2865,7 +2866,7 @@ app.post('/api/ai/chat', requireAuth, aiLimiter, async (req, res) => {
 });
 
 app.get('/api/health', async (_req, res) => {
-  const production = process.env.NODE_ENV === 'production';
+  const production = isProduction;
   let dbOk = true;
   if (!useInMemoryDb) {
     try {
@@ -2896,7 +2897,7 @@ app.get('/api/health', async (_req, res) => {
 });
 
 app.get('/api/admin/production-config', requireAuth, requireAdmin, requirePermission('settings.view'), (_req, res) => {
-  const production = process.env.NODE_ENV === 'production';
+  const production = isProduction;
   const checks = [
     { key: 'SESSION_SECRET', ok: Boolean(process.env.SESSION_SECRET), required: production },
     { key: 'NEON_DATABASE_URL', ok: Boolean(process.env.NEON_DATABASE_URL), required: production },

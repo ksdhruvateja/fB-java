@@ -5,6 +5,8 @@
 
 [build.environment]
   NODE_VERSION = "20"
+  NODE_ENV = "production"
+  FIXBRIDGE_HOSTING = "netlify"
   # Force npm (package-lock.json) — avoids stale pnpm-lock drift on Netlify CI.
   NPM_FLAGS = "--prefer-offline"
   # Vite embeds these at build time — also set them in the Netlify UI.

@@ -87,9 +87,13 @@ export async function sendMail({ to, subject, html, text }) {
 }
 
 export function mailStatus() {
+  const userSet = Boolean(gmailUser());
+  const passSet = Boolean(gmailPass());
   return {
     provider: 'gmail',
     configured: gmailConfigured(),
     from: gmailConfigured() ? fromAddress() : null,
+    userSet,
+    passSet,
   };
 }

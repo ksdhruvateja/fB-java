@@ -385,7 +385,13 @@ export function verifyReminderCronAuth(req) {
 export async function getReminderSchedulerStatus(pool) {
   const pollEnabled = process.env.ENABLE_SERVICE_REMINDER_POLL === 'true';
   const cronSecretConfigured = Boolean(process.env.SERVICE_REMINDER_CRON_SECRET?.trim());
-  const netlifyScheduled = Boolean(process.env.NETLIFY || process.env.NETLIFY_DEV);
+  const netlifyScheduled = Boolean(
+    process.env.FIXBRIDGE_HOSTING === 'netlify' ||
+      process.env.NETLIFY ||
+      process.env.NETLIFY_DEV ||
+      process.env.NETLIFY_SITE_ID ||
+      process.env.CONTEXT === 'production'
+  );
   let pending = 0;
   try {
     const { rows } = await pool.query(
