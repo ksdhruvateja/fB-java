@@ -10,6 +10,7 @@ import {
   roleHomeFrame,
   saveNavFrame,
   type AppHistoryState,
+  sanitizeNavFrame,
 } from "./navigation";
 
 export function useDashboardNavigation<T extends NavFrame>(
@@ -42,7 +43,7 @@ export function useDashboardNavigation<T extends NavFrame>(
     const onPop = (event: PopStateEvent) => {
       const state = (event.state || {}) as AppHistoryState;
       if (state.fixbridgeNav && state.fixbridgeNav.role === role) {
-        applyFrame(state.fixbridgeNav as T);
+        applyFrame(sanitizeNavFrame(state.fixbridgeNav) as T);
         return;
       }
     };

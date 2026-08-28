@@ -2893,7 +2893,7 @@ app.get('/api/health', async (_req, res) => {
     ok: dbOk,
     service: 'fixbridge-api',
     version: process.env.npm_package_version || '0.0.2',
-    build: process.env.COMMIT_REF || process.env.DEPLOY_ID || null,
+    build: process.env.COMMIT_REF || process.env.DEPLOY_ID || process.env.FIXBRIDGE_HOSTING || null,
     env: production ? 'production' : 'development',
     database: useInMemoryDb ? 'memory' : dbOk ? 'neon' : 'neon_unreachable',
     stripeConfigured: stripeConfigured(),

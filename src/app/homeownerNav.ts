@@ -221,6 +221,42 @@ export function resolveNavTab(id: DashTab): DashTab {
   return id;
 }
 
+/** Tabs that render a real panel in HomeownerDashboard (after legacy aliasing). */
+export const HOMEOWNER_RENDER_TABS = new Set<DashTab>([
+  "overview",
+  "property-care",
+  "more",
+  "inbox",
+  "protection",
+  "refer-earn",
+  "documents",
+  "payments",
+  "messages",
+  "assistant",
+  "help",
+  "go-pro",
+  "report",
+  "jobs",
+  "properties",
+  "profile",
+]);
+
+export function sanitizeDashTab(value: unknown): DashTab {
+  const resolved = resolveNavTab(String(value || "overview") as DashTab);
+  return HOMEOWNER_RENDER_TABS.has(resolved) ? resolved : "overview";
+}
+
+export function sanitizeJobsSegment(value: unknown): JobsSegment {
+  if (value === "active" || value === "quotes" || value === "upcoming" || value === "history") {
+    return value;
+  }
+  return "active";
+}
+
+export function isHomeownerTabRendered(tab: DashTab): boolean {
+  return HOMEOWNER_RENDER_TABS.has(resolveNavTab(tab));
+}
+
 export function bottomNavHighlight(tab: DashTab): BottomNavId {
   if (tab === "overview") return "home";
   if (tab === "jobs" || tab === "history") return "jobs";

@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, Component, type ErrorInfo, type ReactNode } from "react";
+import { useEffect, useState, useRef } from "react";
 import { motion } from "motion/react";
 import { Sun, Moon, Menu, X, MapPin, ArrowRight } from "lucide-react";
 import CustomerPage from "./CustomerPage";
@@ -10,6 +10,7 @@ import AdminLogin from "./AdminLogin";
 import HomeownerDashboard from "./HomeownerDashboard";
 import ContractorDashboard from "./ContractorDashboard";
 import AdminPanel from "./AdminPanel";
+import AppErrorBoundary from "./AppErrorBoundary";
 import PartnerPortal from "./PartnerPortal";
 import ResetPassword from "./ResetPassword";
 import GoProPublicPage from "./GoProPublicPage";
@@ -988,7 +989,18 @@ export default function App() {
           )}
 
           {page === "homeowner-dashboard" && currentUser && (
-            <HomeownerDashboard
+            <AppErrorBoundary
+              section="homeowner-dashboard"
+              onGoHome={() => {
+                window.history.replaceState(
+                  { fixbridgePage: "homeowner-dashboard", fixbridgeAuth: true },
+                  "",
+                  window.location.pathname + window.location.search
+                );
+                window.location.reload();
+              }}
+            >
+              <HomeownerDashboard
               onLogout={() => handleSignOut("home")}
               user={currentUser}
               isDark={isDark}
@@ -1004,20 +1016,23 @@ export default function App() {
                 setSubscriptionActivating(false);
                 setPostPaymentDashboard(false);
               }}
-            />
+              />
+            </AppErrorBoundary>
           )}
 
           {page === "contractor-dashboard" && currentUser && currentUser.role === "contractor" && (
-            <ContractorDashboard
+            <AppErrorBoundary section="contractor-dashboard">
+              <ContractorDashboard
               onLogout={() => handleSignOut("contractors")}
               user={currentUser}
               isDark={isDark}
               onToggleDark={toggleDark}
               onUserUpdated={(u) => setCurrentUser(u)}
-            />
+              />
+            </AppErrorBoundary>
           )}
           {page === "admin" && currentUser?.role === "admin" && (
-            <ErrorBoundary>
+            <AppErrorBoundary section="admin-dashboard">
               <AdminPanel
                 onBack={() => navigate(marketingContext)}
                 onSignOut={() => handleSignOut("admin-login")}
@@ -1025,7 +1040,7 @@ export default function App() {
                 isDark={isDark}
                 onToggleDark={toggleDark}
               />
-            </ErrorBoundary>
+            </AppErrorBoundary>
           )}
         </motion.div>
 
@@ -1035,50 +1050,3 @@ export default function App() {
     </div>
   );
 }
-
-interface ErrorBoundaryProps {
-  children: ReactNode;
-}
-
-interface ErrorBoundaryState {
-  hasError: boolean;
-  error: Error | null;
-}
-
-class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  public override state: ErrorBoundaryState = {
-    hasError: false,
-    error: null,
-  };
-
-  public static getDerivedStateFromError(error: Error): ErrorBoundaryState {
-    return { hasError: true, error };
-  }
-
-  public override componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error("Uncaught admin error:", error, errorInfo);
-  }
-
-  public override render() {
-    if (this.state.hasError) {
-      return (
-        <div className="p-8 max-w-2xl mx-auto my-12 bg-red-50 border border-red-200 rounded-3xl text-red-900 shadow-sm">
-          <h2 className="text-xl font-bold mb-2">Something went wrong</h2>
-          <p className="text-sm mb-4">The Admin Panel crashed due to a frontend error. Please share this screenshot or error with the developer:</p>
-          <pre className="p-4 bg-red-950 text-red-100 rounded-2xl overflow-auto text-xs font-mono max-h-96 whitespace-pre-wrap">
-            {this.state.error?.stack || this.state.error?.toString()}
-          </pre>
-          <button
-            onClick={() => window.location.reload()}
-            className="mt-6 px-4 py-2.5 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-700 transition"
-          >
-            Reload page
-          </button>
-        </div>
-      );
-    }
-
-    return this.props.children;
-  }
-}
-

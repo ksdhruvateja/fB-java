@@ -390,7 +390,8 @@ export async function getReminderSchedulerStatus(pool) {
       process.env.NETLIFY ||
       process.env.NETLIFY_DEV ||
       process.env.NETLIFY_SITE_ID ||
-      process.env.CONTEXT === 'production'
+      process.env.CONTEXT === 'production' ||
+      /netlify\.app$/i.test(String(process.env.URL || process.env.DEPLOY_URL || ''))
   );
   let pending = 0;
   try {

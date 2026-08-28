@@ -64,6 +64,7 @@ import HomeownerHomeProtection from "./HomeownerHomeProtection";
 import HomeownerReferEarn from "./HomeownerReferEarn";
 import { buildHomeUpdatesSnapshot, type HomeUpdateItem } from "./homeUpdates";
 import { buildPassportAiContext } from "./propertyPassport";
+import AppErrorBoundary, { DashboardTabFallback } from "./AppErrorBoundary";
 import { ProFeatureProvider } from "./ProFeatureProvider";
 import ProLockedShell from "./ProLockedShell";
 import { promptProUpgrade } from "./proFeatureEvents";
@@ -80,6 +81,9 @@ import {
  jobsForProperty,
  countQuotesWaiting,
  mobileHeaderTitle,
+ sanitizeDashTab,
+ sanitizeJobsSegment,
+ isHomeownerTabRendered,
 } from "./homeownerNav";
 import ServiceTrackingCard from "./ServiceTrackingCard";
 import HomeownerPropertyPage, { DEFAULT_HOME_SYSTEMS } from "./HomeownerPropertyPage";
@@ -306,7 +310,7 @@ export default function HomeownerDashboard({
  subscriptionActivating?: boolean;
  onDismissSubscriptionSuccess?: () => void;
 }) {
- const [tab, setTab] = useState<DashTab>(() => resolveNavTab(initialTab || "overview"));
+ const [tab, setTab] = useState<DashTab>(() => sanitizeDashTab(initialTab || "overview"));
  const [careSection, setCareSection] = useState<PropertyCareSection>(() =>
  propertyCareSectionForTab(initialTab || "overview")
  );
@@ -529,11 +533,11 @@ export default function HomeownerDashboard({
  }
 
  const applyNavFrame = useCallback((f: HomeownerNavFrame) => {
- const nextTab = resolveNavTab(f.tab as DashTab);
+ const nextTab = sanitizeDashTab(f.tab);
  setCareSection(propertyCareSectionForTab(nextTab));
  setTab(nextTab);
  if (f.jobId !== undefined) setSelectedJobId(f.jobId);
- if (f.jobsSegment) setJobsSegment(f.jobsSegment as JobsSegment);
+ if (f.jobsSegment) setJobsSegment(sanitizeJobsSegment(f.jobsSegment));
  if (f.tab === "report") {
  if (f.reportStep) setStep(f.reportStep as ReportStep);
  if (f.intakePhase) setIntakePhase(f.intakePhase as IntakePhase);
@@ -3343,6 +3347,10 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  )}
  </section>
  )}
+
+ {!isHomeownerTabRendered(tab) ? (
+ <DashboardTabFallback tab={tab} onGoHome={() => navigateTab("overview")} />
+ ) : null}
  </main>
  </div>
  

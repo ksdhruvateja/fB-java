@@ -58,23 +58,12 @@ import {
   getContractorExpiryAlerts,
 } from "./contractorExpiry";
 
-type DashTab =
-  | "dashboard"
-  | "invites"
-  | "jobs"
-  | "schedule"
-  | "messages"
-  | "services"
-  | "areas"
-  | "team"
-  | "pricing"
-  | "payouts"
-  | "refer-earn"
-  | "performance"
-  | "compliance"
-  | "documents"
-  | "settings"
-  | "help";
+import { DashboardTabFallback } from "./AppErrorBoundary";
+import {
+  type ContractorDashTab as DashTab,
+  isContractorTabRendered,
+  sanitizeContractorTab,
+} from "./contractorNav";
 
 const NAV_GROUPS: { label: string; items: { id: DashTab; label: string; icon: React.ElementType }[] }[] = [
   {
@@ -185,7 +174,7 @@ export default function ContractorDashboard({
   const expiryDismissKey = `fixbridge-expiry-dismiss-${user.id}`;
 
   const applyNavFrame = useCallback((f: ContractorNavFrame) => {
-    setTab(f.tab as DashTab);
+    setTab(sanitizeContractorTab(f.tab));
     setMobileNav(false);
   }, []);
 
@@ -1034,6 +1023,9 @@ export default function ContractorDashboard({
               </form>
             </div>
           )}
+          {!isContractorTabRendered(tab) ? (
+            <DashboardTabFallback tab={tab} onGoHome={() => go("dashboard")} />
+          ) : null}
         </main>
       </div>
 

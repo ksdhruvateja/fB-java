@@ -1,5 +1,9 @@
 /** Role-aware navigation helpers for FixBridge (state-based routing, not react-router). */
 
+import { sanitizeAdminTab } from "./adminNav";
+import { sanitizeContractorTab } from "./contractorNav";
+import { sanitizeDashTab, sanitizeJobsSegment } from "./homeownerNav";
+
 export type AppPage =
   | "home"
   | "contractors"
@@ -196,10 +200,62 @@ export function canNavigateBack(frame: NavFrame): boolean {
 }
 
 const STORAGE_PREFIX = "fixbridge-nav-frame-";
+const NAV_FRAME_VERSION = 2;
+
+function sanitizeHomeownerFrame(frame: HomeownerNavFrame): HomeownerNavFrame {
+  return {
+    role: "homeowner",
+    tab: sanitizeDashTab(frame.tab),
+    jobId: typeof frame.jobId === "number" && Number.isFinite(frame.jobId) ? frame.jobId : null,
+    jobsSegment: frame.jobsSegment ? sanitizeJobsSegment(frame.jobsSegment) : undefined,
+    reportStep: frame.reportStep,
+    intakePhase: frame.intakePhase,
+    reportPath: frame.reportPath ?? null,
+  };
+}
+
+function sanitizeContractorFrame(frame: ContractorNavFrame): ContractorNavFrame {
+  return {
+    role: "contractor",
+    tab: sanitizeContractorTab(frame.tab),
+  };
+}
+
+function sanitizeAdminFrame(frame: AdminNavFrame): AdminNavFrame {
+  return {
+    ...frame,
+    role: "admin",
+    tab: sanitizeAdminTab(frame.tab),
+    selectedJobId:
+      typeof frame.selectedJobId === "number" && Number.isFinite(frame.selectedJobId)
+        ? frame.selectedJobId
+        : null,
+    selectedHomeownerProfileId:
+      typeof frame.selectedHomeownerProfileId === "number" &&
+      Number.isFinite(frame.selectedHomeownerProfileId)
+        ? frame.selectedHomeownerProfileId
+        : null,
+    expandedContractorId:
+      typeof frame.expandedContractorId === "number" && Number.isFinite(frame.expandedContractorId)
+        ? frame.expandedContractorId
+        : null,
+    selectedSupportTicket:
+      typeof frame.selectedSupportTicket === "string" ? frame.selectedSupportTicket : null,
+  };
+}
+
+export function sanitizeNavFrame(frame: NavFrame): NavFrame {
+  if (frame.role === "homeowner") return sanitizeHomeownerFrame(frame);
+  if (frame.role === "contractor") return sanitizeContractorFrame(frame);
+  return sanitizeAdminFrame(frame as AdminNavFrame);
+}
 
 export function saveNavFrame(role: UserRole, frame: NavFrame) {
   try {
-    sessionStorage.setItem(`${STORAGE_PREFIX}${role}`, JSON.stringify(frame));
+    sessionStorage.setItem(
+      `${STORAGE_PREFIX}${role}`,
+      JSON.stringify({ v: NAV_FRAME_VERSION, frame: sanitizeNavFrame(frame) })
+    );
   } catch {
     /* ignore */
   }
@@ -209,7 +265,12 @@ export function loadNavFrame(role: UserRole): NavFrame | null {
   try {
     const raw = sessionStorage.getItem(`${STORAGE_PREFIX}${role}`);
     if (!raw) return null;
-    return JSON.parse(raw) as NavFrame;
+    const parsed = JSON.parse(raw) as { v?: number; frame?: NavFrame } | NavFrame;
+    const frame = "frame" in (parsed as object) && (parsed as { frame?: NavFrame }).frame
+      ? (parsed as { frame: NavFrame }).frame
+      : (parsed as NavFrame);
+    if (!frame || frame.role !== role) return null;
+    return sanitizeNavFrame(frame);
   } catch {
     return null;
   }

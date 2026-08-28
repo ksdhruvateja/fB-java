@@ -10,7 +10,7 @@ import { loadAllUsers, type AuthUser } from "./auth";
 import { brand } from "../config/brand";
 import AppBackButton from "./AppBackButton";
 import { type AdminNavFrame } from "./navigation";
-import { useDashboardNavigation } from "./useDashboardNavigation";
+import { sanitizeAdminTab } from "./adminNav";
 import {
   contractorSearchBlob,
   fetchAdminUser,
@@ -472,7 +472,7 @@ export default function AdminPanel({
   const [busyStaffId, setBusyStaffId] = useState<number | null>(null);
 
   const applyNavFrame = useCallback((f: AdminNavFrame) => {
-    setTab(f.tab as Tab);
+    setTab(sanitizeAdminTab(f.tab) as Tab);
     if (f.selectedJobId !== undefined) setSelectedJobId(f.selectedJobId);
     if (f.drawerOpen !== undefined) setDrawerOpen(f.drawerOpen);
     if (f.selectedHomeownerProfileId !== undefined) setSelectedHomeownerProfileId(f.selectedHomeownerProfileId);
