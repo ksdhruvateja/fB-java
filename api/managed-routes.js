@@ -2324,12 +2324,8 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         await applyAutoReferralDiscount(pool, job.id, partnerCode);
       }
 
-      // Create timeline logs
+      // Create timeline logs (AI completion is recorded by the background assessment worker)
       await pushStatus(pool, job.id, null, 'draft', user.id, 'Issue reported (Public Guest)');
-      if (ran.ok) {
-        await pushStatus(pool, job.id, 'draft', 'ai_review_complete', user.id, 'AI assessment complete');
-        // Do not notify Admin / Work Queue until visit fee payment succeeds.
-      }
 
       // Fetch fresh job
       const { rows: freshJobs } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [job.id]);

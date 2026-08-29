@@ -21,10 +21,10 @@ function ok(label, cond, detail = '') {
 }
 
 async function login(email, password) {
-  const res = await fetch(`${API}/api/auth/login`, {
+  const res = await fetch(`${API}/api/auth/signin`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ role: 'homeowner', email, password }),
   }).then(parseJsonResponse);
   return res.token ? { Authorization: `Bearer ${res.token}` } : null;
 }
@@ -32,8 +32,8 @@ async function login(email, password) {
 async function main() {
   console.log('\nASSESSMENT ASYNC SMOKE\n');
 
-  const homeEmail = process.env.SMOKE_HOMEOWNER_EMAIL || 'maria.santos@example.com';
-  const homePass = process.env.SMOKE_HOMEOWNER_PASSWORD || 'password123';
+  const homeEmail = process.env.SMOKE_HOMEOWNER_EMAIL || 'maria@example.com';
+  const homePass = process.env.SMOKE_HOMEOWNER_PASSWORD || 'demo123';
   const homeH = await login(homeEmail, homePass);
   if (!homeH) {
     console.error('Login failed — set SMOKE_HOMEOWNER_EMAIL/PASSWORD');
