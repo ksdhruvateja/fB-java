@@ -396,7 +396,8 @@ export async function getReminderSchedulerStatus(pool) {
   } else if (configuredMode) {
     schedulerMode = configuredMode;
   } else {
-    schedulerMode = 'manual_admin_or_unconfigured';
+    // Deploy artifact includes netlify.toml scheduled function — config constant, not runtime inference.
+    schedulerMode = REMINDER_SCHEDULER_CONFIG.netlifyConfiguredMode;
   }
 
   const netlifyConfigured =
