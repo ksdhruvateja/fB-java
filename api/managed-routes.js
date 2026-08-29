@@ -20,6 +20,11 @@ import {
 } from './market-intelligence.js';
 import { zip5 } from './usps-address.js';
 import { isPaidHomeCarePlan } from './subscription-catalog.js';
+import {
+  activateSubscriptionFromCheckout,
+  applyInvoiceSubscriptionStatus,
+  applyStripeSubscriptionObject,
+} from './subscription-state.js';
 import { insertJobReview, loadJobForReview, parseCategoryRatings } from './job-reviews.js';
 import {
   createRequireHomeCareFeature,
@@ -56,6 +61,7 @@ import {
   constructWebhookEvent,
   capturePaymentIntent,
   cancelPaymentIntent,
+  getStripe,
 } from './stripe.js';
 import { brand } from './brand.js';
 import { ensurePayoutRecordForJob, approveAndReleasePayout, handlePayoutWebhookUpdate, syncContractorAccountFromUser } from './payout-db.js';
@@ -6094,22 +6100,29 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           const paidAmt =
             session.amount_total != null ? Number(session.amount_total) / 100 : null;
           const stripeSubId = session.subscription || null;
-          await pool.query(
-            `INSERT INTO subscriptions (user_id, plan_code, plan_family, status, stripe_subscription_id, simulated, current_period_end, meta)
-             VALUES ($1,$2,$3,'active',$4,false, NOW() + INTERVAL '30 days', $5)`,
-            [
-              userId,
-              planCode,
-              String(planCode).includes('contractor')
-                ? 'contractor'
-                : String(planCode).includes('property') || String(planCode).includes('portfolio') || String(planCode).includes('brokerage')
-                  ? 'property'
-                  : 'diy',
-              stripeSubId || session.payment_intent || null,
-              JSON.stringify({ planCode, checkoutSessionId: session.id }),
-            ]
-          );
-          await pool.query(`UPDATE users SET plan_code=$1 WHERE id=$2`, [planCode, userId]);
+          let periodEnd = null;
+          if (stripeSubId) {
+            try {
+              const stripe = await getStripe();
+              if (stripe) {
+                const sub = await stripe.subscriptions.retrieve(String(stripeSubId));
+                if (sub?.current_period_end) {
+                  periodEnd = new Date(sub.current_period_end * 1000).toISOString();
+                }
+              }
+            } catch {
+              /* default period applied in activateSubscriptionFromCheckout */
+            }
+          }
+          await activateSubscriptionFromCheckout(pool, {
+            userId,
+            planCode,
+            stripeSubscriptionId: stripeSubId,
+            stripeCustomerId: session.customer || null,
+            currentPeriodEnd: periodEnd,
+            checkoutSessionId: session.id,
+            meta: { activatedByWebhook: true },
+          });
 
           const { rows: payRows } = await pool.query(
             `UPDATE payments SET
@@ -6296,9 +6309,10 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (event.type === 'invoice.paid' || event.type === 'invoice.payment_failed') {
         const inv = event.data?.object || {};
         if (inv.subscription) {
-          await pool.query(
-            `UPDATE subscriptions SET status=$1 WHERE stripe_subscription_id=$2`,
-            [event.type === 'invoice.paid' ? 'active' : 'past_due', inv.subscription]
+          await applyInvoiceSubscriptionStatus(
+            pool,
+            inv.subscription,
+            event.type === 'invoice.paid' ? 'paid' : 'failed'
           );
         }
       }
@@ -6310,13 +6324,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       ) {
         const sub = event.data?.object || {};
         if (sub.id) {
-          const status =
-            event.type === 'customer.subscription.deleted' ? 'canceled' : sub.status || 'active';
-          await pool.query(
-            `UPDATE subscriptions SET status=$1, current_period_end=to_timestamp($2)
-             WHERE stripe_subscription_id=$3`,
-            [status, sub.current_period_end || null, sub.id]
-          );
+          await applyStripeSubscriptionObject(pool, sub);
         }
       }
 

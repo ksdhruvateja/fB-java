@@ -40,8 +40,8 @@ export default function SubscriptionSuccessModal({
               </div>
               <h2 className="mt-4 text-xl font-bold">Payment Successful</h2>
               <p className="mt-2 text-sm text-muted-foreground">
-                Confirming your payment with Stripe… {planName} will activate when the verified webhook is
-                received.
+                Confirming your HomeCare Pro membership… This uses verified Stripe billing, not the return URL
+                alone.
               </p>
             </>
           ) : (

@@ -54,17 +54,21 @@ const PROJECT_STAGE_OPTIONS = [
   { value: "active_renovation", label: "Active renovation" },
 ] as const;
 
-const HIRE_STEPS = ["timing", "window", "date", "info", "checkout", "review"] as const;
+const HIRE_STEPS = ["schedule", "info", "checkout", "review"] as const;
 type HireStep = (typeof HIRE_STEPS)[number];
 
 const STEP_LABELS: Record<HireStep, string> = {
-  timing: "Timing",
-  window: "Window",
-  date: "Date",
+  schedule: "Schedule",
   info: "Details",
   checkout: "Pricing",
   review: "Review & Confirm",
 };
+
+function dateForTiming(timing: string): string {
+  if (timing === "same-day") return addDaysFromToday(0);
+  if (timing === "evening-weekend") return nextWeekendDate();
+  return "";
+}
 
 function toDateInputValue(d: Date) {
   const y = d.getFullYear();
@@ -101,7 +105,7 @@ function initialStep(job: ManagedJob): HireStep {
     return "review";
   }
   if (job.status === "awaiting_service_payment") return "checkout";
-  return "timing";
+  return "schedule";
 }
 
 export default function HireProfessionalWizard({
@@ -138,7 +142,8 @@ export default function HireProfessionalWizard({
   useEffect(() => {
     setServiceTiming(job.serviceTiming || "weekday");
     setPreferredTimeSlot(job.preferredTimeSlot || "9-11");
-    setPreferredDate(job.preferredDate || "");
+    const timing = job.serviceTiming || "weekday";
+    setPreferredDate(job.preferredDate || dateForTiming(timing) || "");
     setPropertyPurpose(job.propertyPurpose || "current_homeowner");
     setTransactionStage(job.transactionStage || "ongoing_maintenance");
     setDiscountCode(job.discountCode || "");
@@ -146,6 +151,15 @@ export default function HireProfessionalWizard({
     if (dispatchPaid) setStep("checkout");
     else if (job.status === "awaiting_service_payment") setStep("checkout");
   }, [job.id, job.status, job.visitFeeAuthorized]);
+
+  function selectServiceTiming(nextTiming: string) {
+    setServiceTiming(nextTiming);
+    const implied = dateForTiming(nextTiming);
+    if (implied) setPreferredDate(implied);
+    else if (nextTiming === "weekday" && preferredDate === addDaysFromToday(0)) {
+      setPreferredDate("");
+    }
+  }
 
   function goBack() {
     onError(null);
@@ -163,9 +177,13 @@ export default function HireProfessionalWizard({
     setBusy(true);
     onError(null);
     try {
+      const resolvedDate =
+        preferredDate ||
+        (serviceTiming === "same-day" ? addDaysFromToday(0) : undefined) ||
+        (serviceTiming === "evening-weekend" ? nextWeekendDate() : undefined);
       const r = await requestProfessionalDispatch(job.id, {
         serviceTiming,
-        preferredDate: preferredDate || undefined,
+        preferredDate: resolvedDate,
         preferredTimeSlot,
         propertyPurpose,
         transactionStage,
@@ -291,96 +309,135 @@ export default function HireProfessionalWizard({
           transition={{ duration: 0.2 }}
           className="space-y-4"
         >
-          {step === "timing" && (
-            <fieldset className="space-y-3">
-              <legend className="text-sm font-semibold">Preferred service timing</legend>
-              <div className="grid gap-3 sm:grid-cols-3">
-                {SERVICE_TIMING_OPTIONS.map((opt) => {
-                  const selected = serviceTiming === opt.value;
-                  const Icon = opt.icon;
-                  return (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      onClick={() => setServiceTiming(opt.value)}
-                      className={`rounded-xl border px-4 py-4 text-left transition ${
-                        selected
-                          ? "border-[#FF4D1C] bg-[#FF4D1C] text-white shadow-lg"
-                          : "border-border bg-white/80 hover:border-[#FF4D1C]/45 dark:bg-background/60"
-                      }`}
-                    >
-                      <Icon className={`mb-2 h-5 w-5 ${selected ? "text-white" : "text-[#FF4D1C]"}`} />
-                      <p className="text-sm font-semibold">{opt.label}</p>
-                      <p className={`mt-1 text-xs ${selected ? "text-white/85" : "text-muted-foreground"}`}>{opt.hint}</p>
-                    </button>
-                  );
-                })}
-              </div>
-            </fieldset>
-          )}
+          {step === "schedule" && (
+            <div className="space-y-6">
+              <fieldset className="space-y-3">
+                <legend className="text-sm font-semibold">When do you need service?</legend>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {SERVICE_TIMING_OPTIONS.map((opt) => {
+                    const selected = serviceTiming === opt.value;
+                    const Icon = opt.icon;
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => selectServiceTiming(opt.value)}
+                        className={`rounded-xl border px-4 py-4 text-left transition ${
+                          selected
+                            ? "border-[#FF4D1C] bg-[#FF4D1C] text-white shadow-lg"
+                            : "border-border bg-white/80 hover:border-[#FF4D1C]/45 dark:bg-background/60"
+                        }`}
+                      >
+                        <Icon className={`mb-2 h-5 w-5 ${selected ? "text-white" : "text-[#FF4D1C]"}`} />
+                        <p className="text-sm font-semibold">{opt.label}</p>
+                        <p className={`mt-1 text-xs ${selected ? "text-white/85" : "text-muted-foreground"}`}>{opt.hint}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </fieldset>
 
-          {step === "window" && (
-            <fieldset className="space-y-3">
-              <legend className="flex items-center gap-2 text-sm font-semibold">
-                <Clock className="h-4 w-4 text-[#FF4D1C]" /> Preferred time window
-              </legend>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {TIME_WINDOW_OPTIONS.map((opt) => {
-                  const selected = preferredTimeSlot === opt.value;
-                  return (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      onClick={() => setPreferredTimeSlot(opt.value)}
-                      className={`rounded-xl border px-3 py-3 text-left text-sm transition ${
-                        selected
-                          ? "border-[#FF4D1C] bg-[#FF4D1C]/10 ring-1 ring-[#FF4D1C]/30"
-                          : "border-border bg-white/80 hover:border-[#FF4D1C]/35 dark:bg-background/50"
-                      }`}
-                    >
-                      <span className="block text-[10px] font-semibold uppercase text-muted-foreground">{opt.period}</span>
-                      <span className="font-semibold">{opt.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </fieldset>
-          )}
+              <fieldset className="space-y-3">
+                <legend className="flex items-center gap-2 text-sm font-semibold">
+                  <Clock className="h-4 w-4 text-[#FF4D1C]" /> Preferred arrival window
+                </legend>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {TIME_WINDOW_OPTIONS.map((opt) => {
+                    const selected = preferredTimeSlot === opt.value;
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => setPreferredTimeSlot(opt.value)}
+                        className={`rounded-xl border px-3 py-3 text-left text-sm transition ${
+                          selected
+                            ? "border-[#FF4D1C] bg-[#FF4D1C]/10 ring-1 ring-[#FF4D1C]/30"
+                            : "border-border bg-white/80 hover:border-[#FF4D1C]/35 dark:bg-background/50"
+                        }`}
+                      >
+                        <span className="block text-[10px] font-semibold uppercase text-muted-foreground">{opt.period}</span>
+                        <span className="font-semibold">{opt.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </fieldset>
 
-          {step === "date" && (
-            <fieldset className="space-y-3">
-              <legend className="text-sm font-semibold">Preferred service date</legend>
-              <div className="flex flex-wrap gap-2">
-                {[
-                  { label: "Tomorrow", value: addDaysFromToday(1) },
-                  { label: "In 2 days", value: addDaysFromToday(2) },
-                  { label: "This weekend", value: nextWeekendDate() },
-                ].map((chip) => (
-                  <button
-                    key={chip.label}
-                    type="button"
-                    onClick={() => setPreferredDate(chip.value)}
-                    className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
-                      preferredDate === chip.value
-                        ? "border-[#FF4D1C] bg-[#FF4D1C]/10 text-[#FF4D1C]"
-                        : "border-border hover:border-[#FF4D1C]/40"
-                    }`}
-                  >
-                    {chip.label}
-                  </button>
-                ))}
-              </div>
-              <input
-                type="date"
-                min={toDateInputValue(new Date())}
-                value={preferredDate}
-                onChange={(e) => setPreferredDate(e.target.value)}
-                className="w-full rounded-xl border border-border bg-white/80 px-4 py-3 text-sm dark:bg-background/60"
-              />
-              <p className="text-xs text-muted-foreground">
-                {preferredDate ? `Selected · ${formatDisplayDate(preferredDate)}` : "Optional — leave blank if flexible."}
-              </p>
-            </fieldset>
+              {serviceTiming === "same-day" ? (
+                <p className="rounded-xl border border-[#FF4D1C]/20 bg-[#FF4D1C]/5 px-4 py-3 text-sm text-muted-foreground">
+                  <span className="font-semibold text-foreground">Date: </span>
+                  Today ({formatDisplayDate(preferredDate || addDaysFromToday(0))}) — same-day dispatch when a pro is available.
+                </p>
+              ) : serviceTiming === "evening-weekend" ? (
+                <div className="space-y-2">
+                  <p className="rounded-xl border border-[#FF4D1C]/20 bg-[#FF4D1C]/5 px-4 py-3 text-sm text-muted-foreground">
+                    <span className="font-semibold text-foreground">Target: </span>
+                    {formatDisplayDate(preferredDate || nextWeekendDate())} (next available evening or weekend window).
+                  </p>
+                  <details className="text-xs text-muted-foreground">
+                    <summary className="cursor-pointer font-medium text-foreground/80">Pick a different date</summary>
+                    <input
+                      type="date"
+                      min={toDateInputValue(new Date())}
+                      value={preferredDate}
+                      onChange={(e) => setPreferredDate(e.target.value)}
+                      className="mt-2 w-full rounded-xl border border-border bg-white/80 px-4 py-3 text-sm dark:bg-background/60"
+                    />
+                  </details>
+                </div>
+              ) : (
+                <fieldset className="space-y-3">
+                  <legend className="flex items-center gap-2 text-sm font-semibold">
+                    <CalendarDays className="h-4 w-4 text-[#FF4D1C]" />
+                    Preferred weekday <span className="font-normal text-muted-foreground">(optional)</span>
+                  </legend>
+                  <p className="text-xs text-muted-foreground">
+                    Scheduled weekday means we match the next available weekday — only pick a date if you have a specific day in mind.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { label: "Tomorrow", value: addDaysFromToday(1) },
+                      { label: "In 2 days", value: addDaysFromToday(2) },
+                      { label: "Next week", value: addDaysFromToday(7) },
+                    ].map((chip) => (
+                      <button
+                        key={chip.label}
+                        type="button"
+                        onClick={() => setPreferredDate(chip.value)}
+                        className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
+                          preferredDate === chip.value
+                            ? "border-[#FF4D1C] bg-[#FF4D1C]/10 text-[#FF4D1C]"
+                            : "border-border hover:border-[#FF4D1C]/40"
+                        }`}
+                      >
+                        {chip.label}
+                      </button>
+                    ))}
+                    {preferredDate ? (
+                      <button
+                        type="button"
+                        onClick={() => setPreferredDate("")}
+                        className="rounded-full border border-dashed border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-[#FF4D1C]/40"
+                      >
+                        Flexible — any weekday
+                      </button>
+                    ) : null}
+                  </div>
+                  <input
+                    type="date"
+                    min={toDateInputValue(new Date())}
+                    value={preferredDate}
+                    onChange={(e) => setPreferredDate(e.target.value)}
+                    className="w-full rounded-xl border border-border bg-white/80 px-4 py-3 text-sm dark:bg-background/60"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {preferredDate
+                      ? `Selected · ${formatDisplayDate(preferredDate)}`
+                      : "No date selected — we'll use the next available weekday slot."}
+                  </p>
+                </fieldset>
+              )}
+            </div>
           )}
 
           {step === "info" && (

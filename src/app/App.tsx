@@ -19,6 +19,7 @@ import SubscriptionCancelModal from "./SubscriptionCancelModal";
 import { getStoredUser, validateToken, clearSession, loadAllUsers, saveSession, type AuthUser, type UserRole, type ResetRole } from "./auth";
 import { brand } from "../config/brand";
 import { PAID_HOME_CARE_PLAN_CODE, isPaidHomeCarePlan } from "./subscriptionCatalog";
+import { hasProEntitlement } from "./proFeatures";
 import { BrandLogo } from "./BrandLogo";
 import {
   type AppHistoryState,
@@ -31,6 +32,7 @@ import {
   roleHomeFrame,
   roleHomePage,
 } from "./navigation";
+import { applySiteMeta } from "./siteMeta";
 
 function isResetRole(role: string | null): role is ResetRole {
   return role === "homeowner" || role === "contractor" || role === "admin" || role === "partner";
@@ -500,6 +502,10 @@ export default function App() {
     }
   }, [isDark]);
 
+  useEffect(() => {
+    applySiteMeta(page);
+  }, [page]);
+
   const toggleDark = () => setIsDark((d) => !d);
   const [scrolled, setScrolled] = useState(false);
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(initialState.currentUser);
@@ -612,8 +618,9 @@ export default function App() {
             // Plan activates only after verified webhook — poll until plan_code matches.
             const expected = planCode || PAID_HOME_CARE_PLAN_CODE;
             if (
-              result.user.planCode === expected ||
-              (isPaidHomeCarePlan(expected) && isPaidHomeCarePlan(result.user.planCode))
+              hasProEntitlement(result.user.planCode, result.user.homeCareSubscription) &&
+              (result.user.planCode === expected ||
+                (isPaidHomeCarePlan(expected) && isPaidHomeCarePlan(result.user.planCode)))
             ) {
               setSubscriptionActivating(false);
             }
@@ -765,7 +772,12 @@ export default function App() {
       if (cancelled) return;
       if (result.ok) {
         setCurrentUser(result.user);
-        if (result.user.planCode === expected || (isPaidHomeCarePlan(expected) && isPaidHomeCarePlan(result.user.planCode)) || attempts >= 20) {
+        if (
+          hasProEntitlement(result.user.planCode, result.user.homeCareSubscription) &&
+          (result.user.planCode === expected ||
+            (isPaidHomeCarePlan(expected) && isPaidHomeCarePlan(result.user.planCode)) ||
+            attempts >= 20)
+        ) {
           setSubscriptionActivating(false);
           return;
         }

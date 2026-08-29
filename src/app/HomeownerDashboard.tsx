@@ -41,16 +41,20 @@ import {
 import { startSubscription } from "./platformApi";
 import { listGoProPlans } from "./subscriptionPlansApi";
 import { PAID_HOME_CARE_PLAN_CODE, isPaidHomeCarePlan, displayPlanLabel } from "./subscriptionCatalog";
+import { resolveClientProAccess } from "./proFeatures";
 import {
  jobTitleForHomeowner,
  type HomeownerService,
 } from "./homeownerCategories";
-import HomeownerServiceIntake, { type IntakePhase } from "./HomeownerServiceIntake";
+import HomeownerServiceIntake, { type IntakePhase, normalizeIntakePhase } from "./HomeownerServiceIntake";
 import { clearIntakeDraft, loadIntakeDraft, saveIntakeDraft } from "./intakeDraft";
 import {
  tradeToCategory,
  categoryToTradeId,
  formatAdaptiveAnswersNote,
+ resolveRequestTradeId,
+ resolveServiceLocation,
+ serviceRequestTitle,
  type AdaptiveAnswers,
  type ServiceLocation,
 } from "./serviceRequestFlow";
@@ -117,6 +121,16 @@ function formatChatMessage(text: string): string {
  return text
  .replace(/^#+\s+/gm, "") // strip markdown headers
  .replace(/\*\*/g, ""); // strip markdown bolding
+}
+
+function assessmentStringList(value: unknown): string[] {
+ if (!Array.isArray(value)) return [];
+ return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function hasRenderableAssessment(job: ManagedJob | null | undefined): job is ManagedJob & { aiAssessment: NonNullable<ManagedJob["aiAssessment"]> } {
+ const assessment = job?.aiAssessment;
+ return Boolean(assessment && typeof assessment === "object" && !Array.isArray(assessment));
 }
 
 /** Shrink phone photos so create+assess don't hang on multi'MB data URLs. */
@@ -249,6 +263,26 @@ function nextWeekendDate() {
  return toDateInputValue(d);
 }
 
+function dateForServiceTiming(timing: string): string {
+ if (timing === "same-day") return addDaysFromToday(0);
+ if (timing === "evening-weekend") return nextWeekendDate();
+ return "";
+}
+
+function selectServiceTimingOption(
+ timing: string,
+ setServiceTiming: (v: string) => void,
+ setPreferredDate: (v: string) => void,
+ preferredDate: string
+) {
+ setServiceTiming(timing);
+ const implied = dateForServiceTiming(timing);
+ if (implied) setPreferredDate(implied);
+ else if (timing === "weekday" && preferredDate === addDaysFromToday(0)) {
+ setPreferredDate("");
+ }
+}
+
 function formatDisplayDate(iso: string) {
  if (!iso) return null;
  const d = new Date(`${iso}T12:00:00`);
@@ -328,7 +362,7 @@ export default function HomeownerDashboard({
  const [proposal, setProposal] = useState<Proposal | null>(null);
  const [busy, setBusy] = useState(false);
  const [step, setStep] = useState<ReportStep>("intake");
- const [intakePhase, setIntakePhase] = useState<IntakePhase>("trade");
+ const [intakePhase, setIntakePhase] = useState<IntakePhase>("describe");
  const [reportPath, setReportPath] = useState<"ai" | "experts" | null>(null);
  const [requestSystemId, setRequestSystemId] = useState<string>("");
  const [issueArea, setIssueArea] = useState<ServiceLocation | "">("");
@@ -544,8 +578,12 @@ export default function HomeownerDashboard({
  if (f.jobId !== undefined) setSelectedJobId(f.jobId);
  if (f.jobsSegment) setJobsSegment(sanitizeJobsSegment(f.jobsSegment));
  if (f.tab === "report") {
- if (f.reportStep) setStep(f.reportStep as ReportStep);
- if (f.intakePhase) setIntakePhase(f.intakePhase as IntakePhase);
+ const nextStep =
+ f.reportStep === "intake" || f.reportStep === "experts" || f.reportStep === "assessment"
+ ? (f.reportStep as ReportStep)
+ : "intake";
+ setStep(nextStep);
+ setIntakePhase(normalizeIntakePhase(f.intakePhase));
  if (f.reportPath !== undefined) setReportPath(f.reportPath);
  }
  }, []);
@@ -746,6 +784,14 @@ export default function HomeownerDashboard({
  }
 
  function openRequestService(prefill?: HomeUpdateItem["requestPrefill"]) {
+ setError(null);
+ setStep("intake");
+ setIntakePhase("describe");
+ setReportPath(null);
+ setAssessmentMode("diy");
+ setAssessLoadingStep(null);
+ setAssessLoadingZip(null);
+ setAssessmentMsg(null);
  const handoff = readAssistantHandoff();
  if (handoff) {
  if (handoff.propertyId) setPropertyId(handoff.propertyId);
@@ -784,7 +830,7 @@ export default function HomeownerDashboard({
  intakePhase:
  handoff?.description || handoff?.title || prefill?.description || handoff?.category
  ? "details"
- : "trade",
+ : "describe",
  reportPath: handoff?.intent === "site_visit" ? "experts" : handoff?.intent ? "ai" : null,
  jobId: null,
  });
@@ -1048,9 +1094,39 @@ export default function HomeownerDashboard({
  try {
  const guestJobId = localStorage.getItem("fixbridge-guest-job-id");
  if (guestJobId) {
- setSelectedJobId(Number(guestJobId));
- setTab("jobs");
+ const id = Number(guestJobId);
  localStorage.removeItem("fixbridge-guest-job-id");
+ void (async () => {
+ try {
+ const r = await getManagedJob(id);
+ if (r.ok && r.job) {
+ setActiveJob(r.job);
+ setSelectedJobId(id);
+ setReportPath("ai");
+ setAssessmentMode("diy");
+ setStep("assessment");
+ setTab("report");
+ scrollReportToTop();
+ if (!r.job.aiAssessment) {
+ const zip = r.job.zip || r.job.cityStateZip?.match(/\b\d{5}\b/)?.[0] || null;
+ const assessed = await runAssessWithProgress(id, zip);
+ if (assessed.ok && assessed.job) {
+ setActiveJob(assessed.job);
+ setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
+ } else {
+ setAssessmentMsg(assessed.message || "Assessment failed - you can still request a professional.");
+ }
+ }
+ await refresh();
+ } else {
+ setSelectedJobId(id);
+ setTab("jobs");
+ }
+ } catch {
+ setSelectedJobId(id);
+ setTab("jobs");
+ }
+ })();
  }
 
  const stripeJobId = sessionStorage.getItem("fixbridge-stripe-active-job-id");
@@ -1158,7 +1234,13 @@ export default function HomeownerDashboard({
  useEffect(() => {
  if (selectedJobId && step === "assessment" && tab === "report") {
  const j = jobs.find((x) => x.id === selectedJobId);
- if (j) setActiveJob(j);
+ if (j) {
+ setActiveJob((prev) => {
+ if (!prev || prev.id !== j.id) return j;
+ if (prev.aiAssessment && !j.aiAssessment) return prev;
+ return j;
+ });
+ }
  }
  }, [selectedJobId, jobs, step, tab]);
 
@@ -1200,7 +1282,8 @@ export default function HomeownerDashboard({
  const hasDiyAccess = Boolean(
  user.planCode && diyUnlockCodes.includes(user.planCode)
  );
- const hasHomeCarePro = isPaidHomeCarePlan(user.planCode);
+ const { isPro: hasHomeCarePro } = resolveClientProAccess(user);
+ const homeCareSub = user.homeCareSubscription ?? null;
 
  function handleProActivated(feature: ProFeatureId | null) {
  if (!feature) return;
@@ -1279,10 +1362,21 @@ export default function HomeownerDashboard({
  useEffect(() => {
  const draft = loadIntakeDraft(user.id);
  setHasIntakeDraft(
- Boolean(draft && (draft.intakePhase !== "trade" || draft.description || draft.requestSystemId))
+ Boolean(draft && (draft.intakePhase !== "describe" || draft.description || draft.requestSystemId))
  );
  if (draft?.savedAt) setIntakeDraftSavedAt(draft.savedAt);
  }, [user.id]);
+
+ useEffect(() => {
+ if (tab !== "report") return;
+ if (step === "assessment" && !activeJob && assessLoadingStep == null) {
+ setStep("intake");
+ setIntakePhase("describe");
+ }
+ if (step === "intake") {
+ setIntakePhase((phase) => normalizeIntakePhase(phase));
+ }
+ }, [tab, step, activeJob, assessLoadingStep]);
 
  useEffect(() => {
  if (tab !== "report" || step !== "intake") return;
@@ -1301,7 +1395,7 @@ export default function HomeownerDashboard({
  savedAt: new Date().toISOString(),
  });
  setIntakeDraftSavedAt(new Date().toISOString());
- setHasIntakeDraft(intakePhase !== "trade" || Boolean(description.trim()) || Boolean(requestSystemId));
+ setHasIntakeDraft(intakePhase !== "describe" || Boolean(description.trim()) || Boolean(requestSystemId));
  }, 500);
  return () => window.clearTimeout(timer);
  }, [
@@ -1322,7 +1416,7 @@ export default function HomeownerDashboard({
  function resumeIntakeDraft() {
  const draft = loadIntakeDraft(user.id);
  if (!draft) return;
- setIntakePhase(draft.intakePhase);
+ setIntakePhase(normalizeIntakePhase(draft.intakePhase));
  if (draft.requestSystemId) setRequestSystemId(draft.requestSystemId);
  if (draft.issueArea) setIssueArea(draft.issueArea);
  if (draft.description) setDescription(draft.description);
@@ -1337,7 +1431,7 @@ export default function HomeownerDashboard({
  role: "homeowner",
  tab: "report",
  reportStep: "intake",
- intakePhase: draft.intakePhase,
+ intakePhase: normalizeIntakePhase(draft.intakePhase),
  reportPath: null,
  jobId: null,
  });
@@ -1408,25 +1502,63 @@ export default function HomeownerDashboard({
  }
  }
 
+ function scrollReportToTop() {
+ if (typeof window === "undefined") return;
+ window.scrollTo({ top: 0, behavior: "smooth" });
+ document.querySelector("main")?.scrollTo?.({ top: 0, behavior: "smooth" });
+ }
+
+ function openAssessmentFlow(reportPathValue: "ai" | "experts" = "ai") {
+ setAssessmentMsg(null);
+ setAssessLoadingStep(0);
+ if (reportPathValue === "ai") {
+ setAssessmentMode("diy");
+ }
+ const propZip = properties.find((p) => p.id === propertyId)?.zip || null;
+ setAssessLoadingZip(propZip ? String(propZip).slice(0, 5) : null);
+ navigateTo({
+ role: "homeowner",
+ tab: "report",
+ reportStep: "assessment",
+ reportPath: reportPathValue,
+ jobId: null,
+ });
+ scrollReportToTop();
+ }
+
+ function returnToIntakeDetails() {
+ setAssessLoadingStep(null);
+ setAssessLoadingZip(null);
+ navigateTo({
+ role: "homeowner",
+ tab: "report",
+ reportStep: "intake",
+ intakePhase: "details",
+ reportPath: reportPath ?? "ai",
+ jobId: null,
+ });
+ scrollReportToTop();
+ }
+
  async function submitIssue(path: "ai" | "experts") {
- if (!requestSystemId) {
- alert("Please select what type of service you need.");
- setError("Please select a service type.");
- return;
- }
- if (!issueArea) {
- alert("Please select where in your home this is.");
- setError("Please select a location.");
- return;
- }
  if (!description.trim()) {
  alert("Please describe the issue first.");
  setError("Please describe the issue first.");
  return;
  }
 
- const category = tradeToCategory(requestSystemId);
- const fullDescription = `${description.trim()}${formatAdaptiveAnswersNote(requestSystemId, adaptiveAnswers)}`;
+ const resolvedTrade = resolveRequestTradeId(requestSystemId, description);
+ const resolvedLocation = resolveServiceLocation(issueArea, description);
+ if (!requestSystemId) {
+ setRequestSystemId(resolvedTrade);
+ setCategory(tradeToCategory(resolvedTrade));
+ }
+ if (!issueArea) {
+ setIssueArea(resolvedLocation);
+ }
+
+ const category = tradeToCategory(resolvedTrade);
+ const fullDescription = `${description.trim()}${formatAdaptiveAnswersNote(resolvedTrade, adaptiveAnswers)}`;
 
  if (!propertyId) {
  setModalAddressLine1("");
@@ -1454,12 +1586,19 @@ export default function HomeownerDashboard({
 
  setBusy(true);
  setError(null);
+ setAssessmentMsg(null);
+ const propZip = properties.find((p) => p.id === propertyId)?.zip || null;
+ if (path === "ai") {
+ openAssessmentFlow("ai");
+ } else {
+ setAssessmentMode("expert");
+ }
  try {
  const code = partnerCode.trim().toUpperCase();
  const usePartner = Boolean(code);
  const created = await createManagedJob({
  category,
- title: serviceRequestTitle(issueArea, requestSystemId),
+ title: serviceRequestTitle(resolvedLocation, resolvedTrade),
  description: fullDescription,
  propertyId: propertyId || undefined,
  serviceTiming: path === "experts" ? serviceTiming : "weekday",
@@ -1486,6 +1625,7 @@ export default function HomeownerDashboard({
  });
  if (!created.ok || !created.job) {
  setError(created.message || "Could not submit issue.");
+ if (path === "ai") returnToIntakeDetails();
  return;
  }
  try {
@@ -1501,8 +1641,17 @@ export default function HomeownerDashboard({
  setActiveJob(created.job);
  setAssistantHandoffIntent(null);
  setReportPath(path);
- setStep("assessment");
- const propZip = properties.find((p) => p.id === propertyId)?.zip || null;
+ if (path === "experts") {
+ navigateTo({
+ role: "homeowner",
+ tab: "report",
+ reportStep: "assessment",
+ reportPath: "experts",
+ jobId: null,
+ });
+ setAssessmentMode("expert");
+ scrollReportToTop();
+ }
  const assessed = await runAssessWithProgress(created.job.id, propZip);
  if (!assessed.ok || !assessed.job) {
  setAssessmentMsg(assessed.message || "Assessment failed - you can still request a professional.");
@@ -1514,6 +1663,9 @@ export default function HomeownerDashboard({
  assessed.pricing?.message ||
  null
  );
+ }
+ if (path === "ai") {
+ setAssessmentMode("diy");
  }
  await refresh();
  // Keep assessment for DIY/hire choice; tracking is one click away
@@ -1755,6 +1907,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  return (
  <ProFeatureProvider
  planCode={user.planCode}
+ homeCareSubscription={user.homeCareSubscription}
  busy={busy}
  onUpgrade={handleAuthenticatedCheckout}
  onProActivated={handleProActivated}
@@ -1799,6 +1952,12 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <div>
  <AppLogo onHome={goHome} variant="auth" className="mb-0.5" />
  <p className="text-[10px] text-muted-foreground leading-none">Homeowner | {user.name}</p>
+ {hasHomeCarePro ? (
+ <div className="mt-1.5 inline-flex items-center gap-1 rounded-full border border-[#FF6B2C]/35 bg-[#FF6B2C]/10 px-2 py-0.5">
+ <Sparkles className="h-3 w-3 text-[#FF6B2C]" aria-hidden />
+ <span className="text-[10px] font-semibold text-[#FF6B2C]">HomeCare Pro Member</span>
+ </div>
+ ) : null}
  </div>
  </div>
  <div className="flex-1 overflow-y-auto">
@@ -1893,6 +2052,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <HomeownerMoreMenu
  userName={user.name || "Homeowner"}
  planCode={user.planCode}
+ isPro={hasHomeCarePro}
  isDark={isDark}
  onNavigate={navigateTab}
  onToggleDark={onToggleDark}
@@ -2131,13 +2291,13 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
 
  {/* Progress dots */}
  <div className="relative mt-5 flex items-center gap-2">
- {["Timing", "Window", "Date", "Property"].map((label, i) => (
+ {["Timing", "Window", "Property"].map((label, i) => (
  <div key={label} className="flex items-center gap-2">
  <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#FF4D1C] text-[11px] font-semibold text-white">
  {i + 1}
  </span>
  <span className="hidden text-xs font-medium text-muted-foreground sm:inline">{label}</span>
- {i < 3 && <span className="mx-1 hidden h-px w-6 bg-[#FF4D1C]/30 sm:block" />}
+ {i < 2 && <span className="mx-1 hidden h-px w-6 bg-[#FF4D1C]/30 sm:block" />}
  </div>
  ))}
  </div>
@@ -2154,7 +2314,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  key={opt.value}
  type="button"
  whileTap={{ scale: 0.98 }}
- onClick={() => setServiceTiming(opt.value)}
+ onClick={() => selectServiceTimingOption(opt.value, setServiceTiming, setPreferredDate, preferredDate)}
  aria-pressed={selected}
  className={`group relative overflow-hidden rounded-xl border px-4 py-4 text-left transition ${
  selected
@@ -2232,17 +2392,42 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
  </fieldset>
 
- {/* Preferred date */}
+ {/* Preferred date — only when timing doesn't already imply it */}
+ {serviceTiming === "same-day" ? (
+ <p className="relative mt-7 rounded-xl border border-[#FF4D1C]/20 bg-[#FF4D1C]/5 px-4 py-3 text-sm text-muted-foreground">
+ <span className="font-semibold text-foreground">Date: </span>
+ Today ({formatDisplayDate(preferredDate || addDaysFromToday(0))}) — same-day dispatch when a pro is available.
+ </p>
+ ) : serviceTiming === "evening-weekend" ? (
+ <div className="relative mt-7 space-y-2">
+ <p className="rounded-xl border border-[#FF4D1C]/20 bg-[#FF4D1C]/5 px-4 py-3 text-sm text-muted-foreground">
+ <span className="font-semibold text-foreground">Target: </span>
+ {formatDisplayDate(preferredDate || nextWeekendDate())} (next available evening or weekend window).
+ </p>
+ <details className="text-xs text-muted-foreground">
+ <summary className="cursor-pointer font-medium text-foreground/80">Pick a different date</summary>
+ <input
+ type="date"
+ min={toDateInputValue(new Date())}
+ className="mt-2 w-full rounded-xl border border-border bg-white/80 px-4 py-3 text-sm tabular-nums outline-none transition focus:border-[#FF4D1C] focus:ring-2 focus:ring-[#FF4D1C]/20 dark:bg-background/60"
+ value={preferredDate}
+ onChange={(e) => setPreferredDate(e.target.value)}
+ />
+ </details>
+ </div>
+ ) : (
  <fieldset className="relative mt-7 space-y-3">
  <legend className="flex items-center gap-2 text-sm font-semibold">
  <CalendarDays className="h-4 w-4 text-[#FF4D1C]" />
- Preferred date
+ Preferred weekday <span className="font-normal text-muted-foreground">(optional)</span>
  </legend>
+ <p className="text-xs text-muted-foreground">
+ Scheduled weekday means we match the next available weekday — only pick a date if you have a specific day in mind.
+ </p>
  <div className="flex flex-wrap gap-2">
  {[
  { label: "Tomorrow", value: addDaysFromToday(1) },
  { label: "In 2 days", value: addDaysFromToday(2) },
- { label: "This weekend", value: nextWeekendDate() },
  { label: "Next week", value: addDaysFromToday(7) },
  ].map((chip) => {
  const selected = preferredDate === chip.value;
@@ -2261,6 +2446,15 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </button>
  );
  })}
+ {preferredDate ? (
+ <button
+ type="button"
+ onClick={() => setPreferredDate("")}
+ className="rounded-lg border border-dashed border-border px-3 py-2 text-xs font-medium text-muted-foreground hover:border-[#FF4D1C]/40"
+ >
+ Flexible — any weekday
+ </button>
+ ) : null}
  </div>
  <label className="relative block">
  <span className="sr-only">Pick a date</span>
@@ -2284,10 +2478,11 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  Selected | {formatDisplayDate(preferredDate)}
  </motion.p>
  ) : (
- <p className="text-xs text-muted-foreground">Optional - leave blank if your date is flexible.</p>
+ <p className="text-xs text-muted-foreground">No date selected — we&apos;ll use the next available weekday slot.</p>
  )}
  </AnimatePresence>
  </fieldset>
+ )}
 
  {/* Property purpose */}
  <fieldset className="relative mt-7 space-y-3">
@@ -2439,7 +2634,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </motion.form>
  )}
 
- {step === "assessment" && activeJob && (
+ {step === "assessment" && (activeJob || assessLoadingStep != null) && (
  <div className="space-y-5 rounded-lg border border-border bg-card p-4">
  <div className="flex flex-wrap items-center justify-between gap-2">
  <button
@@ -2449,6 +2644,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  >
  <ArrowLeft className="h-4 w-4" /> Back
  </button>
+ {activeJob && assessmentMode === "expert" ? (
  <button
  type="button"
  onClick={() => {
@@ -2459,92 +2655,38 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  >
  Track this request
  </button>
+ ) : null}
  </div>
-
- <ServiceTrackingCard
- job={jobs.find((j) => j.id === activeJob.id) || activeJob}
- compact
- onMessage={() => {
- setSelectedJobId(activeJob.id);
- setTab("jobs");
- setShowTechMessage(true);
- }}
- onChangeSchedule={() => {
- setSelectedJobId(activeJob.id);
- setTab("jobs");
- setForceEditSchedule(true);
- }}
- />
 
  <div className="flex items-start gap-2">
  <ShieldAlert className="mt-0.5 h-5 w-5 text-[#FF4D1C]" />
  <div>
  <h2 className="text-lg font-semibold">Assessment</h2>
- <p className="text-sm text-muted-foreground">{activeJob.aiAssessment?.disclaimer}</p>
+ <p className="text-sm text-muted-foreground">
+ {activeJob?.aiAssessment
+ ? activeJob.aiAssessment.disclaimer ||
+ "AI-assisted assessment, not a professional diagnosis."
+ : "Reviewing your request and preparing your local price estimate."}
+ </p>
  </div>
  </div>
 
- {assessmentMsg && activeJob.aiAssessment ? (
+ {assessmentMsg && activeJob?.aiAssessment ? (
  <p className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
  {assessmentMsg}
  </p>
  ) : null}
 
- {/* Mode Selector Toggle */}
- <div className="flex border-b border-border">
- <button
- type="button"
- onClick={() => setAssessmentMode("diy")}
- className={`flex-1 pb-3 text-center text-sm font-semibold border-b-2 transition ${
- assessmentMode === "diy"
- ? "border-[#FF4D1C] text-[#FF4D1C]"
- : "border-transparent text-muted-foreground hover:text-foreground"
- }`}
- >
- Do It Yourself (DIY)
- </button>
- <button
- type="button"
- onClick={() => setAssessmentMode("expert")}
- className={`flex-1 pb-3 text-center text-sm font-semibold border-b-2 transition ${
- assessmentMode === "expert"
- ? "border-[#FF4D1C] text-[#FF4D1C]"
- : "border-transparent text-muted-foreground hover:text-foreground"
- }`}
- >
- Hire a Professional
- </button>
- </div>
-
- {activeJob.aiAssessment?.questions_needed && activeJob.aiAssessment.questions_needed.length > 0 && (
- <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100 flex gap-3 shadow-sm">
- <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
- <div className="text-sm space-y-1.5 w-full">
- <p className="font-semibold text-amber-900 dark:text-amber-200">Clarification Needed to Refine Estimate</p>
- <p className="text-xs opacity-90 leading-relaxed">
- Our AI detected potential uncertainty or mismatch in the details provided (e.g. description and photo trade categories mismatch, or extremely vague summary). Please review the following questions:
- </p>
- <ul className="list-disc pl-5 text-xs space-y-1 text-amber-800 dark:text-amber-300 font-medium">
- {activeJob.aiAssessment.questions_needed.map((q, idx) => (
- <li key={idx}>{q}</li>
- ))}
- </ul>
- <p className="text-xs pt-1 font-medium text-amber-900 dark:text-amber-200">
- To fix, click <strong className="text-[#FF4D1C]">Report another issue</strong> above and upload a matching photo and clear description.
- </p>
- </div>
- </div>
- )}
-
- {assessLoadingStep != null || (busy && !activeJob.aiAssessment) ? (
+ {assessLoadingStep != null || (busy && !hasRenderableAssessment(activeJob)) ? (
  <EstimateLoadingSteps zip={assessLoadingZip} activeStep={assessLoadingStep ?? 0} />
- ) : !activeJob.aiAssessment ? (
+ ) : !hasRenderableAssessment(activeJob) ? (
  <div className="space-y-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
  <p className="text-sm font-semibold">Assessment not ready yet</p>
  <p className="text-sm leading-relaxed">
  {assessmentMsg ||
  "We couldn't complete the AI assessment right now."}
  </p>
+ {activeJob ? (
  <button
  type="button"
  disabled={busy}
@@ -2553,9 +2695,9 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  setBusy(true);
  setAssessmentMsg(null);
  try {
- const propZip =
+ const retryZip =
  properties.find((p) => p.id === activeJob.propertyId)?.zip || null;
- const assessed = await runAssessWithProgress(activeJob.id, propZip);
+ const assessed = await runAssessWithProgress(activeJob.id, retryZip);
  if (!assessed.ok || !assessed.job) {
  setAssessmentMsg(
  assessed.message ||
@@ -2574,11 +2716,79 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  className="inline-flex items-center gap-2 rounded-md bg-[#FF4D1C] px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60"
  >
  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
- Continue with Service Request
+ Retry assessment
+ </button>
+ ) : null}
+ </div>
+ ) : hasRenderableAssessment(activeJob) ? (
+ <>
+ {/* Mode Selector Toggle */}
+ <div className="flex border-b border-border">
+ <button
+ type="button"
+ onClick={() => setAssessmentMode("diy")}
+ className={`flex-1 pb-3 text-center text-sm font-semibold border-b-2 transition ${
+ assessmentMode === "diy"
+ ? "border-[#FF4D1C] text-[#FF4D1C]"
+ : "border-transparent text-muted-foreground hover:text-foreground"
+ }`}
+ >
+ Do It Yourself (DIY)
+ </button>
+ <button
+ type="button"
+ onClick={() => {
+ setAssessmentMode("expert");
+ if (activeJob) setSelectedJobId(activeJob.id);
+ }}
+ className={`flex-1 pb-3 text-center text-sm font-semibold border-b-2 transition ${
+ assessmentMode === "expert"
+ ? "border-[#FF4D1C] text-[#FF4D1C]"
+ : "border-transparent text-muted-foreground hover:text-foreground"
+ }`}
+ >
+ Hire a Professional
  </button>
  </div>
- ) : assessmentMode === "expert" ? (
+
+ {assessmentStringList(activeJob.aiAssessment?.questions_needed).length > 0 && (
+ <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100 flex gap-3 shadow-sm">
+ <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+ <div className="text-sm space-y-1.5 w-full">
+ <p className="font-semibold text-amber-900 dark:text-amber-200">Clarification Needed to Refine Estimate</p>
+ <p className="text-xs opacity-90 leading-relaxed">
+ Our AI detected potential uncertainty or mismatch in the details provided (e.g. description and photo trade categories mismatch, or extremely vague summary). Please review the following questions:
+ </p>
+ <ul className="list-disc pl-5 text-xs space-y-1 text-amber-800 dark:text-amber-300 font-medium">
+ {assessmentStringList(activeJob.aiAssessment?.questions_needed).map((q, idx) => (
+ <li key={idx}>{q}</li>
+ ))}
+ </ul>
+ <p className="text-xs pt-1 font-medium text-amber-900 dark:text-amber-200">
+ To fix, click <strong className="text-[#FF4D1C]">Report another issue</strong> above and upload a matching photo and clear description.
+ </p>
+ </div>
+ </div>
+ )}
+
+ {assessmentMode === "expert" ? (
  <div className="space-y-4">
+ {activeJob ? (
+ <ServiceTrackingCard
+ job={jobs.find((j) => j.id === activeJob.id) || activeJob}
+ compact
+ onMessage={() => {
+ setSelectedJobId(activeJob.id);
+ setTab("jobs");
+ setShowTechMessage(true);
+ }}
+ onChangeSchedule={() => {
+ setSelectedJobId(activeJob.id);
+ setTab("jobs");
+ setForceEditSchedule(true);
+ }}
+ />
+ ) : null}
  {dispatchSuccessMsg ? (
  <p className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-900 dark:text-emerald-100">
  {dispatchSuccessMsg}
@@ -2597,17 +2807,18 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <div className="rounded-md bg-muted/50 p-3 text-sm">
  <p className="text-muted-foreground">Confidence</p>
  <p className="font-medium">
- {activeJob.aiAssessment?.confidence != null
+ {typeof activeJob.aiAssessment?.confidence === "number" &&
+ Number.isFinite(activeJob.aiAssessment.confidence)
  ? `${Math.round(activeJob.aiAssessment.confidence * 100)}%`
  : " - "}
  </p>
  </div>
  </div>
- {(activeJob.aiAssessment?.immediate_safety_steps?.length || 0) > 0 && (
+ {assessmentStringList(activeJob.aiAssessment?.immediate_safety_steps).length > 0 && (
  <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
  <p className="font-medium">Safety steps</p>
  <ul className="mt-1 list-disc pl-5">
- {activeJob.aiAssessment?.immediate_safety_steps?.map((s) => (
+ {assessmentStringList(activeJob.aiAssessment?.immediate_safety_steps).map((s) => (
  <li key={s}>{s}</li>
  ))}
  </ul>
@@ -2723,9 +2934,9 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <h4 className="font-semibold text-sm mb-3 flex items-center gap-1.5">
  Required Tools
  </h4>
- {activeJob.aiAssessment?.tools_required && activeJob.aiAssessment.tools_required.length > 0 ? (
+ {assessmentStringList(activeJob.aiAssessment?.tools_required).length > 0 ? (
  <ul className="space-y-2">
- {activeJob.aiAssessment.tools_required.map((tool, idx) => (
+ {assessmentStringList(activeJob.aiAssessment?.tools_required).map((tool, idx) => (
  <li key={idx} className="flex items-start gap-2 text-xs">
  <input type="checkbox" className="mt-0.5 h-3.5 w-3.5 rounded border-border text-[#FF4D1C] focus:ring-[#FF4D1C]" />
  <span className="text-muted-foreground">{tool}</span>
@@ -2741,9 +2952,9 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <h4 className="font-semibold text-sm mb-3 flex items-center gap-1.5">
  Materials Needed
  </h4>
- {activeJob.aiAssessment?.materials_needed && activeJob.aiAssessment.materials_needed.length > 0 ? (
+ {assessmentStringList(activeJob.aiAssessment?.materials_needed).length > 0 ? (
  <ul className="space-y-2">
- {activeJob.aiAssessment.materials_needed.map((item, idx) => (
+ {assessmentStringList(activeJob.aiAssessment?.materials_needed).map((item, idx) => (
  <li key={idx} className="flex items-start gap-2 text-xs">
  <input type="checkbox" className="mt-0.5 h-3.5 w-3.5 rounded border-border text-[#FF4D1C] focus:ring-[#FF4D1C]" />
  <span className="text-muted-foreground">{item}</span>
@@ -2760,7 +2971,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <div className="rounded-xl border border-border p-4">
  <div className="flex items-center justify-between mb-4">
  <h4 className="font-semibold text-sm">Step-by-Step Instructions</h4>
- {activeJob.aiAssessment?.diy_steps && activeJob.aiAssessment.diy_steps.length > 0 && (
+ {assessmentStringList(activeJob.aiAssessment?.diy_steps).length > 0 && (
  <button
  type="button"
  onClick={() => setDiyIsGuided(!diyIsGuided)}
@@ -2771,7 +2982,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  )}
  </div>
 
- {activeJob.aiAssessment?.diy_steps && activeJob.aiAssessment.diy_steps.length > 0 ? (
+ {assessmentStringList(activeJob.aiAssessment?.diy_steps).length > 0 ? (
  diyIsGuided ? (
  <div className="space-y-4">
  {/* Progress bar */}
@@ -2781,7 +2992,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <span>
  {Math.round(
  (Object.values(diyCompletedSteps).filter(Boolean).length /
- activeJob.aiAssessment.diy_steps.length) *
+ assessmentStringList(activeJob.aiAssessment?.diy_steps).length) *
  100
  )}% Complete
  </span>
@@ -2792,7 +3003,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  style={{
  width: `${
  (Object.values(diyCompletedSteps).filter(Boolean).length /
- activeJob.aiAssessment.diy_steps.length) *
+ assessmentStringList(activeJob.aiAssessment?.diy_steps).length) *
  100
  }%`,
  }}
@@ -2803,12 +3014,12 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  {/* Active Step Card */}
  <div className="rounded-xl border border-primary/20 bg-primary/5 p-5 relative overflow-hidden">
  <div className="absolute right-3 top-3 text-[10px] font-bold text-primary/30 uppercase tracking-widest">
- Step {diyStepIndex + 1} of {activeJob.aiAssessment.diy_steps.length}
+ Step {diyStepIndex + 1} of {assessmentStringList(activeJob.aiAssessment?.diy_steps).length}
  </div>
  
  <p className="text-xs font-semibold text-primary uppercase tracking-wider mb-1">Active Step</p>
  <p className="text-sm font-medium text-foreground leading-relaxed">
- {activeJob.aiAssessment.diy_steps[diyStepIndex]}
+ {assessmentStringList(activeJob.aiAssessment?.diy_steps)[diyStepIndex]}
  </p>
 
  {/* Checkbox click to complete */}
@@ -2844,7 +3055,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </button>
  <button
  type="button"
- disabled={diyStepIndex === activeJob.aiAssessment.diy_steps.length - 1}
+ disabled={diyStepIndex === assessmentStringList(activeJob.aiAssessment?.diy_steps).length - 1}
  onClick={() => setDiyStepIndex((idx) => idx + 1)}
  className="rounded-full bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-primary/90 disabled:opacity-50"
  >
@@ -2854,7 +3065,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
  ) : (
  <div className="relative border-l border-border/80 pl-4 ml-2 space-y-4">
- {activeJob.aiAssessment.diy_steps.map((stepItem, idx) => (
+ {assessmentStringList(activeJob.aiAssessment?.diy_steps).map((stepItem, idx) => (
  <div key={idx} className="relative">
  <div className="absolute -left-[25px] top-0 flex h-4 w-4 items-center justify-center rounded-full bg-background border border-border text-[9px] font-bold">
  {idx + 1}
@@ -2886,7 +3097,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
 
  {/* Stop conditions warning */}
- {activeJob.aiAssessment?.stop_conditions && activeJob.aiAssessment.stop_conditions.length > 0 && (
+ {assessmentStringList(activeJob.aiAssessment?.stop_conditions).length > 0 && (
  <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
  <h4 className="font-semibold text-sm text-amber-800 dark:text-amber-400 mb-2 flex items-center gap-1.5">
  Warning: Safety Stop Conditions
@@ -2895,7 +3106,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  Stop immediately and request a professional dispatcher if you experience any of the following:
  </p>
  <ul className="space-y-2">
- {activeJob.aiAssessment.stop_conditions.map((stopItem, idx) => (
+ {assessmentStringList(activeJob.aiAssessment?.stop_conditions).map((stopItem, idx) => (
  <li key={idx} className="flex items-start gap-2 text-xs text-amber-950 dark:text-amber-200">
  <span className="mt-1 h-1.5 w-1.5 rounded-full bg-[#FF4D1C] shrink-0" />
  <span>{stopItem}</span>
@@ -3015,6 +3226,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
  )
  )}
+ </>
+ ) : null}
  </div>
  )}
  </section>
@@ -3244,9 +3457,56 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
 
  <div className="rounded-lg border border-border bg-muted/20 p-4">
- <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Current plan</p>
+ <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">HomeCare subscription</p>
+ {hasHomeCarePro ? (
+ <>
+ <p className="mt-1 text-base font-semibold">HomeCare Pro</p>
+ <p className="mt-1 text-xs text-muted-foreground">
+ Status: <span className="font-medium text-foreground">Active</span>
+ </p>
+ {homeCareSub?.currentPeriodEnd ? (
+ <p className="mt-1 text-xs text-muted-foreground">
+ Next billing date:{" "}
+ <span className="font-medium text-foreground">
+ {new Date(homeCareSub.currentPeriodEnd).toLocaleDateString(undefined, {
+ month: "short",
+ day: "numeric",
+ year: "numeric",
+ })}
+ </span>
+ </p>
+ ) : null}
+ {homeCareSub?.cancelAtPeriodEnd && homeCareSub.currentPeriodEnd ? (
+ <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+ Cancels on{" "}
+ {new Date(homeCareSub.currentPeriodEnd).toLocaleDateString(undefined, {
+ month: "short",
+ day: "numeric",
+ year: "numeric",
+ })}
+ </p>
+ ) : null}
+ <p className="mt-2 text-xs text-muted-foreground">
+ Manage billing from HomeCare plans or contact support if you need help.
+ </p>
+ </>
+ ) : homeCareSub?.paymentIssue ? (
+ <>
+ <p className="mt-1 text-base font-semibold text-amber-700 dark:text-amber-300">Payment issue</p>
+ <p className="mt-1 text-xs text-muted-foreground">
+ Update your payment method to restore HomeCare Pro access.
+ </p>
+ <button
+ type="button"
+ onClick={() => navigateTab("go-pro")}
+ className="mt-3 inline-flex rounded-lg border border-[#FF6B2C]/40 bg-[#FF6B2C]/10 px-3 py-2 text-xs font-semibold text-[#FF6B2C]"
+ >
+ Update payment method
+ </button>
+ </>
+ ) : (
+ <>
  <p className="mt-1 text-base font-semibold">{displayPlanLabel(user.planCode)}</p>
- {!hasHomeCarePro ? (
  <button
  type="button"
  onClick={() => navigateTab("go-pro")}
@@ -3254,8 +3514,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  >
  Upgrade to HomeCare Pro
  </button>
- ) : (
- <p className="mt-1 text-xs text-muted-foreground">HomeCare Pro active — manage billing from HomeCare plans.</p>
+ </>
  )}
  </div>
 

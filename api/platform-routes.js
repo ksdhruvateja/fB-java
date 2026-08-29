@@ -19,6 +19,7 @@ import { isAdminRole } from './auth-helpers.js';
 import { reconcileRefundForJob } from './payment-settlement.js';
 import { FINANCIAL_EVENT, recordFinancialEvent } from './financial-ledger.js';
 import { isPaidHomeCarePlan, PAID_HOME_CARE_PLAN_CODE } from './subscription-catalog.js';
+import { userHasActivePaidSubscription } from './subscription-state.js';
 import { writeAudit } from './audit.js';
 import { sendEmailSafe, sendSmsSafe, notifyOps, mailStatus } from './notify.js';
 import { lookupTimezoneFromCoordinates, isValidIanaTimezone } from './property-timezone.js';
@@ -151,6 +152,17 @@ async function startSubscriptionCheckout(pool, {
     throw err;
   }
   assertPaymentsAvailable();
+
+  if (isPaidHomeCarePlan(planCode)) {
+    const alreadyActive = await userHasActivePaidSubscription(pool, userId);
+    if (alreadyActive) {
+      const err = new Error(
+        'You already have an active HomeCare Pro subscription. Manage it from your account profile.'
+      );
+      err.status = 409;
+      throw err;
+    }
+  }
 
   const successPath = jobId
     ? `/?paid=subscription&plan=${encodeURIComponent(planCode)}&jobId=${jobId}`

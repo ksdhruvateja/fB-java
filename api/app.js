@@ -45,6 +45,11 @@ import {
   deriveVerifiedFixBridgeJob,
 } from './job-reviews.js';
 import {
+  syncUserHomeCareEntitlement,
+  activateSubscriptionFromCheckout,
+  toPublicHomeCareSubscriptionDto,
+} from './subscription-state.js';
+import {
   corsOriginDelegate,
   securityHeaders,
   publicErrorMessage,
@@ -654,19 +659,11 @@ async function requireAuth(req, res, next) {
     }
 
     let planCode = rows[0].plan_code;
-    if (planCode) {
-      const { rows: subRows } = await pool.query(
-        `SELECT id, current_period_end FROM subscriptions WHERE user_id=$1 AND plan_code=$2 AND status='active' ORDER BY created_at DESC LIMIT 1`,
-        [rows[0].id, planCode]
-      );
-      if (subRows.length) {
-        const currentPeriodEnd = new Date(subRows[0].current_period_end);
-        if (new Date() > currentPeriodEnd) {
-          await pool.query(`UPDATE subscriptions SET status='expired' WHERE id=$1`, [subRows[0].id]);
-          await pool.query(`UPDATE users SET plan_code=NULL WHERE id=$1`, [rows[0].id]);
-          planCode = null;
-        }
-      }
+    let homeCareSubscription = null;
+    if (rows[0].role === 'homeowner') {
+      const subState = await syncUserHomeCareEntitlement(pool, rows[0].id);
+      planCode = subState.isPro ? subState.effectivePlanCode : null;
+      homeCareSubscription = toPublicHomeCareSubscriptionDto(subState);
     }
 
     req.authUser = {
@@ -676,6 +673,7 @@ async function requireAuth(req, res, next) {
       name: rows[0].name,
       role: rows[0].role,
       planCode: planCode || null,
+      homeCareSubscription,
       // P0-10: is_admin boolean alone must never grant admin / cross-user access
       isAdmin: rows[0].role === 'admin',
       isBlocked: rows[0].is_blocked === true,
@@ -812,7 +810,7 @@ function parseDocumentField(body, nameKey, dataKey) {
   };
 }
 
-function rowToUser(r, { includeDocumentData = true } = {}) {
+function rowToUser(r, { includeDocumentData = true, homeCareSubscription = null } = {}) {
   return {
     id: r.id != null ? Number(r.id) : undefined,
     role: r.role, name: r.name, email: r.email,
@@ -872,6 +870,7 @@ function rowToUser(r, { includeDocumentData = true } = {}) {
     isAppleAccount: r.password === 'APPLE_OAUTH',
     isAuth0Account: r.password === 'AUTH0_OAUTH',
     planCode: r.plan_code || null,
+    ...(homeCareSubscription ? { homeCareSubscription } : {}),
     visitFee: r.visit_fee != null ? Number(r.visit_fee) : null,
     emergencyVisitFee: r.emergency_visit_fee != null ? Number(r.emergency_visit_fee) : null,
     afterHoursFee: r.after_hours_fee != null ? Number(r.after_hours_fee) : null,
@@ -1145,7 +1144,15 @@ app.post('/api/auth/signin', signInLimiter, async (req, res) => {
     }
 
     await ensureUserReferralCode(pool, rows[0]);
-    const user = rowToUser(rows[0]);
+    let homeCareSubscription = null;
+    if (role === 'homeowner') {
+      const subState = await syncUserHomeCareEntitlement(pool, rows[0].id);
+      homeCareSubscription = toPublicHomeCareSubscriptionDto(subState);
+    }
+    const user = rowToUser(rows[0], { homeCareSubscription });
+    if (homeCareSubscription) {
+      user.planCode = homeCareSubscription.isPro ? homeCareSubscription.planCode : null;
+    }
     // P0-8: admin credentials only yield an MFA-pending token until MFA succeeds
     if (role === 'admin') {
       return res.json({
@@ -1341,18 +1348,26 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
             );
             const planCode = session.metadata?.planCode;
             if (payment.payment_type === 'subscription' && planCode) {
-              await pool.query(
-                `INSERT INTO subscriptions (user_id, plan_code, plan_family, status, stripe_subscription_id, simulated, current_period_end, meta)
-                 VALUES ($1,$2,$3,'active',$4,false, NOW() + INTERVAL '30 days', $5)`,
-                [
-                  req.authUser.id,
-                  planCode,
-                  String(planCode).includes('contractor') ? 'contractor' : 'diy',
-                  session.subscription || session.payment_intent || null,
-                  JSON.stringify({ planCode }),
-                ]
-              );
-              await pool.query(`UPDATE users SET plan_code=$1 WHERE id=$2`, [planCode, req.authUser.id]);
+              let periodEnd = null;
+              if (session.subscription && stripe) {
+                try {
+                  const sub = await stripe.subscriptions.retrieve(String(session.subscription));
+                  if (sub?.current_period_end) {
+                    periodEnd = new Date(sub.current_period_end * 1000).toISOString();
+                  }
+                } catch {
+                  /* use default in activateSubscriptionFromCheckout */
+                }
+              }
+              await activateSubscriptionFromCheckout(pool, {
+                userId: req.authUser.id,
+                planCode,
+                stripeSubscriptionId: session.subscription || null,
+                stripeCustomerId: session.customer || null,
+                currentPeriodEnd: periodEnd,
+                checkoutSessionId: session.id,
+                meta: { activatedByAuthMeSync: true },
+              });
             }
           }
         }
@@ -1364,7 +1379,16 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
     const { rows } = await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id]);
     if (!rows.length) return res.status(401).json({ ok: false, message: 'User not found.' });
     await ensureUserReferralCode(pool, rows[0]);
-    return res.json({ ok: true, user: rowToUser(rows[0]) });
+    let homeCareSubscription = req.authUser.homeCareSubscription || null;
+    if (rows[0].role === 'homeowner') {
+      const subState = await syncUserHomeCareEntitlement(pool, rows[0].id);
+      homeCareSubscription = toPublicHomeCareSubscriptionDto(subState);
+    }
+    const user = rowToUser(rows[0], { homeCareSubscription });
+    if (homeCareSubscription) {
+      user.planCode = homeCareSubscription.isPro ? homeCareSubscription.planCode : null;
+    }
+    return res.json({ ok: true, user });
   } catch (e) {
     console.error('me:', e);
     return res.status(500).json({ ok: false, message: 'Server error.' });

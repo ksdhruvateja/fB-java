@@ -1,6 +1,5 @@
 import { ChevronRight, LogOut, Moon, Sparkles, Sun } from "lucide-react";
 import { MORE_MENU_SECTIONS, type DashTab } from "./homeownerNav";
-import { isPaidHomeCarePlan } from "./subscriptionCatalog";
 import LockedProBadge from "./LockedProBadge";
 
 const PRO_LOCKED_MENU_TABS = new Set<DashTab>(["documents"]);
@@ -8,6 +7,7 @@ const PRO_LOCKED_MENU_TABS = new Set<DashTab>(["documents"]);
 export default function HomeownerMoreMenu({
   userName,
   planCode,
+  isPro,
   isDark,
   onNavigate,
   onToggleDark,
@@ -18,6 +18,8 @@ export default function HomeownerMoreMenu({
 }: {
   userName: string;
   planCode?: string | null;
+  /** Authoritative Pro entitlement from server subscription state. */
+  isPro?: boolean;
   isDark: boolean;
   onNavigate: (tab: DashTab) => void;
   onToggleDark: () => void;
@@ -26,6 +28,7 @@ export default function HomeownerMoreMenu({
   goProBusy?: boolean;
   showGoPro?: boolean;
 }) {
+  const hasPro = isPro === true;
   return (
     <section className="mx-auto max-w-lg space-y-6 pb-4">
       <div>
@@ -69,7 +72,7 @@ export default function HomeownerMoreMenu({
                 <span className="min-w-0 flex-1">
                   <p className="flex flex-wrap items-center gap-2 text-sm font-semibold">
                     {item.label}
-                    {PRO_LOCKED_MENU_TABS.has(item.tab) && !isPaidHomeCarePlan(planCode) ? (
+                    {PRO_LOCKED_MENU_TABS.has(item.tab) && !hasPro ? (
                       <LockedProBadge compact />
                     ) : null}
                   </p>

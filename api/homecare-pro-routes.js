@@ -1,6 +1,11 @@
 import crypto from 'crypto';
 import { isPaidHomeCarePlan } from './subscription-catalog.js';
 import {
+  loadBestHomeCareSubscription,
+  syncUserHomeCareEntitlement,
+  toPublicHomeCareSubscriptionDto,
+} from './subscription-state.js';
+import {
   createRequireHomeCareFeature,
   entitlementDeniedPayload,
   getHomeCareConfig,
@@ -773,21 +778,19 @@ Property context: ${propertyContext}`;
   // ── Subscription status (homeowner) ────────────────────────────────────
   app.get('/api/homecare/subscription-status', requireAuth, async (req, res) => {
     try {
-      const { rows: subs } = await pool.query(
-        `SELECT plan_code, status, current_period_end, created_at
-         FROM subscriptions WHERE user_id=$1 ORDER BY created_at DESC LIMIT 3`,
-        [req.authUser.id]
-      );
-      const active = subs.find((s) => s.status === 'active');
+      const state = await syncUserHomeCareEntitlement(pool, req.authUser.id);
+      const dto = toPublicHomeCareSubscriptionDto(state);
+      const subscription = await loadBestHomeCareSubscription(pool, req.authUser.id);
       res.json({
         ok: true,
-        planCode: req.authUser.planCode || 'free',
-        isPro: isPaidHomeCarePlan(req.authUser.planCode),
-        subscription: active
+        ...dto,
+        subscription: subscription
           ? {
-              planCode: active.plan_code,
-              status: active.status,
-              currentPeriodEnd: active.current_period_end,
+              planCode: subscription.plan_code,
+              status: subscription.status,
+              currentPeriodEnd: subscription.current_period_end,
+              cancelAtPeriodEnd: dto.cancelAtPeriodEnd,
+              paymentIssue: dto.paymentIssue,
             }
           : null,
       });

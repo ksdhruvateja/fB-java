@@ -146,7 +146,18 @@ export async function getHomeCareSubscriptionStatus() {
     ok: boolean;
     planCode?: string;
     isPro?: boolean;
-    subscription?: { planCode: string; status: string; currentPeriodEnd?: string } | null;
+    status?: string | null;
+    currentPeriodEnd?: string | null;
+    cancelAtPeriodEnd?: boolean;
+    paymentIssue?: boolean;
+    memberLabel?: string | null;
+    subscription?: {
+      planCode: string;
+      status: string;
+      currentPeriodEnd?: string;
+      cancelAtPeriodEnd?: boolean;
+      paymentIssue?: boolean;
+    } | null;
     message?: string;
   }>("/api/homecare/subscription-status");
 }

@@ -126,14 +126,6 @@ export function resolveParentFrame(frame: NavFrame): NavFrame | null {
           role: "homeowner",
           tab: "report",
           reportStep: "intake",
-          intakePhase: "describe",
-        };
-      }
-      if (frame.reportStep === "intake" && frame.intakePhase === "describe") {
-        return {
-          role: "homeowner",
-          tab: "report",
-          reportStep: "intake",
           intakePhase: "location",
         };
       }
@@ -142,8 +134,11 @@ export function resolveParentFrame(frame: NavFrame): NavFrame | null {
           role: "homeowner",
           tab: "report",
           reportStep: "intake",
-          intakePhase: "trade",
+          intakePhase: "describe",
         };
+      }
+      if (frame.reportStep === "intake" && frame.intakePhase === "describe") {
+        return { role: "homeowner", tab: "overview" };
       }
       if (frame.reportStep === "intake" && frame.intakePhase === "trade") {
         return { role: "homeowner", tab: "overview" };
@@ -203,13 +198,21 @@ const STORAGE_PREFIX = "fixbridge-nav-frame-";
 const NAV_FRAME_VERSION = 2;
 
 function sanitizeHomeownerFrame(frame: HomeownerNavFrame): HomeownerNavFrame {
+  const intakePhase =
+    frame.intakePhase === "trade"
+      ? "describe"
+      : frame.intakePhase === "location" ||
+          frame.intakePhase === "describe" ||
+          frame.intakePhase === "details"
+        ? frame.intakePhase
+        : undefined;
   return {
     role: "homeowner",
     tab: sanitizeDashTab(frame.tab),
     jobId: typeof frame.jobId === "number" && Number.isFinite(frame.jobId) ? frame.jobId : null,
     jobsSegment: frame.jobsSegment ? sanitizeJobsSegment(frame.jobsSegment) : undefined,
     reportStep: frame.reportStep,
-    intakePhase: frame.intakePhase,
+    intakePhase,
     reportPath: frame.reportPath ?? null,
   };
 }

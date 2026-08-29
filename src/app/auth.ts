@@ -1,6 +1,19 @@
 export type UserRole = "homeowner" | "contractor" | "admin";
 export type ResetRole = UserRole | "partner";
 
+/** Authoritative HomeCare Pro subscription state from the server (see /api/auth/me). */
+export type HomeCareSubscription = {
+  isPro: boolean;
+  planCode?: string | null;
+  status?: string | null;
+  currentPeriodEnd?: string | null;
+  cancelAtPeriodEnd?: boolean;
+  paymentIssue?: boolean;
+  memberLabel?: string | null;
+  stripeSubscriptionId?: string;
+  simulated?: boolean;
+};
+
 export type AuthUser = {
   id?: string | number;
   role: UserRole;
@@ -48,6 +61,8 @@ export type AuthUser = {
   isAppleAccount?: boolean;
   isAuth0Account?: boolean;
   planCode?: string | null;
+  /** Server-synced subscription entitlement — authoritative for Pro UI gating. */
+  homeCareSubscription?: HomeCareSubscription | null;
   serviceZips?: string[] | null;
   travelRadiusMiles?: number | null;
   visitFee?: number | null;

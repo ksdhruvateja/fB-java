@@ -89,6 +89,7 @@ export default function ServiceAdaptiveQuestions({
   answers: AdaptiveAnswers;
   onChange: (answers: AdaptiveAnswers) => void;
 }) {
+  const safeAnswers = answers && typeof answers === "object" ? answers : {};
   const { family, fields } = adaptiveFieldsForTrade(tradeId);
   if (!tradeId || fields.length === 0) return null;
 
@@ -111,8 +112,8 @@ export default function ServiceAdaptiveQuestions({
             <span className="text-xs font-medium text-muted-foreground">{field.label}</span>
             <FieldControl
               field={field}
-              value={answers[field.id]}
-              onChange={(id, next) => onChange({ ...answers, [id]: next })}
+              value={safeAnswers[field.id]}
+              onChange={(id, next) => onChange({ ...safeAnswers, [id]: next })}
             />
           </label>
         ))}

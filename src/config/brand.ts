@@ -12,6 +12,8 @@ export const brand = {
   logoMarkUrl: _env.VITE_BRAND_LOGO_MARK_URL?.trim() || "/fixbridge-mark.png",
   /** Black lockup for marketing nav when scrolled over light content */
   logoLockupBlackUrl: _env.VITE_BRAND_LOGO_LOCKUP_BLACK_URL?.trim() || "/fixbridge-logo-lockup-black.png",
+  /** Absolute site URL for Open Graph (e.g. https://fixbridge.com). Falls back to window origin in the client. */
+  siteUrl: _env.VITE_SITE_URL?.trim() || "",
   domain: typeof window !== "undefined" ? window.location.host : "localhost:5000",
 } as const;
 

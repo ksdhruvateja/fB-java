@@ -1,4 +1,5 @@
 import { isPaidHomeCarePlan } from "./subscriptionCatalog";
+import type { HomeCareSubscription } from "./auth";
 
 /** Matches backend `code` for subscription-gated APIs. */
 export const PRO_SUBSCRIPTION_REQUIRED = "PRO_SUBSCRIPTION_REQUIRED";
@@ -71,8 +72,23 @@ export const PRO_FEATURE_COPY: Record<ProFeatureId, ProFeatureCopy> = {
 /** Pro-only surfaces — free users may see them with a lock, but cannot access data/actions. */
 export const PRO_FEATURE_IDS: ProFeatureId[] = Object.keys(PRO_FEATURE_COPY) as ProFeatureId[];
 
-export function hasProEntitlement(planCode?: string | null): boolean {
+/** Whether the signed-in user has active HomeCare Pro entitlement (server state preferred). */
+export function hasProEntitlement(
+  planCode?: string | null,
+  homeCareSubscription?: HomeCareSubscription | null
+): boolean {
+  if (homeCareSubscription != null) return homeCareSubscription.isPro === true;
   return isPaidHomeCarePlan(planCode);
+}
+
+export function resolveClientProAccess(user: {
+  planCode?: string | null;
+  homeCareSubscription?: HomeCareSubscription | null;
+}): { isPro: boolean; subscription: HomeCareSubscription | null } {
+  if (user.homeCareSubscription != null) {
+    return { isPro: user.homeCareSubscription.isPro === true, subscription: user.homeCareSubscription };
+  }
+  return { isPro: isPaidHomeCarePlan(user.planCode), subscription: null };
 }
 
 export function proFeatureCopy(feature: ProFeatureId): ProFeatureCopy {

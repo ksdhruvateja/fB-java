@@ -8,53 +8,35 @@ import {
   Loader2,
   Mic,
   Sparkles,
-  Wrench,
-  Droplets,
-  Zap,
-  Wind,
-  Home,
-  Hammer,
-  Bug,
-  Trees,
-  Brush,
-  PlusCircle,
   X,
 } from "lucide-react";
 import { useIsMobile } from "./components/ui/use-mobile";
 import ServiceAdaptiveQuestions from "./ServiceAdaptiveQuestions";
 import {
-  SERVICE_TRADE_OPTIONS,
   SERVICE_LOCATION_OPTIONS,
   serviceRequestTitle,
   tradeToCategory,
+  resolveRequestTradeId,
+  inferTradeFromDescription,
   type AdaptiveAnswers,
   type ServiceLocation,
 } from "./serviceRequestFlow";
 import type { Property } from "./managedJobs";
 
-const TRADE_ICONS: Record<string, React.ElementType> = {
-  droplet: Droplets,
-  zap: Zap,
-  wind: Wind,
-  refrigerator: Home,
-  hammer: Hammer,
-  bug: Bug,
-  home: Home,
-  trees: Trees,
-  cleaning: Brush,
-  more: PlusCircle,
-};
+export type IntakePhase = "location" | "describe" | "details";
 
-export type IntakePhase = "trade" | "location" | "describe" | "details";
+export function normalizeIntakePhase(phase: string | null | undefined): IntakePhase {
+  if (phase === "location" || phase === "describe" || phase === "details") return phase;
+  return "describe";
+}
 
 const INTAKE_STEP_META: Record<IntakePhase, { step: number; title: string }> = {
-  trade: { step: 1, title: "What's happening?" },
-  location: { step: 2, title: "Tell us about the problem" },
-  describe: { step: 3, title: "Photos & details" },
-  details: { step: 4, title: "Review & submit" },
+  describe: { step: 1, title: "Describe the problem" },
+  location: { step: 2, title: "Where is it?" },
+  details: { step: 3, title: "Review & submit" },
 };
 
-const TOTAL_INTAKE_STEPS = 4;
+const TOTAL_INTAKE_STEPS = 3;
 
 type Props = {
   intakePhase: IntakePhase;
@@ -222,16 +204,9 @@ export default function HomeownerServiceIntake(props: Props) {
   } = props;
 
   const isMobile = useIsMobile();
-  const stepMeta = INTAKE_STEP_META[intakePhase];
-
-  function goNextFromTrade() {
-    if (!requestSystemId) {
-      setError("Pick what you need to continue.");
-      return;
-    }
-    setError(null);
-    setIntakePhase("location");
-  }
+  const safeIntakePhase = normalizeIntakePhase(intakePhase);
+  const stepMeta = INTAKE_STEP_META[safeIntakePhase];
+  const resolvedTradeId = resolveRequestTradeId(requestSystemId, description);
 
   function goNextFromLocation() {
     if (!issueArea) {
@@ -239,7 +214,12 @@ export default function HomeownerServiceIntake(props: Props) {
       return;
     }
     setError(null);
-    setIntakePhase("describe");
+    if (!requestSystemId) {
+      const inferred = inferTradeFromDescription(description);
+      setRequestSystemId(inferred);
+      setCategory(tradeToCategory(inferred));
+    }
+    setIntakePhase("details");
   }
 
   function goNextFromDescribe() {
@@ -248,7 +228,12 @@ export default function HomeownerServiceIntake(props: Props) {
       return;
     }
     setError(null);
-    setIntakePhase("details");
+    if (!requestSystemId) {
+      const inferred = inferTradeFromDescription(description);
+      setRequestSystemId(inferred);
+      setCategory(tradeToCategory(inferred));
+    }
+    setIntakePhase("location");
   }
 
   return (
@@ -274,99 +259,7 @@ export default function HomeownerServiceIntake(props: Props) {
         </p>
       ) : null}
 
-      {intakePhase === "trade" && (
-        <div className="space-y-5">
-          <div>
-            <p className="text-lg font-semibold">What do you need?</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Pick the closest match — AI will refine the exact service from your description.
-            </p>
-          </div>
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-            {SERVICE_TRADE_OPTIONS.map((opt) => {
-              const Icon = TRADE_ICONS[opt.iconHint] || Wrench;
-              const selected = requestSystemId === opt.id;
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => {
-                    setRequestSystemId(opt.id);
-                    setCategory(tradeToCategory(opt.id));
-                    setError(null);
-                  }}
-                  className={`rounded-2xl border px-3 py-4 text-left transition ${
-                    selected
-                      ? "border-primary bg-primary/10 shadow-[0_8px_24px_rgba(255,77,28,0.12)]"
-                      : "border-border hover:border-primary/35 hover:bg-muted/40"
-                  }`}
-                >
-                  <span
-                    className={`mb-2 flex h-9 w-9 items-center justify-center rounded-xl ${
-                      selected ? "bg-primary text-white" : "bg-muted text-foreground"
-                    }`}
-                  >
-                    <Icon size={16} />
-                  </span>
-                  <span className="block text-sm font-semibold leading-snug">{opt.label}</span>
-                </button>
-              );
-            })}
-          </div>
-          <div className="hidden justify-end sm:flex">
-            <button
-              type="button"
-              onClick={goNextFromTrade}
-              className="inline-flex items-center gap-2 rounded-2xl bg-primary px-5 py-3 text-sm font-semibold text-white"
-            >
-              Continue <ArrowRight size={16} />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {intakePhase === "location" && (
-        <div className="space-y-5">
-          <button type="button" onClick={onBack} className="inline-flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
-            <ArrowLeft size={14} /> Back
-          </button>
-          <div>
-            <p className="text-lg font-semibold">Where is it?</p>
-            <p className="mt-1 text-sm text-muted-foreground">Choose the area of your home — not the trade or service type.</p>
-          </div>
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-            {SERVICE_LOCATION_OPTIONS.map((loc) => {
-              const selected = issueArea === loc;
-              return (
-                <button
-                  key={loc}
-                  type="button"
-                  onClick={() => {
-                    setIssueArea(loc);
-                    setError(null);
-                  }}
-                  className={`rounded-xl border px-3 py-3 text-sm font-semibold transition ${
-                    selected ? "border-primary bg-primary/10 text-primary" : "border-border hover:border-primary/35"
-                  }`}
-                >
-                  {loc}
-                </button>
-              );
-            })}
-          </div>
-          <div className="hidden justify-end sm:flex">
-            <button
-              type="button"
-              onClick={goNextFromLocation}
-              className="inline-flex items-center gap-2 rounded-2xl bg-primary px-5 py-3 text-sm font-semibold text-white"
-            >
-              Continue <ArrowRight size={16} />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {intakePhase === "describe" && (
+      {safeIntakePhase === "describe" && (
         <div className="space-y-5">
           <button type="button" onClick={onBack} className="inline-flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
             <ArrowLeft size={14} /> Back
@@ -468,17 +361,58 @@ export default function HomeownerServiceIntake(props: Props) {
         </div>
       )}
 
-      {intakePhase === "details" && (
+      {safeIntakePhase === "location" && (
+        <div className="space-y-5">
+          <button type="button" onClick={onBack} className="inline-flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
+            <ArrowLeft size={14} /> Back
+          </button>
+          <div>
+            <p className="text-lg font-semibold">Where is it?</p>
+            <p className="mt-1 text-sm text-muted-foreground">Choose the area of your home.</p>
+          </div>
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+            {SERVICE_LOCATION_OPTIONS.map((loc) => {
+              const selected = issueArea === loc;
+              return (
+                <button
+                  key={loc}
+                  type="button"
+                  onClick={() => {
+                    setIssueArea(loc);
+                    setError(null);
+                  }}
+                  className={`rounded-xl border px-3 py-3 text-sm font-semibold transition ${
+                    selected ? "border-primary bg-primary/10 text-primary" : "border-border hover:border-primary/35"
+                  }`}
+                >
+                  {loc}
+                </button>
+              );
+            })}
+          </div>
+          <div className="hidden justify-end sm:flex">
+            <button
+              type="button"
+              onClick={goNextFromLocation}
+              className="inline-flex items-center gap-2 rounded-2xl bg-primary px-5 py-3 text-sm font-semibold text-white"
+            >
+              Continue <ArrowRight size={16} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {safeIntakePhase === "details" && (
         <div className="space-y-5">
           <button type="button" onClick={onBack} className="inline-flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
             <ArrowLeft size={14} /> Back
           </button>
           <div className="rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm">
-            <p className="font-semibold">{serviceRequestTitle(issueArea, requestSystemId)}</p>
+            <p className="font-semibold">{serviceRequestTitle(issueArea, resolvedTradeId)}</p>
             <p className="mt-1 line-clamp-3 text-muted-foreground">{description}</p>
           </div>
 
-          <ServiceAdaptiveQuestions tradeId={requestSystemId} answers={adaptiveAnswers} onChange={setAdaptiveAnswers} />
+          <ServiceAdaptiveQuestions tradeId={resolvedTradeId} answers={adaptiveAnswers} onChange={setAdaptiveAnswers} />
 
           <div className="grid gap-1.5 text-sm">
             <span className="font-medium">
@@ -558,14 +492,13 @@ export default function HomeownerServiceIntake(props: Props) {
         </div>
       )}
 
-      {isMobile && intakePhase !== "details" ? (
+      {isMobile && safeIntakePhase !== "details" ? (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/95 px-4 py-3 backdrop-blur supports-[padding:max(0px)]:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <button
             type="button"
             disabled={busy}
             onClick={() => {
-              if (intakePhase === "trade") goNextFromTrade();
-              else if (intakePhase === "location") goNextFromLocation();
+              if (safeIntakePhase === "location") goNextFromLocation();
               else goNextFromDescribe();
             }}
             className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-5 py-3.5 text-sm font-semibold text-white disabled:opacity-60"

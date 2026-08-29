@@ -14,6 +14,7 @@ import {
   trackProFeatureEvent,
   type ProFeatureId,
 } from "./proFeatures";
+import type { HomeCareSubscription } from "./auth";
 import { FEATURE_DISABLED_EVENT, PRO_REQUIRED_EVENT, type ProRequiredDetail } from "./proFeatureEvents";
 import { PAID_HOME_CARE_PLAN_CODE } from "./subscriptionCatalog";
 
@@ -31,18 +32,20 @@ const ProFeatureContext = createContext<ProFeatureContextValue | null>(null);
 
 export function ProFeatureProvider({
   planCode,
+  homeCareSubscription,
   busy,
   onUpgrade,
   onProActivated,
   children,
 }: {
   planCode?: string | null;
+  homeCareSubscription?: HomeCareSubscription | null;
   busy?: boolean;
   onUpgrade: (planCode: string) => void | Promise<void>;
   onProActivated?: (feature: ProFeatureId | null) => void;
   children: ReactNode;
 }) {
-  const isPro = hasProEntitlement(planCode);
+  const isPro = hasProEntitlement(planCode, homeCareSubscription);
   const [modalFeature, setModalFeature] = useState<ProFeatureId | null>(null);
   const [modalSource, setModalSource] = useState<string | undefined>();
   const [pendingFeature, setPendingFeature] = useState<ProFeatureId | null>(null);
@@ -63,11 +66,11 @@ export function ProFeatureProvider({
 
   const requestFeature = useCallback(
     (feature: ProFeatureId, source?: string) => {
-      if (hasProEntitlement(planCode)) return true;
+      if (hasProEntitlement(planCode, homeCareSubscription)) return true;
       openUpgrade(feature, source);
       return false;
     },
-    [planCode, openUpgrade]
+    [planCode, homeCareSubscription, openUpgrade]
   );
 
   const consumePendingFeature = useCallback(() => {
@@ -80,7 +83,7 @@ export function ProFeatureProvider({
     function onProRequired(e: Event) {
       const detail = (e as CustomEvent<ProRequiredDetail>).detail;
       if (!detail) return;
-      if (hasProEntitlement(planCode)) return;
+      if (hasProEntitlement(planCode, homeCareSubscription)) return;
       openUpgrade(detail.feature || "document_vault", detail.source);
     }
     function onFeatureDisabled(e: Event) {
@@ -93,7 +96,7 @@ export function ProFeatureProvider({
       window.removeEventListener(PRO_REQUIRED_EVENT, onProRequired);
       window.removeEventListener(FEATURE_DISABLED_EVENT, onFeatureDisabled);
     };
-  }, [planCode, openUpgrade]);
+  }, [planCode, homeCareSubscription, openUpgrade]);
 
   useEffect(() => {
     if (!prevProRef.current && isPro) {

@@ -15,6 +15,21 @@ function resolveBuildStamp(): string {
 
 const BUILD_STAMP = resolveBuildStamp()
 
+function resolveSiteUrl(): string {
+  const raw = process.env.VITE_SITE_URL || process.env.URL || process.env.DEPLOY_PRIME_URL || ''
+  return raw.replace(/\/$/, '')
+}
+
+function injectSiteMeta(): Plugin {
+  const siteUrl = resolveSiteUrl()
+  return {
+    name: 'inject-site-meta',
+    transformIndexHtml(html) {
+      return html.replaceAll('%SITE_URL%', siteUrl)
+    },
+  }
+}
+
 /** Strip version suffixes like `@1.2.3` from Figma Make imports. */
 function removeVersionSpecifiers(): Plugin {
   const VERSION_PATTERN = /@\d+\.\d+\.\d+/
@@ -46,7 +61,7 @@ function figmaAssetsResolver(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), figmaAssetsResolver(), removeVersionSpecifiers()],
+  plugins: [react(), tailwindcss(), figmaAssetsResolver(), removeVersionSpecifiers(), injectSiteMeta()],
   define: {
     __FIXBRIDGE_BUILD__: JSON.stringify(BUILD_STAMP),
   },

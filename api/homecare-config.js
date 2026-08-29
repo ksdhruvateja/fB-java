@@ -388,8 +388,13 @@ export async function resolveFeatureEntitlement(pool, { user, feature, planCode:
       message: `${feat?.label || featureId} is currently unavailable.`,
     };
   }
-  const planCode = planOverride ?? user?.planCode ?? FREE_PLAN_CODE;
-  const isPro = isPaidHomeCarePlan(planCode);
+  const isPro =
+    user?.homeCareSubscription != null
+      ? user.homeCareSubscription.isPro === true
+      : isPaidHomeCarePlan(planOverride ?? user?.planCode);
+  const planCode = isPro
+    ? planOverride ?? user?.homeCareSubscription?.planCode ?? user?.planCode ?? PAID_HOME_CARE_PLAN_CODE
+    : FREE_PLAN_CODE;
   const planAllows = isPro ? feat.pro : feat.free;
   if (!planAllows) {
     return {

@@ -68,6 +68,61 @@ export function categoryToTradeId(category: string): ServiceTradeId {
   return CATEGORY_TO_TRADE[category as HomeownerService] || "other";
 }
 
+const TRADE_INFERENCE_RULES: { id: ServiceTradeId; pattern: RegExp }[] = [
+  { id: "plumbing", pattern: /\b(leak|leaking|drip|dripping|faucet|sink|toilet|pipe|plumb|drain|clog|sewer|garbage disposal|water heater|sump)\b/i },
+  { id: "electrical", pattern: /\b(electric|electrical|outlet|switch|breaker|wiring|light|spark|sparking|power|circuit|gfci|panel)\b/i },
+  { id: "hvac", pattern: /\b(hvac|furnace|a\/c|ac unit|air condition|heat pump|thermostat|heating|cooling|no heat|no cool|vent)\b/i },
+  { id: "appliance", pattern: /\b(appliance|dishwasher|refrigerator|fridge|oven|stove|dryer|washer|microwave|freezer)\b/i },
+  { id: "roofing", pattern: /\b(roof|gutter|shingle|flashing|skylight)\b/i },
+  { id: "pest", pattern: /\b(pest|rodent|mouse|rat|roach|termite|ant|bed bug|wasp|bee nest)\b/i },
+  { id: "cleaning", pattern: /\b(clean|cleaning|maid|deep clean|move[- ]out clean)\b/i },
+  { id: "landscaping", pattern: /\b(lawn|mow|landscape|landscaping|tree|shrub|leaf|snow removal|yard|garden)\b/i },
+  { id: "handyman", pattern: /\b(drywall|hang|mount|door|window|fence|deck|tile|paint|handyman|cabinet)\b/i },
+];
+
+/** Guess trade from homeowner description — AI assessment refines further. */
+export function inferTradeFromDescription(description: string): ServiceTradeId {
+  const text = String(description || "").trim();
+  if (!text) return "other";
+  for (const rule of TRADE_INFERENCE_RULES) {
+    if (rule.pattern.test(text)) return rule.id;
+  }
+  return "other";
+}
+
+export function resolveRequestTradeId(tradeId: string, description: string): ServiceTradeId {
+  if (tradeId && SERVICE_TRADE_OPTIONS.some((t) => t.id === tradeId)) {
+    return tradeId as ServiceTradeId;
+  }
+  return inferTradeFromDescription(description);
+}
+
+const LOCATION_INFERENCE_RULES: { loc: ServiceLocation; pattern: RegExp }[] = [
+  { loc: "Kitchen", pattern: /\b(kitchen|sink|dishwasher|fridge|refrigerator|oven|stove|counter)\b/i },
+  { loc: "Bathroom", pattern: /\b(bathroom|bath|toilet|shower|tub|vanity)\b/i },
+  { loc: "Basement", pattern: /\b(basement|cellar)\b/i },
+  { loc: "Garage", pattern: /\b(garage)\b/i },
+  { loc: "Bedroom", pattern: /\b(bedroom|bed room)\b/i },
+  { loc: "Exterior / Yard", pattern: /\b(exterior|outside|yard|lawn|roof|driveway|patio|deck)\b/i },
+  { loc: "Whole Home", pattern: /\b(whole home|entire home|everywhere|whole house)\b/i },
+];
+
+export function inferLocationFromDescription(description: string): ServiceLocation | "" {
+  const text = String(description || "").trim();
+  if (!text) return "";
+  for (const rule of LOCATION_INFERENCE_RULES) {
+    if (rule.pattern.test(text)) return rule.loc;
+  }
+  return "";
+}
+
+export function resolveServiceLocation(location: string, description: string): ServiceLocation {
+  if (location && SERVICE_LOCATION_OPTIONS.includes(location as ServiceLocation)) {
+    return location as ServiceLocation;
+  }
+  return inferLocationFromDescription(description) || "Other";
+}
+
 /** Job title: location · trade — never duplicates the same label twice. */
 export function serviceRequestTitle(location: string, tradeId: string): string {
   const trade = tradeLabel(tradeId);

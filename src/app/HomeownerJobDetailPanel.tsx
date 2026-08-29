@@ -23,7 +23,7 @@ import { requestQuoteSecondOpinion, type QuoteSecondOpinion } from "./homecarePr
 import { setPreferredProvider } from "./homeAssistantApi";
 import { arrivalWindowLabel, canEditHomeownerJob } from "./ServiceTrackingCard";
 import { useIsMobile } from "./components/ui/use-mobile";
-import { CalendarDays, Loader2, Pencil, Sparkles } from "lucide-react";
+import { CalendarDays, Clock, HardHat, Loader2, MapPin, Pencil, Phone, Save, Sparkles } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
 const TIME_WINDOW_OPTIONS = [
