@@ -9,6 +9,8 @@ export type AssistantHandoff = {
   intent?: "remote_quote" | "site_visit" | "diy";
   assistantSummary?: string;
   mediaDataUrl?: string | null;
+  mediaType?: string | null;
+  openQuoteSecondOpinion?: boolean;
 };
 
 export const ASSISTANT_HANDOFF_KEY = "fixbridge_assistant_handoff";

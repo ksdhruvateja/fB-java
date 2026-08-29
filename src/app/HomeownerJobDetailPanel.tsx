@@ -17,13 +17,14 @@ import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 import { HomeownerTipCheckout } from "./HomeownerTipCheckout";
 import ChangeOrderPanel from "./ChangeOrderPanel";
 import HomeownerAccordion from "./HomeownerAccordion";
+import JobReviewForm from "./JobReviewForm";
 import { useProFeature } from "./ProFeatureProvider";
 import { requestQuoteSecondOpinion, type QuoteSecondOpinion } from "./homecareProApi";
 import { setPreferredProvider } from "./homeAssistantApi";
 import { arrivalWindowLabel, canEditHomeownerJob } from "./ServiceTrackingCard";
 import { useIsMobile } from "./components/ui/use-mobile";
 import { CalendarDays, Loader2, Pencil, Sparkles } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 const TIME_WINDOW_OPTIONS = [
   { value: "9-11", label: "9–11 AM", period: "Morning" },
@@ -129,14 +130,8 @@ export default function HomeownerJobDetailPanel({
   onEditScheduleConsumed?: () => void;
 }) {
   const isMobile = useIsMobile();
-  const completionFileRef = useRef<HTMLInputElement>(null);
   const editable = canEditHomeownerJob(job.status);
 
-  const [completionRating, setCompletionRating] = useState(5);
-  const [completionReview, setCompletionReview] = useState("");
-  const [completionLocation, setCompletionLocation] = useState("");
-  const [completionImages, setCompletionImages] = useState<string[]>([]);
-  const [completionImageBusy, setCompletionImageBusy] = useState(false);
   const [dispatchCouponPreview, setDispatchCouponPreview] = useState<DispatchCouponPreview | null>(null);
 
   const [editingSchedule, setEditingSchedule] = useState(false);
@@ -874,7 +869,8 @@ export default function HomeownerJobDetailPanel({
             {["completed", "closed", "customer_review_pending", "work_completed", "payout_pending"].includes(
               String(job.status).toLowerCase()
             ) ? (
-              <div className="flex flex-wrap gap-2 pt-2">
+              <div className="flex flex-col gap-2 pt-2">
+                <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   className="rounded-lg border border-primary/40 px-3 py-1.5 text-xs font-semibold text-primary"
@@ -908,6 +904,10 @@ export default function HomeownerJobDetailPanel({
                     Save as preferred provider
                   </button>
                 ) : null}
+                </div>
+                <p className="text-[11px] text-muted-foreground italic">
+                  We&apos;ll prioritize your preferred provider when available. New pricing applies for repeated services.
+                </p>
               </div>
             ) : null}
           </div>
@@ -915,123 +915,31 @@ export default function HomeownerJobDetailPanel({
       ) : null}
 
       {showReviewForm ? (
-        <DetailSection mobile={isMobile} title="Review & confirm" defaultOpen>
-          <p className="text-xs text-muted-foreground">
-            Your rating publishes on the public Customer Trust page as soon as you submit.
-          </p>
-          <div className="mt-3">
-            <p className="mb-1.5 text-xs text-muted-foreground">Your rating</p>
-            <StarRating
-              value={completionRating}
-              onChange={setCompletionRating}
-              size={24}
-              interactive
-              tone="coral"
-            />
-          </div>
-          <input
-            value={completionLocation}
-            onChange={(e) => setCompletionLocation(e.target.value)}
-            placeholder="Neighborhood (e.g. Astoria, Queens)"
-            className="mt-3 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm"
+        <DetailSection mobile={isMobile} title="Rate your service" defaultOpen>
+          <JobReviewForm
+            job={job}
+            contractorName={job.contractorName || job.technician?.name || undefined}
+            alsoConfirmCompletion
+            onError={onError}
+            onBusy={onBusy}
+            onRebook={() => void onRefresh()}
+            onMakeRecurring={() => void onRefresh()}
+            onSubmitted={() => void onRefresh()}
           />
-          <textarea
-            value={completionReview}
-            onChange={(e) => setCompletionReview(e.target.value)}
-            placeholder="How did the job go? (optional but publishes live if 20+ characters)"
-            rows={3}
-            className="mt-3 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm"
+        </DetailSection>
+      ) : null}
+
+      {["work_completed", "payout_pending", "closed", "paid_out"].includes(String(job.status)) && !showReviewForm ? (
+        <DetailSection mobile={isMobile} title="Rate your service" defaultOpen={false}>
+          <JobReviewForm
+            job={job}
+            contractorName={job.contractorName || job.technician?.name || undefined}
+            onError={onError}
+            onBusy={onBusy}
+            onRebook={() => void onRefresh()}
+            onMakeRecurring={() => void onRefresh()}
+            onSubmitted={() => void onRefresh()}
           />
-          <div className="mt-3">
-            <p className="mb-1.5 text-xs text-muted-foreground">Photos (optional)</p>
-            <input
-              ref={completionFileRef}
-              type="file"
-              accept="image/*"
-              multiple
-              className="sr-only"
-              onChange={async (e) => {
-                const files = e.target.files;
-                if (!files?.length) return;
-                setCompletionImageBusy(true);
-                onError(null);
-                try {
-                  const next = [...completionImages];
-                  for (const file of Array.from(files)) {
-                    if (next.length >= MAX_REVIEW_IMAGES) break;
-                    next.push(await fileToReviewImage(file));
-                  }
-                  setCompletionImages(next.slice(0, MAX_REVIEW_IMAGES));
-                } catch (err) {
-                  onError(err instanceof Error ? err.message : "Could not add image.");
-                } finally {
-                  setCompletionImageBusy(false);
-                  if (completionFileRef.current) completionFileRef.current.value = "";
-                }
-              }}
-            />
-            <div className="flex flex-wrap gap-2">
-              {completionImages.map((src, i) => (
-                <div key={i} className="relative h-16 w-16 overflow-hidden rounded-lg border border-border">
-                  <img src={src} alt="" className="h-full w-full object-cover" />
-                  <button
-                    type="button"
-                    className="absolute right-0.5 top-0.5 rounded-full bg-black/70 p-0.5 text-white"
-                    onClick={() => setCompletionImages((prev) => prev.filter((_, idx) => idx !== i))}
-                    aria-label="Remove photo"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ))}
-              {completionImages.length < MAX_REVIEW_IMAGES && (
-                <button
-                  type="button"
-                  disabled={completionImageBusy}
-                  onClick={() => completionFileRef.current?.click()}
-                  className="flex h-16 w-16 flex-col items-center justify-center gap-0.5 rounded-lg border border-dashed border-border text-muted-foreground hover:border-primary/40 disabled:opacity-60"
-                >
-                  {completionImageBusy ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <ImagePlus className="h-4 w-4" />
-                  )}
-                  <span className="text-[9px] uppercase tracking-wide">Add</span>
-                </button>
-              )}
-            </div>
-          </div>
-          <button
-            type="button"
-            className="mt-4 inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
-            disabled={busy}
-            onClick={async () => {
-              onBusy(true);
-              onError(null);
-              const payload =
-                completionReview.trim().length >= 20
-                  ? {
-                      rating: Math.round(completionRating),
-                      review: completionReview.trim(),
-                      location: completionLocation.trim() || undefined,
-                      images: completionImages.length ? completionImages : undefined,
-                    }
-                  : undefined;
-              const r = await confirmCompletion(job.id, payload);
-              if (r.ok) {
-                setCompletionReview("");
-                setCompletionLocation("");
-                setCompletionRating(5);
-                setCompletionImages([]);
-                await onRefresh();
-              } else {
-                onError((r as { message?: string }).message || "Could not confirm completion.");
-              }
-              onBusy(false);
-            }}
-          >
-            <CheckCircle className="h-4 w-4" /> Confirm completion
-          </button>
         </DetailSection>
       ) : null}
 

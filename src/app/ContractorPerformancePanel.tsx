@@ -3,6 +3,7 @@ import { Loader2, Star } from "lucide-react";
 import type { ManagedJob } from "./managedJobs";
 import type { ContractorInvite } from "./ContractorInvitesPanel";
 import { getContractorPerformance, type ContractorJobReview } from "./managedJobs";
+import { VerifiedFixBridgeJobBadge } from "./VerifiedJobBadge";
 import { StarRating } from "./StarRating";
 
 function scoreHeadline(score: number) {
@@ -22,6 +23,9 @@ function formatReviewDate(value?: string | null) {
 }
 
 function ReviewCard({ review }: { review: ContractorJobReview }) {
+  const categoryEntries = review.categories
+    ? Object.entries(review.categories).filter(([, v]) => v != null)
+    : [];
   return (
     <article className="rounded-2xl border border-border bg-card p-4 sm:p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -31,6 +35,11 @@ function ReviewCard({ review }: { review: ContractorJobReview }) {
             {review.jobRef || (review.jobId ? `FB-${review.jobId}` : "Job")}
             {review.jobTitle ? ` · ${review.jobTitle}` : ""}
           </p>
+          {review.verifiedFixBridgeJob ? (
+            <p className="mt-1.5">
+              <VerifiedFixBridgeJobBadge compact />
+            </p>
+          ) : null}
         </div>
         <div className="text-right">
           <StarRating value={review.rating} tone="gold" size={14} />
@@ -38,10 +47,19 @@ function ReviewCard({ review }: { review: ContractorJobReview }) {
         </div>
       </div>
       <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{review.text}</p>
+      {categoryEntries.length > 0 ? (
+        <div className="mt-3 grid gap-1.5 text-[11px] text-muted-foreground sm:grid-cols-2">
+          {categoryEntries.map(([key, value]) => (
+            <div key={key} className="flex items-center justify-between gap-2 rounded-lg bg-muted/40 px-2 py-1">
+              <span className="capitalize">{key}</span>
+              <StarRating value={Number(value)} tone="gold" size={12} />
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
         {review.serviceType ? <span>{review.serviceType}</span> : null}
         {review.location ? <span>· {review.location}</span> : null}
-        {review.verified ? <span className="text-emerald-700 dark:text-emerald-400">· Verified job</span> : null}
       </div>
     </article>
   );
@@ -58,6 +76,7 @@ export default function ContractorPerformancePanel({
   const [reviews, setReviews] = useState<ContractorJobReview[]>([]);
   const [averageRating, setAverageRating] = useState<number | null>(null);
   const [reviewCount, setReviewCount] = useState(0);
+  const [categoryAverages, setCategoryAverages] = useState<Record<string, number | null> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -69,6 +88,7 @@ export default function ContractorPerformancePanel({
         setReviews(r.reviews || []);
         setAverageRating(r.stats?.averageRating ?? null);
         setReviewCount(r.stats?.reviewCount ?? r.reviews?.length ?? 0);
+        setCategoryAverages(r.stats?.categoryAverages ?? null);
       }
       setLoadingReviews(false);
     })();
@@ -147,6 +167,18 @@ export default function ContractorPerformancePanel({
             <span className="text-muted-foreground">
               from {reviewCount} homeowner review{reviewCount === 1 ? "" : "s"}
             </span>
+          </div>
+        ) : null}
+        {categoryAverages && Object.values(categoryAverages).some((v) => v != null) ? (
+          <div className="mt-4 grid gap-2 sm:grid-cols-2">
+            {Object.entries(categoryAverages)
+              .filter(([, v]) => v != null)
+              .map(([key, value]) => (
+                <div key={key} className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-xs">
+                  <span className="capitalize text-muted-foreground">{key}</span>
+                  <span className="font-semibold tabular-nums">{Number(value).toFixed(1)}</span>
+                </div>
+              ))}
           </div>
         ) : null}
         <div className="mt-5 h-2.5 overflow-hidden rounded-full bg-muted">

@@ -164,6 +164,42 @@ export async function buildPropertyTimeline(pool, propertyId, userId, { limit = 
         section: 'recent',
       });
     }
+    const reschedules = Array.isArray(meta.reschedules) ? meta.reschedules : [];
+    for (const rs of reschedules.slice(-8)) {
+      if (!rs?.to) continue;
+      recent.push({
+        id: `recurring-reschedule-${r.id}-${rs.to}-${rs.at || ''}`,
+        type: 'recurring_rescheduled',
+        occurredAt: rs.at || `${rs.to}T12:00:00.000Z`,
+        title: `Rescheduled ${r.service_type === 'recurring_landscaping' ? 'landscaping' : 'cleaning'}`,
+        subtitle: rs.from ? `Moved from ${rs.from} to ${rs.to}` : `Next visit: ${rs.to}`,
+        status: 'rescheduled',
+        relatedRecurringId: Number(r.id),
+        section: 'recent',
+      });
+    }
+    if (r.status === 'cancelled') {
+      recent.push({
+        id: `recurring-cancelled-${r.id}`,
+        type: 'recurring_cancelled',
+        occurredAt: r.updated_at || r.created_at,
+        title: `Cancelled ${r.service_type === 'recurring_landscaping' ? 'landscaping' : 'cleaning'} plan`,
+        status: 'cancelled',
+        relatedRecurringId: Number(r.id),
+        section: 'recent',
+      });
+    } else if (r.created_at) {
+      recent.push({
+        id: `recurring-created-${r.id}`,
+        type: 'recurring_plan_created',
+        occurredAt: r.created_at,
+        title: `Started ${r.service_type === 'recurring_landscaping' ? 'landscaping' : 'cleaning'} plan`,
+        subtitle: r.recurrence,
+        status: r.status,
+        relatedRecurringId: Number(r.id),
+        section: 'recent',
+      });
+    }
     if (r.status === 'active' && r.next_service_date && !activeRecurringJobIds.has(Number(r.id))) {
       upcoming.push({
         id: `recurring-plan-${r.id}`,

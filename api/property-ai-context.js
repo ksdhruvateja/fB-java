@@ -25,6 +25,46 @@ function equipmentSummary(homeSystems = []) {
     });
 }
 
+function isConfirmedMemoryRecord(record) {
+  if (!record || typeof record !== 'object') return false;
+  const verification = String(record.verification || (record.modelConfirmed ? 'confirmed' : '')).toLowerCase();
+  const source = String(record.source || '').toLowerCase();
+  if (verification === 'confirmed' || source === 'confirmed' || source === 'homeowner') return true;
+  if (record.ignored === true || record.dismissed === true) return false;
+  return false;
+}
+
+function confirmedEquipmentLines(homeSystems = []) {
+  return (Array.isArray(homeSystems) ? homeSystems : [])
+    .filter(isConfirmedMemoryRecord)
+    .slice(0, 12)
+    .map((s) => {
+      const label = [s.name || s.key, s.brand, s.model].filter(Boolean).join(' ');
+      const extras = [s.installedYear ? `installed ${s.installedYear}` : null, s.lastService ? `last service ${s.lastService}` : null]
+        .filter(Boolean)
+        .join(', ');
+      return extras ? `${label} (${extras})` : label;
+    })
+    .filter(Boolean);
+}
+
+function detectIntentFromMessage(userMessage, jobContext = null) {
+  const msg = String(userMessage || '').toLowerCase();
+  if (/quote|expensive|reasonable|too high|make sense|pricing/.test(msg)) return 'quote_second_opinion';
+  if (/same\s+(cleaner|landscaper|contractor|provider|guy|person)/.test(msg) || /same\s+as\s+last/.test(msg)) {
+    return 'same_provider';
+  }
+  if (
+    /every\s+(week|two weeks|month)|twice\s+a\s+month|biweekly|recurring|clean\s+every|mow|lawn\s+cut|landscap/.test(
+      msg
+    )
+  ) {
+    return 'recurring';
+  }
+  if (jobContext?.hasQuote) return null;
+  return null;
+}
+
 /**
  * Build sanitized property AI context for an authorized homeowner.
  * @param {object} pool
@@ -41,7 +81,9 @@ export async function buildPropertyAIContext(pool, propertyId, userId) {
   const health = parseJson(property.health_profile, {}) || {};
   const passport = health.passport || {};
   const maintenance = Array.isArray(health.maintenance) ? health.maintenance.slice(0, 12) : [];
-  const systems = equipmentSummary(parseJson(property.home_systems, []));
+  const homeSystems = parseJson(property.home_systems, []) || [];
+  const confirmedSystems = confirmedEquipmentLines(homeSystems);
+  const systems = confirmedSystems.length ? confirmedSystems : equipmentSummary(homeSystems);
 
   const { rows: jobRows } = await pool.query(
     `SELECT id, title, category, status, created_at, customer_retail_estimate_high, completion_report
@@ -59,7 +101,13 @@ export async function buildPropertyAIContext(pool, propertyId, userId) {
   if (property.beds != null) lines.push(`Beds: ${property.beds}`);
   if (property.baths != null) lines.push(`Baths: ${property.baths}`);
   if (property.sqft) lines.push(`Sq ft: ${property.sqft}`);
-  if (systems.length) lines.push(`Systems/equipment: ${systems.join('; ')}`);
+  if (systems.length) {
+    lines.push(
+      confirmedSystems.length
+        ? `Confirmed home systems/equipment: ${systems.join('; ')}`
+        : `Systems/equipment: ${systems.join('; ')}`
+    );
+  }
   if (maintenance.length) {
     lines.push(
       `Upcoming maintenance: ${maintenance.map((m) => `${m.label}${m.dueDate ? ` (due ${m.dueDate})` : ''}`).join('; ')}`
@@ -74,7 +122,14 @@ export async function buildPropertyAIContext(pool, propertyId, userId) {
   }
   const warranties = Array.isArray(passport.warranties) ? passport.warranties.slice(0, 8) : [];
   if (warranties.length) {
-    lines.push(`Warranties on file: ${warranties.map((w) => w.name).join('; ')}`);
+    lines.push(
+      `Warranties on file: ${warranties.map((w) => `${w.name}${w.expiresAt ? ` (expires ${w.expiresAt})` : ''}`).join('; ')}`
+    );
+  }
+
+  const docs = Array.isArray(passport.documents) ? passport.documents.slice(0, 6) : [];
+  if (docs.length) {
+    lines.push(`Documents on file: ${docs.map((d) => d.title || d.name || d.category).filter(Boolean).join('; ')}`);
   }
 
   return {
@@ -101,6 +156,9 @@ export async function buildHomeAssistantContext(pool, { userId, propertyId, jobI
   let risk = { level: 'MODERATE', reason: null };
   if (userMessage) risk = classifyDiyRisk(userMessage);
 
+  let jobContext = null;
+  let preferredProviders = [];
+
   if (propertyId) {
     const propCtx = await buildPropertyAIContext(pool, propertyId, userId);
     if (propCtx) {
@@ -109,26 +167,70 @@ export async function buildHomeAssistantContext(pool, { userId, propertyId, jobI
     }
     try {
       const { rows: prefs } = await pool.query(
-        `SELECT pc.service_type, u.name, u.company_name
+        `SELECT pc.service_type, pc.is_favorite, u.name, u.company_name
          FROM preferred_contractors pc
          JOIN users u ON u.id = pc.contractor_user_id
          WHERE pc.property_id=$1 AND pc.owner_user_id=$2`,
         [propertyId, userId]
       );
+      preferredProviders = prefs;
       if (prefs.length) {
         parts.push('Preferred providers:');
         for (const p of prefs) {
-          parts.push(`- ${p.service_type}: ${p.company_name || p.name}`);
+          const fav = p.is_favorite ? ' (favorite)' : '';
+          parts.push(`- ${p.service_type}: ${p.company_name || p.name}${fav}`);
         }
       }
     } catch {
       /* table may not exist yet */
     }
+
+    try {
+      const { rows: recurring } = await pool.query(
+        `SELECT service_type, recurrence, status, next_service_date
+         FROM recurring_services
+         WHERE property_id=$1 AND owner_user_id=$2 AND status IN ('active','paused')
+         ORDER BY next_service_date ASC NULLS LAST LIMIT 6`,
+        [propertyId, userId]
+      );
+      if (recurring.length) {
+        parts.push('Recurring home care plans:');
+        for (const r of recurring) {
+          const label = r.service_type === 'recurring_landscaping' ? 'Landscaping' : 'Cleaning';
+          const next = r.next_service_date ? String(r.next_service_date).slice(0, 10) : 'not scheduled';
+          parts.push(`- ${label} (${r.recurrence}, ${r.status}) — next plan date: ${next}`);
+        }
+      }
+    } catch {
+      /* optional */
+    }
+
+    try {
+      const { rows: docRows } = await pool.query(
+        `SELECT category, title, notes, system_key, created_at
+         FROM property_documents
+         WHERE property_id=$1 AND owner_user_id=$2
+         ORDER BY created_at DESC LIMIT 8`,
+        [propertyId, userId]
+      );
+      if (docRows.length) {
+        parts.push('Document vault (structured metadata only):');
+        for (const d of docRows) {
+          const label = [d.category, d.title].filter(Boolean).join(' — ') || 'Document';
+          const meta = [d.system_key ? `system: ${d.system_key}` : null, d.notes ? String(d.notes).slice(0, 120) : null]
+            .filter(Boolean)
+            .join('; ');
+          parts.push(`- ${label}${meta ? ` (${meta})` : ''}`);
+        }
+      }
+    } catch {
+      /* optional */
+    }
   }
 
   if (jobId) {
     const { rows: jobs } = await pool.query(
-      `SELECT j.*, p.retail_amount, p.status AS proposal_status
+      `SELECT j.*, p.retail_amount, p.status AS proposal_status, p.line_items
        FROM managed_jobs j
        LEFT JOIN proposals p ON p.job_id = j.id AND p.id = (
          SELECT id FROM proposals WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1
@@ -138,6 +240,7 @@ export async function buildHomeAssistantContext(pool, { userId, propertyId, jobI
     );
     const job = jobs[0];
     if (job) {
+      jobContext = { hasQuote: job.retail_amount != null || job.proposal_status === 'sent' };
       parts.push('=== CURRENT JOB ===');
       parts.push(`Title: ${job.title || job.category}`);
       parts.push(`Status: ${job.status}`);
@@ -163,39 +266,78 @@ export async function buildHomeAssistantContext(pool, { userId, propertyId, jobI
     }
   }
 
+  const resolvedIntent = intent || detectIntentFromMessage(userMessage, jobContext) || null;
+
   const systemRules = [
     'You are FixBridge Home Assistant — one property-aware helper for repairs, maintenance, quotes, and recurring care.',
     'Ask ONE useful question at a time. Do not dump long forms. Never ask more than one question mark in a single reply unless giving emergency safety instructions.',
-    'Use property context you already have — do not re-ask known facts unless confirming.',
+    'Use property context you already have — do not re-ask known facts unless confirming (e.g. reference HVAC brand from passport).',
     'Never expose contractor internal costs, margins, or admin notes.',
     'For repair vs replacement: give advisory context only. Never say the homeowner must replace equipment unless there is a safety emergency.',
     'When enough context exists, suggest clear next actions: DIY (if safe), Remote Quote, Site Visit, or Recurring Service.',
     safetySystemPrompt(risk.level),
-    intent ? `User intent hint: ${intent}` : '',
+    resolvedIntent ? `Detected user intent: ${resolvedIntent}` : '',
   ].filter(Boolean);
 
   return {
     contextText: parts.join('\n'),
     systemRules: systemRules.join('\n'),
     riskLevel: risk.level,
-    suggestedActions: buildSuggestedActions(risk.level, intent),
+    suggestedActions: buildSuggestedActions(risk.level, resolvedIntent, {
+      userMessage,
+      jobContext,
+      preferredProviders,
+    }),
+    resolvedIntent,
   };
 }
 
-function buildSuggestedActions(riskLevel, intent) {
+function buildSuggestedActions(riskLevel, intent, { userMessage = '', jobContext = null, preferredProviders = [] } = {}) {
   const actions = [];
+  const msg = String(userMessage || '').toLowerCase();
+
   if (riskLevel === 'EMERGENCY' || riskLevel === 'HIGH') {
     actions.push({ id: 'site_visit', label: 'Schedule Site Visit' });
     return actions;
   }
-  if (intent === 'recurring' || /clean|landscap|every\s+(week|two weeks|month)/i.test(intent || '')) {
-    actions.push({ id: 'recurring_cleaning', label: 'Set Up Recurring Cleaning' });
-    actions.push({ id: 'recurring_landscaping', label: 'Set Up Recurring Landscaping' });
+
+  const wantsQuoteOpinion =
+    intent === 'quote_second_opinion' || /quote|expensive|reasonable|too high|make sense/.test(msg);
+  if (wantsQuoteOpinion && jobContext?.hasQuote) {
+    actions.push({ id: 'quote_second_opinion', label: 'Review My Quote' });
   }
-  actions.push({ id: 'diy', label: 'Try Safe DIY' });
+
+  const wantsRecurring =
+    intent === 'recurring' || /clean|landscap|every\s+(week|two weeks|month)|mow|lawn/.test(msg);
+  if (wantsRecurring) {
+    if (/landscap|mow|lawn|yard/.test(msg)) {
+      actions.push({ id: 'recurring_landscaping', label: 'Set Up Recurring Landscaping' });
+    } else if (/clean/.test(msg)) {
+      actions.push({ id: 'recurring_cleaning', label: 'Set Up Recurring Cleaning' });
+    } else {
+      actions.push({ id: 'recurring_cleaning', label: 'Set Up Recurring Cleaning' });
+      actions.push({ id: 'recurring_landscaping', label: 'Set Up Recurring Landscaping' });
+    }
+  }
+
+  const wantsSameProvider =
+    intent === 'same_provider' || /same\s+(cleaner|landscaper|contractor|provider)/.test(msg);
+  if (wantsSameProvider && preferredProviders.length) {
+    actions.push({ id: 'remote_quote', label: 'Request Same Provider' });
+  }
+
+  if (riskLevel === 'LOW' || riskLevel === 'MODERATE') {
+    actions.push({ id: 'diy', label: 'Try Safe DIY' });
+  }
   actions.push({ id: 'remote_quote', label: 'Request Remote Quote' });
   actions.push({ id: 'site_visit', label: 'Schedule Site Visit' });
-  return actions;
+
+  const seen = new Set();
+  return actions.filter((a) => {
+    if (seen.has(a.id)) return false;
+    seen.add(a.id);
+    return true;
+  });
 }
 
 export { classifyDiyRisk, safetySystemPrompt };

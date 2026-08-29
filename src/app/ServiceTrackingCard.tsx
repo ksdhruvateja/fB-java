@@ -27,8 +27,8 @@ export type AssignedTechnician = {
 const TRACK_STEPS = [
   { id: "submitted", label: "Request submitted" },
   { id: "reviewed", label: "Issue reviewed" },
-  { id: "assigned", label: "Contractor assigned" },
-  { id: "en_route", label: "Technician on the way" },
+  { id: "assigned", label: "Provider assigned" },
+  { id: "en_route", label: "Provider on the way" },
   { id: "started", label: "Work started" },
   { id: "completed", label: "Work completed" },
 ] as const;
@@ -296,7 +296,7 @@ export default function ServiceTrackingCard({
             {hasTech && (
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                  Technician
+                  Provider
                 </p>
                 <p className="mt-2 text-base font-semibold">{displayName}</p>
                 {company && <p className="text-sm text-muted-foreground">{company}</p>}

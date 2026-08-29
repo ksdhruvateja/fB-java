@@ -18,7 +18,9 @@ import {
   Trees,
   Brush,
   PlusCircle,
+  X,
 } from "lucide-react";
+import { useIsMobile } from "./components/ui/use-mobile";
 import ServiceAdaptiveQuestions from "./ServiceAdaptiveQuestions";
 import {
   SERVICE_TRADE_OPTIONS,
@@ -44,6 +46,15 @@ const TRADE_ICONS: Record<string, React.ElementType> = {
 };
 
 export type IntakePhase = "trade" | "location" | "describe" | "details";
+
+const INTAKE_STEP_META: Record<IntakePhase, { step: number; title: string }> = {
+  trade: { step: 1, title: "What's happening?" },
+  location: { step: 2, title: "Tell us about the problem" },
+  describe: { step: 3, title: "Photos & details" },
+  details: { step: 4, title: "Review & submit" },
+};
+
+const TOTAL_INTAKE_STEPS = 4;
 
 type Props = {
   intakePhase: IntakePhase;
@@ -82,6 +93,8 @@ type Props = {
   onBack: () => void;
   onSubmitAi: () => void;
   onHirePro: () => void;
+  onClearMedia?: () => void;
+  draftSavedAt?: string | null;
 };
 
 function startVoiceInput(
@@ -204,10 +217,57 @@ export default function HomeownerServiceIntake(props: Props) {
     onBack,
     onSubmitAi,
     onHirePro,
+    onClearMedia,
+    draftSavedAt,
   } = props;
 
+  const isMobile = useIsMobile();
+  const stepMeta = INTAKE_STEP_META[intakePhase];
+
+  function goNextFromTrade() {
+    if (!requestSystemId) {
+      setError("Pick what you need to continue.");
+      return;
+    }
+    setError(null);
+    setIntakePhase("location");
+  }
+
+  function goNextFromLocation() {
+    if (!issueArea) {
+      setError("Pick where the issue is to continue.");
+      return;
+    }
+    setError(null);
+    setIntakePhase("describe");
+  }
+
+  function goNextFromDescribe() {
+    if (!description.trim()) {
+      setError("Describe the problem so we can analyze it.");
+      return;
+    }
+    setError(null);
+    setIntakePhase("details");
+  }
+
   return (
-    <div className="space-y-5 rounded-[1.5rem] border border-border/70 bg-card p-5 shadow-sm sm:p-6">
+    <div className="space-y-5 rounded-[1.5rem] border border-border/70 bg-card p-5 shadow-sm sm:p-6 pb-24 sm:pb-6">
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2 text-xs font-medium text-muted-foreground">
+          <span>
+            Step {stepMeta.step} of {TOTAL_INTAKE_STEPS}
+          </span>
+          {draftSavedAt ? <span className="text-emerald-700 dark:text-emerald-400">Saved</span> : null}
+        </div>
+        <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-full rounded-full bg-primary transition-all"
+            style={{ width: `${(stepMeta.step / TOTAL_INTAKE_STEPS) * 100}%` }}
+          />
+        </div>
+        <p className="text-sm font-semibold">{stepMeta.title}</p>
+      </div>
       {error ? (
         <p className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200">
           {error}
@@ -253,17 +313,10 @@ export default function HomeownerServiceIntake(props: Props) {
               );
             })}
           </div>
-          <div className="flex justify-end">
+          <div className="hidden justify-end sm:flex">
             <button
               type="button"
-              onClick={() => {
-                if (!requestSystemId) {
-                  setError("Pick what you need to continue.");
-                  return;
-                }
-                setError(null);
-                setIntakePhase("location");
-              }}
+              onClick={goNextFromTrade}
               className="inline-flex items-center gap-2 rounded-2xl bg-primary px-5 py-3 text-sm font-semibold text-white"
             >
               Continue <ArrowRight size={16} />
@@ -301,17 +354,10 @@ export default function HomeownerServiceIntake(props: Props) {
               );
             })}
           </div>
-          <div className="flex justify-end">
+          <div className="hidden justify-end sm:flex">
             <button
               type="button"
-              onClick={() => {
-                if (!issueArea) {
-                  setError("Pick where the issue is to continue.");
-                  return;
-                }
-                setError(null);
-                setIntakePhase("describe");
-              }}
+              onClick={goNextFromLocation}
               className="inline-flex items-center gap-2 rounded-2xl bg-primary px-5 py-3 text-sm font-semibold text-white"
             >
               Continue <ArrowRight size={16} />
@@ -390,26 +436,30 @@ export default function HomeownerServiceIntake(props: Props) {
             onChange={(e) => onFile(e.target.files?.[0] || null)}
           />
           {mediaDataUrl ? (
-            <p className="text-xs font-medium text-primary">
-              Media attached
+            <div className="rounded-xl border border-border bg-muted/20 p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-xs font-medium text-muted-foreground">Preview</p>
+                {onClearMedia ? (
+                  <button
+                    type="button"
+                    onClick={onClearMedia}
+                    className="inline-flex items-center gap-1 text-xs font-semibold text-muted-foreground hover:text-foreground"
+                  >
+                    <X size={12} /> Remove
+                  </button>
+                ) : null}
+              </div>
               {mediaType === "image" ? (
-                <img src={mediaDataUrl} alt="" className="mt-2 max-h-40 rounded-xl border object-contain" />
+                <img src={mediaDataUrl} alt="" className="max-h-48 w-full rounded-xl border object-contain" />
               ) : mediaType?.startsWith("video") ? (
-                <video src={mediaDataUrl} controls className="mt-2 max-h-40 rounded-xl border" />
+                <video src={mediaDataUrl} controls className="max-h-48 w-full rounded-xl border" />
               ) : null}
-            </p>
+            </div>
           ) : null}
-          <div className="flex justify-end">
+          <div className="hidden justify-end sm:flex">
             <button
               type="button"
-              onClick={() => {
-                if (!description.trim()) {
-                  setError("Describe the problem so we can analyze it.");
-                  return;
-                }
-                setError(null);
-                setIntakePhase("details");
-              }}
+              onClick={goNextFromDescribe}
               className="inline-flex items-center gap-2 rounded-2xl bg-primary px-5 py-3 text-sm font-semibold text-white"
             >
               Continue <ArrowRight size={16} />
@@ -507,6 +557,23 @@ export default function HomeownerServiceIntake(props: Props) {
           </div>
         </div>
       )}
+
+      {isMobile && intakePhase !== "details" ? (
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/95 px-4 py-3 backdrop-blur supports-[padding:max(0px)]:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              if (intakePhase === "trade") goNextFromTrade();
+              else if (intakePhase === "location") goNextFromLocation();
+              else goNextFromDescribe();
+            }}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-5 py-3.5 text-sm font-semibold text-white disabled:opacity-60"
+          >
+            Continue <ArrowRight size={16} />
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -85,3 +85,20 @@ export async function setPreferredProvider(
     body: JSON.stringify(body),
   });
 }
+
+export async function fetchQuoteSecondOpinion(jobId: number) {
+  return api<{
+    ok: boolean;
+    opinion?: {
+      summary?: string;
+      scopeReview?: string;
+      pricingContext?: string;
+      thingsToAsk?: string | string[];
+      recommendation?: string;
+      disclaimer?: string;
+    };
+    message?: string;
+    code?: string;
+    feature?: ProFeatureId;
+  }>(`/api/managed/jobs/${jobId}/quote-second-opinion`, { method: "POST" });
+}

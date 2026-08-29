@@ -20,6 +20,7 @@ import {
 } from './market-intelligence.js';
 import { zip5 } from './usps-address.js';
 import { isPaidHomeCarePlan } from './subscription-catalog.js';
+import { insertJobReview, loadJobForReview, parseCategoryRatings } from './job-reviews.js';
 import {
   createRequireHomeCareFeature,
   getHomeCareConfig,
@@ -3385,39 +3386,66 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const { rows: reviewRows } = await pool.query(
         `SELECT sr.id, sr.author_name, sr.location, sr.service_type, sr.rating, sr.body,
                 sr.verified, sr.created_at, sr.job_id,
+                sr.rating_quality, sr.rating_communication, sr.rating_punctuality,
+                sr.rating_cleanliness, sr.rating_value,
                 mj.title AS job_title, mj.booking_id AS job_ref
          FROM site_reviews sr
          INNER JOIN managed_jobs mj ON mj.id = sr.job_id
-         WHERE mj.assigned_contractor_user_id = $1
+         WHERE mj.assigned_contractor_user_id = $1 AND sr.published = TRUE
          ORDER BY sr.created_at DESC
          LIMIT 50`,
         [contractorId]
       );
 
-      const reviews = reviewRows.map((r) => ({
-        id: Number(r.id),
-        authorName: r.author_name,
-        location: r.location,
-        serviceType: r.service_type,
-        rating: Number(r.rating),
-        text: r.body,
-        verified: r.verified === true,
-        createdAt: r.created_at,
-        jobId: r.job_id != null ? Number(r.job_id) : null,
-        jobTitle: r.job_title || null,
-        jobRef: r.job_ref || (r.job_id ? `FB-${r.job_id}` : null),
-      }));
+      const reviews = reviewRows.map((r) => {
+        const categories = {};
+        if (r.rating_quality != null) categories.quality = Number(r.rating_quality);
+        if (r.rating_communication != null) categories.communication = Number(r.rating_communication);
+        if (r.rating_punctuality != null) categories.punctuality = Number(r.rating_punctuality);
+        if (r.rating_cleanliness != null) categories.cleanliness = Number(r.rating_cleanliness);
+        if (r.rating_value != null) categories.value = Number(r.rating_value);
+        return {
+          id: Number(r.id),
+          authorName: r.author_name,
+          location: r.location,
+          serviceType: r.service_type,
+          rating: Number(r.rating),
+          text: r.body,
+          verified: r.verified === true,
+          verifiedFixBridgeJob: r.verified === true && r.job_id != null,
+          categories: Object.keys(categories).length ? categories : null,
+          createdAt: r.created_at,
+          jobId: r.job_id != null ? Number(r.job_id) : null,
+          jobTitle: r.job_title || null,
+          jobRef: r.job_ref || (r.job_id ? `FB-${r.job_id}` : null),
+        };
+      });
 
       const reviewCount = reviews.length;
       const averageRating =
         reviewCount > 0
           ? Math.round((reviews.reduce((sum, r) => sum + r.rating, 0) / reviewCount) * 10) / 10
           : null;
+      const avg = (key) => {
+        const vals = reviews.map((r) => r.categories?.[key]).filter((n) => n != null);
+        if (!vals.length) return null;
+        return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
+      };
 
       res.json({
         ok: true,
         reviews,
-        stats: { reviewCount, averageRating },
+        stats: {
+          reviewCount,
+          averageRating,
+          categoryAverages: {
+            quality: avg('quality'),
+            communication: avg('communication'),
+            punctuality: avg('punctuality'),
+            cleanliness: avg('cleanliness'),
+            value: avg('value'),
+          },
+        },
       });
     } catch (e) {
       console.error(e);
@@ -4364,7 +4392,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         }
       }
 
-      // Optional public review — published immediately on the marketing site
+      // Optional job review — verified status derived server-side only
       const rating = Math.round(Number(req.body?.rating));
       const reviewText = String(req.body?.review || req.body?.text || '').trim().slice(0, 2000);
       const location = String(req.body?.location || '').trim().slice(0, 80);
@@ -4375,30 +4403,56 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           .slice(0, 4);
         if (imgs.length) imagesJson = JSON.stringify(imgs);
       }
-      if (Number.isFinite(rating) && rating >= 1 && rating <= 5 && reviewText.length >= 20) {
+      let publishedReview = null;
+      if (Number.isFinite(rating) && rating >= 1 && rating <= 5) {
         try {
-          await pool.query(
-            `INSERT INTO site_reviews
-               (author_name, location, service_type, rating, body, verified, published, user_id, job_id, images)
-             VALUES ($1,$2,$3,$4,$5,TRUE,TRUE,$6,$7,$8)`,
-            [
-              String(req.authUser.name || 'Homeowner').slice(0, 80),
-              location || 'NYC & Long Island',
-              String(rows[0].category || rows[0].trade || 'Home repair').slice(0, 60),
-              rating,
-              reviewText,
-              req.authUser.id,
-              jobId,
-              imagesJson,
-            ]
-          );
+          const access = await loadJobForReview(pool, jobId, req.authUser.id);
+          if (access.ok) {
+            const { rows: existing } = await pool.query(
+              `SELECT id FROM site_reviews WHERE user_id=$1 AND job_id=$2 LIMIT 1`,
+              [req.authUser.id, jobId]
+            );
+            if (!existing.length) {
+              const categories = parseCategoryRatings(req.body);
+              publishedReview = await insertJobReview(pool, {
+                job: access.job,
+                homeownerUser: req.authUser,
+                rating,
+                body: reviewText || '',
+                location: location || 'Local area',
+                serviceType: String(rows[0].category || 'Home repair').slice(0, 60),
+                imagesJson,
+                categories,
+              });
+            } else {
+              const { rows: revRows } = await pool.query(`SELECT * FROM site_reviews WHERE id=$1`, [existing[0].id]);
+              publishedReview = revRows[0] || null;
+            }
+          }
         } catch (revErr) {
           console.warn('confirm-completion review publish:', revErr.message);
         }
       }
 
       const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
-      res.json({ ok: true, job: serializeJob(fresh[0], req.authUser) });
+      const reviewPayload = publishedReview
+        ? {
+            id: Number(publishedReview.id),
+            rating: Number(publishedReview.rating),
+            verified: publishedReview.verified === true,
+            verifiedFixBridgeJob: publishedReview.verified === true && publishedReview.job_id != null,
+            categories: parseCategoryRatings({
+              categories: {
+                quality: publishedReview.rating_quality,
+                communication: publishedReview.rating_communication,
+                punctuality: publishedReview.rating_punctuality,
+                cleanliness: publishedReview.rating_cleanliness,
+                value: publishedReview.rating_value,
+              },
+            }),
+          }
+        : null;
+      res.json({ ok: true, job: serializeJob(fresh[0], req.authUser), review: reviewPayload });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Server error' });
     }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { BadgeCheck, ImagePlus, Loader2, Quote, Star, X } from "lucide-react";
+import { VerifiedFixBridgeJobBadge } from "./VerifiedJobBadge";
+import { Loader2, Quote, Star } from "lucide-react";
 import { ScrollReveal } from "./shared";
 import { getStoredToken, getStoredUser } from "./auth";
 import { brand } from "../config/brand";
@@ -14,6 +15,9 @@ export type SiteReview = {
   rating: number;
   text: string;
   verified: boolean;
+  verifiedFixBridgeJob?: boolean;
+  jobId?: number | null;
+  categories?: Record<string, number> | null;
   images?: string[];
   createdAt?: string;
 };
@@ -39,7 +43,7 @@ const SERVICE_OPTIONS = [
   "General",
 ];
 
-const TRUST_MARKS = ["Licensed Pros", "AI Assessment", "NYC & LI", "Background Checks", "Real Bids", "Free to Post"];
+const TRUST_MARKS = ["AI Assessment", "NYC & LI", "Real Bids", "Free to Post", "Verified Reviews"];
 
 /** Soft job textures for photo-style cards (no person portraits). */
 const CARD_PHOTOS = [
@@ -139,8 +143,12 @@ function ReviewCard({ review, index }: { review: SiteReview; index: number }) {
             <p className="font-semibold text-sm truncate text-[#1a1a1a] dark:text-foreground">{review.name}</p>
             <p className="text-xs text-[#1a1a1a]/55 dark:text-muted-foreground truncate">
               {review.serviceType}
-              {review.verified ? " · Verified" : ""}
             </p>
+            {review.verifiedFixBridgeJob ? (
+              <p className="mt-1">
+                <VerifiedFixBridgeJobBadge compact />
+              </p>
+            ) : null}
             <div className="mt-1.5">
               <StarRating value={review.rating} tone="gold" size={13} />
             </div>
@@ -178,8 +186,12 @@ function ReviewCard({ review, index }: { review: SiteReview; index: number }) {
             <p className="font-semibold text-sm truncate">{review.name}</p>
             <p className="text-xs text-muted-foreground truncate">
               {review.serviceType}
-              {review.verified ? " · Verified" : ""}
             </p>
+            {review.verifiedFixBridgeJob ? (
+              <p className="mt-1">
+                <VerifiedFixBridgeJobBadge compact />
+              </p>
+            ) : null}
           </div>
         </div>
       </article>
@@ -211,10 +223,12 @@ function ReviewCard({ review, index }: { review: SiteReview; index: number }) {
               <Avatar name={review.name} light />
               <div className="min-w-0">
                 <p className="font-semibold text-sm truncate">{review.name}</p>
-                <p className="text-xs text-white/65 truncate">
-                  {review.serviceType}
-                  {review.verified ? " · Verified" : ""}
-                </p>
+                <p className="text-xs text-white/65 truncate">{review.serviceType}</p>
+                {review.verifiedFixBridgeJob ? (
+                  <p className="mt-1">
+                    <VerifiedFixBridgeJobBadge compact />
+                  </p>
+                ) : null}
               </div>
             </div>
           </div>
@@ -238,10 +252,12 @@ function ReviewCard({ review, index }: { review: SiteReview; index: number }) {
         <Avatar name={review.name} light />
         <div className="min-w-0">
           <p className="font-semibold text-sm truncate">{review.name}</p>
-          <p className="text-xs text-white/70 truncate">
-            {review.serviceType}
-            {review.verified ? " · Verified" : ""}
-          </p>
+          <p className="text-xs text-white/70 truncate">{review.serviceType}</p>
+          {review.verifiedFixBridgeJob ? (
+            <p className="mt-1">
+              <VerifiedFixBridgeJobBadge compact />
+            </p>
+          ) : null}
         </div>
       </div>
     </article>
@@ -478,10 +494,10 @@ export default function CustomerTrustSection() {
               ))}
             </div>
 
-            {reviews.some((r) => r.verified) && (
+            {reviews.some((r) => r.verifiedFixBridgeJob) && (
               <p className="mt-6 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-                <BadgeCheck size={14} className="text-primary" />
-                Verified badges mark completed {brand.productName} jobs
+                <VerifiedFixBridgeJobBadge compact />
+                <span>marks reviews tied to completed {brand.productName} jobs</span>
               </p>
             )}
           </>

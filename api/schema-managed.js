@@ -639,6 +639,12 @@ export async function initManagedSchema(pool) {
     )
   `);
   await pool.query(`ALTER TABLE site_reviews ADD COLUMN IF NOT EXISTS images TEXT`);
+  await pool.query(`ALTER TABLE site_reviews ADD COLUMN IF NOT EXISTS contractor_user_id INT`);
+  await pool.query(`ALTER TABLE site_reviews ADD COLUMN IF NOT EXISTS rating_quality INT`);
+  await pool.query(`ALTER TABLE site_reviews ADD COLUMN IF NOT EXISTS rating_communication INT`);
+  await pool.query(`ALTER TABLE site_reviews ADD COLUMN IF NOT EXISTS rating_punctuality INT`);
+  await pool.query(`ALTER TABLE site_reviews ADD COLUMN IF NOT EXISTS rating_cleanliness INT`);
+  await pool.query(`ALTER TABLE site_reviews ADD COLUMN IF NOT EXISTS rating_value INT`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_role_preset TEXT`);
   try {
     await pool.query(`

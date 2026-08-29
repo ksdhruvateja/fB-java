@@ -1,9 +1,16 @@
 import { useEffect, useState } from "react";
-import { Loader2, Plus, Users, FileText, Repeat } from "lucide-react";
-import type { Property } from "./managedJobs";
+import { Loader2, Plus, Users, FileText } from "lucide-react";
+import type { ManagedJob, Property } from "./managedJobs";
+import { repeatManagedService } from "./managedJobs";
 import { useProFeature } from "./ProFeatureProvider";
 import ProLockedShell from "./ProLockedShell";
 import LockedProBadge from "./LockedProBadge";
+import RecurringRescheduleDialog from "./RecurringRescheduleDialog";
+import { PREFERRED_PROVIDER_PRIORITY_COPY } from "./preferredProviderCopy";
+import {
+  clearRecurringHandoff,
+  readRecurringHandoff,
+} from "./recurringHandoff";
 import {
   createRecurringService,
   generateHomeHealthReport,
@@ -28,18 +35,48 @@ const RECURRENCE_LABELS: Record<string, string> = {
   monthly: "Monthly",
 };
 
+function formatVisitDate(iso?: string | null) {
+  if (!iso) return "Not scheduled";
+  const d = new Date(`${iso.slice(0, 10)}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+}
+
+const COMPLETED_STATUSES = new Set(["completed", "closed", "work_completed", "customer_review_pending", "payout_pending"]);
+
+function lastCompletedJobForRecurring(
+  jobs: ManagedJob[],
+  propertyId: number,
+  serviceType: RecurringService["serviceType"]
+): ManagedJob | null {
+  const needle = serviceType === "recurring_landscaping" ? "landscap" : "clean";
+  const matches = jobs.filter((j) => {
+    if (j.propertyId !== propertyId) return false;
+    const st = String(j.status).toLowerCase();
+    if (!COMPLETED_STATUSES.has(st)) return false;
+    const cat = String(j.category || "").toLowerCase();
+    const title = String(j.title || "").toLowerCase();
+    return cat.includes(needle) || title.includes(needle) || Boolean(j.sourceRecurringServiceId);
+  });
+  return matches.sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime())[0] || null;
+}
+
 export default function HomeCareProHub({
   properties,
   selectedPropertyId,
+  jobs = [],
   onOpenPassport,
   onOpenMaintenance,
   onOpenDocuments,
+  onOpenJob,
 }: {
   properties: Property[];
   selectedPropertyId: number | null;
+  jobs?: ManagedJob[];
   onOpenPassport: () => void;
   onOpenMaintenance: () => void;
   onOpenDocuments: () => void;
+  onOpenJob?: (jobId: number) => void;
 }) {
   const { isPro, requestFeature, openUpgrade } = useProFeature();
   const [view, setView] = useState<HubView>("hub");
@@ -56,8 +93,24 @@ export default function HomeCareProHub({
   const [showAddRecurring, setShowAddRecurring] = useState(false);
   const [newServiceType, setNewServiceType] = useState<RecurringService["serviceType"]>("recurring_cleaning");
   const [newRecurrence, setNewRecurrence] = useState<RecurringService["recurrence"]>("biweekly");
+  const [rescheduleTarget, setRescheduleTarget] = useState<RecurringService | null>(null);
+  const [repeatBusyId, setRepeatBusyId] = useState<number | null>(null);
 
   const property = properties.find((p) => p.id === selectedPropertyId) || properties[0] || null;
+  const propertyServices = property?.id ? services.filter((s) => s.propertyId === property.id) : services;
+
+  useEffect(() => {
+    const handoff = readRecurringHandoff();
+    if (!handoff || !isPro) return;
+    setView("recurring");
+    if (handoff.propertyId && properties.some((p) => p.id === handoff.propertyId)) {
+      /* property selection is parent-controlled */
+    }
+    if (handoff.serviceType) setNewServiceType(handoff.serviceType);
+    if (handoff.recurrence) setNewRecurrence(handoff.recurrence);
+    if (handoff.openAdd !== false) setShowAddRecurring(true);
+    clearRecurringHandoff();
+  }, [isPro, properties]);
 
   useEffect(() => {
     if (!isPro || view !== "recurring") return;
@@ -168,6 +221,10 @@ export default function HomeCareProHub({
               <Plus className="h-3.5 w-3.5" /> Add
             </button>
           </div>
+          <p className="rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+            A recurring plan stores your schedule and preferences. It does <strong>not</strong> automatically book visits —
+            tap <strong>Request Next Visit</strong> when you&apos;re ready for FixBridge to create a real service job.
+          </p>
           {showAddRecurring && property ? (
             <form
               className="grid gap-2 rounded-xl border border-border bg-card p-4 sm:grid-cols-2"
@@ -210,31 +267,86 @@ export default function HomeCareProHub({
               </button>
             </form>
           ) : null}
-          {services.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-              No recurring services are currently scheduled.
-            </p>
+          {propertyServices.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border px-4 py-8 text-center">
+              <p className="text-sm text-muted-foreground">No recurring services are currently scheduled.</p>
+              {property ? (
+                <div className="mt-4 flex flex-wrap justify-center gap-2">
+                  <button
+                    type="button"
+                    className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white"
+                    onClick={() => {
+                      setNewServiceType("recurring_cleaning");
+                      setShowAddRecurring(true);
+                    }}
+                  >
+                    Set Up Cleaning
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-xl border border-primary/40 px-4 py-2 text-xs font-semibold text-primary"
+                    onClick={() => {
+                      setNewServiceType("recurring_landscaping");
+                      setShowAddRecurring(true);
+                    }}
+                  >
+                    Set Up Landscaping
+                  </button>
+                </div>
+              ) : null}
+            </div>
           ) : (
-            services.map((s) => (
+            propertyServices.map((s) => {
+              const lastJob = property?.id ? lastCompletedJobForRecurring(jobs, property.id, s.serviceType) : null;
+              return (
               <article key={s.id} className="rounded-xl border border-border bg-card p-4">
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <p className="font-semibold">{s.serviceType === "recurring_cleaning" ? "Cleaning" : "Landscaping"}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {RECURRENCE_LABELS[s.recurrence] || s.recurrence}
-                      {s.nextServiceDate ? ` · Next plan date: ${s.nextServiceDate}` : ""}
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 space-y-2 text-sm">
+                    <p className="text-base font-semibold">
+                      {s.serviceType === "recurring_cleaning" ? "Cleaning" : "Landscaping"}
                     </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Manual fulfillment — visits are not auto-booked. Use <strong>Request Next Visit</strong> to create a service job.
-                    </p>
-                    <p className="mt-1 text-xs capitalize text-muted-foreground">Status: {s.status}</p>
+                    <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                      <p>
+                        <span className="font-medium text-foreground">Property:</span>{" "}
+                        {property?.label || property?.addressLine1 || `Property #${s.propertyId}`}
+                      </p>
+                      <p>
+                        <span className="font-medium text-foreground">Frequency:</span>{" "}
+                        {RECURRENCE_LABELS[s.recurrence] || s.recurrence}
+                      </p>
+                      <p>
+                        <span className="font-medium text-foreground">Next visit:</span>{" "}
+                        {formatVisitDate(s.nextServiceDate)}
+                      </p>
+                      <p>
+                        <span className="font-medium text-foreground">Provider:</span>{" "}
+                        {s.providerName || "Not assigned yet"}
+                      </p>
+                      {s.providerName ? (
+                        <p className="sm:col-span-2 text-[11px] italic">{PREFERRED_PROVIDER_PRIORITY_COPY}</p>
+                      ) : null}
+                      <p className="sm:col-span-2">
+                        <span className="font-medium text-foreground">Status:</span>{" "}
+                        <span
+                          className={
+                            s.status === "paused"
+                              ? "font-semibold text-amber-700 dark:text-amber-300"
+                              : s.status === "cancelled"
+                                ? "font-semibold text-red-600"
+                                : "font-semibold text-emerald-700 dark:text-emerald-300"
+                          }
+                        >
+                          {s.status === "paused" ? "Paused" : s.status === "cancelled" ? "Cancelled" : "Active"}
+                        </span>
+                      </p>
+                    </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {s.status === "active" ? (
                       <>
                         <button
                           type="button"
-                          className="text-xs font-semibold text-primary"
+                          className="rounded-lg border border-primary/30 px-3 py-1.5 text-xs font-semibold text-primary"
                           onClick={() => {
                             setLoading(true);
                             void requestRecurringVisit(s.id).then((r) => {
@@ -248,7 +360,7 @@ export default function HomeCareProHub({
                         </button>
                         <button
                           type="button"
-                          className="text-xs font-semibold text-primary"
+                          className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold"
                           onClick={() => {
                             if (!s.nextServiceDate) return;
                             setLoading(true);
@@ -259,27 +371,18 @@ export default function HomeCareProHub({
                             });
                           }}
                         >
-                          Skip next
+                          Skip
                         </button>
                         <button
                           type="button"
-                          className="text-xs font-semibold text-primary"
-                          onClick={() => {
-                            const newDate = window.prompt("Reschedule next visit to (YYYY-MM-DD):", s.nextServiceDate || "");
-                            if (!newDate) return;
-                            setLoading(true);
-                            void rescheduleRecurringService(s.id, newDate).then((r) => {
-                              setLoading(false);
-                              if (!r.ok) setError(r.message || "Could not reschedule.");
-                              else if (r.service) setServices((prev) => prev.map((x) => (x.id === s.id ? r.service! : x)));
-                            });
-                          }}
+                          className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold"
+                          onClick={() => setRescheduleTarget(s)}
                         >
                           Reschedule
                         </button>
                         <button
                           type="button"
-                          className="text-xs font-semibold text-primary"
+                          className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold"
                           onClick={() =>
                             void updateRecurringService(s.id, { status: "paused" }).then(
                               (r) => r.ok && setServices((prev) => prev.map((x) => (x.id === s.id ? { ...x, status: "paused" } : x)))
@@ -292,20 +395,20 @@ export default function HomeCareProHub({
                     ) : s.status === "paused" ? (
                       <button
                         type="button"
-                        className="text-xs font-semibold text-primary"
+                        className="rounded-lg border border-primary/30 px-3 py-1.5 text-xs font-semibold text-primary"
                         onClick={() =>
                           void updateRecurringService(s.id, { status: "active" }).then(
                             (r) => r.ok && setServices((prev) => prev.map((x) => (x.id === s.id ? { ...x, status: "active" } : x)))
                           )
                         }
                       >
-                        Resume
+                        Resume Service
                       </button>
                     ) : null}
                     {s.status !== "cancelled" ? (
                       <button
                         type="button"
-                        className="text-xs font-semibold text-red-600"
+                        className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600"
                         onClick={() =>
                           void updateRecurringService(s.id, { status: "cancelled" }).then(
                             (r) => r.ok && setServices((prev) => prev.map((x) => (x.id === s.id ? { ...x, status: "cancelled" } : x)))
@@ -315,11 +418,50 @@ export default function HomeCareProHub({
                         Cancel
                       </button>
                     ) : null}
+                    {lastJob ? (
+                      <button
+                        type="button"
+                        disabled={repeatBusyId === s.id}
+                        className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold"
+                        onClick={() => {
+                          setRepeatBusyId(s.id);
+                          void repeatManagedService(lastJob.id, true).then((r) => {
+                            setRepeatBusyId(null);
+                            if (!r.ok) {
+                              setError(r.message || "Could not repeat service.");
+                              return;
+                            }
+                            if (r.job?.id) onOpenJob?.(r.job.id);
+                          });
+                        }}
+                      >
+                        {repeatBusyId === s.id ? "Repeating…" : "Repeat Last Service"}
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               </article>
-            ))
+            );
+            })
           )}
+          <RecurringRescheduleDialog
+            open={Boolean(rescheduleTarget)}
+            serviceLabel={rescheduleTarget?.serviceType === "recurring_landscaping" ? "Landscaping" : "Cleaning"}
+            currentDate={rescheduleTarget?.nextServiceDate}
+            currentTimeWindow={rescheduleTarget?.preferredTimeWindow}
+            busy={loading}
+            onClose={() => setRescheduleTarget(null)}
+            onConfirm={(newDate, timeWindow) => {
+              if (!rescheduleTarget) return;
+              setLoading(true);
+              void rescheduleRecurringService(rescheduleTarget.id, newDate, timeWindow).then((r) => {
+                setLoading(false);
+                setRescheduleTarget(null);
+                if (!r.ok) setError(r.message || "Could not reschedule.");
+                else if (r.service) setServices((prev) => prev.map((x) => (x.id === rescheduleTarget.id ? r.service! : x)));
+              });
+            }}
+          />
         </div>
       )}
 

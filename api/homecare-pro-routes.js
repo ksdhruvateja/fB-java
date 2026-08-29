@@ -54,6 +54,7 @@ function serializeRecurring(row) {
     status: row.status,
     nextServiceDate: row.next_service_date ? String(row.next_service_date).slice(0, 10) : null,
     assignedContractorUserId: row.assigned_contractor_user_id != null ? Number(row.assigned_contractor_user_id) : null,
+    providerName: row.providerName || row.contractor_company || row.contractor_name || null,
     notes: row.notes || null,
     metadata,
     createdAt: row.created_at,
@@ -71,31 +72,70 @@ async function assertPropertyOwner(pool, propertyId, userId) {
 
 export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin }) {
   const requireHomeCareFeature = createRequireHomeCareFeature(pool);
-  // ── Recurring services ───────────────────────────────────────────────────
-  app.get('/api/recurring-services', requireAuth, async (req, res) => {
+
+  async function requireAnyRecurringFeature(req, res, next) {
     try {
-      const gate = await resolveFeatureEntitlement(pool, {
-        user: req.authUser,
-        feature: 'recurring_cleaning',
-      });
-      if (!gate.allowed) {
-        return res.status(403).json(entitlementDeniedPayload(gate));
-      }
+      const [cleaning, landscaping] = await Promise.all([
+        resolveFeatureEntitlement(pool, { user: req.authUser, feature: 'recurring_cleaning' }),
+        resolveFeatureEntitlement(pool, { user: req.authUser, feature: 'recurring_landscaping' }),
+      ]);
+      if (cleaning.allowed || landscaping.allowed) return next();
+      return res.status(403).json(entitlementDeniedPayload(cleaning));
+    } catch (e) {
+      console.error('requireAnyRecurringFeature:', e);
+      return res.status(500).json({ ok: false, message: 'Could not verify feature access.' });
+    }
+  }
+
+  // ── Recurring services ───────────────────────────────────────────────────
+  app.get('/api/recurring-services', requireAuth, requireAnyRecurringFeature, async (req, res) => {
+    try {
+      const [cleaningGate, landscapingGate] = await Promise.all([
+        resolveFeatureEntitlement(pool, { user: req.authUser, feature: 'recurring_cleaning' }),
+        resolveFeatureEntitlement(pool, { user: req.authUser, feature: 'recurring_landscaping' }),
+      ]);
       const { rows } = await pool.query(
-        `SELECT rs.* FROM recurring_services rs
+        `SELECT rs.*,
+                u.name AS contractor_name, u.company_name AS contractor_company,
+                pref.pref_name, pref.pref_company
+         FROM recurring_services rs
          JOIN properties p ON p.id = rs.property_id
+         LEFT JOIN users u ON u.id = rs.assigned_contractor_user_id
+         LEFT JOIN LATERAL (
+           SELECT u2.name AS pref_name, u2.company_name AS pref_company
+           FROM preferred_contractors pc
+           JOIN users u2 ON u2.id = pc.contractor_user_id
+           WHERE pc.property_id = rs.property_id
+             AND pc.owner_user_id = rs.owner_user_id
+             AND pc.service_type = CASE
+               WHEN rs.service_type = 'recurring_landscaping' THEN 'landscaping'
+               ELSE 'cleaning'
+             END
+           ORDER BY pc.is_favorite DESC, pc.created_at DESC
+           LIMIT 1
+         ) pref ON true
          WHERE p.owner_user_id = $1
          ORDER BY rs.next_service_date ASC NULLS LAST, rs.created_at DESC`,
         [req.authUser.id]
       );
-      res.json({ ok: true, services: rows.map(serializeRecurring) });
+      const services = [];
+      for (const row of rows) {
+        const feature = recurringFeatureFor(row);
+        const gate = feature === 'recurring_landscaping' ? landscapingGate : cleaningGate;
+        if (!gate.allowed) continue;
+        const serialized = serializeRecurring(row);
+        serialized.providerName =
+          row.contractor_company || row.contractor_name || row.pref_company || row.pref_name || null;
+        services.push(serialized);
+      }
+      res.json({ ok: true, services });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, message: 'Could not load recurring services.' });
     }
   });
 
-  app.post('/api/recurring-services', requireAuth, requireHomeCareFeature('recurring_cleaning'), async (req, res) => {
+  app.post('/api/recurring-services', requireAuth, requireAnyRecurringFeature, async (req, res) => {
     try {
       const config = await getHomeCareConfig(pool);
       const b = req.body || {};
@@ -136,7 +176,7 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
     }
   });
 
-  app.patch('/api/recurring-services/:id', requireAuth, requireHomeCareFeature('recurring_cleaning'), async (req, res) => {
+  app.patch('/api/recurring-services/:id', requireAuth, requireAnyRecurringFeature, async (req, res) => {
     try {
       const config = await getHomeCareConfig(pool);
       const id = Number(req.params.id);
@@ -183,7 +223,7 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
     }
   });
 
-  app.post('/api/recurring-services/:id/skip', requireAuth, requireHomeCareFeature('recurring_cleaning'), async (req, res) => {
+  app.post('/api/recurring-services/:id/skip', requireAuth, requireAnyRecurringFeature, async (req, res) => {
     try {
       const id = Number(req.params.id);
       const { rows: existing } = await pool.query(
@@ -221,11 +261,19 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
     }
   });
 
-  app.post('/api/recurring-services/:id/reschedule', requireAuth, requireHomeCareFeature('recurring_cleaning'), async (req, res) => {
+  app.post('/api/recurring-services/:id/reschedule', requireAuth, requireAnyRecurringFeature, async (req, res) => {
     try {
       const id = Number(req.params.id);
       const newDate = String(req.body?.newDate || '').slice(0, 10);
-      if (!newDate) return res.status(400).json({ ok: false, message: 'newDate required.' });
+      if (!newDate || !/^\d{4}-\d{2}-\d{2}$/.test(newDate)) {
+        return res.status(400).json({ ok: false, message: 'Valid newDate (YYYY-MM-DD) required.' });
+      }
+      const today = new Date().toISOString().slice(0, 10);
+      if (newDate < today) {
+        return res.status(400).json({ ok: false, message: 'Reschedule date must be today or later.' });
+      }
+      const preferredTimeWindow =
+        req.body?.preferredTimeWindow != null ? String(req.body.preferredTimeWindow).slice(0, 40) : null;
       const { rows: existing } = await pool.query(
         `SELECT * FROM recurring_services WHERE id=$1 AND owner_user_id=$2`,
         [id, req.authUser.id]
@@ -246,13 +294,15 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
       reschedules.push({
         from: row.next_service_date ? String(row.next_service_date).slice(0, 10) : null,
         to: newDate,
+        timeWindow: preferredTimeWindow || row.preferred_time_window || null,
         at: new Date().toISOString(),
       });
       metadata.reschedules = reschedules.slice(-24);
       const { rows } = await pool.query(
-        `UPDATE recurring_services SET metadata=$3, next_service_date=$4, updated_at=NOW()
+        `UPDATE recurring_services SET metadata=$3, next_service_date=$4,
+           preferred_time_window=COALESCE($5, preferred_time_window), updated_at=NOW()
          WHERE id=$1 AND owner_user_id=$2 RETURNING *`,
-        [id, req.authUser.id, JSON.stringify(metadata), newDate]
+        [id, req.authUser.id, JSON.stringify(metadata), newDate, preferredTimeWindow]
       );
       res.json({ ok: true, service: serializeRecurring(rows[0]) });
     } catch (e) {
@@ -261,7 +311,7 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
     }
   });
 
-  app.post('/api/recurring-services/:id/request-visit', requireAuth, requireHomeCareFeature('recurring_cleaning'), async (req, res) => {
+  app.post('/api/recurring-services/:id/request-visit', requireAuth, requireAnyRecurringFeature, async (req, res) => {
     try {
       const id = Number(req.params.id);
       const { rows: existing } = await pool.query(

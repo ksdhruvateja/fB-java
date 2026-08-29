@@ -1499,11 +1499,11 @@ export default function AdminPanel({
                     </div>
                     {selectedJob.preferredContractorUserId ? (
                       <p className="rounded-xl bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
-                        Preferred by homeowner: contractor ID #{selectedJob.preferredContractorUserId}
+                        <span className="font-semibold">Preferred by homeowner</span>
                         {contractors.find((c) => Number(c.id) === Number(selectedJob.preferredContractorUserId))
                           ? ` · ${contractors.find((c) => Number(c.id) === Number(selectedJob.preferredContractorUserId))?.name}`
-                          : ""}
-                        . Assignment is not guaranteed — verify eligibility and availability.
+                          : ` · contractor #${selectedJob.preferredContractorUserId}`}
+                        . We&apos;ll prioritize them when available — assignment is not guaranteed.
                       </p>
                     ) : null}
                     <p className="text-sm font-medium">Invite contractor</p>

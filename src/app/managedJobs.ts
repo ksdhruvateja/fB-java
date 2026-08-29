@@ -111,6 +111,7 @@ export type ManagedJob = {
   estimateConfidence?: string | null;
   preferredTimeNote?: string;
   assignedContractorUserId?: number | null;
+  contractorName?: string | null;
   preferredContractorUserId?: number | null;
   preferredByHomeowner?: boolean;
   sourceRecurringServiceId?: number | null;
@@ -327,28 +328,28 @@ export type Bid = {
 
 export const STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
-  ai_review_complete: "Assessment ready — awaiting FixBridge quote",
-  awaiting_service_payment: "Legacy — dispatch hold pending",
-  paid_for_dispatch: "Fee paid",
-  awaiting_contractor: "Finding professional",
-  contractor_invited: "Contractor invited",
-  contractor_accepted: "Contractor accepted",
-  awaiting_bid: "Awaiting bid",
-  diagnosing: "Site visit / diagnosing",
-  bid_received: "Bid received",
-  proposal_sent: "Proposal ready",
-  awaiting_customer_approval: "Approve proposal",
-  approved: "Quote approved — awaiting dispatch",
+  ai_review_complete: "Quote ready",
+  awaiting_service_payment: "Awaiting payment",
+  paid_for_dispatch: "Processing",
+  awaiting_contractor: "Processing",
+  contractor_invited: "Finding provider",
+  contractor_accepted: "Provider assigned",
+  awaiting_bid: "Getting quotes",
+  diagnosing: "Site visit scheduled",
+  bid_received: "Quote ready",
+  proposal_sent: "Quote ready",
+  awaiting_customer_approval: "Review quote",
+  approved: "Scheduled",
   scheduled: "Scheduled",
-  contractor_en_route: "En route",
-  work_started: "Work in progress",
+  contractor_en_route: "Provider on the way",
+  work_started: "In progress",
   change_order_pending: "Change order pending",
-  work_completed: "Work completed",
-  customer_review_pending: "Pay FixBridge",
-  admin_review_pending: "Admin review",
-  payout_pending: "Payout pending",
-  paid_out: "Contractor paid",
-  closed: "Closed",
+  work_completed: "Completed",
+  customer_review_pending: "Confirm completion",
+  admin_review_pending: "Processing",
+  payout_pending: "Completed",
+  paid_out: "Completed",
+  closed: "Completed",
   canceled: "Canceled",
   refunded: "Refunded",
   disputed: "Disputed",
@@ -651,9 +652,25 @@ export async function requestAdminDispatch(jobId: number) {
 
 export async function confirmCompletion(
   jobId: number,
-  review?: { rating: number; review: string; location?: string; images?: string[] }
+  review?: {
+    rating: number;
+    review?: string;
+    location?: string;
+    images?: string[];
+    categories?: Record<string, number>;
+  }
 ) {
-  return api<{ ok: boolean; job?: ManagedJob }>(`/api/managed/jobs/${jobId}/confirm-completion`, {
+  return api<{
+    ok: boolean;
+    job?: ManagedJob;
+    review?: {
+      id: number;
+      rating: number;
+      verified: boolean;
+      verifiedFixBridgeJob: boolean;
+      categories?: Record<string, number> | null;
+    } | null;
+  }>(`/api/managed/jobs/${jobId}/confirm-completion`, {
     method: "POST",
     body: JSON.stringify(review || {}),
   });
@@ -671,6 +688,8 @@ export type ContractorJobReview = {
   rating: number;
   text: string;
   verified: boolean;
+  verifiedFixBridgeJob?: boolean;
+  categories?: Record<string, number> | null;
   createdAt: string | null;
   jobId: number | null;
   jobTitle: string | null;
@@ -681,7 +700,11 @@ export async function getContractorPerformance() {
   return api<{
     ok: boolean;
     reviews?: ContractorJobReview[];
-    stats?: { reviewCount: number; averageRating: number | null };
+    stats?: {
+      reviewCount: number;
+      averageRating: number | null;
+      categoryAverages?: Record<string, number | null> | null;
+    };
     message?: string;
   }>("/api/contractor/performance");
 }

@@ -38,6 +38,13 @@ import {
 } from './password-reset.js';
 import { mailStatus } from './mail.js';
 import {
+  loadJobForReview,
+  insertJobReview,
+  parseCategoryRatings,
+  serializeSiteReview,
+  deriveVerifiedFixBridgeJob,
+} from './job-reviews.js';
+import {
   corsOriginDelegate,
   securityHeaders,
   publicErrorMessage,
@@ -2463,16 +2470,23 @@ app.put('/api/lifecycle/:jobId/rating', requireAuth, async (req, res) => {
     // Auto-publish public site review when homeowner leaves text feedback
     if (review && review.trim().length >= 12) {
       try {
+        let verified = false;
+        const { rows: mjRows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1 LIMIT 1`, [jobId]);
+        if (mjRows[0]) {
+          verified = deriveVerifiedFixBridgeJob(mjRows[0]);
+        }
         await pool.query(
           `INSERT INTO site_reviews
              (author_name, location, service_type, rating, body, verified, published, user_id, job_id, images)
-           VALUES ($1,$2,$3,$4,$5,TRUE,TRUE,$6,$7,$8)`,
+           VALUES ($1,$2,$3,$4,$5,$6,TRUE,$7,$8,$9)
+           ON CONFLICT DO NOTHING`,
           [
             clampString(req.authUser.name || 'Homeowner', 80),
             clampString(req.body?.location || 'NYC & Long Island', 80),
             clampString(req.body?.serviceType || 'Home repair', 60),
             rating,
             review.trim(),
+            verified,
             req.authUser.id || null,
             Number(jobId),
             images.length ? JSON.stringify(images) : null,
@@ -2520,27 +2534,34 @@ function normalizeReviewImages(input) {
 }
 
 function rowToSiteReview(r) {
+  const base = serializeSiteReview(r);
   return {
-    id: Number(r.id),
-    name: r.author_name,
-    location: r.location,
-    serviceType: r.service_type || 'Home repair',
-    rating: Number(r.rating),
-    text: r.body,
-    verified: r.verified === true,
+    ...base,
     images: parseReviewImages(r.images),
-    createdAt: r.created_at,
+    verifiedFixBridgeJob: base.verified === true && r.job_id != null,
   };
 }
 
-app.get('/api/reviews', async (_req, res) => {
+app.get('/api/reviews', async (req, res) => {
   try {
+    const jobId = Number(req.query?.jobId);
+    const filterJob = Number.isFinite(jobId) && jobId > 0;
+
     const { rows } = await pool.query(
-      `SELECT id, author_name, location, service_type, rating, body, verified, published, images, created_at, job_id
-       FROM site_reviews
-       WHERE published = TRUE
-       ORDER BY created_at DESC
-       LIMIT 60`
+      filterJob
+        ? `SELECT id, author_name, location, service_type, rating, body, verified, published, images, created_at, job_id,
+                  rating_quality, rating_communication, rating_punctuality, rating_cleanliness, rating_value, contractor_user_id
+           FROM site_reviews
+           WHERE published = TRUE AND job_id = $1
+           ORDER BY created_at DESC
+           LIMIT 10`
+        : `SELECT id, author_name, location, service_type, rating, body, verified, published, images, created_at, job_id,
+                  rating_quality, rating_communication, rating_punctuality, rating_cleanliness, rating_value, contractor_user_id
+           FROM site_reviews
+           WHERE published = TRUE
+           ORDER BY created_at DESC
+           LIMIT 60`,
+      filterJob ? [jobId] : []
     );
     const reviews = rows.map(rowToSiteReview);
     const count = reviews.length;
@@ -2555,16 +2576,7 @@ app.get('/api/reviews', async (_req, res) => {
   }
 });
 
-const REVIEWABLE_STATUSES = new Set([
-  'work_completed',
-  'customer_review_pending',
-  'admin_review_pending',
-  'payout_pending',
-  'paid_out',
-  'closed',
-]);
-
-/** Verified job reviews only — identity from JWT; job must be owned + completed-ish. */
+/** Verified job reviews only — identity from JWT; job must be owned + completed. */
 app.post('/api/reviews', requireAuth, reviewLimiter, async (req, res) => {
   try {
     if (req.authUser.role !== 'homeowner') {
@@ -2597,30 +2609,13 @@ app.post('/api/reviews', requireAuth, reviewLimiter, async (req, res) => {
     if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
       return res.status(400).json({ ok: false, message: 'Rating must be 1–5 stars.' });
     }
-    if (!body || body.trim().length < 20) {
-      return res.status(400).json({ ok: false, message: 'Please write at least 20 characters about your experience.' });
-    }
 
-    const { rows: jobs } = await pool.query(
-      `SELECT id, homeowner_user_id, status, category, title FROM managed_jobs WHERE id=$1`,
-      [jobId]
-    );
-    const job = jobs[0];
-    if (!job) {
-      return res.status(404).json({ ok: false, message: 'Job not found.' });
-    }
-    if (Number(job.homeowner_user_id) !== Number(req.authUser.id)) {
-      return res.status(403).json({
+    const access = await loadJobForReview(pool, jobId, req.authUser.id);
+    if (!access.ok) {
+      return res.status(access.status).json({
         ok: false,
-        code: 'NOT_JOB_OWNER',
-        message: 'You can only review your own completed jobs.',
-      });
-    }
-    if (!REVIEWABLE_STATUSES.has(String(job.status || ''))) {
-      return res.status(400).json({
-        ok: false,
-        code: 'JOB_NOT_COMPLETE',
-        message: 'Reviews are available after the job is completed.',
+        code: access.code,
+        message: access.message,
       });
     }
 
@@ -2636,24 +2631,27 @@ app.post('/api/reviews', requireAuth, reviewLimiter, async (req, res) => {
       });
     }
 
-    const authorName = clampString(req.authUser.name || 'Homeowner', 80);
-    const serviceType = clampString(req.body?.serviceType || job.category || 'Home repair', 60);
+    const categories = parseCategoryRatings(req.body);
     const imagesJson = images.length ? JSON.stringify(images) : null;
+    const serviceType = clampString(req.body?.serviceType || access.job.category || 'Home repair', 60);
 
-    const { rows } = await pool.query(
-      `INSERT INTO site_reviews
-         (author_name, location, service_type, rating, body, verified, published, user_id, job_id, images)
-       VALUES ($1,$2,$3,$4,$5,TRUE,TRUE,$6,$7,$8)
-       RETURNING id, author_name, location, service_type, rating, body, verified, published, images, created_at, job_id`,
-      [authorName, location, serviceType, rating, body.trim(), req.authUser.id, jobId, imagesJson]
-    );
+    const row = await insertJobReview(pool, {
+      job: access.job,
+      homeownerUser: req.authUser,
+      rating,
+      body: body?.trim() || '',
+      location,
+      serviceType,
+      imagesJson,
+      categories,
+    });
 
-    await writeAudit(pool, req.authUser.id, 'job_review_created', 'managed_job', jobId, { rating });
+    await writeAudit(pool, req.authUser.id, 'job_review_created', 'managed_job', jobId, { rating, categories });
 
     return res.status(201).json({
       ok: true,
-      review: rowToSiteReview(rows[0]),
-      message: 'Thanks — your verified review is live on FixBridge.',
+      review: rowToSiteReview(row),
+      message: 'Thanks for your feedback.',
     });
   } catch (e) {
     if (e?.code === '23505') {

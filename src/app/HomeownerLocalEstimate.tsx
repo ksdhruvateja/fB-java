@@ -3,10 +3,10 @@ import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 import { ManagedJob, retailRangeLabel } from "./managedJobs";
 
 const STEPS = [
-  "Identifying the service",
-  "Reviewing pricing near your ZIP",
-  "Comparing similar local services",
-  "Preparing your estimate",
+  "Reviewing your problem…",
+  "Looking at your photos…",
+  "Checking your home details…",
+  "Preparing next steps…",
 ] as const;
 
 export function EstimateLoadingSteps({
@@ -21,7 +21,7 @@ export function EstimateLoadingSteps({
     <div className="space-y-4 py-2">
       <div className="flex items-center gap-2">
         <Loader2 className="h-4 w-4 animate-spin text-[#FF4D1C]" />
-        <p className="text-sm font-semibold text-foreground">Analyzing your request…</p>
+        <p className="text-sm font-semibold text-foreground">Reviewing your request…</p>
       </div>
       <ul className="space-y-2 text-sm">
         {STEPS.map((label, idx) => {

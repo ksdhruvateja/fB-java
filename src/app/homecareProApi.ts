@@ -27,6 +27,7 @@ export type RecurringService = {
   status: "active" | "paused" | "cancelled";
   nextServiceDate?: string | null;
   notes?: string | null;
+  providerName?: string | null;
 };
 
 export type QuoteSecondOpinion = {
@@ -75,10 +76,10 @@ export async function skipRecurringService(id: number, date?: string) {
   });
 }
 
-export async function rescheduleRecurringService(id: number, newDate: string) {
+export async function rescheduleRecurringService(id: number, newDate: string, preferredTimeWindow?: string | null) {
   return api<{ ok: boolean; service?: RecurringService; message?: string }>(`/api/recurring-services/${id}/reschedule`, {
     method: "POST",
-    body: JSON.stringify({ newDate }),
+    body: JSON.stringify({ newDate, preferredTimeWindow: preferredTimeWindow || undefined }),
   });
 }
 

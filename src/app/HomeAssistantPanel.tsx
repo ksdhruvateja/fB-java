@@ -3,12 +3,19 @@ import { Loader2, Send, Sparkles } from "lucide-react";
 import type { ManagedJob, Property } from "./managedJobs";
 import { useProFeature } from "./ProFeatureProvider";
 import {
+  fetchQuoteSecondOpinion,
   sendHomeAssistantMessage,
   type AssistantAction,
   type AssistantChatMessage,
 } from "./homeAssistantApi";
 import type { ProFeatureId } from "./proFeatures";
 import { saveAssistantHandoff } from "./assistantHandoff";
+import { PREFERRED_PROVIDER_PRIORITY_COPY } from "./preferredProviderCopy";
+import {
+  inferRecurrenceFromText,
+  inferRecurringServiceType,
+  saveRecurringHandoff,
+} from "./recurringHandoff";
 
 const STARTER_PROMPTS = [
   "There's water around my water heater.",
@@ -16,6 +23,25 @@ const STARTER_PROMPTS = [
   "Does my latest quote look reasonable?",
   "I need someone to clean every two weeks.",
 ];
+
+function formatQuoteOpinion(op: {
+  summary?: string;
+  scopeReview?: string;
+  pricingContext?: string;
+  thingsToAsk?: string | string[];
+  recommendation?: string;
+  disclaimer?: string;
+}) {
+  const parts: string[] = [];
+  if (op.summary) parts.push(op.summary);
+  if (op.scopeReview) parts.push(`**Scope:** ${op.scopeReview}`);
+  if (op.pricingContext) parts.push(`**Pricing context:** ${op.pricingContext}`);
+  const ask = Array.isArray(op.thingsToAsk) ? op.thingsToAsk.join("; ") : op.thingsToAsk;
+  if (ask) parts.push(`**Questions to consider:** ${ask}`);
+  if (op.recommendation) parts.push(op.recommendation);
+  if (op.disclaimer) parts.push(`_${op.disclaimer}_`);
+  return parts.join("\n\n");
+}
 
 export default function HomeAssistantPanel({
   properties,
@@ -48,6 +74,9 @@ export default function HomeAssistantPanel({
 
   const property = properties.find((p) => p.id === propertyId) || properties[0] || null;
   const activeJob = jobs.find((j) => !["completed", "closed", "cancelled"].includes(String(j.status).toLowerCase()));
+  const quotedJob =
+    activeJob ||
+    jobs.find((j) => j.customerRetailEstimateHigh != null || j.status === "awaiting_customer_approval");
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -65,7 +94,7 @@ export default function HomeAssistantPanel({
     const r = await sendHomeAssistantMessage({
       messages: nextMessages,
       propertyId: property?.id ?? null,
-      jobId: activeJob?.id ?? null,
+      jobId: quotedJob?.id ?? null,
       intent: text.trim(),
     });
 
@@ -82,8 +111,13 @@ export default function HomeAssistantPanel({
       }
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: r.message || "Sorry, I couldn't respond right now." },
+        {
+          role: "assistant",
+          content:
+            "AI assistance is temporarily unavailable. You can still request service directly — use Request Service below or the main menu.",
+        },
       ]);
+      setActions([{ id: "remote_quote", label: "Request Service" }]);
       return;
     }
 
@@ -99,22 +133,44 @@ export default function HomeAssistantPanel({
     const lower = issue.toLowerCase();
     let category = "Others";
     if (/plumb|leak|drain|water|sink|toilet/.test(lower)) category = "Plumbing";
-    else if (/hvac|ac\b|furnace|heat|cool/.test(lower)) category = "HVAC";
+    else if (/hvac|ac\b|furnace|heat|cool/.test(lower)) category = "HVAC & Heating/Cooling";
     else if (/electric|outlet|breaker|light/.test(lower)) category = "Electrical";
-    else if (/roof|gutter/.test(lower)) category = "Roofing";
+    else if (/roof|gutter/.test(lower)) category = "Roofing & Gutters";
     else if (/appliance|fridge|dishwasher|washer|dryer/.test(lower)) category = "Appliances";
+    else if (/clean/.test(lower)) category = "Cleaning";
+    else if (/landscap|mow|lawn/.test(lower)) category = "Landscaping";
 
     saveAssistantHandoff({
       propertyId: property?.id ?? null,
       category,
       title: issue.split("\n")[0]?.slice(0, 120) || "Service request from Home Assistant",
-      description: [issue, lastAssistant ? `Assistant notes: ${lastAssistant}` : ""].filter(Boolean).join("\n\n").slice(0, 3000),
+      description: issue.slice(0, 2800),
       intent,
       assistantSummary: lastAssistant.slice(0, 500),
     });
   }
 
-  function handleAction(action: AssistantAction) {
+  function openRecurringWithPrefill(actionId: string) {
+    const userText = messages
+      .filter((m) => m.role === "user")
+      .map((m) => m.content)
+      .join(" ");
+    const serviceType =
+      actionId === "recurring_landscaping"
+        ? "recurring_landscaping"
+        : inferRecurringServiceType(userText) || "recurring_cleaning";
+    const feature = serviceType === "recurring_landscaping" ? "recurring_landscaping" : "recurring_cleaning";
+    if (!requestFeature(feature, "home-assistant")) return;
+    saveRecurringHandoff({
+      propertyId: property?.id ?? null,
+      serviceType,
+      recurrence: inferRecurrenceFromText(userText) || "biweekly",
+      openAdd: true,
+    });
+    onOpenRecurring?.();
+  }
+
+  async function handleAction(action: AssistantAction) {
     if (action.id === "diy") {
       buildHandoff("diy");
       onStartReport?.();
@@ -131,14 +187,47 @@ export default function HomeAssistantPanel({
       return;
     }
     if (action.id === "recurring_cleaning" || action.id === "recurring_landscaping") {
-      const feature = action.id === "recurring_landscaping" ? "recurring_landscaping" : "recurring_cleaning";
-      if (!requestFeature(feature, "home-assistant")) return;
-      onOpenRecurring?.();
+      openRecurringWithPrefill(action.id);
       return;
     }
-    if (action.id === "quote_second_opinion" && activeJob?.id) {
+    if (action.id === "quote_second_opinion") {
+      const jobId = quotedJob?.id;
+      if (!jobId) {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: "I don't see an active quote on file. Open a job with a quote first, or request service to get a new estimate." },
+        ]);
+        return;
+      }
       if (!requestFeature("quote_second_opinion", "home-assistant")) return;
-      onOpenJob?.(activeJob.id);
+      setBusy(true);
+      const r = await fetchQuoteSecondOpinion(jobId);
+      setBusy(false);
+      if (!r.ok) {
+        if (r.code === "PRO_SUBSCRIPTION_REQUIRED" && r.feature) {
+          openUpgrade(r.feature as ProFeatureId, "home-assistant");
+          return;
+        }
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: r.message || "Could not load quote review right now." },
+        ]);
+        return;
+      }
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: r.opinion
+            ? formatQuoteOpinion(r.opinion)
+            : "I reviewed your quote but could not generate a summary. Open the job for full details.",
+        },
+      ]);
+      setActions([{ id: "open_job_quote", label: "View Full Job Details" }]);
+      return;
+    }
+    if (action.id === "open_job_quote" && quotedJob?.id) {
+      onOpenJob?.(quotedJob.id);
     }
   }
 
@@ -178,17 +267,23 @@ export default function HomeAssistantPanel({
           </div>
         ) : null}
         {actions.length > 0 ? (
-          <div className="flex flex-wrap gap-2 pt-1">
-            {actions.map((a) => (
-              <button
-                key={a.id}
-                type="button"
-                onClick={() => handleAction(a)}
-                className="rounded-full border border-primary/30 bg-primary/5 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/10"
-              >
-                {a.label}
-              </button>
-            ))}
+          <div className="space-y-2 pt-1">
+            {actions.some((a) => a.id === "remote_quote" && a.label.includes("Same Provider")) ? (
+              <p className="text-[11px] text-muted-foreground italic">{PREFERRED_PROVIDER_PRIORITY_COPY}</p>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              {actions.map((a) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() => void handleAction(a)}
+                  disabled={busy}
+                  className="rounded-full border border-primary/30 bg-primary/5 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/10 disabled:opacity-50"
+                >
+                  {a.label}
+                </button>
+              ))}
+            </div>
           </div>
         ) : null}
         <div ref={bottomRef} />

@@ -370,6 +370,7 @@ export default function HomeownerPropertyCare({
         <HomeCareProHub
           properties={properties}
           selectedPropertyId={property?.id ?? null}
+          jobs={jobs}
           onOpenPassport={() => {
             setHub("passport");
             setPassportSection("overview");
@@ -379,6 +380,7 @@ export default function HomeownerPropertyCare({
             setHub("passport");
             setPassportSection("documents");
           }}
+          onOpenJob={onOpenJob}
         />
       )}
 

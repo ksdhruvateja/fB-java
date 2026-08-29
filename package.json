@@ -21,6 +21,8 @@
     "smoke:home-memory": "node --env-file=.env scripts/smoke-home-memory.mjs",
     "smoke:connected-home-e2e": "node --env-file=.env scripts/smoke-connected-home-e2e.mjs",
     "smoke:service-reminders": "node --env-file=.env scripts/smoke-service-reminders.mjs",
+    "smoke:recurring-assistant": "node --env-file=.env scripts/smoke-recurring-assistant.mjs",
+    "smoke:reviews": "node --env-file=.env scripts/smoke-reviews.mjs",
     "smoke:p0-final": "node --env-file=.env scripts/p0-final-e2e.mjs",
     "smoke:stripe-e2e": "node --env-file=.env scripts/smoke-stripe-e2e.mjs",
     "smoke:p1": "node --env-file=.env scripts/smoke-p1.mjs",

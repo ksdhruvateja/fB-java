@@ -46,8 +46,10 @@ import {
  type HomeownerService,
 } from "./homeownerCategories";
 import HomeownerServiceIntake, { type IntakePhase } from "./HomeownerServiceIntake";
+import { clearIntakeDraft, loadIntakeDraft, saveIntakeDraft } from "./intakeDraft";
 import {
  tradeToCategory,
+ categoryToTradeId,
  formatAdaptiveAnswersNote,
  type AdaptiveAnswers,
  type ServiceLocation,
@@ -397,6 +399,7 @@ export default function HomeownerDashboard({
  const [preferredTimeSlot, setPreferredTimeSlot] = useState("9-11");
  const [mediaDataUrl, setMediaDataUrl] = useState<string | null>(null);
  const [mediaType, setMediaType] = useState<string | null>(null);
+ const [assistantHandoffIntent, setAssistantHandoffIntent] = useState<"remote_quote" | "site_visit" | "diy" | null>(null);
  const [propertyPurpose, setPropertyPurpose] = useState("current_homeowner");
  const [transactionStage, setTransactionStage] = useState("ongoing_maintenance");
  const [partnerCode, setPartnerCode] = useState(() => {
@@ -430,6 +433,8 @@ export default function HomeownerDashboard({
  const [assessmentMsg, setAssessmentMsg] = useState<string | null>(null);
  const [assessLoadingStep, setAssessLoadingStep] = useState<number | null>(null);
  const [assessLoadingZip, setAssessLoadingZip] = useState<string | null>(null);
+ const [intakeDraftSavedAt, setIntakeDraftSavedAt] = useState<string | null>(null);
+ const [hasIntakeDraft, setHasIntakeDraft] = useState(false);
  const [showTechMessage, setShowTechMessage] = useState(false);
  const [forceEditSchedule, setForceEditSchedule] = useState(false);
  const [techMessageDraft, setTechMessageDraft] = useState("");
@@ -744,12 +749,29 @@ export default function HomeownerDashboard({
  const handoff = readAssistantHandoff();
  if (handoff) {
  if (handoff.propertyId) setPropertyId(handoff.propertyId);
- if (handoff.category) setCategory(handoff.category);
- if (handoff.description) setDescription(handoff.description);
- if (handoff.issueArea) setIssueArea(handoff.issueArea);
+ if (handoff.category) {
+ setCategory(handoff.category as HomeownerService);
+ if (!handoff.requestSystemId) setRequestSystemId(categoryToTradeId(handoff.category));
+ }
  if (handoff.requestSystemId) setRequestSystemId(handoff.requestSystemId);
+ const descParts: string[] = [];
+ if (handoff.title?.trim()) descParts.push(handoff.title.trim());
+ if (handoff.description?.trim()) descParts.push(handoff.description.trim());
+ if (handoff.assistantSummary?.trim()) descParts.push(`Assistant notes: ${handoff.assistantSummary.trim()}`);
+ if (descParts.length) setDescription(descParts.join("\n\n").slice(0, 3000));
+ if (handoff.issueArea) setIssueArea(handoff.issueArea as ServiceLocation);
+ if (handoff.mediaDataUrl) {
+ setMediaDataUrl(handoff.mediaDataUrl);
+ setMediaType(handoff.mediaType || (String(handoff.mediaDataUrl).startsWith("data:video") ? "video" : "image"));
+ }
+ if (handoff.intent) {
+ setAssistantHandoffIntent(handoff.intent);
+ if (handoff.intent === "site_visit") setReportPath("experts");
+ else setReportPath("ai");
+ }
  clearAssistantHandoff();
  } else {
+ setAssistantHandoffIntent(null);
  if (prefill?.systemId) setRequestSystemId(prefill.systemId);
  if (prefill?.area) setIssueArea(prefill.area);
  if (prefill?.service) setCategory(prefill.service);
@@ -759,8 +781,11 @@ export default function HomeownerDashboard({
  role: "homeowner",
  tab: "report",
  reportStep: "intake",
- intakePhase: (handoff?.description || prefill?.description) ? "details" : "trade",
- reportPath: null,
+ intakePhase:
+ handoff?.description || handoff?.title || prefill?.description || handoff?.category
+ ? "details"
+ : "trade",
+ reportPath: handoff?.intent === "site_visit" ? "experts" : handoff?.intent ? "ai" : null,
  jobId: null,
  });
  }
@@ -1252,6 +1277,73 @@ export default function HomeownerDashboard({
  }, [discountCode]);
 
  useEffect(() => {
+ const draft = loadIntakeDraft(user.id);
+ setHasIntakeDraft(
+ Boolean(draft && (draft.intakePhase !== "trade" || draft.description || draft.requestSystemId))
+ );
+ if (draft?.savedAt) setIntakeDraftSavedAt(draft.savedAt);
+ }, [user.id]);
+
+ useEffect(() => {
+ if (tab !== "report" || step !== "intake") return;
+ const timer = window.setTimeout(() => {
+ saveIntakeDraft({
+ userId: user.id,
+ intakePhase,
+ requestSystemId,
+ issueArea,
+ description,
+ adaptiveAnswers,
+ propertyId,
+ partnerCode,
+ mediaDataUrl,
+ mediaType,
+ savedAt: new Date().toISOString(),
+ });
+ setIntakeDraftSavedAt(new Date().toISOString());
+ setHasIntakeDraft(intakePhase !== "trade" || Boolean(description.trim()) || Boolean(requestSystemId));
+ }, 500);
+ return () => window.clearTimeout(timer);
+ }, [
+ tab,
+ step,
+ user.id,
+ intakePhase,
+ requestSystemId,
+ issueArea,
+ description,
+ adaptiveAnswers,
+ propertyId,
+ partnerCode,
+ mediaDataUrl,
+ mediaType,
+ ]);
+
+ function resumeIntakeDraft() {
+ const draft = loadIntakeDraft(user.id);
+ if (!draft) return;
+ setIntakePhase(draft.intakePhase);
+ if (draft.requestSystemId) setRequestSystemId(draft.requestSystemId);
+ if (draft.issueArea) setIssueArea(draft.issueArea);
+ if (draft.description) setDescription(draft.description);
+ if (draft.adaptiveAnswers) setAdaptiveAnswers(draft.adaptiveAnswers);
+ if (draft.propertyId) setPropertyId(draft.propertyId);
+ if (draft.partnerCode) setPartnerCode(draft.partnerCode);
+ if (draft.mediaDataUrl) {
+ setMediaDataUrl(draft.mediaDataUrl);
+ setMediaType(draft.mediaType);
+ }
+ navigateTo({
+ role: "homeowner",
+ tab: "report",
+ reportStep: "intake",
+ intakePhase: draft.intakePhase,
+ reportPath: null,
+ jobId: null,
+ });
+ }
+
+ useEffect(() => {
  if (!selectedJobId) {
  setProposal(null);
  return;
@@ -1398,12 +1490,16 @@ export default function HomeownerDashboard({
  }
  try {
  sessionStorage.removeItem("fixbridge-partner-intake");
+ clearIntakeDraft();
+ setHasIntakeDraft(false);
+ setIntakeDraftSavedAt(null);
  // Keep code applied for this session in case they file another job;
  // clear intake flag only.
  } catch {
  // ignore
  }
  setActiveJob(created.job);
+ setAssistantHandoffIntent(null);
  setReportPath(path);
  setStep("assessment");
  const propZip = properties.find((p) => p.id === propertyId)?.zip || null;
@@ -1729,6 +1825,18 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
 
  {tab === "overview" && (
  <div className="space-y-6">
+ {hasIntakeDraft ? (
+ <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 rounded-2xl border border-primary/25 bg-primary/5 px-4 py-3">
+ <p className="text-sm font-medium">You have an unfinished service request.</p>
+ <button
+ type="button"
+ onClick={resumeIntakeDraft}
+ className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white"
+ >
+ Continue Request
+ </button>
+ </div>
+ ) : null}
  <HomeownerOverview
  userName={user.name || "there"}
  property={primaryProperty}
@@ -1847,7 +1955,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  properties={properties}
  propertyId={typeof propertyId === "number" ? propertyId : primaryPropertyId}
  jobs={jobs}
- onStartReport={() => setTab("report")}
+ onStartReport={() => openRequestService()}
  onOpenRecurring={() => setTab("property-care")}
  onOpenJob={(id) => {
  setSelectedJobId(id);
@@ -1912,6 +2020,16 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </button>
  </div>
 
+ {assistantHandoffIntent ? (
+ <p className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-2 text-sm text-foreground">
+ {assistantHandoffIntent === "site_visit"
+ ? "From Home Assistant — review details below, then continue to schedule a site visit."
+ : assistantHandoffIntent === "remote_quote"
+ ? "From Home Assistant — your issue is prefilled. Review and request a remote quote."
+ : "From Home Assistant — review safe DIY guidance or request professional help."}
+ </p>
+ ) : null}
+
  {step === "intake" && (
  <HomeownerServiceIntake
  intakePhase={intakePhase}
@@ -1957,6 +2075,11 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  onBack={goBackOneReportStep}
  onSubmitAi={() => void submitIssue("ai")}
  onHirePro={goToExperts}
+ onClearMedia={() => {
+ setMediaDataUrl(null);
+ setMediaType(null);
+ }}
+ draftSavedAt={intakeDraftSavedAt}
  />
  )}
 
@@ -2420,7 +2543,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <p className="text-sm font-semibold">Assessment not ready yet</p>
  <p className="text-sm leading-relaxed">
  {assessmentMsg ||
- "AI assessment did not complete. You can retry, or hire a professional below."}
+ "We couldn't complete the AI assessment right now."}
  </p>
  <button
  type="button"
@@ -2436,7 +2559,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  if (!assessed.ok || !assessed.job) {
  setAssessmentMsg(
  assessed.message ||
- "Assessment failed - you can still request a professional."
+ "We couldn't complete the AI assessment right now."
  );
  } else {
  setActiveJob(assessed.job);
@@ -2451,7 +2574,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  className="inline-flex items-center gap-2 rounded-md bg-[#FF4D1C] px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60"
  >
  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
- Retry AI assessment
+ Continue with Service Request
  </button>
  </div>
  ) : assessmentMode === "expert" ? (

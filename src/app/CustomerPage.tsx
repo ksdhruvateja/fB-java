@@ -30,8 +30,8 @@ const FEATURES = [
     tone: "coral" as const,
   },
   {
-    title: "Guaranteed Vetting",
-    body: "Background-checked, licensed contractors only. No cold-call spam.",
+    title: "Verified Providers",
+    body: "License and insurance badges shown only when FixBridge has verified compliance.",
     icon: ShieldCheck,
     tone: "ink" as const,
   },
@@ -69,7 +69,7 @@ const MOBILE_STEPS = [
   {
     num: "03",
     title: "Compare real bids",
-    body: "Licensed local pros send priced estimates you can review side by side.",
+    body: "Local pros send priced estimates you can review side by side.",
     icon: Scale,
   },
   {
@@ -168,17 +168,23 @@ export default function CustomerPage({
               Home repair, made simple by AI.
             </p>
             <p className="text-white/70 text-sm sm:text-base md:text-lg leading-relaxed mb-5 sm:mb-8 max-w-md">
-              Get an AI assessment, guided DIY help when safe, or book a trusted local pro for repairs,
-              cleaning, landscaping, and home care.
+              Something wrong at home? Tell FixBridge what&apos;s happening. AI helps understand the issue, then we
+              coordinate quotes, service, and completion tracking.
             </p>
             <div className="flex flex-col sm:flex-row flex-wrap gap-2.5 sm:gap-3 w-full sm:w-auto">
               <button
                 onClick={onGetStarted}
-                className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase tracking-wider text-sm bg-white text-black px-5 sm:px-7 py-3 sm:py-3.5 flex items-center justify-center gap-2 hover:bg-white/90 transition-colors group w-full sm:w-auto"
+                className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase tracking-wider text-sm bg-primary text-white px-5 sm:px-7 py-3 sm:py-3.5 flex items-center justify-center gap-2 hover:bg-primary/90 transition-colors group w-full sm:w-auto shadow-[0_8px_24px_rgba(255,77,28,0.35)]"
               >
                 Describe Your Problem
                 <ArrowRight size={15} className="transition-transform group-hover:translate-x-1" />
               </button>
+              <a
+                href="#how-it-works"
+                className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase tracking-wider text-sm border border-white/35 text-white px-5 sm:px-7 py-3 sm:py-3.5 flex items-center justify-center hover:bg-white/10 transition-colors w-full sm:w-auto"
+              >
+                How FixBridge Works
+              </a>
             </div>
           </motion.div>
 
@@ -189,6 +195,35 @@ export default function CustomerPage({
             />
           </motion.div>
         </motion.div>
+      </section>
+
+      {/* ── 3-step strip ─────────────────────────────────────────────────── */}
+      <section className="border-b border-border bg-[#111] px-4 py-10 sm:px-8 sm:py-12">
+        <div className="mx-auto grid max-w-5xl gap-6 sm:grid-cols-3 sm:gap-8">
+          {[
+            {
+              step: "1",
+              title: "Tell Us",
+              body: "Describe what's happening and add photos if useful.",
+            },
+            {
+              step: "2",
+              title: "AI Helps",
+              body: "FixBridge helps understand the issue and next best step.",
+            },
+            {
+              step: "3",
+              title: "FixBridge Connects & Coordinates",
+              body: "Get quotes, service coordination, updates, and completion tracking.",
+            },
+          ].map((item) => (
+            <div key={item.step} className="text-center sm:text-left">
+              <p className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black text-primary">{item.step}</p>
+              <p className="mt-1 text-sm font-semibold text-white">{item.title}</p>
+              <p className="mt-1 text-xs leading-relaxed text-white/60">{item.body}</p>
+            </div>
+          ))}
+        </div>
       </section>
 
       {/* ── Mission ──────────────────────────────────────────────────────── */}

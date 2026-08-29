@@ -51,6 +51,23 @@ export function tradeToCategory(tradeId: string): HomeownerService {
   return TRADE_TO_CATEGORY[tradeId as ServiceTradeId] || "Other";
 }
 
+const CATEGORY_TO_TRADE: Partial<Record<HomeownerService, ServiceTradeId>> = {
+  Plumbing: "plumbing",
+  Electrical: "electrical",
+  "HVAC & Heating/Cooling": "hvac",
+  Appliances: "appliance",
+  Handyman: "handyman",
+  "Pest Control": "pest",
+  "Roofing & Gutters": "roofing",
+  Cleaning: "cleaning",
+  Landscaping: "landscaping",
+  Other: "other",
+};
+
+export function categoryToTradeId(category: string): ServiceTradeId {
+  return CATEGORY_TO_TRADE[category as HomeownerService] || "other";
+}
+
 /** Job title: location · trade — never duplicates the same label twice. */
 export function serviceRequestTitle(location: string, tradeId: string): string {
   const trade = tradeLabel(tradeId);
