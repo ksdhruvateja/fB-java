@@ -35,6 +35,11 @@ import {
 import { buildPropertyAIContext } from './property-ai-context.js';
 import { analyzeRepairStructured, extractPropertyDocumentFields } from './ai.js';
 import {
+  ASSESSMENT_ERROR_MESSAGES,
+  resolveAssessmentStatus,
+  scheduleAssessmentJob,
+} from './assessment-worker.js';
+import {
   normalizeStructuredEquipment,
   hasStructuredEquipmentData,
   equipmentFromExtraction,
@@ -384,6 +389,8 @@ function serializeJob(row, viewer) {
     priorityTier: row.priority_tier || 'standard',
     homeownerUserId: isAdmin ? row.homeowner_user_id : undefined,
     aiAssessment: parseJson(row.ai_assessment),
+    assessmentStatus: resolveAssessmentStatus(row),
+    assessmentErrorCode: row.assessment_error_code || null,
     showRetailPrice: row.show_retail_price !== false,
     preferredTimeNote: 'Preferred service time — not confirmed until a contractor is scheduled.',
     partnerCode: row.partner_code,
@@ -745,12 +752,15 @@ async function loadAssessContext(pool, job, rules, assessment = null) {
 }
 
 async function runManagedJobAssessment(pool, job, viewer) {
+  const t0 = Date.now();
+  console.log('[assessment] processing started', { jobId: job?.id });
   const rules = await loadPricingRules(pool);
   const { rows: hoRows } = await pool.query(`SELECT plan_code FROM users WHERE id=$1`, [job.homeowner_user_id]);
   const homeCarePro = isPaidHomeCarePlan(hoRows[0]?.plan_code);
 
   // Phase 1: preliminary context for AI (ZIP + property + coarse market)
   const preCtx = await loadAssessContext(pool, job, rules, null);
+  console.log('[assessment] context ready', { jobId: job?.id, durationMs: Date.now() - t0 });
 
   let propertyAiContext = '';
   if (homeCarePro && job.property_id) {
@@ -758,6 +768,8 @@ async function runManagedJobAssessment(pool, job, viewer) {
     propertyAiContext = ctx?.text || '';
   }
 
+  const aiStarted = Date.now();
+  console.log('[assessment] AI started', { jobId: job?.id });
   const result = await analyzeRepairStructured({
     category: job.category,
     description: job.description,
@@ -769,10 +781,15 @@ async function runManagedJobAssessment(pool, job, viewer) {
     city: preCtx.city,
     state: preCtx.state,
   });
+  console.log('[assessment] AI complete', {
+    jobId: job?.id,
+    durationMs: Date.now() - aiStarted,
+    source: result?.source,
+  });
 
   const assessment = result.assessment;
   if (!assessment) {
-    return { ok: false, error: result.error || 'Assessment failed.' };
+    return { ok: false, error: result.error || 'Assessment failed.', code: 'AI_ASSESSMENT_FAILED' };
   }
 
   // Phase 2: refine market profile with AI service classification
@@ -827,6 +844,9 @@ async function runManagedJobAssessment(pool, job, viewer) {
        market_snapshot_id=COALESCE($14, market_snapshot_id),
        city=COALESCE(city, $15),
        state=COALESCE(state, $16),
+       assessment_status='ready',
+       assessment_error_code=NULL,
+       assessment_completed_at=NOW(),
        updated_at=NOW()
      WHERE id=$17`,
     [
@@ -850,6 +870,8 @@ async function runManagedJobAssessment(pool, job, viewer) {
     ]
   );
 
+  console.log('[assessment] saved', { jobId: job?.id, durationMs: Date.now() - t0 });
+
   return {
     ok: true,
     assessment,
@@ -860,6 +882,76 @@ async function runManagedJobAssessment(pool, job, viewer) {
     jobId: job.id,
     marketSnapshotId: snapshotId,
   };
+}
+
+/** Background/local worker entry — runs full assessment and updates job status. */
+export async function processManagedJobAssessmentTask(pool, { jobId, actorUserId }) {
+  const started = Date.now();
+  const id = Number(jobId);
+  const actorId = Number(actorUserId);
+  console.log('[assessment] worker started', { jobId: id });
+  try {
+    const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [id]);
+    if (!rows[0]) {
+      console.warn('[assessment] worker job missing', { jobId: id });
+      return { ok: false, code: 'JOB_NOT_FOUND' };
+    }
+    const job = rows[0];
+    const viewer = { id: actorId, role: 'homeowner' };
+    const ran = await runManagedJobAssessment(pool, job, viewer);
+    if (!ran.ok) {
+      const code = ran.code || 'AI_ASSESSMENT_FAILED';
+      await pool.query(
+        `UPDATE managed_jobs SET assessment_status='failed', assessment_error_code=$1, assessment_completed_at=NOW(), updated_at=NOW() WHERE id=$2`,
+        [code, id]
+      );
+      console.log('[assessment] failed', { jobId: id, code, durationMs: Date.now() - started });
+      return { ok: false, code };
+    }
+    await pushStatus(pool, id, job.status, 'ai_review_complete', actorId, 'AI assessment complete');
+    console.log('[assessment] complete', { jobId: id, durationMs: Date.now() - started });
+    return { ok: true };
+  } catch (err) {
+    const code =
+      err?.code === 'AI_TIMEOUT' || /timed out/i.test(String(err?.message || ''))
+        ? 'AI_TIMEOUT'
+        : 'AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE';
+    await pool.query(
+      `UPDATE managed_jobs SET assessment_status='failed', assessment_error_code=$1, assessment_completed_at=NOW(), updated_at=NOW() WHERE id=$2`,
+      [code, id]
+    ).catch(() => {});
+    console.error('[assessment] worker error', {
+      jobId: id,
+      code,
+      durationMs: Date.now() - started,
+      error: err?.message || String(err),
+    });
+    return { ok: false, code };
+  }
+}
+
+async function claimAssessmentProcessing(pool, jobId, homeownerUserId, { force = false } = {}) {
+  const staleMinutes = 12;
+  const { rows } = await pool.query(
+    `UPDATE managed_jobs
+     SET assessment_status='processing',
+         assessment_started_at=NOW(),
+         assessment_completed_at=NULL,
+         assessment_error_code=NULL,
+         assessment_attempts=COALESCE(assessment_attempts, 0) + 1,
+         updated_at=NOW()
+     WHERE id=$1
+       AND homeowner_user_id=$2
+       AND (
+         $3::boolean = TRUE
+         OR assessment_status IS NULL
+         OR assessment_status IN ('pending', 'failed')
+         OR (assessment_status='processing' AND assessment_started_at < NOW() - ($4::text || ' minutes')::interval)
+       )
+     RETURNING *`,
+    [jobId, homeownerUserId, force, String(staleMinutes)]
+  );
+  return rows[0] || null;
 }
 
 function addressUnlocked(status) {
@@ -2165,11 +2257,21 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       await pool.query(`UPDATE managed_jobs SET booking_id=$1 WHERE id=$2`, [bookingId, job.id]);
       job.booking_id = bookingId;
 
-      // 4. Run structured AI assessment with ZIP + local market context
-      const ran = await runManagedJobAssessment(pool, job, rowToUser(user));
-      if (!ran.ok) {
-        console.warn('public job assess failed:', ran.error);
-        // Job still created — homeowner can retry assess from dashboard
+      // 4. Queue structured AI assessment (async — avoids Netlify inactivity timeout)
+      await pool.query(
+        `UPDATE managed_jobs SET assessment_status='processing', assessment_started_at=NOW(), assessment_attempts=1 WHERE id=$1`,
+        [job.id]
+      );
+      const queued = await scheduleAssessmentJob(pool, {
+        jobId: job.id,
+        actorUserId: user.id,
+      });
+      if (!queued.ok) {
+        console.warn('public job assess queue failed:', queued.reason);
+        await pool.query(
+          `UPDATE managed_jobs SET assessment_status='failed', assessment_error_code='WORKER_UNAVAILABLE', assessment_completed_at=NOW() WHERE id=$1`,
+          [job.id]
+        );
       }
 
       const partnerCode = (b.partnerCode || '').trim();
@@ -2417,6 +2519,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
   app.post('/api/managed/jobs/:id/assess', requireAuth, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
+      const force = req.body?.force === true;
       const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
       const job = rows[0];
@@ -2424,44 +2527,112 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
 
-      const ran = await runManagedJobAssessment(pool, job, req.authUser);
-      if (!ran.ok) {
-        return res.status(502).json({
-          ok: false,
-          message: ran.error || 'Assessment failed. Please retry or request a professional.',
+      const currentStatus = resolveAssessmentStatus(job);
+      if (currentStatus === 'ready' && !force) {
+        return res.json({
+          ok: true,
+          status: 'ready',
+          assessmentStatus: 'ready',
+          job: serializeJob(job, req.authUser),
+        });
+      }
+      if (currentStatus === 'processing' && !force) {
+        return res.status(202).json({
+          ok: true,
+          status: 'processing',
+          assessmentStatus: 'processing',
+          jobId,
+          message: 'Assessment is still processing.',
         });
       }
 
-      await pushStatus(pool, jobId, job.status, 'ai_review_complete', req.authUser.id, 'AI assessment complete');
+      const claimed = await claimAssessmentProcessing(pool, jobId, job.homeowner_user_id, { force });
+      if (!claimed) {
+        return res.status(202).json({
+          ok: true,
+          status: 'processing',
+          assessmentStatus: 'processing',
+          jobId,
+          message: 'Assessment is already in progress.',
+        });
+      }
 
-      // Do not notify Admin / Work Queue until visit fee payment is verified.
-      const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
-      res.json({
+      const queued = await scheduleAssessmentJob(pool, {
+        jobId,
+        actorUserId: req.authUser.id,
+      });
+      if (!queued.ok) {
+        await pool.query(
+          `UPDATE managed_jobs SET assessment_status='failed', assessment_error_code='WORKER_UNAVAILABLE', assessment_completed_at=NOW() WHERE id=$1`,
+          [jobId]
+        );
+        return res.status(503).json({
+          ok: false,
+          code: 'AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE',
+          message: ASSESSMENT_ERROR_MESSAGES.AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE,
+        });
+      }
+
+      return res.status(202).json({
         ok: true,
-        job: serializeJob(fresh[0], req.authUser),
-        assessment: ran.assessment,
-        pricing: {
-          showPrice: ran.pricing.show_price,
-          message: ran.pricing.message,
-          customerRetailEstimateLow: ran.pricing.customer_retail_estimate_low,
-          customerRetailEstimateHigh: ran.pricing.customer_retail_estimate_high,
-          disclaimer: ran.pricing.disclaimer,
-          estimateContext: ran.pricing.estimate_context || ran.ctx.zip,
-          zipMarket: ran.ctx.zip,
-          estimateConfidence: ran.pricing.estimate_confidence || ran.ctx.marketProfile?.aiConfidence,
-        },
-        source: ran.result.source,
-        model: ran.result.model || null,
-        warning: ran.result.error || null,
+        status: 'processing',
+        assessmentStatus: 'processing',
+        jobId,
+        message: 'Assessment started.',
       });
     } catch (e) {
       console.error('assess:', e);
-      const timedOut = e?.code === 'AI_TIMEOUT' || /timed out/i.test(String(e?.message || ''));
-      res.status(timedOut ? 504 : 500).json({
+      res.status(500).json({
         ok: false,
-        message: timedOut
-          ? 'AI assessment timed out. Try a smaller/clearer photo, or hire a professional.'
-          : 'Assessment failed. Please retry or request a professional.',
+        code: 'AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE',
+        message: ASSESSMENT_ERROR_MESSAGES.AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE,
+      });
+    }
+  });
+
+  app.get('/api/managed/jobs/:id/assessment-status', requireAuth, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
+      const job = rows[0];
+      if (Number(job.homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      const status = resolveAssessmentStatus(job);
+      const errorCode = job.assessment_error_code || null;
+      const payload = {
+        ok: true,
+        status,
+        assessmentStatus: status,
+        jobId,
+        errorCode,
+        message:
+          status === 'failed'
+            ? ASSESSMENT_ERROR_MESSAGES[errorCode] ||
+              ASSESSMENT_ERROR_MESSAGES.AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE
+            : undefined,
+      };
+      if (status === 'ready') {
+        payload.job = serializeJob(job, req.authUser);
+        const pricing = parseJson(job.pricing);
+        if (pricing) {
+          payload.pricing = {
+            showPrice: job.show_retail_price !== false,
+            message: pricing.message,
+            customerRetailEstimateLow: job.customer_retail_estimate_low,
+            customerRetailEstimateHigh: job.customer_retail_estimate_high,
+            disclaimer: pricing.disclaimer,
+          };
+        }
+      }
+      return res.json(payload);
+    } catch (e) {
+      console.error('assessment-status:', e);
+      res.status(500).json({
+        ok: false,
+        code: 'AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE',
+        message: ASSESSMENT_ERROR_MESSAGES.AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE,
       });
     }
   });

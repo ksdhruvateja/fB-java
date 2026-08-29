@@ -1,6 +1,11 @@
 import { getStoredToken } from "./auth";
 import { brand } from "../config/brand";
 import { emitFeatureDisabled, emitProSubscriptionRequired, parseEntitlementDeniedResponse } from "./proFeatureEvents";
+import {
+  ASSESSMENT_UNAVAILABLE_CODE,
+  assessmentUnavailableMessage,
+  sanitizeApiErrorMessage,
+} from "./apiErrors";
 
 
 export type CheckoutBreakdown = {
@@ -101,6 +106,8 @@ export type ManagedJob = {
   propertyId?: number | null;
   priorityTier?: string | null;
   aiAssessment?: StructuredAssessment | null;
+  assessmentStatus?: "pending" | "processing" | "ready" | "failed" | null;
+  assessmentErrorCode?: string | null;
   showRetailPrice?: boolean;
   customerRetailEstimateLow?: number | null;
   customerRetailEstimateHigh?: number | null;
@@ -365,11 +372,30 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     const res = await fetch(path, { ...init, headers });
     const text = await res.text();
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text) as T;
-    } catch {
-      parsed = { ok: false, message: text || res.statusText || "Request failed." } as T;
+    const contentType = res.headers.get("content-type") || "";
+    let parsed: Record<string, unknown> | null = null;
+    if (contentType.includes("application/json")) {
+      try {
+        parsed = JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        parsed = null;
+      }
+    }
+    if (!parsed) {
+      const message = sanitizeApiErrorMessage(text, res.status);
+      return {
+        ok: false,
+        code: ASSESSMENT_UNAVAILABLE_CODE,
+        message,
+        status: res.status,
+      } as T;
+    }
+    if (!res.ok && typeof parsed.message === "string") {
+      parsed.message = sanitizeApiErrorMessage(String(parsed.message), res.status);
+    }
+    if (!res.ok && !parsed.code && (res.status >= 500 || res.status === 504)) {
+      parsed.code = ASSESSMENT_UNAVAILABLE_CODE;
+      if (!parsed.message) parsed.message = assessmentUnavailableMessage();
     }
     const denied = parseEntitlementDeniedResponse(res.status, parsed);
     if (denied?.disabled) {
@@ -382,11 +408,16 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const aborted = err instanceof Error && err.name === "AbortError";
     return {
       ok: false,
+      code: ASSESSMENT_UNAVAILABLE_CODE,
       message: aborted
-        ? "Request timed out. Try a smaller photo or hire a professional."
+        ? "The assessment took too long. Please try again."
         : "Network error. Is the API running?",
     } as T;
   }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 export async function listProperties() {
@@ -494,33 +525,87 @@ export async function repeatManagedService(jobId: number, requestSameProvider = 
   });
 }
 
-export async function assessManagedJob(jobId: number) {
-  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-  const timer = controller ? window.setTimeout(() => controller.abort(), 90_000) : 0;
-  try {
-    return await api<{
-      ok: boolean;
-      job?: ManagedJob;
-      assessment?: StructuredAssessment;
-      pricing?: {
-        showPrice: boolean;
-        message?: string | null;
-        customerRetailEstimateLow?: number | null;
-        customerRetailEstimateHigh?: number | null;
-        disclaimer?: string;
-        estimateContext?: string | null;
-        zipMarket?: string | null;
-      };
-      message?: string;
-      warning?: string | null;
-    }>(`/api/managed/jobs/${jobId}/assess`, {
-      method: "POST",
-      body: "{}",
-      signal: controller?.signal,
-    });
-  } finally {
-    if (timer) window.clearTimeout(timer);
+export async function getManagedJobAssessmentStatus(jobId: number) {
+  return api<{
+    ok: boolean;
+    status?: "pending" | "processing" | "ready" | "failed";
+    assessmentStatus?: "pending" | "processing" | "ready" | "failed";
+    job?: ManagedJob;
+    pricing?: {
+      showPrice?: boolean;
+      message?: string | null;
+      customerRetailEstimateLow?: number | null;
+      customerRetailEstimateHigh?: number | null;
+      disclaimer?: string;
+    };
+    errorCode?: string | null;
+    code?: string;
+    message?: string;
+  }>(`/api/managed/jobs/${jobId}/assessment-status`);
+}
+
+export async function startManagedJobAssessment(jobId: number, { force = false } = {}) {
+  return api<{
+    ok: boolean;
+    status?: "processing" | "ready";
+    assessmentStatus?: "processing" | "ready";
+    job?: ManagedJob;
+    jobId?: number;
+    code?: string;
+    message?: string;
+  }>(`/api/managed/jobs/${jobId}/assess`, {
+    method: "POST",
+    body: JSON.stringify(force ? { force: true } : {}),
+  });
+}
+
+export async function assessManagedJob(jobId: number, { force = false } = {}) {
+  const started = await startManagedJobAssessment(jobId, { force });
+  if (!started.ok) {
+    return {
+      ok: false as const,
+      code: started.code || ASSESSMENT_UNAVAILABLE_CODE,
+      message: started.message || assessmentUnavailableMessage(),
+    };
   }
+  if (started.status === "ready" && started.job) {
+    return {
+      ok: true as const,
+      job: started.job,
+      assessment: started.job.aiAssessment,
+      pricing: undefined,
+      warning: null,
+    };
+  }
+
+  const maxAttempts = 50;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await sleep(3000);
+    const status = await getManagedJobAssessmentStatus(jobId);
+    if (!status.ok) continue;
+    if (status.status === "ready" && status.job) {
+      return {
+        ok: true as const,
+        job: status.job,
+        assessment: status.job.aiAssessment,
+        pricing: status.pricing,
+        warning: null,
+      };
+    }
+    if (status.status === "failed") {
+      return {
+        ok: false as const,
+        code: status.errorCode || status.code || ASSESSMENT_UNAVAILABLE_CODE,
+        message: status.message || assessmentUnavailableMessage(),
+      };
+    }
+  }
+
+  return {
+    ok: false as const,
+    code: ASSESSMENT_UNAVAILABLE_CODE,
+    message: assessmentUnavailableMessage(),
+  };
 }
 
 export async function listMyManagedJobs() {

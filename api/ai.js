@@ -23,7 +23,7 @@ const OPENAI_BASE = 'https://api.openai.com/v1';
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
 /** Hard cap so OpenRouter/Gemini calls cannot hang the assess UI forever. */
-const AI_FETCH_TIMEOUT_MS = Number(process.env.AI_FETCH_TIMEOUT_MS || 55000);
+const AI_FETCH_TIMEOUT_MS = Number(process.env.AI_FETCH_TIMEOUT_MS || 38000);
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = AI_FETCH_TIMEOUT_MS) {
   const controller = new AbortController();

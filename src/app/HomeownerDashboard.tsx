@@ -42,6 +42,7 @@ import { startSubscription } from "./platformApi";
 import { listGoProPlans } from "./subscriptionPlansApi";
 import { PAID_HOME_CARE_PLAN_CODE, isPaidHomeCarePlan, displayPlanLabel } from "./subscriptionCatalog";
 import { resolveClientProAccess } from "./proFeatures";
+import { assessmentUnavailableMessage, isHtmlOrGatewayErrorBody } from "./apiErrors";
 import {
  jobTitleForHomeowner,
  type HomeownerService,
@@ -131,6 +132,16 @@ function assessmentStringList(value: unknown): string[] {
 function hasRenderableAssessment(job: ManagedJob | null | undefined): job is ManagedJob & { aiAssessment: NonNullable<ManagedJob["aiAssessment"]> } {
  const assessment = job?.aiAssessment;
  return Boolean(assessment && typeof assessment === "object" && !Array.isArray(assessment));
+}
+
+function isAssessmentProcessing(job: ManagedJob | null | undefined) {
+ const st = job?.assessmentStatus;
+ return st === "processing" || st === "pending";
+}
+
+function normalizeAssessmentMessage(msg?: string | null) {
+ if (!msg || isHtmlOrGatewayErrorBody(msg)) return assessmentUnavailableMessage();
+ return msg;
 }
 
 /** Shrink phone photos so create+assess don't hang on multi'MB data URLs. */
@@ -475,6 +486,8 @@ export default function HomeownerDashboard({
  const [techMessageSent, setTechMessageSent] = useState(false);
  const fileRef = useRef<HTMLInputElement>(null);
  const videoRef = useRef<HTMLInputElement>(null);
+ const assessInFlightRef = useRef<number | null>(null);
+ const assessmentRecoveryRef = useRef<number | null>(null);
 
  // Guided DIY interactive states
  const [diyIsGuided, setDiyIsGuided] = useState(false);
@@ -1081,6 +1094,32 @@ export default function HomeownerDashboard({
  }, []);
 
  useEffect(() => {
+ if (step !== "assessment" || !activeJob?.id) return;
+ if (hasRenderableAssessment(activeJob)) return;
+ if (!isAssessmentProcessing(activeJob)) return;
+ if (busy || assessInFlightRef.current === activeJob.id) return;
+ if (assessmentRecoveryRef.current === activeJob.id) return;
+ assessmentRecoveryRef.current = activeJob.id;
+ const jobId = activeJob.id;
+ const propZip = properties.find((p) => p.id === activeJob.propertyId)?.zip || null;
+ void (async () => {
+ setBusy(true);
+ try {
+ const assessed = await runAssessWithProgress(jobId, propZip);
+ if (assessed.ok && assessed.job) {
+ setActiveJob(assessed.job);
+ setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
+ } else {
+ setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
+ }
+ } finally {
+ setBusy(false);
+ if (assessmentRecoveryRef.current === jobId) assessmentRecoveryRef.current = null;
+ }
+ })();
+ }, [step, activeJob?.id, activeJob?.assessmentStatus, activeJob?.aiAssessment, busy, properties]);
+
+ useEffect(() => {
  void refresh();
  void listGoProPlans()
  .then((r) => {
@@ -1107,14 +1146,23 @@ export default function HomeownerDashboard({
  setStep("assessment");
  setTab("report");
  scrollReportToTop();
- if (!r.job.aiAssessment) {
+ if (!r.job.aiAssessment && !isAssessmentProcessing(r.job)) {
  const zip = r.job.zip || r.job.cityStateZip?.match(/\b\d{5}\b/)?.[0] || null;
  const assessed = await runAssessWithProgress(id, zip);
  if (assessed.ok && assessed.job) {
  setActiveJob(assessed.job);
  setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
  } else {
- setAssessmentMsg(assessed.message || "Assessment failed - you can still request a professional.");
+ setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
+ }
+ } else if (isAssessmentProcessing(r.job) && !hasRenderableAssessment(r.job)) {
+ const zip = r.job.zip || r.job.cityStateZip?.match(/\b\d{5}\b/)?.[0] || null;
+ const assessed = await runAssessWithProgress(id, zip);
+ if (assessed.ok && assessed.job) {
+ setActiveJob(assessed.job);
+ setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
+ } else {
+ setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
  }
  }
  await refresh();
@@ -1484,14 +1532,26 @@ export default function HomeownerDashboard({
  })();
  }
 
- async function runAssessWithProgress(jobId: number, zip?: string | null) {
+ async function runAssessWithProgress(
+ jobId: number,
+ zip?: string | null,
+ { force = false }: { force?: boolean } = {}
+ ) {
+ if (!force && assessInFlightRef.current === jobId) {
+ return {
+ ok: false as const,
+ message: "Assessment is already in progress.",
+ code: "IN_FLIGHT",
+ };
+ }
+ assessInFlightRef.current = jobId;
  setAssessLoadingStep(0);
  setAssessLoadingZip(zip ? String(zip).slice(0, 5) : null);
  const timer = window.setInterval(() => {
  setAssessLoadingStep((s) => (s == null ? 0 : Math.min(3, s + 1)));
  }, 900);
  try {
- return await assessManagedJob(jobId);
+ return await assessManagedJob(jobId, { force });
  } finally {
  window.clearInterval(timer);
  setAssessLoadingStep(3);
@@ -1499,6 +1559,7 @@ export default function HomeownerDashboard({
  setAssessLoadingStep(null);
  setAssessLoadingZip(null);
  }, 350);
+ if (assessInFlightRef.current === jobId) assessInFlightRef.current = null;
  }
  }
 
@@ -1654,7 +1715,7 @@ export default function HomeownerDashboard({
  }
  const assessed = await runAssessWithProgress(created.job.id, propZip);
  if (!assessed.ok || !assessed.job) {
- setAssessmentMsg(assessed.message || "Assessment failed - you can still request a professional.");
+ setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
  setActiveJob(created.job);
  } else {
  setActiveJob(assessed.job);
@@ -2677,16 +2738,18 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </p>
  ) : null}
 
- {assessLoadingStep != null || (busy && !hasRenderableAssessment(activeJob)) ? (
+ {assessLoadingStep != null ||
+ busy ||
+ (isAssessmentProcessing(activeJob) && !hasRenderableAssessment(activeJob)) ? (
  <EstimateLoadingSteps zip={assessLoadingZip} activeStep={assessLoadingStep ?? 0} />
  ) : !hasRenderableAssessment(activeJob) ? (
  <div className="space-y-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
- <p className="text-sm font-semibold">Assessment not ready yet</p>
+ <p className="text-sm font-semibold">We couldn&apos;t finish the assessment right now</p>
  <p className="text-sm leading-relaxed">
- {assessmentMsg ||
- "We couldn't complete the AI assessment right now."}
+ {normalizeAssessmentMessage(assessmentMsg)}
  </p>
  {activeJob ? (
+ <div className="flex flex-wrap gap-2">
  <button
  type="button"
  disabled={busy}
@@ -2697,12 +2760,9 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  try {
  const retryZip =
  properties.find((p) => p.id === activeJob.propertyId)?.zip || null;
- const assessed = await runAssessWithProgress(activeJob.id, retryZip);
+ const assessed = await runAssessWithProgress(activeJob.id, retryZip, { force: true });
  if (!assessed.ok || !assessed.job) {
- setAssessmentMsg(
- assessed.message ||
- "We couldn't complete the AI assessment right now."
- );
+ setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
  } else {
  setActiveJob(assessed.job);
  setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
@@ -2716,8 +2776,32 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  className="inline-flex items-center gap-2 rounded-md bg-[#FF4D1C] px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60"
  >
  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
- Retry assessment
+ Try assessment again
  </button>
+ {assessmentMode === "expert" || reportPath === "experts" ? (
+ <button
+ type="button"
+ onClick={() => {
+ setSelectedJobId(activeJob.id);
+ setTab("jobs");
+ }}
+ className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium"
+ >
+ Continue request
+ </button>
+ ) : (
+ <button
+ type="button"
+ onClick={() => {
+ setAssessmentMode("expert");
+ if (activeJob) setSelectedJobId(activeJob.id);
+ }}
+ className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium"
+ >
+ Continue to hire a professional
+ </button>
+ )}
+ </div>
  ) : null}
  </div>
  ) : hasRenderableAssessment(activeJob) ? (

@@ -16,7 +16,8 @@ import {
   registerSubscriptionPlanRoutes,
   getSubscriptionPlanByCode,
 } from './subscription-plans.js';
-import { registerManagedRoutes } from './managed-routes.js';
+import { registerManagedRoutes, processManagedJobAssessmentTask } from './managed-routes.js';
+import { registerAssessmentProcessor } from './assessment-worker.js';
 import { registerHomeCareProRoutes } from './homecare-pro-routes.js';
 import { registerHomeCareAdminRoutes, initHomeCareSettingsSchema } from './homecare-admin-routes.js';
 import { registerHomeAssistantRoutes, initPropertyMemorySchema } from './home-assistant-routes.js';
@@ -403,6 +404,7 @@ async function ensureDemoUsers() {
 }
 
 export async function initDb() {
+  if (initDb._done) return;
   try {
     const check = await pool.query("SELECT id FROM users LIMIT 1");
     if (check.rows.length > 0) {
@@ -415,7 +417,8 @@ export async function initDb() {
       await initHomeownerAdminSchema(pool);
       await initSubscriptionPlansSchema(pool);
       await migratePrimaryAdminEmail();
-  await ensureDemoUsers();
+      await ensureDemoUsers();
+      initDb._done = true;
       return;
     }
   } catch (e) {
@@ -622,6 +625,7 @@ export async function initDb() {
   await initSubscriptionPlansSchema(pool);
 
   console.log('[FixBridge API] DB ready ✓');
+  initDb._done = true;
 }
 
 // ── Row mappers ───────────────────────────────────────────────────────────────
@@ -2843,6 +2847,7 @@ app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
 });
 
   registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser });
+  registerAssessmentProcessor(processManagedJobAssessmentTask);
   registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin });
   registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdmin });
   registerHomeAssistantRoutes(app, { pool, requireAuth });

@@ -414,6 +414,11 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS state TEXT`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS zip TEXT`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS country TEXT DEFAULT 'US'`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS assessment_status TEXT`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS assessment_error_code TEXT`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS assessment_attempts INT DEFAULT 0`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS assessment_started_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS assessment_completed_at TIMESTAMPTZ`);
 
   // Profile extensions & Referral System
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT UNIQUE`);

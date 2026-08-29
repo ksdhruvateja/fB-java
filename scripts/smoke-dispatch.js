@@ -2,6 +2,8 @@
  * Smoke-test admin invite / assign / payout against a running local API.
  * Usage: node --env-file=.env scripts/smoke-dispatch.js
  */
+import { waitForAssessment } from './smoke-assessment-poll.mjs';
+
 const API = process.env.API_URL || 'http://127.0.0.1:3001';
 
 async function json(res) {
@@ -83,10 +85,7 @@ async function main() {
   console.log('✓ job created', jobId);
 
   // Move to paid_for_dispatch-ish path via assess (sets awaiting_service_payment)
-  const assessed = await fetch(`${API}/api/managed/jobs/${jobId}/assess`, {
-    method: 'POST',
-    headers: homeHeaders,
-  }).then(json);
+  const assessed = await waitForAssessment(API, jobId, homeHeaders);
   if (!assessed.ok) {
     console.warn('assess warning:', assessed.message);
   } else {

@@ -4,6 +4,8 @@
  *
  * Usage: node --env-file=.env scripts/smoke-full.js
  */
+import { waitForAssessment } from './smoke-assessment-poll.mjs';
+
 const API = process.env.API_URL || 'http://127.0.0.1:3001';
 
 let passed = 0;
@@ -156,10 +158,7 @@ async function main() {
   ok('create managed job', created.ok && created.job?.id, created.message);
   const jobId = created.job?.id;
 
-  const assessed = await fetch(`${API}/api/managed/jobs/${jobId}/assess`, {
-    method: 'POST',
-    headers: homeH,
-  }).then(json);
+  const assessed = await waitForAssessment(API, jobId, homeH);
   ok('assess job', assessed.ok, assessed.message);
   ok(
     'assessment has real pricing or message',

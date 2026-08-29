@@ -2,6 +2,8 @@
  * Comprehensive FixBridge wiring audit against a running API + Neon DB.
  * Usage: node --env-file=.env scripts/smoke-wiring-audit.mjs
  */
+import { waitForAssessment } from './smoke-assessment-poll.mjs';
+
 const API = process.env.API_URL || 'http://127.0.0.1:3001';
 const stamp = Date.now();
 
@@ -180,12 +182,8 @@ async function main() {
   const jobId = jobCreate.job?.id;
 
   if (jobId) {
-    const assess = await fetch(`${API}/api/managed/jobs/${jobId}/assess`, {
-      method: 'POST',
-      headers: H,
-      body: JSON.stringify({}),
-    }).then(json);
-    ok('AI assess job', assess.ok, assess.message || assess.source);
+    const assess = await waitForAssessment(API, jobId, H);
+    ok('AI assess job', assess.ok, assess.message || assess.status);
 
     const pay = await fetch(`${API}/api/managed/jobs/${jobId}/pay-dispatch`, {
       method: 'POST',

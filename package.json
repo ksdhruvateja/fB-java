@@ -40,6 +40,7 @@
     "smoke:p1-final": "node --env-file=.env scripts/smoke-p1-final.mjs",
     "smoke:usps-address": "node --env-file=.env scripts/smoke-usps-address.mjs",
     "smoke:navigation": "node scripts/smoke-navigation.mjs",
+    "smoke:assessment-async": "node --env-file=.env scripts/smoke-assessment-async.mjs",
     "smoke:service-catalog": "node scripts/smoke-service-catalog.mjs",
     "brand:logo": "node scripts/process-brand-logo.mjs"
   },
