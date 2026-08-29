@@ -61,6 +61,7 @@ export async function buildPropertyTimeline(pool, propertyId, userId, { limit = 
     `SELECT j.id, j.booking_id, j.title, j.category, j.status, j.created_at, j.updated_at,
             j.preferred_date, j.preferred_time_slot, j.source_recurring_service_id,
             j.customer_retail_estimate_high, j.assigned_contractor_user_id, j.completion_report,
+            j.cancellation_reason, j.cancellation_reason_code, j.cancelled_by, j.cancelled_at,
             u.name AS contractor_name, u.company_name AS contractor_company
      FROM managed_jobs j
      LEFT JOIN users u ON u.id = j.assigned_contractor_user_id
@@ -96,10 +97,19 @@ export async function buildPropertyTimeline(pool, propertyId, userId, { limit = 
     };
 
     if (isCancelled) {
+      const cancelledByLabel =
+        j.cancelled_by === 'homeowner'
+          ? 'Cancelled by homeowner'
+          : j.cancelled_by === 'admin'
+            ? 'Cancelled by FixBridge'
+            : 'Cancelled';
+      const reasonBits = [cancelledByLabel];
+      if (j.cancellation_reason) reasonBits.push(`Reason: ${j.cancellation_reason}`);
       recent.push({
         ...base,
         type: 'service_cancelled',
-        occurredAt: j.updated_at || j.created_at,
+        occurredAt: j.cancelled_at || j.updated_at || j.created_at,
+        subtitle: reasonBits.join(' · '),
         section: 'recent',
       });
     } else if (!isComplete && visitDate && isFutureDate(visitDate)) {

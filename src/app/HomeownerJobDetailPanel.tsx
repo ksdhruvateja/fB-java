@@ -18,10 +18,17 @@ import { HomeownerTipCheckout } from "./HomeownerTipCheckout";
 import ChangeOrderPanel from "./ChangeOrderPanel";
 import HomeownerAccordion from "./HomeownerAccordion";
 import JobReviewForm from "./JobReviewForm";
+import HomeownerCancelServiceModal from "./HomeownerCancelServiceModal";
+import { canHomeownerCancelJob, cancelServiceLabel, homeownerCancelledLabel } from "./jobCancellation";
 import { useProFeature } from "./ProFeatureProvider";
 import { requestQuoteSecondOpinion, type QuoteSecondOpinion } from "./homecareProApi";
 import { setPreferredProvider } from "./homeAssistantApi";
-import { arrivalWindowLabel, canEditHomeownerJob } from "./ServiceTrackingCard";
+import {
+  arrivalWindowLabel,
+  canEditHomeownerJob,
+  SERVICE_TIMING_LABELS,
+  TIME_SLOT_LABELS,
+} from "./ServiceTrackingCard";
 import { useIsMobile } from "./components/ui/use-mobile";
 import { CalendarDays, Clock, HardHat, Loader2, MapPin, Pencil, Phone, Save, Sparkles } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -145,6 +152,8 @@ export default function HomeownerJobDetailPanel({
   const { isPro, requestFeature } = useProFeature();
   const [secondOpinion, setSecondOpinion] = useState<QuoteSecondOpinion | null>(null);
   const [secondOpinionBusy, setSecondOpinionBusy] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [moreActionsOpen, setMoreActionsOpen] = useState(false);
 
   useEffect(() => {
     setServiceTiming(job.serviceTiming || "weekday");
@@ -186,6 +195,9 @@ export default function HomeownerJobDetailPanel({
 
   const showAcceptQuoteFooter =
     isMobile && showQuote && proposal != null && proposal.status !== "approved";
+
+  const cancelledLabel = homeownerCancelledLabel(job);
+  const showCancelAction = canHomeownerCancelJob(job);
 
   const dateChips = [
     { label: "Today", value: addDaysFromToday(0) },
@@ -277,6 +289,15 @@ export default function HomeownerJobDetailPanel({
         <p className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-800 dark:text-emerald-300">
           {saveMsg}
         </p>
+      ) : null}
+
+      {cancelledLabel ? (
+        <div className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-sm">
+          <p className="font-semibold">{cancelledLabel}</p>
+          {job.cancellationReason ? (
+            <p className="mt-1 text-muted-foreground">Reason: {job.cancellationReason}</p>
+          ) : null}
+        </div>
       ) : null}
 
       <DetailSection mobile={isMobile} title="Service details" defaultOpen actions={detailsActions}>
@@ -641,6 +662,7 @@ export default function HomeownerJobDetailPanel({
       ) : null}
 
       {showQuote && proposal ? (
+        <div id={`job-quote-section-${job.id}`}>
         <DetailSection mobile={isMobile} title="Quote" defaultOpen badge={quoteBadge}>
           {proposal.quoteNumber ? (
             <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -721,6 +743,7 @@ export default function HomeownerJobDetailPanel({
             )}
           </div>
         </DetailSection>
+        </div>
       ) : null}
 
       {showPayAfterWork && proposal ? (
@@ -960,6 +983,32 @@ export default function HomeownerJobDetailPanel({
           </button>
         </DetailSection>
       ) : null}
+
+      {showCancelAction ? (
+        <div className="border-t border-border pt-4">
+          <button
+            type="button"
+            onClick={() => setMoreActionsOpen((v) => !v)}
+            className="text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+          >
+            More actions
+          </button>
+          {moreActionsOpen ? (
+            <div className="mt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setMoreActionsOpen(false);
+                  setCancelOpen(true);
+                }}
+                className="rounded-xl border border-red-500/30 px-4 py-2.5 text-sm font-semibold text-red-700 hover:bg-red-500/5 dark:text-red-300"
+              >
+                {cancelServiceLabel(job)}
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </>
   );
 
@@ -991,12 +1040,31 @@ export default function HomeownerJobDetailPanel({
       <>
         <div className={`space-y-2 ${showAcceptQuoteFooter ? "pb-28" : "pb-2"}`}>{inner}</div>
         {acceptQuoteFooter}
+        <HomeownerCancelServiceModal
+          open={cancelOpen}
+          job={job}
+          busy={busy}
+          onBusy={onBusy}
+          onClose={() => setCancelOpen(false)}
+          onCancelled={() => void onRefresh()}
+          onReschedule={() => {
+            setEditingSchedule(true);
+            onEditScheduleConsumed?.();
+          }}
+          onEditRequest={() => setEditingDetails(true)}
+          onReviewQuote={() => {
+            document.getElementById(`job-quote-section-${job.id}`)?.scrollIntoView({ behavior: "smooth" });
+          }}
+          canEditRequest={editable}
+          hasQuote={showQuote}
+        />
       </>
     );
   }
 
   return (
-    <div className="space-y-3 rounded-[1.5rem] border border-border bg-card p-4 sm:p-5">
+    <>
+      <div className="space-y-3 rounded-[1.5rem] border border-border bg-card p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Request details</h2>
         {editable ? (
@@ -1026,5 +1094,24 @@ export default function HomeownerJobDetailPanel({
       </div>
       {inner}
     </div>
+      <HomeownerCancelServiceModal
+        open={cancelOpen}
+        job={job}
+        busy={busy}
+        onBusy={onBusy}
+        onClose={() => setCancelOpen(false)}
+        onCancelled={() => void onRefresh()}
+        onReschedule={() => {
+          setEditingSchedule(true);
+          onEditScheduleConsumed?.();
+        }}
+        onEditRequest={() => setEditingDetails(true)}
+        onReviewQuote={() => {
+          document.getElementById(`job-quote-section-${job.id}`)?.scrollIntoView({ behavior: "smooth" });
+        }}
+        canEditRequest={editable}
+        hasQuote={showQuote}
+      />
+    </>
   );
 }

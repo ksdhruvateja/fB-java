@@ -3304,6 +3304,21 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </button>
  </form>
  </div>
+
+ <p className="rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-center text-xs text-muted-foreground">
+ Prefer not to do it yourself?{" "}
+ <button
+ type="button"
+ onClick={() => {
+ setAssessmentMode("expert");
+ if (activeJob) setSelectedJobId(activeJob.id);
+ }}
+ className="inline-flex items-center gap-1 font-semibold text-[#FF4D1C] underline-offset-2 hover:underline"
+ >
+ <HardHat className="h-3.5 w-3.5" />
+ Hire a professional instead
+ </button>
+ </p>
  </div>
 
  </div>

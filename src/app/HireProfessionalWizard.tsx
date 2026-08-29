@@ -503,9 +503,14 @@ export default function HireProfessionalWizard({
             <div className="space-y-4">
               <div className="rounded-xl border border-border bg-card p-4 space-y-2 text-sm">
                 <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Price summary</p>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Service estimate</span>
-                  <span className="font-semibold tabular-nums">{retailRangeLabel(job)}</span>
+                <div className="flex justify-between gap-3">
+                  <div className="min-w-0">
+                    <span className="text-muted-foreground">Service estimate</span>
+                    <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">
+                      (Estimates only — the final price will be quoted by contractors, depending on the work and complexity.)
+                    </p>
+                  </div>
+                  <span className="shrink-0 font-semibold tabular-nums">{retailRangeLabel(job)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Service fee</span>
@@ -563,9 +568,14 @@ export default function HireProfessionalWizard({
               </div>
               <div className="rounded-xl border border-[#FF4D1C]/25 bg-card p-4 space-y-2 text-sm">
                 <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Price summary</p>
-                <div className="flex justify-between">
-                  <span>Service</span>
-                  <span className="tabular-nums">{retailRangeLabel(job)}</span>
+                <div className="flex justify-between gap-3">
+                  <div className="min-w-0">
+                    <span>Service estimate</span>
+                    <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">
+                      (Estimates only — the final price will be quoted by contractors, depending on the work and complexity.)
+                    </p>
+                  </div>
+                  <span className="shrink-0 tabular-nums">{retailRangeLabel(job)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Service fee</span>

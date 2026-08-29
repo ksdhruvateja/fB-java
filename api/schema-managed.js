@@ -363,6 +363,10 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS visit_fee_amount NUMERIC`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS stripe_payment_intent_id TEXT`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS cancellation_reason TEXT`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS cancellation_reason_code TEXT`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS cancellation_details JSONB`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS cancelled_by TEXT`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS checkout_snapshot JSONB`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS coupon_redeemed_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS service_fee_amount NUMERIC`);

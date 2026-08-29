@@ -159,6 +159,11 @@ export type ManagedJob = {
   visitFeeCaptured?: boolean;
   visitFeeAmount?: number | null;
   diyRiskLevel?: string;
+  cancellationReason?: string | null;
+  cancellationReasonCode?: string | null;
+  cancellationDetails?: Record<string, unknown> | null;
+  cancelledAt?: string | null;
+  cancelledBy?: string | null;
 };
 
 export type PropertyHealthProfilePayload = {
@@ -357,7 +362,7 @@ export const STATUS_LABELS: Record<string, string> = {
   payout_pending: "Completed",
   paid_out: "Completed",
   closed: "Completed",
-  canceled: "Canceled",
+  canceled: "Cancelled",
   refunded: "Refunded",
   disputed: "Disputed",
 };

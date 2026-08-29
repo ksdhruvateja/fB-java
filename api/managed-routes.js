@@ -107,6 +107,14 @@ import {
 import { sendEmailSafe, sendSmsSafe, notifyOps } from './notify.js';
 import { lookupZipPlace, formatLocationContext } from './zip-market.js';
 import { isAdminRole } from './auth-helpers.js';
+import {
+  CANCELLATION_REASON_LABELS,
+  HOMEOWNER_CANCELABLE_STATUSES,
+  isHomeownerCancellableStatus,
+  normalizeCancellationPayload,
+  notifyJobCancelled,
+  releaseVisitFeeHoldIfNeeded,
+} from './job-cancellation.js';
 
 async function ensureUserReferralCodeInline(pool, r) {
   if (r.referral_code) return r.referral_code;
@@ -420,6 +428,20 @@ function serializeJob(row, viewer) {
 
   if (isAdmin) {
     base.preferredByHomeowner = Boolean(row.preferred_contractor_user_id);
+  }
+
+  if (isOwner || isAdmin) {
+    base.cancellationReason = row.cancellation_reason || null;
+    base.cancellationReasonCode = row.cancellation_reason_code || null;
+    base.cancellationDetails = parseJson(row.cancellation_details);
+    base.cancelledAt = row.cancelled_at || null;
+    base.cancelledBy = row.cancelled_by || null;
+  } else if (isAssignedContractor && String(row.status) === 'canceled') {
+    base.cancelledBy = row.cancelled_by || null;
+    if (row.cancellation_reason_code && row.cancellation_reason_code !== 'provider_issue') {
+      base.cancellationReason =
+        CANCELLATION_REASON_LABELS[row.cancellation_reason_code] || row.cancellation_reason || null;
+    }
   }
 
   if ((isOwner || isAdmin) && row.assigned_contractor_user_id) {
@@ -2876,6 +2898,140 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, message: 'Could not update request.' });
+    }
+  });
+
+  app.post('/api/managed/jobs/:id/cancel', requireAuth, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const jobId = Number(req.params.id);
+      if (!Number.isFinite(jobId) || jobId <= 0) {
+        return res.status(400).json({ ok: false, message: 'Invalid job id.' });
+      }
+
+      const parsed = normalizeCancellationPayload(req.body || {});
+      if (!parsed.ok) {
+        return res.status(400).json({ ok: false, message: parsed.message });
+      }
+
+      await client.query('BEGIN');
+      const { rows } = await client.query(`SELECT * FROM managed_jobs WHERE id=$1 FOR UPDATE`, [jobId]);
+      if (!rows[0]) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ ok: false, message: 'Job not found.' });
+      }
+      const job = rows[0];
+      const isOwner = Number(job.homeowner_user_id) === Number(req.authUser.id);
+      const isAdmin = req.authUser.role === 'admin';
+      if (!isOwner && !isAdmin) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+
+      if (String(job.status) === 'canceled') {
+        await client.query('COMMIT');
+        return res.json({
+          ok: true,
+          alreadyCancelled: true,
+          job: serializeJob(job, req.authUser),
+        });
+      }
+
+      if (!isHomeownerCancellableStatus(job.status)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          ok: false,
+          message: 'This service can no longer be cancelled online. Contact FixBridge support for help.',
+        });
+      }
+
+      const fromStatus = job.status;
+      const cancelledBy = isAdmin ? 'admin' : 'homeowner';
+      const { rows: updatedRows } = await client.query(
+        `UPDATE managed_jobs SET
+           status='canceled',
+           cancellation_reason=$2,
+           cancellation_reason_code=$3,
+           cancellation_details=$4,
+           cancelled_at=NOW(),
+           cancelled_by=$5,
+           updated_at=NOW()
+         WHERE id=$1 AND status = ANY($6::text[])
+         RETURNING *`,
+        [
+          jobId,
+          parsed.cancellationReason,
+          parsed.reasonCode,
+          JSON.stringify(parsed.details || {}),
+          cancelledBy,
+          Array.from(HOMEOWNER_CANCELABLE_STATUSES),
+        ]
+      );
+
+      if (!updatedRows[0]) {
+        await client.query('ROLLBACK');
+        const { rows: fresh } = await client.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+        if (fresh[0] && String(fresh[0].status) === 'canceled') {
+          return res.json({
+            ok: true,
+            alreadyCancelled: true,
+            job: serializeJob(fresh[0], req.authUser),
+          });
+        }
+        return res.status(409).json({
+          ok: false,
+          message: 'This service changed while cancelling. Refresh and try again.',
+        });
+      }
+
+      await client.query(
+        `INSERT INTO job_status_history (job_id, from_status, to_status, actor_user_id, note)
+         VALUES ($1,$2,'canceled',$3,$4)`,
+        [jobId, fromStatus, req.authUser.id, `Cancelled by ${cancelledBy}: ${parsed.reasonLabel}`]
+      );
+
+      await client.query('COMMIT');
+
+      const updatedJob = updatedRows[0];
+      try {
+        await releaseVisitFeeHoldIfNeeded(pool, jobId, req.authUser.id, pushStatus);
+      } catch (e) {
+        console.error('cancel release hold:', e.message);
+      }
+
+      const { rows: hw } = await pool.query('SELECT id, name, email FROM users WHERE id=$1', [
+        job.homeowner_user_id,
+      ]);
+      try {
+        await notifyJobCancelled(pool, {
+          job: updatedJob,
+          homeowner: hw[0],
+          reasonCode: parsed.reasonCode,
+          reasonLabel: parsed.reasonLabel,
+          details: parsed.details,
+          actorUserId: req.authUser.id,
+        });
+      } catch (e) {
+        console.error('notifyJobCancelled:', e.message);
+      }
+
+      try {
+        await syncPartnerReferralFromJob(pool, jobId, 'canceled');
+      } catch (e) {
+        console.error('[Partner sync cancel]', e.message);
+      }
+
+      res.json({ ok: true, job: serializeJob(updatedJob, req.authUser) });
+    } catch (e) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* ignore */
+      }
+      console.error('cancel job:', e);
+      res.status(500).json({ ok: false, message: 'Could not cancel service.' });
+    } finally {
+      client.release();
     }
   });
 

@@ -137,6 +137,11 @@ export default function AdminJobDrawer({
               <p className="mt-1 text-sm text-muted-foreground">
                 {(job.category || "Service").toString()} · {STATUS_LABELS[job.status] || job.status}
               </p>
+              {job.status === "canceled" && job.cancellationReason ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Cancelled by customer · {job.cancellationReason}
+                </p>
+              ) : null}
             </div>
             <button type="button" onClick={onClose} className="rounded-lg p-2 hover:bg-muted" aria-label="Close">
               <X className="h-4 w-4" />

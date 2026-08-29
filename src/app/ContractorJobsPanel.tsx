@@ -216,6 +216,15 @@ export default function ContractorJobsPanel({
                 </div>
               </div>
 
+              {selected.status === "canceled" ? (
+                <div className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-sm">
+                  <p className="font-semibold">Cancelled by customer</p>
+                  {selected.cancellationReason ? (
+                    <p className="mt-1 text-muted-foreground">{selected.cancellationReason}</p>
+                  ) : null}
+                </div>
+              ) : null}
+
               {selected &&
                 payoutByJobId?.get(selected.id) &&
                 ["work_completed", "customer_review_pending", "admin_review_pending", "payout_pending", "paid_out", "closed"].includes(
@@ -260,7 +269,7 @@ export default function ContractorJobsPanel({
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2 pt-1">
-                  {selected.status === "scheduled" && (
+                  {selected.status !== "canceled" && selected.status === "scheduled" && (
                     <button
                       type="button"
                       className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold"
@@ -272,7 +281,7 @@ export default function ContractorJobsPanel({
                       <Truck className="h-4 w-4" /> Start Travel
                     </button>
                   )}
-                  {selected.status === "contractor_en_route" && (
+                  {selected.status !== "canceled" && selected.status === "contractor_en_route" && (
                     <button
                       type="button"
                       className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold"
@@ -284,7 +293,7 @@ export default function ContractorJobsPanel({
                       <Navigation className="h-4 w-4" /> Start work
                     </button>
                   )}
-                  {["awaiting_bid", "contractor_accepted"].includes(selected.status) && (
+                  {selected.status !== "canceled" && ["awaiting_bid", "contractor_accepted"].includes(selected.status) && (
                     <button
                       type="button"
                       className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-sm font-semibold text-white"
@@ -296,10 +305,12 @@ export default function ContractorJobsPanel({
                 </div>
               </div>
 
-              {["work_started", "change_order_pending", "contractor_en_route"].includes(selected.status) ? (
+              {selected.status !== "canceled" &&
+              ["work_started", "change_order_pending", "contractor_en_route"].includes(selected.status) ? (
                 <ChangeOrderPanel jobId={selected.id} role="contractor" onChanged={onRefresh} />
               ) : null}
 
+              {selected.status !== "canceled" ? (
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground mb-2">Job actions</p>
                 <div className="flex flex-wrap gap-2">
@@ -340,8 +351,9 @@ export default function ContractorJobsPanel({
                   />
                 )}
               </div>
+              ) : null}
 
-              {completeOpen && (
+              {completeOpen && selected.status !== "canceled" && (
                 <div className="space-y-3 rounded-xl border border-border p-4">
                   <p className="text-sm font-semibold">Mark complete + proof</p>
                   <textarea
