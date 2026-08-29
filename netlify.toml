@@ -7,7 +7,6 @@
 
 [build.environment]
   NODE_VERSION = "22"
-  FIXBRIDGE_HOSTING = "netlify"
   SERVICE_REMINDER_SCHEDULER_MODE = "netlify_scheduled_function_configured"
   # Install devDependencies during CI even if NODE_ENV=production is scoped to Builds in the Netlify UI.
   # Remove NODE_ENV from Builds scope in the UI when possible; this is a safe fallback until then.
@@ -17,6 +16,11 @@
   # Vite embeds these at build time — also set them in the Netlify UI.
   # VITE_GEMINI_API_KEY =
   # VITE_GOOGLE_MAPS_API_KEY =
+
+# Runtime env for production deploys (API + scheduled functions) — not available from [build.environment] alone.
+[context.production.environment]
+  FIXBRIDGE_HOSTING = "netlify"
+  SERVICE_REMINDER_SCHEDULER_MODE = "netlify_scheduled_function_configured"
 
 [functions]
   directory = "netlify/functions"
