@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.2",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "concurrently -k -p \"[{name}]\" -n \"API,VITE\" -c \"cyan.bold,green.bold\" \"node --env-file=.env server.js\" \"vite --port 5000 --strictPort\"",
     "dev:api": "node --env-file=.env server.js",
@@ -78,7 +81,6 @@
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "cmdk": "1.1.1",
-    "concurrently": "^10.0.3",
     "cors": "^2.8.6",
     "date-fns": "3.6.0",
     "embla-carousel-react": "8.6.0",
@@ -101,7 +103,6 @@
     "react-popper": "2.3.0",
     "react-resizable-panels": "2.1.7",
     "react-responsive-masonry": "2.7.1",
-    "react-router": "7.13.0",
     "react-slick": "0.31.0",
     "recharts": "2.15.2",
     "serverless-http": "^4.0.0",
@@ -114,9 +115,10 @@
   "devDependencies": {
     "@tailwindcss/vite": "4.1.12",
     "@vitejs/plugin-react": "4.7.0",
+    "concurrently": "^9.1.2",
     "playwright": "^1.62.1",
     "sharp": "^0.35.4",
     "tailwindcss": "4.1.12",
-    "vite": "6.3.5"
+    "vite": "6.4.3"
   }
 }

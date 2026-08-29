@@ -1,11 +1,14 @@
 [build]
-  command = "npm install --include=dev && npm run build"
+  # Plain npm run build — do NOT set NODE_ENV=production in Netlify *build* scope (skips devDependencies).
+  # Scope NODE_ENV to Functions/Runtime only in the Netlify UI, or rely on CONTEXT=production at runtime.
+  command = "npm run build"
   publish = "dist"
   functions = "netlify/functions"
 
 [build.environment]
-  NODE_VERSION = "20"
+  NODE_VERSION = "22"
   FIXBRIDGE_HOSTING = "netlify"
+  SERVICE_REMINDER_SCHEDULER_MODE = "netlify_scheduled_function_configured"
   # Force npm (package-lock.json) — avoids stale pnpm-lock drift on Netlify CI.
   NPM_FLAGS = "--prefer-offline"
   # Vite embeds these at build time — also set them in the Netlify UI.

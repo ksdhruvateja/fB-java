@@ -10,6 +10,7 @@ import {
   formatServiceWhenInTimezone,
   serviceAtLegacyUtc,
 } from './property-timezone.js';
+import { REMINDER_SCHEDULER_CONFIG } from './reminder-scheduler-config.js';
 
 const MATERIAL_RESCHEDULE_MS = 60 * 60 * 1000; // 1 hour
 const MAX_EMAIL_ATTEMPTS = 5;
@@ -385,14 +386,22 @@ export function verifyReminderCronAuth(req) {
 export async function getReminderSchedulerStatus(pool) {
   const pollEnabled = process.env.ENABLE_SERVICE_REMINDER_POLL === 'true';
   const cronSecretConfigured = Boolean(process.env.SERVICE_REMINDER_CRON_SECRET?.trim());
-  const netlifyScheduled = Boolean(
-    process.env.FIXBRIDGE_HOSTING === 'netlify' ||
-      process.env.NETLIFY ||
-      process.env.NETLIFY_DEV ||
-      process.env.NETLIFY_SITE_ID ||
-      process.env.CONTEXT === 'production' ||
-      /netlify\.app$/i.test(String(process.env.URL || process.env.DEPLOY_URL || ''))
-  );
+  const configuredMode = String(process.env.SERVICE_REMINDER_SCHEDULER_MODE || '').trim();
+
+  let schedulerMode;
+  if (pollEnabled) {
+    schedulerMode = 'internal_poll';
+  } else if (cronSecretConfigured) {
+    schedulerMode = 'external_cron_configured';
+  } else if (configuredMode) {
+    schedulerMode = configuredMode;
+  } else {
+    schedulerMode = 'manual_admin_or_unconfigured';
+  }
+
+  const netlifyConfigured =
+    schedulerMode === REMINDER_SCHEDULER_CONFIG.netlifyConfiguredMode;
+
   let pending = 0;
   try {
     const { rows } = await pool.query(
@@ -402,22 +411,23 @@ export async function getReminderSchedulerStatus(pool) {
   } catch {
     pending = null;
   }
-  const recommendedMode = pollEnabled
-    ? 'internal_poll'
-    : netlifyScheduled
-      ? 'netlify_scheduled_function'
-      : cronSecretConfigured
-        ? 'external_cron'
-        : 'manual_admin_or_unconfigured';
+
   return {
     deliveryConfigured: true,
     pollWorkerEnabled: pollEnabled,
     cronSecretConfigured,
-    netlifyScheduledFunction: netlifyScheduled,
-    recommendedMode,
-    schedule: '*/15 * * * *',
+    schedulerMode,
+    /** @deprecated use schedulerMode — kept for existing monitors */
+    netlifyScheduledFunction: netlifyConfigured,
+    /** @deprecated alias of schedulerMode */
+    recommendedMode: schedulerMode,
+    scheduledFunctionName: netlifyConfigured
+      ? REMINDER_SCHEDULER_CONFIG.scheduledFunctionName
+      : null,
+    schedule: REMINDER_SCHEDULER_CONFIG.schedule,
+    invocationObserved: false,
     pendingEligibility: pending,
     hostingNote:
-      'Netlify: use scheduled function process-service-reminders. Persistent Node host: ENABLE_SERVICE_REMINDER_POLL=true.',
+      'Netlify: scheduled function process-service-reminders (see netlify.toml). Persistent Node host: ENABLE_SERVICE_REMINDER_POLL=true.',
   };
 }
