@@ -8,6 +8,7 @@ import {
   Home,
   LayoutDashboard,
   MessageSquare,
+  Scale,
   Settings,
   Shield,
   Sparkles,
@@ -38,7 +39,8 @@ export type DashTab =
   | "profile"
   | "inbox"
   | "more"
-  | "go-pro";
+  | "go-pro"
+  | "legal";
 
 export type PropertyCareSection =
   | "passport"
@@ -90,6 +92,7 @@ export const NAV_SECTIONS: {
 ];
 
 export const FOOTER_NAV: { id: DashTab; label: string; icon: LucideIcon }[] = [
+  { id: "legal", label: "Legal", icon: Scale },
   { id: "settings", label: "Settings", icon: Settings },
   { id: "help", label: "Help & Support", icon: HelpCircle },
 ];
@@ -203,6 +206,7 @@ export const MORE_MENU_SECTIONS: {
     title: "Account",
     items: [
       { tab: "profile", label: "Settings" },
+      { tab: "legal", label: "Legal", description: "Policies & acceptances" },
       { tab: "go-pro", label: "HomeCare", description: "Free & Pro plans" },
     ],
   },
@@ -239,6 +243,7 @@ export const HOMEOWNER_RENDER_TABS = new Set<DashTab>([
   "jobs",
   "properties",
   "profile",
+  "legal",
 ]);
 
 export function sanitizeDashTab(value: unknown): DashTab {
@@ -297,6 +302,8 @@ export function mobileHeaderTitle(tab: DashTab): string {
     case "profile":
     case "settings":
       return "Settings";
+    case "legal":
+      return "Legal";
     case "assistant":
       return "Assistant";
     case "help":

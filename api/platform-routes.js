@@ -23,6 +23,10 @@ import { userHasActivePaidSubscription } from './subscription-state.js';
 import { writeAudit } from './audit.js';
 import { sendEmailSafe, sendSmsSafe, notifyOps, mailStatus } from './notify.js';
 import { lookupTimezoneFromCoordinates, isValidIanaTimezone } from './property-timezone.js';
+import {
+  ACKNOWLEDGMENT_TYPES,
+  requireHomeownerAcknowledgment,
+} from './homeowner-acknowledgments.js';
 
 const PARTNER_JWT_SECRET = process.env.SESSION_SECRET || (!process.env.NETLIFY && process.env.NODE_ENV !== 'production' ? 'local-dev-secret' : undefined);
 
@@ -910,6 +914,26 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       if (Number(jobs[0].homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
+      const { rows: coRows } = await pool.query(
+        `SELECT * FROM change_orders WHERE id=$1 AND job_id=$2`,
+        [coId, jobId]
+      );
+      if (!coRows[0]) return res.status(404).json({ ok: false, message: 'Change order not found.' });
+      if (req.authUser.role !== 'admin') {
+        const ackOk = await requireHomeownerAcknowledgment(pool, req, res, {
+          jobId,
+          changeOrderId: coId,
+          actionKey: 'CHANGE_ORDER_APPROVAL',
+          message: 'You must approve this additional scope and price.',
+          snapshotData: {
+            changeOrderId: coId,
+            description: coRows[0].description,
+            retailAmount: coRows[0].retail_amount,
+            contractorNet: coRows[0].contractor_net,
+          },
+        });
+        if (!ackOk) return;
+      }
       const { rows } = await pool.query(
         `UPDATE change_orders SET status='approved', approved_at=NOW(),
            approved_snapshot=COALESCE(approved_snapshot, jsonb_build_object(
@@ -1252,6 +1276,17 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
   // ── DIY projects + parts catalog ─────────────────────────────────────────
   app.post('/api/diy/projects', requireAuth, async (req, res) => {
     try {
+      if (req.authUser.role === 'homeowner') {
+        const ackOk = await requireHomeownerAcknowledgment(pool, req, res, {
+          actionKey: 'DIY_START',
+          message: 'You must accept the AI / DIY Safety Disclaimer before using Guided DIY.',
+        });
+        if (!ackOk) return;
+        await pool.query(
+          `UPDATE users SET diy_safety_accepted_version=$2 WHERE id=$1`,
+          [req.authUser.id, '1.0']
+        );
+      }
       const plan = req.body?.plan || {};
       const { rows } = await pool.query(
         `INSERT INTO diy_projects (user_id, job_id, title, plan, steps_completed)

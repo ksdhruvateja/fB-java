@@ -54,6 +54,35 @@ export const DEFAULT_PRICING_RULES = {
   /** Flat homeowner visit / dispatch fee charged before a pro is sent. Credited on the final bill. */
   default_visit_fee: 125,
   default_emergency_visit_fee: 125,
+  /** Admin-controlled multi-line professional dispatch pricing shown at authorization. */
+  professional_dispatch_pricing: {
+    version: 1,
+    effective_from: '2026-08-30',
+    lines: [
+      {
+        key: 'assessment_coordination',
+        label: 'FixBridge Assessment / Coordination',
+        amount_cents: 14900,
+        enabled: true,
+        line_type: 'charge',
+      },
+      {
+        key: 'visit_diagnostic',
+        label: 'Contractor Visit / Diagnostic',
+        amount_cents: 9500,
+        enabled: true,
+        line_type: 'charge',
+        timing_adjustable: true,
+      },
+      {
+        key: 'beta_discount',
+        label: 'Beta Discount',
+        amount_cents: 14900,
+        enabled: true,
+        line_type: 'discount',
+      },
+    ],
+  },
   /**
    * Stage A — applied to AI-generated recommended retail before homeowner sees it.
    * Homeowners never see the raw AI amount or this markup; only the final estimate.
@@ -677,6 +706,15 @@ export function mergePricingRules(stored) {
         ...(DEFAULT_PRICING_RULES.pricing_overrides?.by_zip_prefix || {}),
         ...(stored.pricing_overrides?.by_zip_prefix || {}),
       },
+    },
+    professional_dispatch_pricing: {
+      ...(DEFAULT_PRICING_RULES.professional_dispatch_pricing || {}),
+      ...(stored.professional_dispatch_pricing || {}),
+      lines:
+        Array.isArray(stored.professional_dispatch_pricing?.lines) &&
+        stored.professional_dispatch_pricing.lines.length
+          ? stored.professional_dispatch_pricing.lines
+          : DEFAULT_PRICING_RULES.professional_dispatch_pricing?.lines || [],
     },
   };
 }

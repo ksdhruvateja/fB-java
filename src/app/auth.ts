@@ -28,6 +28,7 @@ export type AuthUser = {
   licenseExpiresAt?: string | null;
   insuranceExpiresAt?: string | null;
   complianceStatus?: string;
+  dispatchEligible?: boolean;
   licenseDocumentName?: string;
   insuranceDocumentName?: string;
   idDocumentName?: string;
@@ -191,6 +192,8 @@ export async function signUpUser(user: {
   freeEstimate?: boolean;
   visitAppliesToRepair?: boolean;
   referredByCode?: string;
+  consents?: Record<string, boolean>;
+  marketingConsent?: boolean;
 }): Promise<{ ok: true; user: AuthUser } | { ok: false; message: string }> {
   try {
     const res = await fetch("/api/auth/signup", {
@@ -391,6 +394,8 @@ export async function createPublicGuestJob(jobData: {
   contactName: string;
   contactPhone: string;
   email: string;
+  consents?: Record<string, boolean>;
+  marketingConsent?: boolean;
 }): Promise<{ ok: true; user: AuthUser; job: any } | { ok: false; message: string }> {
   try {
     const res = await fetch("/api/public/jobs", {

@@ -11,6 +11,8 @@ import AdminQuoteBuilderPanel from "./AdminQuoteBuilderPanel";
 import { AdminQuoteDocumentPanel } from "./AdminQuotesWorkspace";
 import AdminHomeownerInvoicePanel from "./AdminHomeownerInvoicePanel";
 import ChangeOrderPanel from "./ChangeOrderPanel";
+import AdminHomeownerAcceptancesPanel from "./AdminHomeownerAcceptancesPanel";
+import AdminJobEvidencePanel from "./AdminJobEvidencePanel";
 import {
   STATUS_LABELS,
   formatMoney,
@@ -27,7 +29,7 @@ import {
 } from "./adminOpsHelpers";
 import type { AuthUser } from "./auth";
 
-type DrawerTab = "overview" | "quotes" | "dispatch" | "invoice";
+type DrawerTab = "overview" | "quotes" | "dispatch" | "invoice" | "evidence";
 type QuoteSubMode = "document" | "build";
 
 export default function AdminJobDrawer({
@@ -181,6 +183,7 @@ export default function AdminJobDrawer({
                 ["quotes", "Quotes"],
                 ["dispatch", "Dispatch"],
                 ["invoice", "Invoice"],
+                ["evidence", "Legal / Evidence"],
               ] as const
             ).map(([id, label]) => (
               <button
@@ -276,6 +279,13 @@ export default function AdminJobDrawer({
                     <p className="mt-1 text-sm leading-relaxed">{job.description}</p>
                   </div>
                 )}
+
+                <div className="rounded-xl border border-border/70 bg-muted/20 p-3 space-y-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Homeowner consent history
+                  </p>
+                  <AdminHomeownerAcceptancesPanel jobId={job.id} userId={job.homeownerUserId} />
+                </div>
 
                 <div className="grid gap-2 pt-2">
                   {(job.status === "bid_received" || !!latestBid) && (
@@ -498,6 +508,8 @@ export default function AdminJobDrawer({
                 onMessage={onMessage}
               />
             )}
+
+            {tab === "evidence" && <AdminJobEvidencePanel jobId={job.id} />}
           </div>
         </motion.aside>
       </motion.div>

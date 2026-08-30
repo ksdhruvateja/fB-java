@@ -19,8 +19,11 @@ import {
   Zap,
 } from "lucide-react";
 import type { ManagedJob } from "./managedJobs";
-import { payDispatchFee, prepareCheckout, requestProfessionalDispatch, retailRangeLabel } from "./managedJobs";
+import { payDispatchFee, prepareCheckout, requestProfessionalDispatch, retailRangeLabel, fetchDispatchPricing, formatMoney, type CheckoutBreakdown } from "./managedJobs";
 import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
+import { ConsentCheckbox, ConsentSection, consentsFromState, allChecked } from "./ConsentCheckbox";
+import type { ConsentState } from "./ConsentCheckbox";
+import type { AcceptanceType } from "./legalDocuments";
 import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 
 const SERVICE_TIMING_OPTIONS = [
@@ -132,9 +135,34 @@ export default function HireProfessionalWizard({
   const [discountCode, setDiscountCode] = useState(job.discountCode || "");
   const [dispatchCouponPreview, setDispatchCouponPreview] = useState<DispatchCouponPreview | null>(null);
   const [prefsSaved, setPrefsSaved] = useState(job.status === "awaiting_service_payment");
+  const [dispatchConsents, setDispatchConsents] = useState<ConsentState>({
+    PROFESSIONAL_DISPATCH_PROVIDER_ACK: false,
+    PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK: false,
+    VISIT_FEE_ACK: false,
+    HOMEOWNER_SERVICE_AGREEMENT: false,
+    VISIT_CANCELLATION_POLICY: false,
+  });
+  const [paymentConsents, setPaymentConsents] = useState<ConsentState>({
+    PAYMENT_AUTHORIZATION: false,
+    PAYMENT_VISIT_POLICY: false,
+  });
+  const [dispatchPricing, setDispatchPricing] = useState<CheckoutBreakdown | null>(null);
+  const [pricingLoading, setPricingLoading] = useState(false);
+
+  const dispatchConsentKeys: AcceptanceType[] = [
+    "PROFESSIONAL_DISPATCH_PROVIDER_ACK",
+    "PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK",
+    "VISIT_FEE_ACK",
+    "HOMEOWNER_SERVICE_AGREEMENT",
+    "VISIT_CANCELLATION_POLICY",
+  ];
+  const paymentConsentKeys: AcceptanceType[] = ["PAYMENT_AUTHORIZATION", "PAYMENT_VISIT_POLICY"];
 
   const baseDispatchFee = job.visitFeeAmount ?? job.pricing?.contractor_visit_fee ?? 125;
-  const dispatchHoldAmount = dispatchCouponPreview?.discountedAmount ?? baseDispatchFee;
+  const dispatchHoldAmount =
+    dispatchPricing?.authorizedNow ??
+    dispatchCouponPreview?.discountedAmount ??
+    baseDispatchFee;
   const dispatchPaid =
     job.visitFeeAuthorized ||
     ["paid_for_dispatch", "awaiting_contractor", "contractor_invited", "scheduled"].includes(job.status);
@@ -151,6 +179,71 @@ export default function HireProfessionalWizard({
     if (dispatchPaid) setStep("checkout");
     else if (job.status === "awaiting_service_payment") setStep("checkout");
   }, [job.id, job.status, job.visitFeeAuthorized]);
+
+  useEffect(() => {
+    if (step !== "checkout" && step !== "review") return;
+    let cancelled = false;
+    setPricingLoading(true);
+    const code = dispatchCouponPreview?.code || discountCode.trim() || undefined;
+    void fetchDispatchPricing(job.id, code).then((r) => {
+      if (cancelled) return;
+      setPricingLoading(false);
+      if (r.ok && r.breakdown) setDispatchPricing(r.breakdown);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [step, job.id, dispatchCouponPreview?.code, discountCode, serviceTiming]);
+
+  function formatLineAmount(cents: number) {
+    const abs = Math.abs(cents) / 100;
+    const formatted = formatMoney(abs);
+    return cents < 0 ? `−${formatted}` : formatted;
+  }
+
+  function PricingBreakdownCard({ compact }: { compact?: boolean }) {
+    const lines = dispatchPricing?.lines || [];
+    return (
+      <div className={`rounded-xl border border-[#FF4D1C]/25 bg-card space-y-2 text-sm ${compact ? "p-3" : "p-4"}`}>
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Professional dispatch pricing
+        </p>
+        {pricingLoading ? (
+          <p className="text-xs text-muted-foreground flex items-center gap-2">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading current pricing…
+          </p>
+        ) : lines.length ? (
+          <div className="space-y-1.5">
+            {lines.map((line) => (
+              <div key={line.key} className="flex justify-between gap-3 text-sm">
+                <span className="min-w-0 text-muted-foreground">{line.label}</span>
+                <span className="shrink-0 tabular-nums font-medium">{formatLineAmount(line.amount_cents)}</span>
+              </div>
+            ))}
+            {dispatchPricing?.couponDiscount ? (
+              <div className="flex justify-between gap-3 text-sm text-emerald-700 dark:text-emerald-300">
+                <span>Coupon {dispatchPricing.couponCode}</span>
+                <span className="tabular-nums">−{formatMoney(dispatchPricing.couponDiscount)}</span>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">Pricing will be confirmed at authorization.</p>
+        )}
+        <div className="border-t border-border pt-3">
+          <p className="text-[11px] font-bold uppercase tracking-widest text-primary">Authorized now</p>
+          <p className="text-2xl font-black tabular-nums text-primary">{formatMoney(dispatchHoldAmount)}</p>
+        </div>
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-relaxed">
+          <p className="font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-200">Repair work</p>
+          <p className="mt-1 font-bold text-foreground">NOT INCLUDED</p>
+          <p className="mt-1 text-muted-foreground">
+            Any repair or additional work will require a separate estimate/quote and your approval before work proceeds.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   function selectServiceTiming(nextTiming: string) {
     setServiceTiming(nextTiming);
@@ -188,6 +281,7 @@ export default function HireProfessionalWizard({
         propertyPurpose,
         transactionStage,
         discountCode: discountCode.trim() || undefined,
+        consents: consentsFromState(dispatchConsents),
       });
       if (!r.ok || !r.job) {
         onError(r.message || "Could not save your dispatch request.");
@@ -201,12 +295,20 @@ export default function HireProfessionalWizard({
     }
   }
 
-  async function handleConfirm() {
-    const ok = await savePreferences();
-    if (ok) setStep("checkout");
+  function handleConfirm() {
+    onError(null);
+    setStep("checkout");
   }
 
   async function handlePay() {
+    if (!allChecked(dispatchConsents, dispatchConsentKeys)) {
+      onError("Please complete all dispatch acknowledgments before continuing.");
+      return;
+    }
+    if (!allChecked(paymentConsents, paymentConsentKeys)) {
+      onError("Please authorize the payment amount under the stated cancellation/refund rules.");
+      return;
+    }
     setBusy(true);
     onError(null);
     try {
@@ -224,7 +326,7 @@ export default function HireProfessionalWizard({
         return;
       }
       if (prepared.job) onJobUpdated(prepared.job);
-      const r = await payDispatchFee(job.id, code);
+      const r = await payDispatchFee(job.id, code, consentsFromState(paymentConsents));
       if (!r.ok) {
         onError(r.message || "Payment unsuccessful. Your request has not been submitted for dispatch.");
         return;
@@ -501,35 +603,7 @@ export default function HireProfessionalWizard({
 
           {step === "checkout" && (
             <div className="space-y-4">
-              <div className="rounded-xl border border-border bg-card p-4 space-y-2 text-sm">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Price summary</p>
-                <div className="flex justify-between gap-3">
-                  <div className="min-w-0">
-                    <span className="text-muted-foreground">Service estimate</span>
-                    <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">
-                      (Estimates only — the final price will be quoted by contractors, depending on the work and complexity.)
-                    </p>
-                  </div>
-                  <span className="shrink-0 font-semibold tabular-nums">{retailRangeLabel(job)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Service fee</span>
-                  <span className="font-semibold tabular-nums">${Number(baseDispatchFee).toFixed(2)}</span>
-                </div>
-                {dispatchCouponPreview ? (
-                  <div className="flex justify-between text-emerald-700 dark:text-emerald-300">
-                    <span>Coupon {dispatchCouponPreview.code}</span>
-                    <span className="font-semibold tabular-nums">−${Number(dispatchCouponPreview.discountAmount).toFixed(2)}</span>
-                  </div>
-                ) : null}
-                <div className="flex justify-between border-t border-border pt-2 text-base font-bold">
-                  <span>Total due today</span>
-                  <span className="text-primary tabular-nums">${Number(dispatchHoldAmount).toFixed(2)}</span>
-                </div>
-                <p className="text-[11px] text-muted-foreground leading-relaxed">
-                  The service fee is calculated from current FixBridge pricing and is locked when you confirm. Repair estimate is informational; today you authorize the service fee.
-                </p>
-              </div>
+              <PricingBreakdownCard />
               <DispatchCouponField
                 jobId={job.id}
                 baseAmount={baseDispatchFee}
@@ -566,35 +640,65 @@ export default function HireProfessionalWizard({
                   </div>
                 ) : null}
               </div>
-              <div className="rounded-xl border border-[#FF4D1C]/25 bg-card p-4 space-y-2 text-sm">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Price summary</p>
-                <div className="flex justify-between gap-3">
-                  <div className="min-w-0">
-                    <span>Service estimate</span>
-                    <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">
-                      (Estimates only — the final price will be quoted by contractors, depending on the work and complexity.)
-                    </p>
-                  </div>
-                  <span className="shrink-0 tabular-nums">{retailRangeLabel(job)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Service fee</span>
-                  <span className="tabular-nums">${Number(baseDispatchFee).toFixed(2)}</span>
-                </div>
-                {dispatchCouponPreview ? (
-                  <div className="flex justify-between text-emerald-700 dark:text-emerald-300">
-                    <span>Coupon {dispatchCouponPreview.code}</span>
-                    <span className="tabular-nums">−${Number(dispatchCouponPreview.discountAmount).toFixed(2)}</span>
-                  </div>
-                ) : null}
-                <div className="flex justify-between border-t border-border pt-2 text-base font-bold">
-                  <span>Total due</span>
-                  <span className="text-primary tabular-nums">${Number(dispatchHoldAmount).toFixed(2)}</span>
-                </div>
-              </div>
+              <PricingBreakdownCard />
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Confirming starts secure payment. Your request is sent to the Admin Work Queue only after payment succeeds.
+                Authorizing charges the amount shown under AUTHORIZED NOW. Your request is sent to FixBridge only after payment succeeds.
               </p>
+              <ConsentSection title="Dispatch acknowledgments">
+                <ConsentCheckbox
+                  id="dispatch-provider"
+                  checked={dispatchConsents.PROFESSIONAL_DISPATCH_PROVIDER_ACK === true}
+                  onChange={(v) => setDispatchConsents((s) => ({ ...s, PROFESSIONAL_DISPATCH_PROVIDER_ACK: v }))}
+                  label="I understand the service professional is an independent provider responsible for on-site work, safety, workmanship, tools and personnel."
+                />
+                <ConsentCheckbox
+                  id="dispatch-fixbridge"
+                  checked={dispatchConsents.PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK === true}
+                  onChange={(v) => setDispatchConsents((s) => ({ ...s, PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK: v }))}
+                  label="I understand FixBridge coordinates the request/payment workflow and does not guarantee the provider's work or AI diagnosis."
+                />
+                <ConsentCheckbox
+                  id="dispatch-visit-fee"
+                  checked={dispatchConsents.VISIT_FEE_ACK === true}
+                  onChange={(v) => setDispatchConsents((s) => ({ ...s, VISIT_FEE_ACK: v }))}
+                  label="I understand the visit/diagnostic fee shown is separate from repair work; additional work needs my approval."
+                />
+                <ConsentCheckbox
+                  id="dispatch-agreement"
+                  checked={dispatchConsents.HOMEOWNER_SERVICE_AGREEMENT === true}
+                  onChange={(v) => setDispatchConsents((s) => ({ ...s, HOMEOWNER_SERVICE_AGREEMENT: v }))}
+                  label="I agree to the Homeowner Service Agreement."
+                  documentKey="HOMEOWNER_SERVICE_AGREEMENT"
+                  documentLabel="Homeowner Agreement"
+                />
+                <ConsentCheckbox
+                  id="dispatch-cancel"
+                  checked={dispatchConsents.VISIT_CANCELLATION_POLICY === true}
+                  onChange={(v) => setDispatchConsents((s) => ({ ...s, VISIT_CANCELLATION_POLICY: v }))}
+                  label="I agree to the Visit/Cancellation Policy."
+                  documentKey="VISIT_CANCELLATION_POLICY"
+                  documentLabel="Visit/Cancellation Policy"
+                />
+              </ConsentSection>
+              <ConsentSection title="Payment authorization">
+                <p className="text-sm font-semibold tabular-nums">
+                  Amount authorized: ${Number(dispatchHoldAmount).toFixed(2)}
+                </p>
+                <ConsentCheckbox
+                  id="payment-auth"
+                  checked={paymentConsents.PAYMENT_AUTHORIZATION === true}
+                  onChange={(v) =>
+                    setPaymentConsents((s) => ({
+                      ...s,
+                      PAYMENT_AUTHORIZATION: v,
+                      PAYMENT_VISIT_POLICY: v,
+                    }))
+                  }
+                  label="I authorize the amount shown under the stated cancellation/refund rules."
+                  documentKey="PAYMENT_VISIT_POLICY"
+                  documentLabel="Payment / Visit Policy"
+                />
+              </ConsentSection>
             </div>
           )}
         </motion.div>
@@ -644,7 +748,7 @@ export default function HireProfessionalWizard({
         {step === "info" && (
           <button
             type="button"
-            onClick={() => void handleConfirm()}
+            onClick={handleConfirm}
             disabled={busy}
             className="ml-auto inline-flex items-center gap-2 rounded-xl bg-[#FF4D1C] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
           >
@@ -669,11 +773,15 @@ export default function HireProfessionalWizard({
           <button
             type="button"
             onClick={() => void handlePay()}
-            disabled={busy}
+            disabled={
+              busy ||
+              !allChecked(dispatchConsents, dispatchConsentKeys) ||
+              !allChecked(paymentConsents, paymentConsentKeys)
+            }
             className="ml-auto inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white shadow-lg disabled:opacity-60 sm:flex-none"
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Confirm & Pay — ${Number(dispatchHoldAmount).toFixed(2)}
+            Authorize & Request Professional — {formatMoney(dispatchHoldAmount)}
           </button>
         )}
       </div>

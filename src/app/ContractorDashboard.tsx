@@ -24,7 +24,8 @@ import {
   type PayoutSummary,
   type PayoutAccount,
 } from "./managedJobs";
-import ContractorApplicationForm, { type ContractorApplicationDocs } from "./ContractorApplicationForm";
+import ContractorApplicationForm, { type ContractorApplicationDocs, emptyContractorApplicationDocs } from "./ContractorApplicationForm";
+import ContractorCompliancePanel from "./ContractorCompliancePanel";
 import {
   applicationFromUser,
   applicationToProfileFields,
@@ -56,6 +57,8 @@ import {
   expiryLabel,
   formatExpiryDate,
   getContractorExpiryAlerts,
+  hasShownExpiryModalThisSession,
+  markExpiryModalShownThisSession,
 } from "./contractorExpiry";
 
 import { DashboardTabFallback } from "./AppErrorBoundary";
@@ -136,9 +139,7 @@ export default function ContractorDashboard({
   const [focusInviteId, setFocusInviteId] = useState<number | null>(null);
 
   const [application, setApplication] = useState<ContractorApplication>(() => applicationFromUser(user));
-  const [appDocs, setAppDocs] = useState<ContractorApplicationDocs>({
-    w9: null, license: null, insurance: null, businessRegistration: null, businessLicense: null, idDoc: null, diversityCert: null,
-  });
+  const [appDocs, setAppDocs] = useState<ContractorApplicationDocs>(emptyContractorApplicationDocs);
   const [editGender, setEditGender] = useState(user.gender || "");
   const [editDob, setEditDob] = useState(user.dob || "");
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -171,7 +172,6 @@ export default function ContractorDashboard({
   const [warranty, setWarranty] = useState("90-day workmanship");
   const [exclusions, setExclusions] = useState("Hidden damage, permits not included");
   const [expiryAlertOpen, setExpiryAlertOpen] = useState(false);
-  const expiryDismissKey = `fixbridge-expiry-dismiss-${user.id}`;
 
   const applyNavFrame = useCallback((f: ContractorNavFrame) => {
     setTab(sanitizeContractorTab(f.tab));
@@ -238,26 +238,13 @@ export default function ContractorDashboard({
       setExpiryAlertOpen(false);
       return;
     }
-    const hasBlocking = expiryAlerts.some((i) => i.severity === "expired" || i.severity === "missing");
-    if (hasBlocking) {
-      setExpiryAlertOpen(true);
+    if (hasShownExpiryModalThisSession(user.id)) {
+      setExpiryAlertOpen(false);
       return;
     }
-    try {
-      const raw = window.localStorage.getItem(expiryDismissKey);
-      if (!raw) {
-        setExpiryAlertOpen(true);
-        return;
-      }
-      const dismissedAt = Number(raw);
-      // Re-show warning alerts after 24h
-      if (!Number.isFinite(dismissedAt) || Date.now() - dismissedAt > 86_400_000) {
-        setExpiryAlertOpen(true);
-      }
-    } catch {
-      setExpiryAlertOpen(true);
-    }
-  }, [expiryAlerts, expiryDismissKey]);
+    markExpiryModalShownThisSession(user.id);
+    setExpiryAlertOpen(true);
+  }, [expiryAlerts, user.id]);
 
   useEffect(() => {
     setApplication(applicationFromUser(user));
@@ -603,6 +590,7 @@ export default function ContractorDashboard({
               invites={invites}
               jobs={jobs}
               monthEarnings={monthEarnings}
+              expiryAlerts={expiryAlerts}
               onOpenInvites={() => go("invites")}
               onOpenJobs={() => go("jobs")}
               onOpenCompliance={() => go("compliance")}
@@ -882,11 +870,13 @@ export default function ContractorDashboard({
                 <div>
                   <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase">Compliance</h1>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Keep your license, insurance, company details, and documents current anytime — including after signup.
-                    Fields marked * are required. Save here whenever FixBridge or a staff member asks for updates.
+                    Upload compliance documents anytime — including after signup. Missing documents do not block your
+                    application, but live dispatch stays blocked until required items are verified.
                   </p>
                 </div>
               </div>
+
+              <ContractorCompliancePanel />
               {(licenseStatus.severity !== "ok" || insuranceStatus.severity !== "ok") && (
                 <div className="rounded-xl border border-amber-300/60 bg-amber-50/80 px-4 py-3 text-sm text-amber-950 dark:border-amber-800/50 dark:bg-amber-950/30 dark:text-amber-100">
                   <p className="font-semibold">Credential reminders</p>
@@ -1032,21 +1022,9 @@ export default function ContractorDashboard({
       <ContractorExpiryAlert
         items={expiryAlerts}
         open={expiryAlertOpen}
-        onClose={() => {
-          setExpiryAlertOpen(false);
-          try {
-            window.localStorage.setItem(expiryDismissKey, String(Date.now()));
-          } catch {
-            /* ignore */
-          }
-        }}
+        onClose={() => setExpiryAlertOpen(false)}
         onUpdate={() => {
           setExpiryAlertOpen(false);
-          try {
-            window.localStorage.setItem(expiryDismissKey, String(Date.now()));
-          } catch {
-            /* ignore */
-          }
           go("compliance");
         }}
       />

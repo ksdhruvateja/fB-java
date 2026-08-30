@@ -14,6 +14,9 @@ import {
 } from "./managedJobs";
 import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
 import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
+import { ConsentCheckbox, ConsentSection, allChecked, consentsFromState } from "./ConsentCheckbox";
+import type { ConsentState } from "./ConsentCheckbox";
+import type { AcceptanceType } from "./legalDocuments";
 import { HomeownerTipCheckout } from "./HomeownerTipCheckout";
 import ChangeOrderPanel from "./ChangeOrderPanel";
 import HomeownerAccordion from "./HomeownerAccordion";
@@ -154,6 +157,26 @@ export default function HomeownerJobDetailPanel({
   const [secondOpinionBusy, setSecondOpinionBusy] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [moreActionsOpen, setMoreActionsOpen] = useState(false);
+  const [quoteConsents, setQuoteConsents] = useState<ConsentState>({
+    HOMEOWNER_SERVICE_AGREEMENT: false,
+    VISIT_CANCELLATION_POLICY: false,
+    QUOTE_SCOPE_APPROVAL: false,
+  });
+  const [dispatchPaymentConsents, setDispatchPaymentConsents] = useState<ConsentState>({
+    PAYMENT_AUTHORIZATION: false,
+    PAYMENT_VISIT_POLICY: false,
+  });
+  const [retailPaymentConsents, setRetailPaymentConsents] = useState<ConsentState>({
+    PAYMENT_AUTHORIZATION: false,
+    PAYMENT_VISIT_POLICY: false,
+  });
+
+  const quoteConsentKeys: AcceptanceType[] = [
+    "HOMEOWNER_SERVICE_AGREEMENT",
+    "VISIT_CANCELLATION_POLICY",
+    "QUOTE_SCOPE_APPROVAL",
+  ];
+  const paymentConsentKeys: AcceptanceType[] = ["PAYMENT_AUTHORIZATION", "PAYMENT_VISIT_POLICY"];
 
   useEffect(() => {
     setServiceTiming(job.serviceTiming || "weekday");
@@ -250,8 +273,12 @@ export default function HomeownerJobDetailPanel({
   }
 
   const handleApproveProposal = async () => {
+    if (!allChecked(quoteConsents, quoteConsentKeys)) {
+      onError("Please complete all quote acknowledgments before approving.");
+      return;
+    }
     onBusy(true);
-    const r = await approveProposal(job.id);
+    const r = await approveProposal(job.id, consentsFromState(quoteConsents));
     if (r.ok) await onRefresh();
     onBusy(false);
   };
@@ -605,11 +632,34 @@ export default function HomeownerJobDetailPanel({
             <p className="text-[10px] leading-normal text-muted-foreground">
               Card hold placed now. Only charged when the contractor checks in on-site. Released if cancelled.
             </p>
+            <ConsentSection title="Payment authorization">
+              <p className="text-sm font-semibold tabular-nums">
+                Amount authorized: {formatMoney(dispatchHoldAmount)}
+              </p>
+              <ConsentCheckbox
+                id={`dispatch-payment-${job.id}`}
+                checked={dispatchPaymentConsents.PAYMENT_AUTHORIZATION === true}
+                onChange={(v) =>
+                  setDispatchPaymentConsents((s) => ({
+                    ...s,
+                    PAYMENT_AUTHORIZATION: v,
+                    PAYMENT_VISIT_POLICY: v,
+                  }))
+                }
+                label="I authorize the amount shown under the stated cancellation/refund rules."
+                documentKey="PAYMENT_VISIT_POLICY"
+                documentLabel="Payment / Visit Policy"
+              />
+            </ConsentSection>
             <button
               type="button"
               className="w-full rounded-xl bg-primary px-3 py-2.5 text-sm font-semibold text-white hover:bg-primary/90 disabled:opacity-60"
-              disabled={busy}
+              disabled={busy || !allChecked(dispatchPaymentConsents, paymentConsentKeys)}
               onClick={async () => {
+                if (!allChecked(dispatchPaymentConsents, paymentConsentKeys)) {
+                  onError("Please authorize the payment amount under the stated cancellation/refund rules.");
+                  return;
+                }
                 const prop = properties.find((p) => p.id === job.propertyId);
                 if (prop) {
                   const isMissingAddress =
@@ -641,7 +691,7 @@ export default function HomeownerJobDetailPanel({
                 onBusy(false);
                 return;
               }
-              const r = await payDispatchFee(job.id, code);
+              const r = await payDispatchFee(job.id, code, consentsFromState(dispatchPaymentConsents));
                 if (!r.ok) {
                   onError(r.message || "Payment failed.");
                   onBusy(false);
@@ -701,14 +751,40 @@ export default function HomeownerJobDetailPanel({
           ) : null}
           <div className={`mt-4 flex flex-wrap gap-2 ${showAcceptQuoteFooter ? "hidden" : ""}`}>
             {proposal.status !== "approved" && (
-              <button
-                type="button"
-                className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
-                disabled={busy}
-                onClick={handleApproveProposal}
-              >
-                Approve proposal
-              </button>
+              <>
+                <ConsentSection title="Quote approval">
+                  <ConsentCheckbox
+                    id={`quote-agreement-${job.id}`}
+                    checked={quoteConsents.HOMEOWNER_SERVICE_AGREEMENT === true}
+                    onChange={(v) => setQuoteConsents((s) => ({ ...s, HOMEOWNER_SERVICE_AGREEMENT: v }))}
+                    label="I agree to the Homeowner Service Agreement and Visit/Cancellation Policy."
+                    documentKey="HOMEOWNER_SERVICE_AGREEMENT"
+                    documentLabel="Homeowner Agreement"
+                  />
+                  <ConsentCheckbox
+                    id={`quote-cancel-${job.id}`}
+                    checked={quoteConsents.VISIT_CANCELLATION_POLICY === true}
+                    onChange={(v) => setQuoteConsents((s) => ({ ...s, VISIT_CANCELLATION_POLICY: v }))}
+                    label="I agree to the Visit/Cancellation Policy."
+                    documentKey="VISIT_CANCELLATION_POLICY"
+                    documentLabel="Visit/Cancellation Policy"
+                  />
+                  <ConsentCheckbox
+                    id={`quote-scope-${job.id}`}
+                    checked={quoteConsents.QUOTE_SCOPE_APPROVAL === true}
+                    onChange={(v) => setQuoteConsents((s) => ({ ...s, QUOTE_SCOPE_APPROVAL: v }))}
+                    label="I approve this scope and TOTAL price. No extra work is approved unless I approve a change order."
+                  />
+                </ConsentSection>
+                <button
+                  type="button"
+                  className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+                  disabled={busy || !allChecked(quoteConsents, quoteConsentKeys)}
+                  onClick={handleApproveProposal}
+                >
+                  Approve proposal
+                </button>
+              </>
             )}
             <button
               type="button"
@@ -753,15 +829,38 @@ export default function HomeownerJobDetailPanel({
               Your contractor has finished the work. Pay FixBridge directly to finalize this job.
             </p>
             <p className="tabular-nums text-2xl font-semibold">{formatMoney(proposal.retailAmount)}</p>
+            <ConsentSection title="Payment authorization">
+              <p className="text-sm font-semibold tabular-nums">
+                Amount authorized: {formatMoney(proposal.retailAmount)}
+              </p>
+              <ConsentCheckbox
+                id={`retail-payment-${job.id}`}
+                checked={retailPaymentConsents.PAYMENT_AUTHORIZATION === true}
+                onChange={(v) =>
+                  setRetailPaymentConsents((s) => ({
+                    ...s,
+                    PAYMENT_AUTHORIZATION: v,
+                    PAYMENT_VISIT_POLICY: v,
+                  }))
+                }
+                label="I authorize the amount shown under the stated cancellation/refund rules."
+                documentKey="PAYMENT_VISIT_POLICY"
+                documentLabel="Payment / Visit Policy"
+              />
+            </ConsentSection>
             <button
               type="button"
               className="w-full rounded-xl bg-primary px-3 py-2.5 text-sm font-semibold text-white hover:bg-primary/90 disabled:opacity-60"
-              disabled={busy}
+              disabled={busy || !allChecked(retailPaymentConsents, paymentConsentKeys)}
               onClick={async () => {
+                if (!allChecked(retailPaymentConsents, paymentConsentKeys)) {
+                  onError("Please authorize the payment amount under the stated cancellation/refund rules.");
+                  return;
+                }
                 onBusy(true);
                 onError(null);
                 try {
-                  const r = await payRetail(job.id);
+                  const r = await payRetail(job.id, consentsFromState(retailPaymentConsents));
                   if (r.ok) {
                     if (r.url) {
                       window.location.href = r.url;
@@ -817,7 +916,11 @@ export default function HomeownerJobDetailPanel({
         job.status
       ) ? (
         <DetailSection mobile={isMobile} title="Change orders" defaultOpen={false}>
-          <ChangeOrderPanel jobId={job.id} role="homeowner" />
+          <ChangeOrderPanel
+            jobId={job.id}
+            role="homeowner"
+            originalApprovedTotal={proposal?.status === "approved" ? proposal.retailAmount : undefined}
+          />
         </DetailSection>
       ) : null}
 
@@ -1018,19 +1121,45 @@ export default function HomeownerJobDetailPanel({
         className="fixed inset-x-0 z-30 border-t border-border bg-background/95 px-4 py-3 backdrop-blur lg:hidden"
         style={{ bottom: "calc(4.25rem + env(safe-area-inset-bottom, 0px))" }}
       >
-        <div className="mx-auto flex max-w-lg items-center gap-3">
-          <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Quote ready</p>
-            <p className="truncate text-lg font-semibold tabular-nums">{formatMoney(proposal.retailAmount)}</p>
+        <div className="mx-auto max-w-lg space-y-2 max-h-[45vh] overflow-y-auto">
+          <ConsentSection title="Quote approval">
+            <ConsentCheckbox
+              id={`mobile-quote-agreement-${job.id}`}
+              checked={quoteConsents.HOMEOWNER_SERVICE_AGREEMENT === true}
+              onChange={(v) => setQuoteConsents((s) => ({ ...s, HOMEOWNER_SERVICE_AGREEMENT: v }))}
+              label="I agree to the Homeowner Service Agreement and Visit/Cancellation Policy."
+              documentKey="HOMEOWNER_SERVICE_AGREEMENT"
+              documentLabel="Homeowner Agreement"
+            />
+            <ConsentCheckbox
+              id={`mobile-quote-cancel-${job.id}`}
+              checked={quoteConsents.VISIT_CANCELLATION_POLICY === true}
+              onChange={(v) => setQuoteConsents((s) => ({ ...s, VISIT_CANCELLATION_POLICY: v }))}
+              label="I agree to the Visit/Cancellation Policy."
+              documentKey="VISIT_CANCELLATION_POLICY"
+              documentLabel="Visit/Cancellation Policy"
+            />
+            <ConsentCheckbox
+              id={`mobile-quote-scope-${job.id}`}
+              checked={quoteConsents.QUOTE_SCOPE_APPROVAL === true}
+              onChange={(v) => setQuoteConsents((s) => ({ ...s, QUOTE_SCOPE_APPROVAL: v }))}
+              label="I approve this scope and TOTAL price. No extra work is approved unless I approve a change order."
+            />
+          </ConsentSection>
+          <div className="flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Quote ready</p>
+              <p className="truncate text-lg font-semibold tabular-nums">{formatMoney(proposal.retailAmount)}</p>
+            </div>
+            <button
+              type="button"
+              className="shrink-0 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white shadow-[0_8px_24px_rgba(255,77,28,0.28)] disabled:opacity-60"
+              disabled={busy || !allChecked(quoteConsents, quoteConsentKeys)}
+              onClick={handleApproveProposal}
+            >
+              Accept Quote
+            </button>
           </div>
-          <button
-            type="button"
-            className="shrink-0 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white shadow-[0_8px_24px_rgba(255,77,28,0.28)] disabled:opacity-60"
-            disabled={busy}
-            onClick={handleApproveProposal}
-          >
-            Accept Quote
-          </button>
         </div>
       </div>
     ) : null;

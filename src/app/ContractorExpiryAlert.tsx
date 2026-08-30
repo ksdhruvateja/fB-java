@@ -74,15 +74,13 @@ export default function ContractorExpiryAlert({
           </ul>
 
           <div className="flex flex-wrap justify-end gap-2 border-t border-border bg-muted/20 px-5 py-4">
-            {!hasExpired && (
-              <button
-                type="button"
-                onClick={onClose}
-                className="rounded-xl border border-border px-4 py-2.5 text-sm font-medium hover:bg-muted"
-              >
-                Remind me later
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-xl border border-border px-4 py-2.5 text-sm font-medium hover:bg-muted"
+            >
+              Update details later
+            </button>
             <button
               type="button"
               onClick={onUpdate}

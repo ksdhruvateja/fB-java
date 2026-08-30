@@ -830,6 +830,97 @@ export default function AdminPricingPanel({
 
           {section === "dispatch" && (
             <div className="space-y-3">
+              <div className="rounded-2xl border border-border/70 bg-card p-5 shadow-sm space-y-4">
+                <div>
+                  <h2 className="font-semibold">Professional dispatch pricing</h2>
+                  <p className="text-xs text-muted-foreground">
+                    Homeowner-facing authorization lines (AUTHORIZED NOW). Version{" "}
+                    {String((pricingRules.professional_dispatch_pricing as { version?: number })?.version || 1)}.
+                  </p>
+                </div>
+                {(
+                  (pricingRules.professional_dispatch_pricing as {
+                    lines?: Array<{
+                      key: string;
+                      label: string;
+                      amount_cents: number;
+                      enabled: boolean;
+                      line_type: string;
+                      timing_adjustable?: boolean;
+                    }>;
+                  })?.lines || []
+                ).map((line, idx) => (
+                  <div key={line.key || idx} className="rounded-xl border border-border/60 p-3 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <input
+                        className="min-w-[12rem] flex-1 rounded-lg border border-border bg-background px-2 py-1.5 text-sm font-medium"
+                        value={line.label}
+                        onChange={(e) => {
+                          const lines = [
+                            ...((pricingRules.professional_dispatch_pricing as { lines?: typeof line[] })?.lines ||
+                              []),
+                          ];
+                          lines[idx] = { ...line, label: e.target.value };
+                          setPricingRules({
+                            ...pricingRules,
+                            professional_dispatch_pricing: {
+                              ...(pricingRules.professional_dispatch_pricing as object),
+                              lines,
+                            },
+                          });
+                        }}
+                      />
+                      <label className="flex items-center gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={line.enabled !== false}
+                          onChange={(e) => {
+                            const lines = [
+                              ...((pricingRules.professional_dispatch_pricing as { lines?: typeof line[] })?.lines ||
+                                []),
+                            ];
+                            lines[idx] = { ...line, enabled: e.target.checked };
+                            setPricingRules({
+                              ...pricingRules,
+                              professional_dispatch_pricing: {
+                                ...(pricingRules.professional_dispatch_pricing as object),
+                                lines,
+                              },
+                            });
+                          }}
+                        />
+                        Enabled
+                      </label>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <NumField
+                        label={line.line_type === "discount" ? "Discount amount" : "Amount"}
+                        value={Number(line.amount_cents || 0) / 100}
+                        onChange={(n) => {
+                          const lines = [
+                            ...((pricingRules.professional_dispatch_pricing as { lines?: typeof line[] })?.lines ||
+                              []),
+                          ];
+                          lines[idx] = { ...line, amount_cents: Math.round(n * 100) };
+                          setPricingRules({
+                            ...pricingRules,
+                            professional_dispatch_pricing: {
+                              ...(pricingRules.professional_dispatch_pricing as object),
+                              lines,
+                            },
+                          });
+                        }}
+                        suffix="$"
+                        dirty={isDirtyPath(`professional_dispatch_pricing.lines.${idx}.amount_cents`)}
+                      />
+                      <div className="flex items-end text-xs text-muted-foreground">
+                        Type: {line.line_type === "discount" ? "Discount" : "Charge"}
+                        {line.timing_adjustable ? " · timing-adjustable visit fee" : ""}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
               <div className="rounded-2xl border border-border/70 bg-card p-5 shadow-sm">
                 <h2 className="font-semibold">Dispatch / assessment fees</h2>
                 <p className="text-xs text-muted-foreground">

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { BadgeCheck, Ban, Briefcase, FileText, Shield, Star, Wallet } from "lucide-react";
 import type { AuthUser } from "./auth";
 import { ContractorApplicationAdminView } from "./ContractorAdminDetail";
+import AdminContractorCompliancePanel from "./AdminContractorCompliancePanel";
 import { applicationFromUser } from "./contractorApplication";
 import { formatMoney, STATUS_LABELS, type ManagedJob } from "./managedJobs";
 import { relativeTime } from "./adminOpsHelpers";
@@ -25,7 +26,7 @@ const TABS: { id: ProfileTab; label: string }[] = [
   { id: "jobs", label: "Jobs" },
   { id: "performance", label: "Performance" },
   { id: "financials", label: "Financials" },
-  { id: "documents", label: "Documents" },
+  { id: "documents", label: "Compliance" },
   { id: "internal", label: "Internal" },
 ];
 
@@ -298,7 +299,16 @@ export default function Contractor360Profile({
           </div>
         )}
 
-        {tab === "documents" && <ContractorApplicationAdminView user={contractor} onViewDocument={onViewDocument} />}
+        {tab === "documents" && (
+          <div className="space-y-4">
+            <AdminContractorCompliancePanel
+              contractorId={contractorId}
+              contractorName={contractor.name}
+              canVerify
+            />
+            <ContractorApplicationAdminView user={contractor} onViewDocument={onViewDocument} />
+          </div>
+        )}
 
         {tab === "internal" && (
           <div className="space-y-3">

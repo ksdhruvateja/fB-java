@@ -44,8 +44,9 @@ export function isContractorEligibleForJob(contractor, job, { requireCompliance 
   if (!contractor || contractor.role !== 'contractor') return false;
   if (contractor.is_blocked) return false;
   if (requireCompliance) {
+    if (contractor.dispatch_eligible === false) return false;
     const compliance = String(contractor.compliance_status || '').toLowerCase();
-    if (compliance && compliance !== 'approved') return false;
+    if (['suspended', 'rejected', 'blocked'].includes(compliance)) return false;
   }
   if (!contractorTradesMatchCategory(job.category, contractor.trade)) return false;
   return contractorCoversJobZip(contractor, job.zip || job.city_state_zip);
@@ -57,8 +58,11 @@ export function rankEligibleContractors(contractors, job) {
       let score = 0;
       if (contractorTradesMatchCategory(job.category, c.trade)) score += 40;
       if (contractorCoversJobZip(c, job.zip || job.city_state_zip)) score += 40;
-      const compliance = String(c.compliance_status || '').toLowerCase();
-      if (compliance === 'approved') score += 20;
+      if (c.dispatch_eligible === true) score += 20;
+      else {
+        const compliance = String(c.compliance_status || '').toLowerCase();
+        if (compliance === 'approved') score += 5;
+      }
       return { contractor: c, score };
     })
     .sort((a, b) => b.score - a.score);

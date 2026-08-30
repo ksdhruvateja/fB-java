@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import type { Unicon } from "./contractorIcons";
 import {
   SECTION_ICONS,
@@ -10,18 +10,27 @@ import {
 import { brand } from "../config/brand";
 import {
   BUSINESS_TYPES,
-  COI_SAMPLE_URL,
+  FIXBRIDGE_CONTRACTOR_AGREEMENT_V4_PDF_URL,
+  FIXBRIDGE_INSURANCE_REQUIREMENTS_PDF_URL,
+  INSURANCE_REQUIREMENTS_URL,
+  W9_FORM_URL,
   PHONE_TYPES,
   PRIMARY_SERVICES,
   UNION_OPTIONS,
   US_STATES,
-  W9_FORM_URL,
   type ApplicationDoc,
   type ContractorApplication,
   type TaxIdType,
   type YesNo,
 } from "./contractorApplication";
 import { VerifiedAddressFields } from "./VerifiedAddressInput";
+import InsuranceRequirementsLink from "./InsuranceRequirementsLink";
+import {
+  CONTRACTOR_APPLICATION_DOCUMENTS,
+  formatLegalDate,
+  LEGAL_ROUTES,
+} from "./legalDocuments";
+import { fetchPublicLegalDocument } from "./legalApi";
 
 const inputClass =
   "w-full rounded-xl border border-border bg-background px-3.5 py-2.5 text-sm outline-none transition focus:border-primary/50 focus:ring-2 focus:ring-primary/15";
@@ -137,6 +146,7 @@ function DocUpload({
   existingName,
   onChange,
   sampleLink,
+  allowUploadLater,
 }: {
   label: string;
   required?: boolean;
@@ -144,7 +154,11 @@ function DocUpload({
   existingName?: string | null;
   onChange: (doc: ApplicationDoc) => void;
   sampleLink?: { href: string; text: string };
+  allowUploadLater?: boolean;
 }) {
+  const [uploadLater, setUploadLater] = useState(false);
+  const hasExisting = Boolean(existingName || file?.data);
+
   return (
     <div className="space-y-2 rounded-xl border border-border bg-muted/20 p-3.5">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -152,6 +166,11 @@ function DocUpload({
           <UilFileUploadAlt size={14} color="currentColor" className="text-primary" />
           {label} {required ? <Req /> : null}
         </span>
+        {hasExisting ? (
+          <span className="text-[10px] font-semibold text-emerald-600">✓ Uploaded</span>
+        ) : uploadLater ? (
+          <span className="text-[10px] font-semibold text-muted-foreground">Upload later</span>
+        ) : null}
         {sampleLink ? (
           <a
             href={sampleLink.href}
@@ -164,22 +183,50 @@ function DocUpload({
           </a>
         ) : null}
       </div>
-      <input
-        type="file"
-        accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/*"
-        required={required && !existingName && !file?.data}
-        className="w-full text-xs text-foreground file:mr-2 file:rounded-md file:border file:border-border file:bg-card file:px-2.5 file:py-1 file:text-xs file:font-semibold"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (!f) {
-            onChange(null);
-            return;
-          }
-          const reader = new FileReader();
-          reader.onload = () => onChange({ name: f.name, data: reader.result as string });
-          reader.readAsDataURL(f);
-        }}
-      />
+      {allowUploadLater && !hasExisting ? (
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setUploadLater(false);
+              onChange(null);
+            }}
+            className={`rounded-md px-2 py-1 text-[10px] font-semibold ${!uploadLater ? "bg-primary text-white" : "border border-border"}`}
+          >
+            Upload now
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setUploadLater(true);
+              onChange(null);
+            }}
+            className={`rounded-md px-2 py-1 text-[10px] font-semibold ${uploadLater ? "bg-muted text-foreground" : "border border-border"}`}
+          >
+            Upload later
+          </button>
+        </div>
+      ) : null}
+      {!uploadLater ? (
+        <input
+          type="file"
+          accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/*"
+          required={required && !existingName && !file?.data}
+          className="w-full text-xs text-foreground file:mr-2 file:rounded-md file:border file:border-border file:bg-card file:px-2.5 file:py-1 file:text-xs file:font-semibold"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (!f) {
+              onChange(null);
+              return;
+            }
+            const reader = new FileReader();
+            reader.onload = () => onChange({ name: f.name, data: reader.result as string });
+            reader.readAsDataURL(f);
+          }}
+        />
+      ) : (
+        <p className="text-[10px] text-muted-foreground">You can upload this from your Compliance dashboard after applying.</p>
+      )}
       {file?.name && <p className="text-[10px] text-emerald-600">Selected: {file.name}</p>}
       {!file && existingName && (
         <p className="text-[10px] text-muted-foreground truncate">Current: {existingName}</p>
@@ -196,7 +243,37 @@ export type ContractorApplicationDocs = {
   businessLicense: ApplicationDoc;
   idDoc: ApplicationDoc;
   diversityCert: ApplicationDoc;
+  aiOngoing: ApplicationDoc;
+  aiCompleted: ApplicationDoc;
+  primaryNonContributory: ApplicationDoc;
+  glWaiver: ApplicationDoc;
+  workersComp: ApplicationDoc;
+  wcWaiver: ApplicationDoc;
+  commercialAuto: ApplicationDoc;
+  umbrellaExcess: ApplicationDoc;
+  soloOwnerAck: ApplicationDoc;
 };
+
+export function emptyContractorApplicationDocs(): ContractorApplicationDocs {
+  return {
+    w9: null,
+    license: null,
+    insurance: null,
+    businessRegistration: null,
+    businessLicense: null,
+    idDoc: null,
+    diversityCert: null,
+    aiOngoing: null,
+    aiCompleted: null,
+    primaryNonContributory: null,
+    glWaiver: null,
+    workersComp: null,
+    wcWaiver: null,
+    commercialAuto: null,
+    umbrellaExcess: null,
+    soloOwnerAck: null,
+  };
+}
 
 export type ExistingDocs = {
   w9?: string | null;
@@ -205,6 +282,15 @@ export type ExistingDocs = {
   businessRegistration?: string | null;
   businessLicense?: string | null;
   idDoc?: string | null;
+  aiOngoing?: string | null;
+  aiCompleted?: string | null;
+  primaryNonContributory?: string | null;
+  glWaiver?: string | null;
+  workersComp?: string | null;
+  wcWaiver?: string | null;
+  commercialAuto?: string | null;
+  umbrellaExcess?: string | null;
+  soloOwnerAck?: string | null;
 };
 
 export default function ContractorApplicationForm({
@@ -482,37 +568,108 @@ export default function ContractorApplicationForm({
       <div className={sectionClass}>
         <SectionTitle icon={SECTION_ICONS.documents}>5. Documents</SectionTitle>
         <p className={helpClass}>
-          PDF or image, under ~3.5 MB each. Upload your W-9 and Certificate of Insurance now
-          {mode === "profile" ? " or replace existing files anytime." : "."}
+          PDF or image, under ~3.5 MB each. Upload documents now or choose &quot;Upload later&quot; — you can submit
+          your application even if some documents are still missing. Live dispatch requires verified compliance.
         </p>
+        <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5 space-y-2">
+          <p className="text-sm font-medium">Need help preparing your insurance documents?</p>
+          <InsuranceRequirementsLink label="View FixBridge Insurance Requirements / Sample COI" />
+        </div>
+        <div className="rounded-xl border border-primary/20 bg-primary/5 p-3.5 text-xs space-y-1">
+          <p className="font-semibold text-primary">Certificate Holder / Additional Insured legal name</p>
+          <p>Liora Creations, Corp. d/b/a FixBridge</p>
+          <p className="pt-1 font-semibold text-primary">Temporary COI / legal notice address</p>
+          <p>131 Continental Dr, Suite 305, Newark, DE 19713</p>
+        </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <DocUpload
             label="W-9"
-            required={mode === "signup"}
             file={docs.w9}
             existingName={existingDocs?.w9}
             onChange={(d) => onDocsChange({ ...docs, w9: d })}
             sampleLink={{ href: W9_FORM_URL, text: "Download blank W-9 (IRS) →" }}
+            allowUploadLater
           />
           <DocUpload
-            label="Certificate of Insurance"
-            required={mode === "signup" && value.generalLiability === "yes"}
+            label="Certificate of Insurance (COI)"
             file={docs.insurance}
             existingName={existingDocs?.insurance}
             onChange={(d) => onDocsChange({ ...docs, insurance: d })}
-            sampleLink={{ href: COI_SAMPLE_URL, text: "View a sample marked-up COI →" }}
+            sampleLink={{
+              href: FIXBRIDGE_INSURANCE_REQUIREMENTS_PDF_URL,
+              text: "View FixBridge Insurance Requirements / Sample COI →",
+            }}
+            allowUploadLater
           />
           <DocUpload
-            label="Business registration"
-            file={docs.businessRegistration}
-            existingName={existingDocs?.businessRegistration}
-            onChange={(d) => onDocsChange({ ...docs, businessRegistration: d })}
+            label="Business / Trade License"
+            file={docs.license}
+            existingName={existingDocs?.license}
+            onChange={(d) => onDocsChange({ ...docs, license: d })}
+            allowUploadLater
           />
           <DocUpload
-            label="Business license"
-            file={docs.businessLicense}
-            existingName={existingDocs?.businessLicense}
-            onChange={(d) => onDocsChange({ ...docs, businessLicense: d })}
+            label="Additional Insured — ongoing operations"
+            file={docs.aiOngoing}
+            existingName={existingDocs?.aiOngoing}
+            onChange={(d) => onDocsChange({ ...docs, aiOngoing: d })}
+            allowUploadLater
+          />
+          <DocUpload
+            label="Additional Insured — completed operations"
+            file={docs.aiCompleted}
+            existingName={existingDocs?.aiCompleted}
+            onChange={(d) => onDocsChange({ ...docs, aiCompleted: d })}
+            allowUploadLater
+          />
+          <DocUpload
+            label="Primary & Non-Contributory Endorsement"
+            file={docs.primaryNonContributory}
+            existingName={existingDocs?.primaryNonContributory}
+            onChange={(d) => onDocsChange({ ...docs, primaryNonContributory: d })}
+            allowUploadLater
+          />
+          <DocUpload
+            label="Waiver of Subrogation — General Liability"
+            file={docs.glWaiver}
+            existingName={existingDocs?.glWaiver}
+            onChange={(d) => onDocsChange({ ...docs, glWaiver: d })}
+            allowUploadLater
+          />
+          <DocUpload
+            label="Workers' Compensation proof"
+            file={docs.workersComp}
+            existingName={existingDocs?.workersComp}
+            onChange={(d) => onDocsChange({ ...docs, workersComp: d })}
+            allowUploadLater
+          />
+          <DocUpload
+            label="Workers' Comp Waiver of Subrogation"
+            file={docs.wcWaiver}
+            existingName={existingDocs?.wcWaiver}
+            onChange={(d) => onDocsChange({ ...docs, wcWaiver: d })}
+            allowUploadLater
+          />
+          <DocUpload
+            label="Commercial Auto proof"
+            file={docs.commercialAuto}
+            existingName={existingDocs?.commercialAuto}
+            onChange={(d) => onDocsChange({ ...docs, commercialAuto: d })}
+            allowUploadLater
+          />
+          <DocUpload
+            label="Umbrella / Excess coverage"
+            file={docs.umbrellaExcess}
+            existingName={existingDocs?.umbrellaExcess}
+            onChange={(d) => onDocsChange({ ...docs, umbrellaExcess: d })}
+            allowUploadLater
+          />
+          <DocUpload
+            label="Solo Owner / No Employees Acknowledgment"
+            file={docs.soloOwnerAck}
+            existingName={existingDocs?.soloOwnerAck}
+            onChange={(d) => onDocsChange({ ...docs, soloOwnerAck: d })}
+            allowUploadLater
           />
         </div>
       </div>
@@ -814,6 +971,15 @@ export default function ContractorApplicationForm({
         </div>
       </div>
 
+      {/* 9b. Onboarding documents */}
+      <div className={sectionClass}>
+        <SectionTitle icon={SECTION_ICONS.attestation}>Documents to review</SectionTitle>
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          Open each document before signing. Version and effective date are shown from the current published legal record.
+        </p>
+        <ContractorApplicationLegalDocs />
+      </div>
+
       {/* 10. Attestation */}
       <div className={sectionClass}>
         <SectionTitle icon={SECTION_ICONS.attestation}>10. Attestation</SectionTitle>
@@ -830,19 +996,71 @@ export default function ContractorApplicationForm({
             company. <Req />
           </span>
         </label>
-        <label className="flex items-start gap-2.5 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={value.agreeTerms}
-            onChange={(e) => set("agreeTerms", e.target.checked)}
-            required={mode === "signup"}
-            className="mt-0.5 h-4 w-4 rounded border-border text-primary focus:ring-primary"
-          />
-          <span className="text-xs text-foreground leading-relaxed">
-            I agree to {brand.productName} Contractor Terms. <Req />
-          </span>
-        </label>
+        {mode === "signup" ? (
+          <p className="text-[11px] text-muted-foreground pl-6">
+            FixBridge Contractor Agreement Package v4 acceptance is required in the Agreement &amp; Compliance
+            section before submission.
+          </p>
+        ) : null}
       </div>
     </div>
+  );
+}
+
+function ContractorApplicationLegalDocs() {
+  const [meta, setMeta] = useState<Record<string, { version: string; effectiveDate?: string }>>({});
+
+  useEffect(() => {
+    for (const item of CONTRACTOR_APPLICATION_DOCUMENTS) {
+      if (!item.key) continue;
+      void fetchPublicLegalDocument(item.key).then((r) => {
+        if (r.ok && r.document) {
+          setMeta((prev) => ({
+            ...prev,
+            [item.key!]: { version: r.document!.version, effectiveDate: r.document!.effectiveDate },
+          }));
+        }
+      });
+    }
+  }, []);
+
+  return (
+    <ul className="space-y-2">
+      {CONTRACTOR_APPLICATION_DOCUMENTS.map((item) => {
+        const href =
+          item.key === "INSURANCE_REQUIREMENTS"
+            ? FIXBRIDGE_INSURANCE_REQUIREMENTS_PDF_URL
+            : item.key === "CONTRACTOR_AGREEMENT"
+              ? FIXBRIDGE_CONTRACTOR_AGREEMENT_V4_PDF_URL
+              : item.externalHref || (item.key ? LEGAL_ROUTES[item.key] : "#");
+        const m = item.key ? meta[item.key] : null;
+        return (
+          <li
+            key={`${item.label}-${item.key || item.externalHref}`}
+            className="flex flex-col gap-1 rounded-xl border border-border/70 bg-muted/20 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div>
+              <p className="text-sm font-medium">{item.label}</p>
+              {m ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Version {m.version}
+                  {m.effectiveDate ? ` · Effective ${formatLegalDate(m.effectiveDate)}` : ""}
+                </p>
+              ) : item.key ? (
+                <p className="text-[11px] text-muted-foreground">Loading version…</p>
+              ) : null}
+            </div>
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+            >
+              Open <UilExternalLinkAlt className="h-3.5 w-3.5" />
+            </a>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

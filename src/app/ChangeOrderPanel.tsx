@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Loader2, Plus, Check, X } from "lucide-react";
+import { Loader2, Plus, Check } from "lucide-react";
 import { formatMoney } from "./managedJobs";
 import {
   listChangeOrders,
@@ -8,14 +8,17 @@ import {
   priceChangeOrder,
   type ChangeOrder,
 } from "./changeOrdersApi";
+import { ConsentCheckbox, ConsentSection } from "./ConsentCheckbox";
 
 export default function ChangeOrderPanel({
   jobId,
   role,
+  originalApprovedTotal,
   onChanged,
 }: {
   jobId: number;
   role: "contractor" | "admin" | "homeowner";
+  originalApprovedTotal?: number | null;
   onChanged?: () => void;
 }) {
   const [orders, setOrders] = useState<ChangeOrder[]>([]);
@@ -26,6 +29,7 @@ export default function ChangeOrderPanel({
   const [reason, setReason] = useState("");
   const [amount, setAmount] = useState("");
   const [retailDraft, setRetailDraft] = useState<Record<number, string>>({});
+  const [changeOrderAck, setChangeOrderAck] = useState<Record<number, boolean>>({});
 
   const refresh = async () => {
     setLoading(true);
@@ -38,6 +42,10 @@ export default function ChangeOrderPanel({
   useEffect(() => {
     void refresh();
   }, [jobId]);
+
+  const approvedAdditional = orders
+    .filter((co) => co.status === "approved" && co.retailAmount != null)
+    .reduce((sum, co) => sum + Number(co.retailAmount || 0), 0);
 
   const submitContractor = async () => {
     setBusy(true);
@@ -83,8 +91,14 @@ export default function ChangeOrderPanel({
   };
 
   const approve = async (co: ChangeOrder) => {
+    if (!changeOrderAck[co.id]) {
+      setError("Please approve this additional scope and price before continuing.");
+      return;
+    }
     setBusy(true);
-    const r = await approveChangeOrder(jobId, co.id);
+    const r = await approveChangeOrder(jobId, co.id, {
+      CHANGE_ORDER_APPROVAL: true,
+    });
     setBusy(false);
     if (!r.ok) {
       setError(r.message || "Could not approve.");
@@ -149,7 +163,12 @@ export default function ChangeOrderPanel({
         <p className="text-sm text-muted-foreground">No change orders yet.</p>
       ) : (
         <ul className="space-y-3">
-          {orders.map((co) => (
+          {orders.map((co) => {
+            const additional = Number(co.retailAmount || 0);
+            const original = Number(originalApprovedTotal || 0);
+            const updatedTotal = original + approvedAdditional + (co.status === "approved" ? 0 : additional);
+
+            return (
             <li key={co.id} className="rounded-xl border border-border p-3 text-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-mono text-xs uppercase text-muted-foreground">{co.status.replace(/_/g, " ")}</span>
@@ -164,6 +183,27 @@ export default function ChangeOrderPanel({
               {(role === "admin" || role === "homeowner") && co.retailAmount != null ? (
                 <p className="font-semibold">Homeowner price: {formatMoney(co.retailAmount)}</p>
               ) : null}
+
+              {role === "homeowner" && co.status === "sent_to_homeowner" && co.retailAmount != null && (
+                <div className="mt-3 space-y-2 rounded-lg border border-border bg-muted/15 p-3 text-xs tabular-nums">
+                  {original > 0 ? (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Original approved total</span>
+                        <span>{formatMoney(original)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Additional change order</span>
+                        <span>{formatMoney(additional)}</span>
+                      </div>
+                      <div className="flex justify-between border-t border-border pt-2 font-semibold">
+                        <span>Updated total</span>
+                        <span>{formatMoney(updatedTotal)}</span>
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              )}
 
               {role === "admin" && ["submitted", "admin_reviewed"].includes(co.status) && (
                 <div className="mt-3 flex flex-wrap gap-2 items-end">
@@ -188,14 +228,23 @@ export default function ChangeOrderPanel({
               )}
 
               {role === "homeowner" && co.status === "sent_to_homeowner" && (
-                <div className="mt-3 flex gap-2">
+                <div className="mt-3 space-y-2">
+                  <ConsentSection title="Change order approval">
+                    <ConsentCheckbox
+                      id={`co-ack-${co.id}`}
+                      checked={!!changeOrderAck[co.id]}
+                      onChange={(v) => setChangeOrderAck((prev) => ({ ...prev, [co.id]: v }))}
+                      label="I approve this additional scope and additional price."
+                    />
+                  </ConsentSection>
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={busy || !changeOrderAck[co.id]}
                     onClick={() => void approve(co)}
-                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white"
+                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
                   >
-                    <Check className="h-3.5 w-3.5" /> Approve {co.retailAmount != null ? formatMoney(co.retailAmount) : ""}
+                    <Check className="h-3.5 w-3.5" /> Approve Change Order
+                    {co.retailAmount != null ? ` ${formatMoney(co.retailAmount)}` : ""}
                   </button>
                 </div>
               )}
@@ -204,7 +253,8 @@ export default function ChangeOrderPanel({
                 <p className="mt-2 text-xs text-muted-foreground">Locked — included in final invoice.</p>
               ) : null}
             </li>
-          ))}
+          );
+          })}
         </ul>
       )}
     </section>

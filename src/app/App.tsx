@@ -32,6 +32,8 @@ import {
   roleHomeFrame,
   roleHomePage,
 } from "./navigation";
+import LegalDocumentPage from "./LegalDocumentPage";
+import { PUBLIC_FOOTER_LEGAL_LINKS, PUBLIC_CONTRACTOR_LEGAL_LINKS } from "./legalDocuments";
 import { applySiteMeta } from "./siteMeta";
 
 function isResetRole(role: string | null): role is ResetRole {
@@ -456,18 +458,37 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
           <p className="font-mono text-[11px] text-muted-foreground text-center sm:text-left">
             © 2026 {brand.legalName} AI, Inc. All rights reserved.
           </p>
-          <div className="flex flex-col sm:flex-row sm:flex-wrap items-center justify-center sm:justify-start md:justify-end gap-3 sm:gap-4 md:gap-6">
-            {["Privacy Policy", "Terms of Service", "Contractor Agreement"].map((item) => (
-              <a
-                key={item}
-                href="#"
-                className="font-mono text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {item}
-              </a>
-            ))}
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Legal</p>
+              <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:gap-4">
+                {PUBLIC_FOOTER_LEGAL_LINKS.map((item) => (
+                  <a
+                    key={item.href}
+                    href={item.href}
+                    className="font-mono text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {item.label}
+                  </a>
+                ))}
+              </div>
+              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground mt-4 mb-2">
+                Contractors
+              </p>
+              <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:gap-4">
+                {PUBLIC_CONTRACTOR_LEGAL_LINKS.map((item) => (
+                  <a
+                    key={item.href}
+                    href={item.href}
+                    className="font-mono text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {item.label}
+                  </a>
+                ))}
+              </div>
+            </div>
             <span
-              className="font-mono text-[10px] text-primary/80 tracking-wider"
+              className="font-mono text-[10px] text-primary/80 tracking-wider self-center sm:self-auto"
               title="Deploy build stamp — hard-refresh if this does not match the latest release"
             >
               Build {typeof __FIXBRIDGE_BUILD__ !== "undefined" ? __FIXBRIDGE_BUILD__ : "dev"} · v0.0.2
@@ -516,6 +537,21 @@ export default function App() {
   const [subscriptionActivating, setSubscriptionActivating] = useState(false);
   const [showSubscriptionCancel, setShowSubscriptionCancel] = useState(false);
   const [postPaymentDashboard, setPostPaymentDashboard] = useState(false);
+  const [legalPath, setLegalPath] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const p = window.location.pathname.replace(/\/+$/, "") || "/";
+    return p === "/legal" || p.startsWith("/legal/") ? p : null;
+  });
+
+  useEffect(() => {
+    const syncLegalPath = () => {
+      const p = window.location.pathname.replace(/\/+$/, "") || "/";
+      setLegalPath(p === "/legal" || p.startsWith("/legal/") ? p : null);
+    };
+    syncLegalPath();
+    window.addEventListener("popstate", syncLegalPath);
+    return () => window.removeEventListener("popstate", syncLegalPath);
+  }, []);
 
   // Detect password-reset links: /reset-password?token=...&role=... or /?action=reset-password&...
   // Partner intake: /start?partner=CODE or /?partner=CODE
@@ -887,6 +923,21 @@ export default function App() {
             }}
           />
         </div>
+      </div>
+    );
+  }
+
+  if (legalPath) {
+    return (
+      <div className={`${isDark ? "dark" : ""} size-full`} style={{ colorScheme: isDark ? "dark" : "light" }}>
+        <LegalDocumentPage
+          pathname={legalPath}
+          onNavigateHome={() => {
+            window.history.pushState({}, "", "/");
+            setLegalPath(null);
+            setPage("home");
+          }}
+        />
       </div>
     );
   }

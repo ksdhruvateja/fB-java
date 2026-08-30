@@ -69,6 +69,7 @@ import HomeownerHomeUpdates from "./HomeownerHomeUpdates";
 import HomeownerPropertyCare from "./HomeownerPropertyCare";
 import HomeownerHomeProtection from "./HomeownerHomeProtection";
 import HomeownerReferEarn from "./HomeownerReferEarn";
+import HomeownerLegalPanel from "./HomeownerLegalPanel";
 import { buildHomeUpdatesSnapshot, type HomeUpdateItem } from "./homeUpdates";
 import { buildPassportAiContext } from "./propertyPassport";
 import AppErrorBoundary, { DashboardTabFallback } from "./AppErrorBoundary";
@@ -107,6 +108,8 @@ import { clearAssistantHandoff, readAssistantHandoff } from "./assistantHandoff"
 import HomeownerGoProPlans, { type GoProPlanCard } from "./HomeownerGoProPlans";
 import SubscriptionSuccessModal from "./SubscriptionSuccessModal";
 import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
+import { ConsentCheckbox, ConsentSection } from "./ConsentCheckbox";
+import { fetchHomeownerConsentStatus, recordConsentAction } from "./homeownerConsentApi";
 import HomeownerLocalEstimate, { EstimateLoadingSteps } from "./HomeownerLocalEstimate";
 import HireProfessionalWizard from "./HireProfessionalWizard";
 import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
@@ -493,6 +496,10 @@ export default function HomeownerDashboard({
  const [diyIsGuided, setDiyIsGuided] = useState(false);
  const [diyStepIndex, setDiyStepIndex] = useState(0);
  const [diyCompletedSteps, setDiyCompletedSteps] = useState<Record<number, boolean>>({});
+ const [diySafetyAccepted, setDiySafetyAccepted] = useState(false);
+ const [diyConsentOpen, setDiyConsentOpen] = useState(false);
+ const [diyConsentChecked, setDiyConsentChecked] = useState(false);
+ const [diyConsentBusy, setDiyConsentBusy] = useState(false);
 
  // AI DIY Chat
  const [diyChatMessages, setDiyChatMessages] = useState<ChatMessage[]>([]);
@@ -509,6 +516,43 @@ export default function HomeownerDashboard({
  ]);
  }
  }, [activeJob]);
+
+ useEffect(() => {
+ void fetchHomeownerConsentStatus().then((r) => {
+ if (r.ok) setDiySafetyAccepted(r.diySafetyAccepted === true);
+ });
+ }, [user.id]);
+
+ async function startGuidedDiy() {
+ if (activeJob?.diyRiskLevel === "red" || activeJob?.aiAssessment?.diy_risk_level === "red") {
+ setError("Guided DIY is not available for this safety risk. Please request a professional.");
+ return;
+ }
+ if (diySafetyAccepted) {
+ setDiyIsGuided(true);
+ return;
+ }
+ setDiyConsentChecked(false);
+ setDiyConsentOpen(true);
+ }
+
+ async function confirmDiySafetyConsent() {
+ if (!diyConsentChecked) return;
+ setDiyConsentBusy(true);
+ const r = await recordConsentAction({
+ actionKey: "DIY_START",
+ consents: { DIY_SAFETY: true },
+ jobId: activeJob?.id,
+ });
+ setDiyConsentBusy(false);
+ if (!r.ok) {
+ setError(r.message || "Could not save DIY safety acknowledgment.");
+ return;
+ }
+ setDiySafetyAccepted(true);
+ setDiyConsentOpen(false);
+ setDiyIsGuided(true);
+ }
 
  const selectedJob = useMemo(
  () => jobs.find((j) => j.id === selectedJobId) || null,
@@ -1860,7 +1904,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  };
 
  const payloadMessages = [systemContext, ackContext, ...updatedMessages];
- const result = await chatWithAi(payloadMessages);
+ const result = await chatWithAi(payloadMessages, { jobId: activeJob.id });
 
  if (result.reply) {
  setDiyChatMessages([...updatedMessages, { role: "assistant", content: result.reply }]);
@@ -2220,6 +2264,48 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  onDismissSubscriptionSuccess?.();
  }}
  />
+
+ {diyConsentOpen ? (
+ <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-4 sm:items-center">
+ <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-xl">
+ <h3 className="text-lg font-semibold">Guided DIY safety acknowledgment</h3>
+ <p className="mt-1 text-sm text-muted-foreground">
+ Before using Guided DIY, confirm you understand the safety limits of AI guidance.
+ </p>
+ <div className="mt-4">
+ <ConsentSection title="Required">
+ <ConsentCheckbox
+ id="diy-safety-consent"
+ checked={diyConsentChecked}
+ onChange={setDiyConsentChecked}
+ label="I understand FixBridge AI guidance is informational, may be wrong, and I must stop if the task is unsafe or beyond my ability."
+ documentKey="DIY_SAFETY_DISCLAIMER"
+ documentLabel="AI / DIY Safety Disclaimer"
+ />
+ </ConsentSection>
+ </div>
+ <div className="mt-5 flex flex-wrap justify-end gap-2">
+ <button
+ type="button"
+ className="rounded-xl border border-border px-4 py-2 text-sm font-semibold"
+ onClick={() => setDiyConsentOpen(false)}
+ disabled={diyConsentBusy}
+ >
+ Cancel
+ </button>
+ <button
+ type="button"
+ className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+ disabled={!diyConsentChecked || diyConsentBusy}
+ onClick={() => void confirmDiySafetyConsent()}
+ >
+ {diyConsentBusy ? <Loader2 className="h-4 w-4 animate-spin inline" /> : null}
+ Start Guided DIY
+ </button>
+ </div>
+ </div>
+ </div>
+ ) : null}
 
  {tab === "report" && (
  <section className="mx-auto max-w-3xl space-y-5">
@@ -2973,8 +3059,61 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
  ) : (
  <div className="space-y-4">
+ {(() => {
+ const risk = String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green").toLowerCase();
+ if (risk === "red") {
+ return (
+ <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-red-950 dark:text-red-100 space-y-3">
+ <div className="flex gap-3">
+ <ShieldAlert className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
+ <div className="text-sm">
+ <p className="font-semibold">Safety risk detected</p>
+ <p className="mt-1 text-xs leading-relaxed opacity-90">
+ Do not attempt this repair yourself. Follow immediate safety steps and request a licensed professional.
+ </p>
+ </div>
+ </div>
+ {(activeJob.aiAssessment?.immediate_safety_steps || []).length > 0 ? (
+ <ul className="list-disc pl-5 text-xs space-y-1">
+ {assessmentStringList(activeJob.aiAssessment?.immediate_safety_steps).map((step, i) => (
+ <li key={i}>{step}</li>
+ ))}
+ </ul>
+ ) : null}
+ <button
+ type="button"
+ onClick={() => setAssessmentMode("expert")}
+ className="inline-flex items-center rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white"
+ >
+ Request a Professional
+ </button>
+ </div>
+ );
+ }
+ if (risk === "yellow") {
+ return (
+ <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-amber-950 dark:text-amber-100 flex gap-3">
+ <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+ <div className="text-sm">
+ <p className="font-semibold">Caution — Limited DIY Guidance</p>
+ <p className="mt-1 opacity-90 text-xs leading-relaxed">
+ We can help with low-risk checks, but this issue may require a professional.
+ </p>
+ <button
+ type="button"
+ onClick={() => setAssessmentMode("expert")}
+ className="mt-3 inline-flex items-center rounded-lg border border-primary px-3 py-1.5 text-xs font-semibold text-primary"
+ >
+ Get a Pro
+ </button>
+ </div>
+ </div>
+ );
+ }
+ return null;
+ })()}
  {/* DIY Caution Banner if not safe */}
- {!activeJob.aiAssessment?.safe_diy_allowed && (
+ {!activeJob.aiAssessment?.safe_diy_allowed && String(activeJob.diyRiskLevel || "green") !== "red" && (
  <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-4 text-red-950 dark:text-red-100 flex gap-3">
  <ShieldAlert className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
  <div className="text-sm">
@@ -3055,10 +3194,11 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <div className="rounded-xl border border-border p-4">
  <div className="flex items-center justify-between mb-4">
  <h4 className="font-semibold text-sm">Step-by-Step Instructions</h4>
- {assessmentStringList(activeJob.aiAssessment?.diy_steps).length > 0 && (
+ {assessmentStringList(activeJob.aiAssessment?.diy_steps).length > 0 &&
+ String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green") !== "red" && (
  <button
  type="button"
- onClick={() => setDiyIsGuided(!diyIsGuided)}
+ onClick={() => void (diyIsGuided ? setDiyIsGuided(false) : startGuidedDiy())}
  className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary hover:bg-primary/20 transition-colors"
  >
  {diyIsGuided ? "Switch to List View" : "Switch to Guided Mode"}
@@ -3067,7 +3207,11 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
 
  {assessmentStringList(activeJob.aiAssessment?.diy_steps).length > 0 ? (
- diyIsGuided ? (
+ String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green") === "red" ? (
+ <p className="text-sm text-muted-foreground">
+ Repair instructions are not shown for this safety risk. Request a professional for on-site help.
+ </p>
+ ) : diyIsGuided ? (
  <div className="space-y-4">
  {/* Progress bar */}
  <div>
@@ -3535,6 +3679,10 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  onPropertyUpdated={applyPropertyUpdate}
  onReloadProperty={(id) => void reloadProperty(id)}
  />
+ )}
+
+ {tab === "legal" && (
+ <HomeownerLegalPanel />
  )}
 
  {tab === "profile" && (

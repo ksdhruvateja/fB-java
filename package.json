@@ -41,6 +41,9 @@
     "smoke:usps-address": "node --env-file=.env scripts/smoke-usps-address.mjs",
     "smoke:navigation": "node scripts/smoke-navigation.mjs",
     "smoke:job-cancel": "node --env-file=.env scripts/smoke-job-cancel.mjs http://127.0.0.1:3001",
+    "smoke:contractor-compliance": "node --env-file=.env scripts/smoke-contractor-compliance.mjs http://127.0.0.1:3001",
+    "smoke:homeowner-consent": "node --env-file=.env scripts/smoke-homeowner-consent.mjs http://127.0.0.1:3001",
+    "smoke:dispatch-diy-safety": "node scripts/smoke-dispatch-diy-safety.mjs",
     "smoke:assessment-async": "node --env-file=.env scripts/smoke-assessment-async.mjs",
     "smoke:service-catalog": "node scripts/smoke-service-catalog.mjs",
     "brand:logo": "node scripts/process-brand-logo.mjs"

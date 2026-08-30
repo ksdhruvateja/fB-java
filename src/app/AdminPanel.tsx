@@ -25,6 +25,7 @@ import AdminContractorPayoutsPanel from "./AdminContractorPayoutsPanel";
 import AdminPayoutSettingsPanel from "./AdminPayoutSettingsPanel";
 import AdminOrderLedgerPanel from "./AdminOrderLedgerPanel";
 import AdminAuditLogsPanel from "./AdminAuditLogsPanel";
+import AdminLegalSystemPanel from "./AdminLegalSystemPanel";
 import AdminFinancePanel from "./AdminFinancePanel";
 import AdminSupportTicketsPanel from "./AdminSupportTicketsPanel";
 import AdminSubscriptionPlansPanel from "./AdminSubscriptionPlansPanel";
@@ -127,7 +128,8 @@ type Tab =
   | "support-tickets"
   | "pro-plans"
   | "homecare-pro"
-  | "visit-fee";
+  | "visit-fee"
+  | "legal-system";
 
 const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React.ElementType }[] }[] = [
   {
@@ -164,6 +166,7 @@ const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React
       { id: "homecare-pro", label: "HomeCare Pro", icon: Shield },
       { id: "access", label: "Team & Roles", icon: Shield },
       { id: "audit-logs", label: "Audit Logs", icon: ScrollText },
+      { id: "legal-system", label: "Legal / System", icon: ScrollText },
       { id: "platform", label: "Settings", icon: Settings2 },
     ],
   },
@@ -1528,19 +1531,21 @@ export default function AdminPanel({
                             const pref = Number(selectedJob.preferredContractorUserId || 0);
                             if (Number(a.id) === pref) return -1;
                             if (Number(b.id) === pref) return 1;
+                            if (a.dispatchEligible && !b.dispatchEligible) return -1;
+                            if (!a.dispatchEligible && b.dispatchEligible) return 1;
                             return (a.name || "").localeCompare(b.name || "");
                           })
                           .map((c) => {
                           const compliance = String(c.complianceStatus || "approved").toLowerCase();
-                          const blocked = ["draft", "under_review", "suspended", "rejected", "blocked"].includes(
-                            compliance
-                          );
+                          const blockedAccount = ["suspended", "rejected", "blocked"].includes(compliance);
+                          const dispatchBlocked = c.dispatchEligible === false || blockedAccount;
                           const isPreferred = Number(c.id) === Number(selectedJob.preferredContractorUserId);
                           return (
-                            <option key={String(c.id)} value={Number(c.id)} disabled={blocked}>
+                            <option key={String(c.id)} value={Number(c.id)} disabled={dispatchBlocked}>
                               {isPreferred ? "★ Preferred · " : ""}
                               {c.name} · {c.trade || "trade?"} · {c.email}
-                              {compliance !== "approved" ? ` (${compliance})` : ""}
+                              {dispatchBlocked ? " · NOT DISPATCH ELIGIBLE" : c.dispatchEligible ? " · ELIGIBLE" : ""}
+                              {!dispatchBlocked && compliance !== "approved" ? ` (${compliance})` : ""}
                             </option>
                           );
                         })}
@@ -2892,6 +2897,12 @@ export default function AdminPanel({
                 </button>
               </motion.div>
             )}
+          </section>
+        )}
+
+        {tab === "legal-system" && (
+          <section className="space-y-4">
+            <AdminLegalSystemPanel />
           </section>
         )}
 

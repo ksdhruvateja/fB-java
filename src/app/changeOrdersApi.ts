@@ -34,9 +34,13 @@ export async function priceChangeOrder(changeOrderId: number, retailAmount: numb
   );
 }
 
-export async function approveChangeOrder(jobId: number, changeOrderId: number) {
+export async function approveChangeOrder(
+  jobId: number,
+  changeOrderId: number,
+  consents?: Record<string, boolean>
+) {
   return api<{ ok: boolean; changeOrder?: ChangeOrder; message?: string }>(
     `/api/managed/jobs/${jobId}/change-orders/${changeOrderId}/approve`,
-    { method: "POST", body: JSON.stringify({}) }
+    { method: "POST", body: JSON.stringify({ consents, acknowledged: true }) }
   );
 }

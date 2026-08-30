@@ -30,6 +30,16 @@ export type CheckoutBreakdown = {
   serviceTiming?: string | null;
   address?: string | null;
   createdAt?: string;
+  lines?: Array<{
+    key: string;
+    label: string;
+    amount_cents: number;
+    line_type: 'charge' | 'discount';
+  }>;
+  authorizedNowCents?: number;
+  authorizedNow?: number;
+  repairWorkIncluded?: boolean;
+  repairWorkNote?: string;
 };
 
 export type ManagedJobStatus =
@@ -671,6 +681,21 @@ export async function prepareCheckout(
 }
 
 
+export async function fetchDispatchPricing(jobId: number, discountCode?: string) {
+  const q = discountCode ? `?discountCode=${encodeURIComponent(discountCode)}` : "";
+  return api<{
+    ok: boolean;
+    breakdown?: CheckoutBreakdown;
+    lines?: CheckoutBreakdown["lines"];
+    authorizedNow?: number;
+    authorizedNowCents?: number;
+    repairWorkIncluded?: boolean;
+    repairWorkNote?: string;
+    message?: string;
+  }>(`/api/managed/jobs/${jobId}/dispatch-pricing${q}`);
+}
+
+
 export async function requestProfessionalDispatch(
   jobId: number,
   body: {
@@ -680,6 +705,8 @@ export async function requestProfessionalDispatch(
     propertyPurpose: string;
     transactionStage: string;
     discountCode?: string;
+    consents?: Record<string, boolean>;
+    acknowledged?: boolean;
   }
 ) {
   return api<{ ok: boolean; job?: ManagedJob; message?: string }>(
@@ -705,12 +732,20 @@ export async function updateHomeownerJob(
   );
 }
 
-export async function payDispatchFee(jobId: number, discountCode?: string) {
+export async function payDispatchFee(
+  jobId: number,
+  discountCode?: string,
+  consents?: Record<string, boolean>
+) {
   return api<{ ok: boolean; simulated?: boolean; url?: string; amount?: number; job?: ManagedJob; message?: string }>(
     `/api/managed/jobs/${jobId}/pay-dispatch`,
     {
       method: "POST",
-      body: JSON.stringify(discountCode ? { discountCode } : {}),
+      body: JSON.stringify(
+        discountCode
+          ? { discountCode, consents, acknowledged: true }
+          : { consents, acknowledged: true }
+      ),
     }
   );
 }
@@ -719,17 +754,17 @@ export async function getProposal(jobId: number) {
   return api<{ ok: boolean; proposal: Proposal | null }>(`/api/managed/jobs/${jobId}/proposal`);
 }
 
-export async function approveProposal(jobId: number) {
+export async function approveProposal(jobId: number, consents?: Record<string, boolean>) {
   return api<{ ok: boolean; proposal?: Proposal; message?: string }>(
     `/api/managed/jobs/${jobId}/approve-proposal`,
-    { method: "POST", body: "{}" }
+    { method: "POST", body: JSON.stringify({ consents, acknowledged: true }) }
   );
 }
 
-export async function payRetail(jobId: number) {
+export async function payRetail(jobId: number, consents?: Record<string, boolean>) {
   return api<{ ok: boolean; simulated?: boolean; url?: string; amount?: number; job?: ManagedJob; message?: string }>(
     `/api/managed/jobs/${jobId}/pay-retail`,
-    { method: "POST", body: "{}" }
+    { method: "POST", body: JSON.stringify({ consents, acknowledged: true }) }
   );
 }
 

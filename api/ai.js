@@ -9,6 +9,12 @@
  *   AI_MODEL / OPENAI_MODEL         (e.g. gpt-4o-mini, google/gemma-3-27b-it:free)
  */
 
+import {
+  classifyDiyRiskLevel,
+  stripDangerousGuidanceFromAssessment,
+  guidancePolicyForRisk,
+} from './diy-safety.js';
+
 const GEMINI_MODELS = [
   'gemini-3.6-flash',
   'gemini-2.0-flash',
@@ -124,56 +130,54 @@ const DIY_BLOCK_PATTERNS = [
 
 export function applyDiySafetyRules(assessment, description = '') {
   const text = `${assessment.summary || ''} ${description} ${(assessment.visual_findings || []).join(' ')}`;
-  const blocked = DIY_BLOCK_PATTERNS.some((re) => re.test(text));
-  const confidence = typeof assessment.confidence === 'number' ? assessment.confidence : 0.5;
+  const classified = classifyDiyRiskLevel(text, assessment);
+  const level = classified.level;
 
-  const category = String(assessment.category || '').toLowerCase();
-  const urgency = String(assessment.urgency || '').toLowerCase();
-
-  // Enforce RED risk for high-risk categories, low confidence, active emergencies, or matching block patterns
-  const isRed =
-    blocked ||
-    confidence < 0.4 ||
-    assessment.safe_diy_allowed === false ||
-    assessment.diy_difficulty === 'blocked' ||
-    urgency.includes('emerg') ||
-    category === 'electrical' ||
-    category === 'hvac' ||
-    category === 'roofing' ||
-    /gas|leak|voltage|breaker|panel|sewer|flood|flame|fire|roof|structural|refrigerant/i.test(text);
-
-  if (isRed) {
-    return {
+  if (level === 'red') {
+    const next = {
       ...assessment,
       diy_risk_level: 'red',
+      diy_risk_reasons: classified.reasons,
+      diy_risk_reason_codes: classified.reasonCodes,
       safe_diy_allowed: false,
       professional_required: true,
       diy_difficulty: 'blocked',
-      diy_steps: assessment.diy_steps && assessment.diy_steps.length > 0 ? assessment.diy_steps : [], 
+      diy_steps: [],
+      tools_required: [],
+      materials_needed: [],
       immediate_safety_steps:
         assessment.immediate_safety_steps?.length
           ? assessment.immediate_safety_steps
           : [
-              'Isolate the danger area immediately.',
-              'Shut off local utility supply valves (gas, water mains, or electrical breakers) if safe to do so.',
-              'Contact emergency services if there is an active gas leak, fire, or immediate threat to life.',
-              'Do not attempt any DIY repair. Request professional dispatch to resolve this safely.'
+              'Do not use switches or open flame if gas is suspected.',
+              'Leave the area if a leak, fire, or immediate danger is present.',
+              'Shut off utilities only if you can do so safely.',
+              'Contact emergency services or your utility provider when appropriate.',
+              'Request a licensed professional through FixBridge — do not attempt repair yourself.',
             ],
+    };
+    return stripDangerousGuidanceFromAssessment(next, 'red');
+  }
+
+  if (level === 'yellow') {
+    return {
+      ...assessment,
+      diy_risk_level: 'yellow',
+      diy_risk_reasons: classified.reasons,
+      diy_risk_reason_codes: classified.reasonCodes,
+      safe_diy_allowed: true,
+      professional_required: assessment.professional_required !== false,
+      diy_difficulty: assessment.diy_difficulty || 'moderate',
     };
   }
 
-  // Determine YELLOW (DIY with caution) or GREEN (DIY safe)
-  const isYellow =
-    assessment.complexity === 'high' ||
-    assessment.complexity === 'medium' ||
-    assessment.diy_difficulty === 'hard' ||
-    assessment.diy_difficulty === 'moderate';
-
   return {
     ...assessment,
-    diy_risk_level: isYellow ? 'yellow' : 'green',
+    diy_risk_level: 'green',
+    diy_risk_reasons: [],
+    diy_risk_reason_codes: [],
     safe_diy_allowed: true,
-    diy_difficulty: assessment.diy_difficulty || (isYellow ? 'moderate' : 'easy'),
+    diy_difficulty: assessment.diy_difficulty || 'easy',
   };
 }
 
@@ -1606,6 +1610,9 @@ async function chatWithOpenAiCompatible(config, messages) {
 export async function chatWithCustomer(input) {
   const resolved = resolveAiProvider();
   const messages = Array.isArray(input?.messages) ? input.messages : [];
+  const riskLevel = input?.riskLevel || 'green';
+  const policy = guidancePolicyForRisk(riskLevel);
+  const safetyPrefix = { role: 'system', content: policy.systemPrompt };
   if (!resolved) {
     const lastUserMsg = messages.filter(m => m.role === 'user').pop()?.content || 'this step';
     let reply = `[Local Fallback Mode] I received your question: "${lastUserMsg}". Since you are running in local simulation mode (or GEMINI_API_KEY is not configured in .env), I cannot call the live LLM dynamically. Once GEMINI_API_KEY is active, I will analyze your specific questions relative to the tools, materials, and steps of the DIY Action Plan!`;
@@ -1619,13 +1626,13 @@ export async function chatWithCustomer(input) {
   }
 
   if (resolved.provider === 'gemini') {
-    const result = await chatWithGemini(resolved.apiKey, messages, resolved.model || GEMINI_MODELS[0]);
+    const result = await chatWithGemini(resolved.apiKey, [safetyPrefix, ...messages], resolved.model || GEMINI_MODELS[0]);
     if (!result.reply) return { reply: null, source: 'error', error: result.error };
-    return { reply: result.reply, source: 'gemini', model: resolved.model };
+    return { reply: result.reply, source: 'gemini', model: resolved.model, riskLevel };
   }
 
-  const result = await chatWithOpenAiCompatible(resolved, messages);
+  const result = await chatWithOpenAiCompatible(resolved, [safetyPrefix, ...messages]);
   if (!result.reply) return { reply: null, source: 'error', error: result.error };
-  return { reply: result.reply, source: resolved.provider, model: result.model || resolved.model };
+  return { reply: result.reply, source: resolved.provider, model: result.model || resolved.model, riskLevel };
 }
 

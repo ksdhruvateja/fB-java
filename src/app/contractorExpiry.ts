@@ -94,6 +94,26 @@ export function evaluateCredentialExpiry(
   };
 }
 
+export function expirySessionKey(userId: string | number): string {
+  return `fixbridge-expiry-modal-session-${userId}`;
+}
+
+export function hasShownExpiryModalThisSession(userId: string | number): boolean {
+  try {
+    return sessionStorage.getItem(expirySessionKey(userId)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function markExpiryModalShownThisSession(userId: string | number): void {
+  try {
+    sessionStorage.setItem(expirySessionKey(userId), "1");
+  } catch {
+    /* ignore */
+  }
+}
+
 export function getContractorExpiryAlerts(user: {
   licenseNumber?: string | null;
   licenseExpiresAt?: string | null;

@@ -14,6 +14,10 @@ import {
   applyVisitFeeCredit,
 } from './pricing.js';
 import {
+  buildProfessionalDispatchBreakdown,
+  saveProfessionalDispatchSnapshot,
+} from './professional-dispatch-pricing.js';
+import {
   buildLocalMarketProfile,
   loadMarketData,
   saveMarketSnapshot,
@@ -34,6 +38,8 @@ import {
 } from './homecare-config.js';
 import { buildPropertyAIContext } from './property-ai-context.js';
 import { analyzeRepairStructured, extractPropertyDocumentFields } from './ai.js';
+import { resolveJobPricingMode } from './contractor-agreement.js';
+import { createJobAuthorization } from './job-authorization.js';
 import {
   ASSESSMENT_ERROR_MESSAGES,
   resolveAssessmentStatus,
@@ -115,6 +121,23 @@ import {
   notifyJobCancelled,
   releaseVisitFeeHoldIfNeeded,
 } from './job-cancellation.js';
+import {
+  registerContractorComplianceRoutes,
+  enforceContractorDispatchGate,
+} from './contractor-compliance-routes.js';
+import {
+  ACKNOWLEDGMENT_TYPES,
+  requireHomeownerAcknowledgment,
+  requireActionConsents,
+  validateAndRecordActionConsents,
+  checkActionConsentsFromBody,
+  assertHomeownerDispatchConsent,
+  recordMarketingConsent,
+} from './homeowner-acknowledgments.js';
+import { registerHomeownerConsentRoutes } from './homeowner-consent-routes.js';
+import { registerLegalAdminRoutes } from './legal-admin-routes.js';
+import { recordJobDispatchEvidence } from './job-evidence.js';
+import { loadCurrentComplianceDocuments } from './contractor-compliance.js';
 
 async function ensureUserReferralCodeInline(pool, r) {
   if (r.referral_code) return r.referral_code;
@@ -368,11 +391,15 @@ function serializeJob(row, viewer) {
     viewer?.id != null && Number(viewer.id) === Number(row.homeowner_user_id);
   const isAssignedContractor =
     viewer?.id != null && Number(viewer.id) === Number(row.assigned_contractor_user_id);
+  const pricingMode = resolveJobPricingMode(row);
+  const managedPricingFirewall =
+    pricingMode === 'FIXBRIDGE_MANAGED' && isAssignedContractor && !isAdmin;
 
   const base = {
     id: Number(row.id),
     bookingId: row.booking_id,
     jobMode: row.job_mode || 'managed',
+    pricingMode,
     status: row.status,
     category: row.category,
     serviceSubcategory: row.service_subcategory || undefined,
@@ -396,23 +423,41 @@ function serializeJob(row, viewer) {
     propertyId: row.property_id,
     priorityTier: row.priority_tier || 'standard',
     homeownerUserId: isAdmin ? row.homeowner_user_id : undefined,
-    aiAssessment: parseJson(row.ai_assessment),
+    aiAssessment: (() => {
+      const a = parseJson(row.ai_assessment);
+      if (!a) return null;
+      const risk = row.diy_risk_level || a.diy_risk_level || 'green';
+      if ((role === 'homeowner' || (isOwner && role !== 'admin')) && risk === 'red') {
+        return {
+          ...a,
+          diy_steps: [],
+          tools_required: [],
+          materials_needed: [],
+          safe_diy_allowed: false,
+        };
+      }
+      return a;
+    })(),
     assessmentStatus: resolveAssessmentStatus(row),
     assessmentErrorCode: row.assessment_error_code || null,
     showRetailPrice: row.show_retail_price !== false,
     preferredTimeNote: 'Preferred service time — not confirmed until a contractor is scheduled.',
     partnerCode: row.partner_code,
-    referringName: row.referring_name,
-    referringCompany: row.referring_company,
+    referringName: managedPricingFirewall ? undefined : row.referring_name,
+    referringCompany: managedPricingFirewall ? undefined : row.referring_company,
     customerPartnerStatusConsent: row.customer_partner_status_consent === true,
-    referralStatus: row.referral_status,
+    referralStatus: managedPricingFirewall ? undefined : row.referral_status,
     propertyPurpose: row.property_purpose,
     transactionStage: row.transaction_stage,
     completionReport: parseJson(row.completion_report),
-    discountCode: row.discount_code || null,
-    discountLabel: row.discount_label || null,
-    discountType: row.discount_type || null,
-    discountValue: row.discount_value != null ? Number(row.discount_value) : null,
+    discountCode: managedPricingFirewall ? undefined : row.discount_code || null,
+    discountLabel: managedPricingFirewall ? undefined : row.discount_label || null,
+    discountType: managedPricingFirewall ? undefined : row.discount_type || null,
+    discountValue: managedPricingFirewall
+      ? undefined
+      : row.discount_value != null
+        ? Number(row.discount_value)
+        : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     assignedContractorUserId: row.assigned_contractor_user_id,
@@ -480,6 +525,11 @@ function serializeJob(row, viewer) {
           ? Number(parseJson(row.pricing).contractor_visit_fee)
           : null;
     base.diyRiskLevel = row.diy_risk_level || 'green';
+    const assessmentForReasons = parseJson(row.ai_assessment);
+    if (isAdmin && assessmentForReasons) {
+      base.diyRiskReasons = assessmentForReasons.diy_risk_reasons || [];
+      base.diyRiskReasonCodes = assessmentForReasons.diy_risk_reason_codes || [];
+    }
     const storedPricingOwner = parseJson(row.pricing) || {};
     base.estimateContext =
       storedPricingOwner.estimate_context ||
@@ -526,12 +576,22 @@ function serializeJob(row, viewer) {
     };
   }
 
-  // Contractor net visibility
+  // Contractor net visibility — managed jobs hide customer retail economics
   if (isAssignedContractor || isAdmin || role === 'contractor') {
-    base.estimatedContractorNetLow = row.estimated_contractor_net_low != null
-      ? Number(row.estimated_contractor_net_low) : null;
-    base.estimatedContractorNetHigh = row.estimated_contractor_net_high != null
-      ? Number(row.estimated_contractor_net_high) : null;
+    if (managedPricingFirewall) {
+      base.providerCompensationLow =
+        row.estimated_contractor_net_low != null ? Number(row.estimated_contractor_net_low) : null;
+      base.providerCompensationHigh =
+        row.estimated_contractor_net_high != null ? Number(row.estimated_contractor_net_high) : null;
+      base.nteLimit = row.nte_limit != null ? Number(row.nte_limit) : null;
+      base.managedPricingFirewall = true;
+      base.pricingCommunicationGuidance = true;
+    } else {
+      base.estimatedContractorNetLow =
+        row.estimated_contractor_net_low != null ? Number(row.estimated_contractor_net_low) : null;
+      base.estimatedContractorNetHigh =
+        row.estimated_contractor_net_high != null ? Number(row.estimated_contractor_net_high) : null;
+    }
   }
 
   // Admin-only internals
@@ -1152,7 +1212,26 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
   app.put('/api/pricing/rules', requireAuth, requireAdmin, requireAdminWrite, need('pricing.edit'), async (req, res) => {
     try {
+      const prevRules = await loadPricingRules(pool);
       const rules = mergePricingRules(req.body?.rules || req.body);
+      const prevVersion = prevRules?.professional_dispatch_pricing?.version || 0;
+      const nextVersion = rules?.professional_dispatch_pricing?.version || prevVersion;
+      const pricingChanged =
+        JSON.stringify(prevRules?.professional_dispatch_pricing || {}) !==
+        JSON.stringify(rules?.professional_dispatch_pricing || {});
+      if (pricingChanged) {
+        const bumped = Number(prevVersion || 0) + 1;
+        rules.professional_dispatch_pricing = {
+          ...(rules.professional_dispatch_pricing || {}),
+          version: bumped,
+          effective_from: new Date().toISOString().slice(0, 10),
+        };
+        await pool.query(
+          `INSERT INTO pricing_rules_versions (pricing_version, rules, updated_by)
+           VALUES ($1,$2,$3)`,
+          [bumped, JSON.stringify(rules.professional_dispatch_pricing), req.authUser.id]
+        );
+      }
       await pool.query(
         `INSERT INTO pricing_rules (id, rules, updated_at, updated_by)
          VALUES ('default', $1, NOW(), $2)
@@ -1160,6 +1239,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         [JSON.stringify(rules), req.authUser.id]
       );
       await audit(pool, req.authUser.id, 'pricing_rules_update', 'pricing_rules', 'default', rules);
+      if (pricingChanged) {
+        await audit(pool, req.authUser.id, 'PROFESSIONAL_DISPATCH_PRICING_UPDATED', 'pricing_rules', 'default', {
+          old: prevRules?.professional_dispatch_pricing || null,
+          new: rules.professional_dispatch_pricing || null,
+        });
+      }
       res.json({ ok: true, rules });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Server error' });
@@ -2188,6 +2273,16 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         return res.status(400).json({ ok: false, message: 'Name and email are required to start your assessment.' });
       }
 
+      const guestConsent = checkActionConsentsFromBody(b, 'GUEST_SUBMIT');
+      if (!guestConsent.ok) {
+        return res.status(400).json({
+          ok: false,
+          code: guestConsent.code,
+          message: 'You must agree to the FixBridge Terms of Service and Privacy Policy.',
+          missingAcceptanceTypes: guestConsent.missing,
+        });
+      }
+
       // 1. Find or create user
       let user = null;
       const { rows: existingUsers } = await pool.query(
@@ -2222,7 +2317,16 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         user = newUsers[0];
       }
 
+      await validateAndRecordActionConsents(pool, req, {
+        actionKey: 'GUEST_SUBMIT',
+        userId: user.id,
+        idempotencyPrefix: `guest-submit:${user.id}`,
+      });
+
       await ensureUserReferralCodeInline(pool, user);
+      if (b.marketingConsent === true) {
+        await recordMarketingConsent(pool, { userId: user.id, consented: true, req });
+      }
       if (b.partnerCode) {
         await processReferralAward(pool, user, b.partnerCode);
       }
@@ -3051,6 +3155,15 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         });
       }
 
+      if (req.authUser.role !== 'admin') {
+        const ackOk = await requireHomeownerAcknowledgment(pool, req, res, {
+          jobId,
+          actionKey: 'PROFESSIONAL_DISPATCH',
+          message: 'You must acknowledge all dispatch disclosures before requesting a professional.',
+        });
+        if (!ackOk) return;
+      }
+
       const b = req.body || {};
       const serviceTiming = b.serviceTiming || job.service_timing || 'weekday';
       const preferredDate = b.preferredDate || null;
@@ -3104,61 +3217,49 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
   // ── Checkout: optional coupon validate → snapshot → pay ────────────────────
   function buildCheckoutBreakdown(job, rules, discount) {
-    const isEmergency =
-      job.service_timing === 'emergency' ||
-      String(job.title || '').toLowerCase().includes('emerg') ||
-      String(job.description || '').toLowerCase().includes('emerg');
-    const serviceFee = resolveCustomerVisitFee(rules, {
-      emergency: isEmergency,
-      homeCarePro: job.priority_tier === 'homecare_pro' || job.priority_tier === 'homecare_pro_high',
-    });
-    const estLow = job.customer_retail_estimate_low != null ? Number(job.customer_retail_estimate_low) : null;
-    const estHigh = job.customer_retail_estimate_high != null ? Number(job.customer_retail_estimate_high) : null;
-    const serviceAmount =
-      estLow != null && estHigh != null
-        ? Math.round(((estLow + estHigh) / 2) * 100) / 100
-        : estLow != null
-          ? estLow
-          : estHigh != null
-            ? estHigh
-            : null;
-
-    let couponDiscount = 0;
-    let couponCode = null;
-    let couponId = null;
-    let couponLabel = null;
-    if (discount) {
-      const applied = applyDiscountToAmount(serviceFee, discount);
-      couponDiscount = applied.discountAmount;
-      couponCode = discount.code;
-      couponId = discount.id || null;
-      couponLabel = discount.label || null;
-    }
-    const finalAmount = Math.max(0, Math.round((serviceFee - couponDiscount) * 100) / 100);
-    return {
-      customerId: job.homeowner_user_id ? Number(job.homeowner_user_id) : null,
-      propertyId: job.property_id ? Number(job.property_id) : null,
-      serviceRequestId: Number(job.id),
-      bookingId: job.booking_id || `FB-${job.id}`,
-      serviceTitle: job.title || job.category || 'Service request',
-      serviceCategory: job.category || null,
-      serviceAmount,
-      serviceAmountLow: estLow,
-      serviceAmountHigh: estHigh,
-      serviceFee,
-      couponId,
-      couponCode,
-      couponLabel,
-      couponDiscount,
-      finalAmount,
-      pricingVersion: rules?.version || rules?.updated_at || 'live',
-      preferredDate: job.preferred_date || null,
-      preferredTimeSlot: job.preferred_time_slot || null,
-      serviceTiming: job.service_timing || null,
-      address: job.full_address || job.city_state_zip || null,
-      createdAt: new Date().toISOString(),
-    };
+    return buildProfessionalDispatchBreakdown(job, rules, discount);
   }
+
+  app.get('/api/managed/jobs/:id/dispatch-pricing', requireAuth, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
+      const job = rows[0];
+      if (Number(job.homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      const rules = await loadPricingRules(pool);
+      let discount = null;
+      if (job.discount_code) {
+        const row = await lookupDiscountByCode(pool, job.discount_code);
+        const checked = validateDiscountRow(row);
+        if (checked.ok) discount = checked.discount;
+      }
+      const codeFromQuery = req.query?.discountCode != null ? normalizeDiscountCode(String(req.query.discountCode)) : null;
+      if (codeFromQuery) {
+        const row = await lookupDiscountByCode(pool, codeFromQuery);
+        const checked = validateDiscountRow(row);
+        if (!checked.ok) {
+          return res.status(400).json({ ok: false, message: checked.message || 'Invalid coupon.' });
+        }
+        discount = checked.discount;
+      }
+      const breakdown = buildCheckoutBreakdown(job, rules, discount);
+      res.json({
+        ok: true,
+        breakdown,
+        lines: breakdown.lines,
+        authorizedNowCents: breakdown.authorizedNowCents,
+        authorizedNow: breakdown.authorizedNow,
+        repairWorkIncluded: false,
+        repairWorkNote: breakdown.repairWorkNote,
+      });
+    } catch (e) {
+      console.error('dispatch-pricing:', e);
+      res.status(500).json({ ok: false, message: 'Could not load dispatch pricing.' });
+    }
+  });
 
   /** Validate coupon only — does not permanently redeem / increment usage. */
   app.post('/api/managed/jobs/:id/apply-coupon', requireAuth, async (req, res) => {
@@ -3362,6 +3463,53 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const snapshot = buildCheckoutBreakdown(job, rules, discount);
       const amount = snapshot.finalAmount;
 
+      if (req.body?.authorizedAmount != null || req.body?.authorizedNow != null) {
+        const clientCents = Math.round(Number(req.body.authorizedAmount ?? req.body.authorizedNow) * 100);
+        if (clientCents !== snapshot.authorizedNowCents) {
+          return res.status(400).json({
+            ok: false,
+            code: 'PRICING_MISMATCH',
+            message: 'Authorized amount does not match current server pricing. Please refresh and try again.',
+            authorizedNow: snapshot.authorizedNow,
+          });
+        }
+      }
+
+      if (req.authUser.role !== 'admin') {
+        const consentResult = await requireActionConsents(pool, req, res, {
+          jobId,
+          actionKey: 'PAYMENT_AUTHORIZATION',
+          userId: req.authUser.id,
+          snapshotData: {
+            authorizedAmountCents: snapshot.authorizedNowCents,
+            currency: 'usd',
+            bookingId: snapshot.bookingId,
+            breakdown: snapshot,
+          },
+          idempotencyPrefix: `PAYMENT_AUTHORIZATION:${req.authUser.id}:${jobId}:dispatch`,
+        });
+        if (!consentResult) return;
+        const payAcceptanceId = (
+          await pool.query(
+            `SELECT id FROM homeowner_acceptances
+             WHERE user_id=$1 AND job_id=$2 AND acceptance_type='PAYMENT_AUTHORIZATION'
+             ORDER BY accepted_at DESC LIMIT 1`,
+            [req.authUser.id, jobId]
+          )
+        ).rows[0]?.id;
+        await pool.query(
+          `INSERT INTO payment_authorization_snapshots (
+             user_id, job_id, authorized_amount_cents, currency, policy_document_version, acceptance_id
+           ) VALUES ($1,$2,$3,$4,$5,$6)`,
+          [req.authUser.id, jobId, snapshot.authorizedNowCents, 'usd', '1.0', payAcceptanceId || null]
+        );
+        await saveProfessionalDispatchSnapshot(pool, {
+          jobId,
+          userId: req.authUser.id,
+          breakdown: snapshot,
+        });
+      }
+
       await pool.query(
         `UPDATE managed_jobs SET
            checkout_snapshot=$2::jsonb,
@@ -3477,29 +3625,17 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (['suspended', 'rejected', 'blocked'].includes(compliance)) {
         return res.status(400).json({ ok: false, message: 'Contractor is suspended or rejected.' });
       }
-      if (compliance !== 'approved') {
-        return res.status(400).json({
+      const gateOk = await enforceContractorDispatchGate(pool, contractors[0], res, job);
+      if (!gateOk) return;
+      const hoConsent = await assertHomeownerDispatchConsent(pool, job.homeowner_user_id, jobId);
+      if (!hoConsent.ok) {
+        return res.status(409).json({
           ok: false,
-          message: 'Contractor is not approved yet. Approve them under Contractors first.',
+          code: 'HOMEOWNER_DISPATCH_CONSENT_REQUIRED',
+          message: 'Homeowner dispatch acknowledgments are incomplete.',
+          missingAcceptanceTypes: hoConsent.missing,
         });
       }
-      // Document presence checks
-      if (!contractors[0].license_document_data) {
-        return res.status(400).json({ ok: false, message: 'Contractor has not uploaded a license document. Documents are required before inviting.' });
-      }
-      if (!contractors[0].insurance_document_data) {
-        return res.status(400).json({ ok: false, message: 'Contractor has not uploaded an insurance document. Documents are required before inviting.' });
-      }
-      // Expiry checks
-      const today = new Date().toISOString().slice(0, 10);
-      if (contractors[0].license_expires_at && String(contractors[0].license_expires_at).slice(0, 10) < today) {
-        return res.status(400).json({ ok: false, message: 'Contractor license has expired. Ask them to update their license before inviting.' });
-      }
-      if (contractors[0].insurance_expires_at && String(contractors[0].insurance_expires_at).slice(0, 10) < today) {
-        return res.status(400).json({ ok: false, message: 'Contractor insurance has expired. Ask them to update their insurance before inviting.' });
-      }
-
-
       await pool.query(
         `INSERT INTO job_invitations (job_id, contractor_user_id, status, expected_net_low, expected_net_high, message, invited_by, request_type, site_visit_window)
          VALUES ($1,$2,'invited',$3,$4,$5,$6,$7,$8)
@@ -3574,6 +3710,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
       const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
+      const job = rows[0];
 
       const { rows: contractors } = await pool.query(
         `SELECT * FROM users WHERE id=$1 AND role='contractor'`,
@@ -3587,29 +3724,17 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (['suspended', 'rejected', 'blocked'].includes(compliance)) {
         return res.status(400).json({ ok: false, message: 'Contractor is suspended or rejected.' });
       }
-      if (compliance !== 'approved') {
-        return res.status(400).json({
+      const gateOk = await enforceContractorDispatchGate(pool, contractors[0], res, job);
+      if (!gateOk) return;
+      const hoConsent = await assertHomeownerDispatchConsent(pool, job.homeowner_user_id, jobId);
+      if (!hoConsent.ok) {
+        return res.status(409).json({
           ok: false,
-          message: 'Contractor is not approved yet. Approve them under Contractors first.',
+          code: 'HOMEOWNER_DISPATCH_CONSENT_REQUIRED',
+          message: 'Homeowner dispatch acknowledgments are incomplete.',
+          missingAcceptanceTypes: hoConsent.missing,
         });
       }
-      // Document presence checks (same gates as invite path)
-      if (!contractors[0].license_document_data) {
-        return res.status(400).json({ ok: false, message: 'Contractor has not uploaded a license document. Documents are required before assignment.' });
-      }
-      if (!contractors[0].insurance_document_data) {
-        return res.status(400).json({ ok: false, message: 'Contractor has not uploaded an insurance document. Documents are required before assignment.' });
-      }
-      // Expiry checks
-      const today = new Date().toISOString().slice(0, 10);
-      if (contractors[0].license_expires_at && String(contractors[0].license_expires_at).slice(0, 10) < today) {
-        return res.status(400).json({ ok: false, message: 'Contractor license has expired. Ask them to update their license before assignment.' });
-      }
-      if (contractors[0].insurance_expires_at && String(contractors[0].insurance_expires_at).slice(0, 10) < today) {
-        return res.status(400).json({ ok: false, message: 'Contractor insurance has expired. Ask them to update their insurance before assignment.' });
-      }
-
-
       // Ensure invitation row exists so contractor sees it in their portal
       await pool.query(
         `INSERT INTO job_invitations (job_id, contractor_user_id, status, expected_net_low, expected_net_high, invited_by)
@@ -3640,6 +3765,23 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
 
       await audit(pool, req.authUser.id, 'contractor_assigned', 'managed_job', jobId, { contractorUserId });
+
+      const complianceDocs = await loadCurrentComplianceDocuments(pool, contractorUserId);
+      const { rows: dispatchSnaps } = await pool.query(
+        `SELECT id, authorized_now_cents FROM professional_dispatch_snapshots
+         WHERE job_id=$1 ORDER BY created_at DESC LIMIT 1`,
+        [jobId]
+      );
+      await recordJobDispatchEvidence(pool, {
+        jobId,
+        homeownerUserId: rows[0].homeowner_user_id,
+        contractorUserId,
+        professionalDispatchSnapshotId: dispatchSnaps[0]?.id || null,
+        authorizedNowCents: dispatchSnaps[0]?.authorized_now_cents || rows[0].visit_fee_amount || null,
+        complianceDocumentIds: complianceDocs.map((d) => Number(d.id)),
+        complianceStatus: contractors[0].compliance_status || null,
+      });
+
       const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       res.json({
         ok: true,
@@ -3846,6 +3988,21 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       );
       if (action === 'accept') {
         const jobId = rows[0].job_id;
+        const { rows: jobRows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+        const job = jobRows[0];
+        if (!job) return res.status(404).json({ ok: false, message: 'Job not found.' });
+
+        const { rows: providerRows } = await pool.query(`SELECT * FROM users WHERE id=$1`, [req.authUser.id]);
+        try {
+          await createJobAuthorization(pool, {
+            job,
+            providerUser: providerRows[0],
+            req,
+          });
+        } catch (authErr) {
+          console.error('job authorization on accept:', authErr);
+        }
+
         await pool.query(
           `UPDATE managed_jobs SET assigned_contractor_user_id=$1, updated_at=NOW() WHERE id=$2`,
           [req.authUser.id, jobId]
@@ -4253,6 +4410,16 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       );
       if (!props[0]) return res.status(400).json({ ok: false, message: 'No proposal.' });
 
+      if (req.authUser.role !== 'admin') {
+        const ackOk = await requireHomeownerAcknowledgment(pool, req, res, {
+          jobId,
+          quoteId: props[0].id,
+          actionKey: 'QUOTE_APPROVAL',
+          message: 'You must agree to the service agreement and approve the quote scope and total.',
+        });
+        if (!ackOk) return;
+      }
+
       const prop = props[0];
       const versionNumber = Number(prop.version_number || 1);
 
@@ -4311,6 +4478,21 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
            accepted_snapshot_id=$1
          WHERE id=$2`,
         [snapRows[0].id, prop.id]
+      );
+      await pool.query(
+        `UPDATE homeowner_acceptances
+         SET snapshot_id=$1,
+             snapshot_data=COALESCE(snapshot_data, $2::jsonb)
+         WHERE job_id=$3 AND user_id=$4
+           AND acceptance_type IN ('QUOTE_SCOPE_APPROVAL', 'HOMEOWNER_SERVICE_AGREEMENT', 'PAYMENT_VISIT_POLICY')
+           AND snapshot_id IS NULL
+           AND accepted_at >= NOW() - INTERVAL '5 minutes'`,
+        [
+          snapRows[0].id,
+          JSON.stringify({ quoteSnapshotId: snapRows[0].id, proposalId: prop.id, total: totals.total ?? prop.retail_amount }),
+          jobId,
+          req.authUser.id,
+        ]
       );
       await pushStatus(pool, jobId, jobs[0].status, 'approved', req.authUser.id, 'Customer approved proposal');
 
@@ -4397,6 +4579,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         [jobId]
       );
       if (!props[0]) return res.status(400).json({ ok: false, message: 'No proposal.' });
+
       const retail = Number(props[0].retail_amount) || 0;
       const visitCredit = await getVisitFeeCreditForJob(pool, jobId);
       const billed = applyVisitFeeCredit(retail, visitCredit.amount);
@@ -4404,6 +4587,28 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         props[0].deposit_amount != null && Number(props[0].deposit_amount) >= 0
           ? Number(props[0].deposit_amount)
           : billed.amountDue;
+
+      if (req.authUser.role !== 'admin') {
+        const ackOk = await requireHomeownerAcknowledgment(pool, req, res, {
+          jobId,
+          actionKey: 'PAYMENT_AUTHORIZATION',
+          message: 'You must authorize the payment amount under the stated cancellation/refund rules.',
+          snapshotData: {
+            authorizedAmountCents: Math.round(amount * 100),
+            currency: 'usd',
+            proposalId: props[0].id,
+            retailAmount: retail,
+          },
+        });
+        if (!ackOk) return;
+        await pool.query(
+          `INSERT INTO payment_authorization_snapshots (
+             user_id, job_id, authorized_amount_cents, currency, policy_document_version
+           ) VALUES ($1,$2,$3,$4,$5)`,
+          [req.authUser.id, jobId, Math.round(amount * 100), 'usd', '1.0']
+        );
+      }
+
       try {
         assertPaymentsAvailable();
       } catch (payErr) {
@@ -6666,5 +6871,29 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       } catch (_) { /* ignore */ }
       res.status(400).json({ ok: false, message: 'Webhook verification failed.' });
     }
+  });
+
+  registerContractorComplianceRoutes(app, {
+    pool,
+    requireAuth,
+    requireAdmin,
+    requireAdminWrite,
+    requirePermission,
+    audit,
+  });
+
+  registerHomeownerConsentRoutes(app, {
+    pool,
+    requireAuth,
+    requireAdmin,
+    requirePermission,
+  });
+
+  registerLegalAdminRoutes(app, {
+    pool,
+    requireAuth,
+    requireAdmin,
+    requirePermission,
+    audit,
   });
 }

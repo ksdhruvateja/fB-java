@@ -7,6 +7,8 @@ import {
 } from "lucide-react";
 import type { ManagedJob } from "./managedJobs";
 import { formatMoney } from "./managedJobs";
+import ContractorExpiryBanner from "./ContractorExpiryBanner";
+import { type CredentialExpiryItem } from "./contractorExpiry";
 
 type Invite = {
   id: number;
@@ -48,6 +50,7 @@ export default function ContractorOverviewPanel({
   invites,
   jobs,
   monthEarnings,
+  expiryAlerts = [],
   onOpenInvites,
   onOpenJobs,
   onOpenCompliance,
@@ -59,6 +62,7 @@ export default function ContractorOverviewPanel({
   invites: Invite[];
   jobs: ManagedJob[];
   monthEarnings: number;
+  expiryAlerts?: CredentialExpiryItem[];
   onOpenInvites: () => void;
   onOpenJobs: () => void;
   onOpenCompliance: () => void;
@@ -88,6 +92,8 @@ export default function ContractorOverviewPanel({
           <span className="h-2 w-2 rounded-full bg-emerald-500" /> ACTIVE
         </span>
       </div>
+
+      <ContractorExpiryBanner items={expiryAlerts} onUpdate={onOpenCompliance} />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {[
@@ -128,15 +134,6 @@ export default function ContractorOverviewPanel({
               </button>
             </li>
           )}
-          <li className="flex items-center justify-between gap-3 text-sm">
-            <span className="inline-flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-amber-500" />
-              Insurance expires in 24 days
-            </span>
-            <button type="button" onClick={onOpenCompliance} className="text-xs font-semibold text-primary hover:underline">
-              Update →
-            </button>
-          </li>
           {newInvites.length > 0 && (
             <li className="flex items-center justify-between gap-3 text-sm">
               <span className="inline-flex items-center gap-2">

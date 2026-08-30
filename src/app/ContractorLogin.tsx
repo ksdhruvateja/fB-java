@@ -15,7 +15,10 @@ import {
 import { AuthEmailField, AuthPasswordField, AuthPrimaryButton } from "./AuthFormFields";
 import ContractorApplicationForm, {
   type ContractorApplicationDocs,
+  emptyContractorApplicationDocs,
 } from "./ContractorApplicationForm";
+import InsuranceComplianceNotice from "./InsuranceComplianceNotice";
+import ContractorAgreementComplianceNotice from "./ContractorAgreementComplianceNotice";
 import {
   applicationToProfileFields,
   emptyContractorApplication,
@@ -23,15 +26,7 @@ import {
   type ContractorApplication,
 } from "./contractorApplication";
 
-const emptyDocs = (): ContractorApplicationDocs => ({
-  w9: null,
-  license: null,
-  insurance: null,
-  businessRegistration: null,
-  businessLicense: null,
-  idDoc: null,
-  diversityCert: null,
-});
+const emptyDocs = emptyContractorApplicationDocs;
 
 export default function ContractorLogin({
   onLogin,
@@ -213,7 +208,17 @@ export default function ContractorLogin({
 
             <form onSubmit={handleSubmit} className="mt-5 space-y-4">
               {tab === "signup" && (
-                <ContractorApplicationForm
+                <>
+                  <ContractorAgreementComplianceNotice
+                    compact
+                    showCheckbox
+                    agreeChecked={application.agreeContractorAgreementV4}
+                    onAgreeChange={(checked) =>
+                      setApplication((prev) => ({ ...prev, agreeContractorAgreementV4: checked }))
+                    }
+                  />
+                  <InsuranceComplianceNotice compact />
+                  <ContractorApplicationForm
                   mode="signup"
                   value={application}
                   onChange={setApplication}
@@ -221,6 +226,7 @@ export default function ContractorLogin({
                   onDocsChange={setDocs}
                   accountEmail={email}
                 />
+                </>
               )}
 
               <div className={tab === "signup" ? "rounded-xl border border-border bg-muted/20 p-4 space-y-4" : "space-y-4"}>

@@ -234,7 +234,10 @@ export type ChatResult = {
 };
 
 /** Live customer chat via the same OpenRouter / OpenAI / Gemini provider. */
-export async function chatWithAi(messages: ChatMessage[]): Promise<ChatResult> {
+export async function chatWithAi(
+  messages: ChatMessage[],
+  options?: { jobId?: number }
+): Promise<ChatResult> {
   try {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     try {
@@ -248,6 +251,7 @@ export async function chatWithAi(messages: ChatMessage[]): Promise<ChatResult> {
       headers,
       body: JSON.stringify({
         messages: messages.map((m) => ({ role: m.role, content: m.content })),
+        jobId: options?.jobId,
       }),
     });
     const data = (await response.json()) as ChatResult & { message?: string };

@@ -109,7 +109,14 @@ export const PHONE_TYPES = ["Office", "Mobile", "Other"] as const;
 export const UNION_OPTIONS = ["Union", "Non-Union"] as const;
 
 export const W9_FORM_URL = "https://www.irs.gov/pub/irs-pdf/fw9.pdf";
-export const COI_SAMPLE_URL = "https://vendors.broadwaynational.com/assets/samples/coi-sample.pdf";
+export const COI_SAMPLE_URL = "/samples/coi-sample.html";
+/** Official FixBridge Insurance Requirements PDF (contractor / insurance agent guide). */
+export const FIXBRIDGE_INSURANCE_REQUIREMENTS_PDF_URL = "/documents/fixbridge-insurance-requirements.pdf";
+export const INSURANCE_REQUIREMENTS_URL = FIXBRIDGE_INSURANCE_REQUIREMENTS_PDF_URL;
+/** Official FixBridge Contractor Agreement Package v4 PDF. */
+export const FIXBRIDGE_CONTRACTOR_AGREEMENT_V4_PDF_URL =
+  "/documents/fixbridge-contractor-agreement-package-v4.pdf";
+export const CONTRACTOR_AGREEMENT_V4_LABEL = "FixBridge Contractor Agreement Package v4";
 
 export type YesNo = "yes" | "no" | "";
 export type TaxIdType = "ein" | "ssn";
@@ -178,6 +185,7 @@ export type ContractorApplication = {
   safetyTraining: string;
   certifications: string;
   agreeTerms: boolean;
+  agreeContractorAgreementV4: boolean;
   agreeAccurate: boolean;
 };
 
@@ -239,6 +247,7 @@ export function emptyContractorApplication(
     safetyTraining: "",
     certifications: "",
     agreeTerms: false,
+    agreeContractorAgreementV4: false,
     agreeAccurate: false,
     ...defaults,
   };
@@ -366,26 +375,17 @@ export function validateContractorApplication(
     app.agreeAccurate
       ? null
       : "You must certify the information is accurate and you are authorized to submit it.",
-    app.agreeTerms ? null : "You must agree to FixBridge Contractor Terms.",
+    app.agreeContractorAgreementV4
+      ? null
+      : "You must review and accept the FixBridge Contractor Agreement Package v4.",
   ];
 
   for (const msg of checks) {
     if (msg) return msg;
   }
 
-  if (!docs.w9?.data && !docs.existingW9) {
-    return "W-9 upload is required.";
-  }
-  if (!docs.insurance?.data && !docs.existingInsurance && app.generalLiability === "yes") {
-    return "Certificate of Insurance (COI) upload is required when you carry general liability.";
-  }
-  if (app.licenseNumber.trim()) {
-    if (!app.licenseExpiration.trim()) {
-      return "License expiration date is required when a license number is provided.";
-    }
-    if (!docs.license?.data && !docs.existingLicense) {
-      return "License document upload is required when a license number is provided.";
-    }
+  if (app.licenseNumber.trim() && !app.licenseExpiration.trim()) {
+    return "License expiration date is required when a license number is provided.";
   }
   if (app.generalLiability === "yes" && !app.insuranceExpiration.trim()) {
     return "Insurance expiration date is required when you carry general liability.";

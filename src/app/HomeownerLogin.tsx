@@ -42,6 +42,9 @@ import {
  type ServiceTradeId,
 } from "./serviceRequestFlow";
 import { isValidUsZip, normalizeZip } from "./zipCode";
+import { ConsentCheckbox, ConsentSection, consentsFromState } from "./ConsentCheckbox";
+import type { ConsentState } from "./ConsentCheckbox";
+import type { AcceptanceType } from "./legalDocuments";
 
 type ReportStep = 0 | 1 | 2 | 3;
 
@@ -69,6 +72,11 @@ export default function HomeownerLogin({
  const [email, setEmail] = useState("");
  const [password, setPassword] = useState("");
  const [showForgot, setShowForgot] = useState(false);
+ const [accountConsents, setAccountConsents] = useState<ConsentState>({
+   ACCOUNT_TERMS: false,
+   PRIVACY_POLICY: false,
+ });
+ const [marketingConsent, setMarketingConsent] = useState(false);
 
  const [reportStep, setReportStep] = useState<ReportStep>(0);
  const [reportTradeId, setReportTradeId] = useState<ServiceTradeId | "">("");
@@ -177,6 +185,11 @@ export default function HomeownerLogin({
  setLoading(false);
  return;
  }
+ if (!accountConsents.ACCOUNT_TERMS || !accountConsents.PRIVACY_POLICY) {
+ setError("You must agree to the Terms of Service and Privacy Policy.");
+ setLoading(false);
+ return;
+ }
  const result = await createPublicGuestJob({
  category: reportCategory,
  title: serviceRequestTitle(reportLocation, reportTradeId),
@@ -192,6 +205,8 @@ export default function HomeownerLogin({
  contactName: reportName,
  contactPhone: reportPhone,
  email: reportEmail,
+ consents: consentsFromState(accountConsents),
+ marketingConsent,
  });
  setLoading(false);
  if (!result.ok) {
@@ -205,9 +220,21 @@ export default function HomeownerLogin({
  }
  onLogin(result.user);
  } else {
+ if (tab === "signup" && (!accountConsents.ACCOUNT_TERMS || !accountConsents.PRIVACY_POLICY)) {
+ setError("You must agree to the Terms of Service and Privacy Policy.");
+ setLoading(false);
+ return;
+ }
  const result =
  tab === "signup"
- ? await signUpUser({ role: "homeowner", name: fullName, email, password })
+ ? await signUpUser({
+ role: "homeowner",
+ name: fullName,
+ email,
+ password,
+ consents: consentsFromState(accountConsents),
+ marketingConsent,
+ })
  : await signInUser("homeowner", email, password);
  setLoading(false);
  if (!result.ok) {
@@ -469,6 +496,40 @@ export default function HomeownerLogin({
  )}
 
  <AuthError message={error} />
+
+ {(tab === "signup" || (tab === "report" && reportStep === 3)) && (
+ <div className="space-y-3">
+ <ConsentSection title="Required">
+ <ConsentCheckbox
+ id="terms"
+ checked={accountConsents.ACCOUNT_TERMS === true}
+ onChange={(v) => setAccountConsents((s) => ({ ...s, ACCOUNT_TERMS: v }))}
+ label="I agree to the FixBridge Terms of Service."
+ documentKey="HOMEOWNER_TERMS"
+ documentLabel="Terms of Service"
+ />
+ <ConsentCheckbox
+ id="privacy"
+ checked={accountConsents.PRIVACY_POLICY === true}
+ onChange={(v) => setAccountConsents((s) => ({ ...s, PRIVACY_POLICY: v }))}
+ label="I agree to the FixBridge Privacy Policy."
+ documentKey="PRIVACY_POLICY"
+ documentLabel="Privacy Policy"
+ />
+ </ConsentSection>
+ <ConsentSection title="Marketing" optional>
+ <ConsentCheckbox
+ id="marketing"
+ required={false}
+ checked={marketingConsent}
+ onChange={setMarketingConsent}
+ label="Yes, FixBridge may send me marketing by SMS/email."
+ documentKey="MARKETING_CONSENT"
+ documentLabel="Marketing policy"
+ />
+ </ConsentSection>
+ </div>
+ )}
 
  <div className="flex gap-2">
  {tab === "report" && reportStep > 0 && (

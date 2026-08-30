@@ -23,6 +23,10 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_onboarding_status TEXT`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_payouts_enabled BOOLEAN DEFAULT FALSE`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS master_agreement_accepted_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS dispatch_eligible BOOLEAN DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS level1_eligible BOOLEAN DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS level2_eligible BOOLEAN DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS overall_compliance_status TEXT DEFAULT 'RED'`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS min_trip_charge NUMERIC`);
 
   // Contractor pricing rule details
@@ -811,6 +815,175 @@ export async function initManagedSchema(pool) {
     }
   }
 
+  // ── Contractor compliance documents ────────────────────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS contractor_compliance_documents (
+      id                   BIGSERIAL PRIMARY KEY,
+      contractor_user_id   INT NOT NULL,
+      document_type        TEXT NOT NULL,
+      applicability        TEXT NOT NULL DEFAULT 'REQUIRED',
+      status               TEXT NOT NULL DEFAULT 'MISSING',
+      file_name            TEXT,
+      file_data            TEXT,
+      issue_date           DATE,
+      expiration_date      DATE,
+      upload_later         BOOLEAN DEFAULT FALSE,
+      uploaded_at          TIMESTAMPTZ,
+      verified_at          TIMESTAMPTZ,
+      verified_by          INT,
+      rejected_at          TIMESTAMPTZ,
+      rejected_by          INT,
+      rejection_reason     TEXT,
+      notes                TEXT,
+      version              INT NOT NULL DEFAULT 1,
+      is_current           BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at           TIMESTAMPTZ DEFAULT NOW(),
+      updated_at           TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_contractor_compliance_current
+    ON contractor_compliance_documents (contractor_user_id, document_type)
+    WHERE is_current = true
+  `);
+  await pool.query(`ALTER TABLE contractor_compliance_documents ADD COLUMN IF NOT EXISTS policy_carrier TEXT`);
+  await pool.query(`ALTER TABLE contractor_compliance_documents ADD COLUMN IF NOT EXISTS policy_number TEXT`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS contractor_compliance_alerts (
+      id                   BIGSERIAL PRIMARY KEY,
+      contractor_user_id   INT NOT NULL,
+      document_type        TEXT NOT NULL,
+      alert_type           TEXT NOT NULL,
+      expiration_date      DATE,
+      sent_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      recipient_role       TEXT NOT NULL DEFAULT 'contractor',
+      recipient_email      TEXT,
+      UNIQUE (contractor_user_id, document_type, alert_type, expiration_date)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS contractor_compliance_events (
+      id                   BIGSERIAL PRIMARY KEY,
+      contractor_user_id   INT NOT NULL,
+      document_type        TEXT,
+      action               TEXT NOT NULL,
+      actor_user_id        INT,
+      metadata             JSONB,
+      created_at           TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS homeowner_acknowledgments (
+      id                   BIGSERIAL PRIMARY KEY,
+      user_id              INT NOT NULL,
+      job_id               BIGINT,
+      acknowledgment_type  TEXT NOT NULL,
+      acknowledged_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      metadata             JSONB
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_homeowner_ack_job_type
+    ON homeowner_acknowledgments (user_id, job_id, acknowledgment_type)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS homeowner_acceptances (
+      id                   BIGSERIAL PRIMARY KEY,
+      user_id              INT NOT NULL,
+      guest_session_id     TEXT,
+      job_id               BIGINT,
+      quote_id             BIGINT,
+      change_order_id      BIGINT,
+      payment_id           INT,
+      acceptance_type      TEXT NOT NULL,
+      document_key         TEXT,
+      document_version     TEXT NOT NULL,
+      document_title       TEXT,
+      accepted             BOOLEAN NOT NULL DEFAULT TRUE,
+      accepted_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      metadata             JSONB,
+      snapshot_id          BIGINT,
+      snapshot_data        JSONB,
+      action_completed     BOOLEAN NOT NULL DEFAULT TRUE,
+      idempotency_key      TEXT UNIQUE,
+      ip_address           TEXT,
+      user_agent           TEXT,
+      source_route         TEXT,
+      created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_homeowner_acceptances_user_type
+    ON homeowner_acceptances (user_id, acceptance_type, document_version, accepted_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_homeowner_acceptances_job
+    ON homeowner_acceptances (job_id, acceptance_type)
+  `);
+
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS marketing_consent BOOLEAN DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS marketing_consent_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS marketing_consent_version TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS marketing_opt_out_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS diy_safety_accepted_version TEXT`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS marketing_consent_events (
+      id               BIGSERIAL PRIMARY KEY,
+      user_id          INT NOT NULL,
+      consented        BOOLEAN NOT NULL,
+      channels         JSONB,
+      consent_version  TEXT,
+      ip_address       TEXT,
+      user_agent       TEXT,
+      source_route     TEXT,
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS payment_authorization_snapshots (
+      id                      BIGSERIAL PRIMARY KEY,
+      user_id                 INT NOT NULL,
+      job_id                  BIGINT,
+      payment_id              INT,
+      authorized_amount_cents INT NOT NULL,
+      currency                TEXT DEFAULT 'usd',
+      policy_document_version TEXT,
+      acceptance_id           BIGINT,
+      created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS professional_dispatch_snapshots (
+      id                      BIGSERIAL PRIMARY KEY,
+      job_id                  BIGINT NOT NULL,
+      user_id                 INT NOT NULL,
+      payment_id              INT,
+      pricing_version         TEXT NOT NULL,
+      lines                   JSONB NOT NULL,
+      authorized_now_cents    INT NOT NULL,
+      currency                TEXT DEFAULT 'usd',
+      coupon_code             TEXT,
+      coupon_discount_cents   INT DEFAULT 0,
+      snapshot_data           JSONB,
+      created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pricing_rules_versions (
+      id               BIGSERIAL PRIMARY KEY,
+      pricing_version  INT NOT NULL,
+      rules            JSONB NOT NULL,
+      effective_from   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_by       INT,
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
   // ── Contractor payout system ───────────────────────────────────────────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS contractor_accounts (
@@ -1446,6 +1619,137 @@ export async function initManagedSchema(pool) {
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_home_health_reports_property ON home_health_reports (property_id, generated_at DESC)`);
+
+  // ── Versioned legal documents + job evidence linkage ───────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS legal_document_versions (
+      id               BIGSERIAL PRIMARY KEY,
+      document_key     TEXT NOT NULL,
+      title            TEXT NOT NULL,
+      version          TEXT NOT NULL,
+      effective_date   DATE NOT NULL,
+      status           TEXT NOT NULL DEFAULT 'current',
+      route            TEXT,
+      audience         TEXT DEFAULT 'public',
+      content          JSONB NOT NULL DEFAULT '{}',
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_by       INT,
+      UNIQUE (document_key, version)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_legal_doc_versions_key_status
+    ON legal_document_versions (document_key, status, effective_date DESC)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_dispatch_evidence (
+      id                                BIGSERIAL PRIMARY KEY,
+      job_id                            BIGINT NOT NULL,
+      homeowner_user_id                 INT,
+      contractor_user_id                INT,
+      professional_dispatch_snapshot_id BIGINT,
+      authorized_now_cents              INT,
+      currency                          TEXT DEFAULT 'usd',
+      compliance_document_ids           JSONB DEFAULT '[]',
+      compliance_status                 TEXT,
+      dispatch_at                       TIMESTAMPTZ,
+      created_at                        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_job_dispatch_evidence_job
+    ON job_dispatch_evidence (job_id, created_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS contractor_agreement_acceptances (
+      id               BIGSERIAL PRIMARY KEY,
+      contractor_user_id INT NOT NULL,
+      document_key     TEXT NOT NULL,
+      document_version TEXT NOT NULL,
+      document_title   TEXT,
+      accepted_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      ip_address       TEXT,
+      user_agent       TEXT,
+      source_route     TEXT,
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_contractor_agreement_acceptances_user
+    ON contractor_agreement_acceptances (contractor_user_id, document_key, accepted_at DESC)
+  `);
+
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS provider_level TEXT DEFAULT 'level_1'`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS solo_owner_status TEXT`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS pricing_mode TEXT`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS solo_owner_acknowledgments (
+      id                  BIGSERIAL PRIMARY KEY,
+      contractor_user_id  INT NOT NULL,
+      form_version        TEXT NOT NULL,
+      provider_legal_name TEXT,
+      owner_name          TEXT,
+      fein_tax_id         TEXT,
+      trades              TEXT,
+      service_area        TEXT,
+      gl_carrier          TEXT,
+      gl_policy           TEXT,
+      gl_expiration       DATE,
+      acknowledgments     JSONB NOT NULL,
+      status              TEXT NOT NULL DEFAULT 'under_review',
+      accepted_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      reviewed_by         INT,
+      reviewed_at         TIMESTAMPTZ,
+      rejection_reason    TEXT,
+      ip_address          TEXT,
+      user_agent          TEXT,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_solo_owner_ack_contractor
+    ON solo_owner_acknowledgments (contractor_user_id, created_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_authorizations (
+      id                              BIGSERIAL PRIMARY KEY,
+      job_id                          BIGINT NOT NULL,
+      provider_id                     INT NOT NULL,
+      provider_level                  TEXT,
+      pricing_mode                    TEXT NOT NULL,
+      trade                           TEXT,
+      location                        TEXT,
+      job_level                       TEXT,
+      scope                           TEXT,
+      nte_cents                       INT,
+      provider_compensation_low_cents INT,
+      provider_compensation_high_cents INT,
+      customer_amount_low_cents       INT,
+      customer_amount_high_cents      INT,
+      contractor_agreement_version    TEXT,
+      managed_addendum_version        TEXT,
+      compliance_snapshot             JSONB,
+      accepted_at                     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      ip_address                      TEXT,
+      user_agent                      TEXT,
+      created_at                      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_job_authorizations_job
+    ON job_authorizations (job_id, accepted_at DESC)
+  `);
+
+  try {
+    const { seedLegalDocumentVersions } = await import('./legal-document-store.js');
+    await seedLegalDocumentVersions(pool);
+  } catch (e) {
+    console.warn('[schema] legal document seed:', e.message);
+  }
 
   console.log('[API] Managed schema ready');
 }

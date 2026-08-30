@@ -3,6 +3,7 @@ import { Loader2, Mail, Pencil, Save, X } from "lucide-react";
 import type { AuthUser } from "./auth";
 import ContractorApplicationForm, {
   type ContractorApplicationDocs,
+  emptyContractorApplicationDocs,
 } from "./ContractorApplicationForm";
 import {
   applicationFromUser,
@@ -12,15 +13,7 @@ import {
 } from "./contractorApplication";
 import { adminRequestContractorInfo, adminUpdateContractorProfile } from "./managedJobs";
 
-const emptyDocs = (): ContractorApplicationDocs => ({
-  w9: null,
-  license: null,
-  insurance: null,
-  businessRegistration: null,
-  businessLicense: null,
-  idDoc: null,
-  diversityCert: null,
-});
+const emptyDocs = emptyContractorApplicationDocs;
 
 export default function AdminContractorEditPanel({
   contractor,

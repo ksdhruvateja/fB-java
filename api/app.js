@@ -29,6 +29,12 @@ import { applyReferralCode, ensureReferralCode } from './referrals.js';
 import { registerQuoteWorkspaceRoutes } from './quote-workspace-routes.js';
 import { registerAddressRoutes } from './address-routes.js';
 import { registerServiceAreaRoutes } from './service-area.js';
+import { ensureComplianceDocuments, recalculateDispatchEligible } from './contractor-compliance.js';
+import {
+  checkActionConsentsFromBody,
+  validateAndRecordActionConsents,
+  recordMarketingConsent,
+} from './homeowner-consent.js';
 import { writeAudit } from './audit.js';
 import { getStripe, stripeConfigured } from './stripe.js';
 import {
@@ -851,6 +857,10 @@ function rowToUser(r, { includeDocumentData = true, homeCareSubscription = null 
     ...(r.company_details          && { companyDetails: r.company_details }),
     ...(r.insurance_details        && { insuranceDetails: r.insurance_details }),
     ...(r.compliance_status        && { complianceStatus: r.compliance_status }),
+    dispatchEligible: r.dispatch_eligible === true,
+    level1Eligible: r.level1_eligible === true,
+    level2Eligible: r.level2_eligible === true,
+    ...(r.overall_compliance_status && { overallComplianceStatus: r.overall_compliance_status }),
     ...(r.w9_document_name         && { w9DocumentName: r.w9_document_name }),
     ...(includeDocumentData && r.w9_document_data && { w9DocumentData: r.w9_document_data }),
     ...(r.business_registration_name && { businessRegistrationName: r.business_registration_name }),
@@ -1196,6 +1206,18 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
     }
     if (password.length < 6) return res.status(400).json({ ok: false, message: 'Password must be at least 6 characters.' });
 
+    if (role === 'homeowner') {
+      const accountConsent = checkActionConsentsFromBody(req.body, 'ACCOUNT_SIGNUP');
+      if (!accountConsent.ok) {
+        return res.status(400).json({
+          ok: false,
+          code: accountConsent.code,
+          message: 'You must agree to the FixBridge Terms of Service and Privacy Policy.',
+          missingAcceptanceTypes: accountConsent.missing,
+        });
+      }
+    }
+
     const docs = [
       { label: 'License', name: licenseDocumentName, data: licenseDocumentData },
       { label: 'Insurance', name: insuranceDocumentName, data: insuranceDocumentData },
@@ -1224,11 +1246,14 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
       if (!String(app.legalBusinessName || '').trim() || !String(app.ein || '').trim()) {
         return res.status(400).json({ ok: false, message: 'Legal business name and EIN are required.' });
       }
-      if (!w9DocumentData) {
-        return res.status(400).json({ ok: false, message: 'W-9 upload is required.' });
+      if (!app.agreeAccurate) {
+        return res.status(400).json({ ok: false, message: 'You must confirm the application information is accurate.' });
       }
-      if (!app.agreeTerms || !app.agreeAccurate) {
-        return res.status(400).json({ ok: false, message: 'You must agree to FixBridge Contractor Terms and confirm accurate information.' });
+      if (!app.agreeContractorAgreementV4) {
+        return res.status(400).json({
+          ok: false,
+          message: 'You must review and accept the FixBridge Contractor Agreement Package v4.',
+        });
       }
     }
 
@@ -1299,6 +1324,21 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
       ]
     );
     await ensureUserReferralCode(pool, rows[0]);
+    if (role === 'contractor') {
+      try {
+        const { recordContractorAgreementAcceptance } = await import('./contractor-agreement.js');
+        const { AGREEMENT_V4_TITLE, AGREEMENT_V4_VERSION } = await import('./contractor-agreement-content.js');
+        await recordContractorAgreementAcceptance(pool, {
+          contractorUserId: rows[0].id,
+          documentVersion: AGREEMENT_V4_VERSION,
+          documentTitle: AGREEMENT_V4_TITLE,
+          req,
+          sourceRoute: req.originalUrl || '/api/auth/signup',
+        });
+      } catch (agrErr) {
+        console.error('contractor agreement acceptance:', agrErr);
+      }
+    }
     try {
       const refCode =
         typeof referredByCode === 'string' && referredByCode.trim()
@@ -1312,7 +1352,27 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
       console.error('referral on signup:', refErr);
     }
     const user = rowToUser(rows[0]);
+    if (role === 'homeowner') {
+      try {
+        await validateAndRecordActionConsents(pool, req, {
+          actionKey: 'ACCOUNT_SIGNUP',
+          userId: rows[0].id,
+          idempotencyPrefix: `signup:${rows[0].id}`,
+        });
+        if (req.body?.marketingConsent === true) {
+          await recordMarketingConsent(pool, { userId: rows[0].id, consented: true, req });
+        }
+      } catch (consentErr) {
+        console.error('homeowner consent on signup:', consentErr);
+      }
+    }
     if (role === 'contractor') {
+      try {
+        await ensureComplianceDocuments(pool, rows[0].id);
+        await recalculateDispatchEligible(pool, rows[0].id);
+      } catch (complianceErr) {
+        console.error('contractor compliance seed on signup:', complianceErr);
+      }
       const uploaded = docs.filter((d) => d.data || d.name).map((d) => d.label);
       if (uploaded.length) {
         try {
@@ -2873,7 +2933,7 @@ registerServiceAreaRoutes(app);
 
 app.post('/api/ai/chat', requireAuth, aiLimiter, async (req, res) => {
   try {
-    const { messages } = req.body || {};
+    const { messages, jobId } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ ok: false, message: 'messages array is required.' });
     }
@@ -2888,8 +2948,38 @@ app.post('/api/ai/chat', requireAuth, aiLimiter, async (req, res) => {
     if (!normalized.some((m) => m.role === 'user')) {
       return res.status(400).json({ ok: false, message: 'At least one user message is required.' });
     }
-    const result = await chatWithCustomer({ messages: normalized });
-    return res.json(result);
+
+    let riskLevel = 'green';
+    let assessment = null;
+    if (jobId != null && req.authUser.role === 'homeowner') {
+      const { rows } = await pool.query(
+        `SELECT ai_assessment, diy_risk_level, description, homeowner_user_id FROM managed_jobs WHERE id=$1`,
+        [Number(jobId)]
+      );
+      const job = rows[0];
+      if (job && Number(job.homeowner_user_id) === Number(req.authUser.id)) {
+        assessment = typeof job.ai_assessment === 'string' ? JSON.parse(job.ai_assessment) : job.ai_assessment;
+        const lastUser = normalized.filter((m) => m.role === 'user').pop()?.content || '';
+        const { classifyDiyRiskLevel } = await import('./diy-safety.js');
+        const classified = classifyDiyRiskLevel(
+          `${lastUser} ${job.description || ''}`,
+          assessment
+        );
+        riskLevel = classified.level;
+        if (riskLevel === 'red') {
+          return res.json({
+            ok: true,
+            reply:
+              '**Safety risk detected.**\n\nDo not attempt this repair yourself.\n\n**Safe actions you can take now:**\n1. Stop using the affected equipment.\n2. Shut off utilities only if you can do so safely.\n3. Leave the area and contact emergency services or your utility provider if there is immediate danger.\n\n**Avoid:** invasive repair steps, opening panels, gas line work, or roof/height work.\n\nRequest a licensed professional through FixBridge for on-site help.',
+            source: 'safety_policy',
+            riskLevel,
+          });
+        }
+      }
+    }
+
+    const result = await chatWithCustomer({ messages: normalized, riskLevel, assessment });
+    return res.json({ ...result, riskLevel });
   } catch (e) {
     console.error('ai chat:', e);
     return res.status(500).json({
