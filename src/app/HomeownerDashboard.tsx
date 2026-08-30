@@ -110,6 +110,7 @@ import SubscriptionSuccessModal from "./SubscriptionSuccessModal";
 import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 import { ConsentCheckbox, ConsentSection } from "./ConsentCheckbox";
 import { fetchHomeownerConsentStatus, recordConsentAction } from "./homeownerConsentApi";
+import { useAcknowledgmentGate } from "./useAcknowledgmentGate";
 import HomeownerLocalEstimate, { EstimateLoadingSteps } from "./HomeownerLocalEstimate";
 import HireProfessionalWizard from "./HireProfessionalWizard";
 import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
@@ -500,6 +501,7 @@ export default function HomeownerDashboard({
  const [diyConsentOpen, setDiyConsentOpen] = useState(false);
  const [diyConsentChecked, setDiyConsentChecked] = useState(false);
  const [diyConsentBusy, setDiyConsentBusy] = useState(false);
+ const diyAckGate = useAcknowledgmentGate();
 
  // AI DIY Chat
  const [diyChatMessages, setDiyChatMessages] = useState<ChatMessage[]>([]);
@@ -536,16 +538,29 @@ export default function HomeownerDashboard({
  setDiyConsentOpen(true);
  }
 
- async function confirmDiySafetyConsent() {
- if (!diyConsentChecked) return;
+ async function confirmDiySafetyConsent(extraConsents?: Record<string, boolean>) {
+ const consents = { DIY_SAFETY: true, ...extraConsents };
+ if (!consents.DIY_SAFETY) return;
  setDiyConsentBusy(true);
  const r = await recordConsentAction({
  actionKey: "DIY_START",
- consents: { DIY_SAFETY: true },
+ consents,
  jobId: activeJob?.id,
  });
  setDiyConsentBusy(false);
  if (!r.ok) {
+ if (
+ diyAckGate.promptFromResponse(r, {
+ currentState: { DIY_SAFETY: diyConsentChecked },
+ fallbackMissing: ["DIY_SAFETY"],
+ onConfirm: async (next) => {
+ setDiyConsentChecked(true);
+ await confirmDiySafetyConsent(next);
+ },
+ })
+ ) {
+ return;
+ }
  setError(r.message || "Could not save DIY safety acknowledgment.");
  return;
  }
@@ -2306,6 +2321,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
  </div>
  ) : null}
+ {diyAckGate.modal}
 
  {tab === "report" && (
  <section className="mx-auto max-w-3xl space-y-5">

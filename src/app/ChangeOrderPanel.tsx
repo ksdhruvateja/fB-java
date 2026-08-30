@@ -8,7 +8,9 @@ import {
   priceChangeOrder,
   type ChangeOrder,
 } from "./changeOrdersApi";
-import { ConsentCheckbox, ConsentSection } from "./ConsentCheckbox";
+import { ConsentCheckbox, ConsentSection, consentsFromState } from "./ConsentCheckbox";
+import { mergeConsentRecords, useAcknowledgmentGate } from "./useAcknowledgmentGate";
+import type { AcceptanceType } from "./legalDocuments";
 
 export default function ChangeOrderPanel({
   jobId,
@@ -30,6 +32,8 @@ export default function ChangeOrderPanel({
   const [amount, setAmount] = useState("");
   const [retailDraft, setRetailDraft] = useState<Record<number, string>>({});
   const [changeOrderAck, setChangeOrderAck] = useState<Record<number, boolean>>({});
+  const ackGate = useAcknowledgmentGate();
+  const changeOrderConsentKeys: AcceptanceType[] = ["CHANGE_ORDER_APPROVAL"];
 
   const refresh = async () => {
     setLoading(true);
@@ -90,17 +94,44 @@ export default function ChangeOrderPanel({
     onChanged?.();
   };
 
-  const approve = async (co: ChangeOrder) => {
-    if (!changeOrderAck[co.id]) {
-      setError("Please approve this additional scope and price before continuing.");
+  const approve = async (co: ChangeOrder, extraConsents?: Record<string, boolean>) => {
+    const consentState = mergeConsentRecords(
+      { CHANGE_ORDER_APPROVAL: changeOrderAck[co.id] === true },
+      extraConsents
+    );
+    const missing = ackGate.missingConsentKeys(consentState, changeOrderConsentKeys);
+    if (missing.length) {
+      ackGate.prompt({
+        missing,
+        currentState: consentState,
+        description: "Approve this change order by accepting the required acknowledgment below.",
+        onConfirm: async (consents) => {
+          if (consents.CHANGE_ORDER_APPROVAL) {
+            setChangeOrderAck((state) => ({ ...state, [co.id]: true }));
+          }
+          await approve(co, consents);
+        },
+      });
       return;
     }
     setBusy(true);
-    const r = await approveChangeOrder(jobId, co.id, {
-      CHANGE_ORDER_APPROVAL: true,
-    });
+    const r = await approveChangeOrder(jobId, co.id, consentsFromState(consentState));
     setBusy(false);
     if (!r.ok) {
+      if (
+        ackGate.promptFromResponse(r, {
+          currentState: consentState,
+          fallbackMissing: changeOrderConsentKeys,
+          onConfirm: async (consents) => {
+            if (consents.CHANGE_ORDER_APPROVAL) {
+              setChangeOrderAck((state) => ({ ...state, [co.id]: true }));
+            }
+            await approve(co, consents);
+          },
+        })
+      ) {
+        return;
+      }
       setError(r.message || "Could not approve.");
       return;
     }
@@ -257,6 +288,7 @@ export default function ChangeOrderPanel({
           })}
         </ul>
       )}
+      {ackGate.modal}
     </section>
   );
 }

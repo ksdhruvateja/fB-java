@@ -17,6 +17,7 @@ import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 import { ConsentCheckbox, ConsentSection, allChecked, consentsFromState } from "./ConsentCheckbox";
 import type { ConsentState } from "./ConsentCheckbox";
 import type { AcceptanceType } from "./legalDocuments";
+import { mergeConsentRecords, useAcknowledgmentGate } from "./useAcknowledgmentGate";
 import { HomeownerTipCheckout } from "./HomeownerTipCheckout";
 import ChangeOrderPanel from "./ChangeOrderPanel";
 import HomeownerAccordion from "./HomeownerAccordion";
@@ -177,6 +178,7 @@ export default function HomeownerJobDetailPanel({
     "QUOTE_SCOPE_APPROVAL",
   ];
   const paymentConsentKeys: AcceptanceType[] = ["PAYMENT_AUTHORIZATION", "PAYMENT_VISIT_POLICY"];
+  const ackGate = useAcknowledgmentGate();
 
   useEffect(() => {
     setServiceTiming(job.serviceTiming || "weekday");
@@ -272,13 +274,38 @@ export default function HomeownerJobDetailPanel({
     }
   }
 
-  const handleApproveProposal = async () => {
-    if (!allChecked(quoteConsents, quoteConsentKeys)) {
-      onError("Please complete all quote acknowledgments before approving.");
+  const handleApproveProposal = async (extraConsents?: Record<string, boolean>) => {
+    const consentState = mergeConsentRecords(quoteConsents, extraConsents);
+    const missing = ackGate.missingConsentKeys(consentState, quoteConsentKeys);
+    if (missing.length) {
+      ackGate.prompt({
+        missing,
+        currentState: consentState,
+        description: "Review and accept the quote acknowledgments below to approve this repair.",
+        onConfirm: async (consents) => {
+          setQuoteConsents((state) => mergeConsentRecords(state, consents));
+          await handleApproveProposal(consents);
+        },
+      });
       return;
     }
     onBusy(true);
-    const r = await approveProposal(job.id, consentsFromState(quoteConsents));
+    const r = await approveProposal(job.id, consentsFromState(consentState));
+    if (!r.ok) {
+      if (
+        ackGate.promptFromResponse(r, {
+          currentState: consentState,
+          fallbackMissing: quoteConsentKeys,
+          onConfirm: async (consents) => {
+            setQuoteConsents((state) => mergeConsentRecords(state, consents));
+            await handleApproveProposal(consents);
+          },
+        })
+      ) {
+        onBusy(false);
+        return;
+      }
+    }
     if (r.ok) await onRefresh();
     onBusy(false);
   };
@@ -656,53 +683,79 @@ export default function HomeownerJobDetailPanel({
               className="w-full rounded-xl bg-primary px-3 py-2.5 text-sm font-semibold text-white hover:bg-primary/90 disabled:opacity-60"
               disabled={busy || !allChecked(dispatchPaymentConsents, paymentConsentKeys)}
               onClick={async () => {
-                if (!allChecked(dispatchPaymentConsents, paymentConsentKeys)) {
-                  onError("Please authorize the payment amount under the stated cancellation/refund rules.");
-                  return;
-                }
-                const prop = properties.find((p) => p.id === job.propertyId);
-                if (prop) {
-                  const isMissingAddress =
-                    !prop.addressLine1?.trim() ||
-                    !prop.city?.trim() ||
-                    !prop.state?.trim() ||
-                    !prop.zip?.trim();
-                  if (isMissingAddress) {
-                    onNeedAddress({
-                      propertyId: prop.id,
-                      jobId: job.id,
-                      line1: prop.addressLine1 || "",
-                      line2: prop.addressLine2 || "",
-                      city: prop.city || "",
-                      state: prop.state || "",
-                      zip: prop.zip || "",
+                const runPayment = async (extraConsents?: Record<string, boolean>) => {
+                  const consentState = mergeConsentRecords(dispatchPaymentConsents, extraConsents);
+                  const missing = ackGate.missingConsentKeys(consentState, paymentConsentKeys);
+                  if (missing.length) {
+                    ackGate.prompt({
+                      missing,
+                      currentState: consentState,
+                      description: "Authorize payment by accepting the required acknowledgments below.",
+                      onConfirm: async (consents) => {
+                        setDispatchPaymentConsents((state) => mergeConsentRecords(state, consents));
+                        await runPayment(consents);
+                      },
                     });
                     return;
                   }
-                }
-                onBusy(true);
-                const code = dispatchCouponPreview?.code || job.discountCode || undefined;
-              const prepared = await prepareCheckout(job.id, {
-                discountCode: code || null,
-                clearCoupon: !code,
-              });
-              if (!prepared.ok) {
-                onError(prepared.message || "Could not prepare checkout.");
-                onBusy(false);
-                return;
-              }
-              const r = await payDispatchFee(job.id, code, consentsFromState(dispatchPaymentConsents));
-                if (!r.ok) {
-                  onError(r.message || "Payment failed.");
+                  const prop = properties.find((p) => p.id === job.propertyId);
+                  if (prop) {
+                    const isMissingAddress =
+                      !prop.addressLine1?.trim() ||
+                      !prop.city?.trim() ||
+                      !prop.state?.trim() ||
+                      !prop.zip?.trim();
+                    if (isMissingAddress) {
+                      onNeedAddress({
+                        propertyId: prop.id,
+                        jobId: job.id,
+                        line1: prop.addressLine1 || "",
+                        line2: prop.addressLine2 || "",
+                        city: prop.city || "",
+                        state: prop.state || "",
+                        zip: prop.zip || "",
+                      });
+                      return;
+                    }
+                  }
+                  onBusy(true);
+                  const code = dispatchCouponPreview?.code || job.discountCode || undefined;
+                  const prepared = await prepareCheckout(job.id, {
+                    discountCode: code || null,
+                    clearCoupon: !code,
+                  });
+                  if (!prepared.ok) {
+                    onError(prepared.message || "Could not prepare checkout.");
+                    onBusy(false);
+                    return;
+                  }
+                  const r = await payDispatchFee(job.id, code, consentsFromState(consentState));
+                  if (!r.ok) {
+                    if (
+                      ackGate.promptFromResponse(r, {
+                        currentState: consentState,
+                        fallbackMissing: paymentConsentKeys,
+                        onConfirm: async (consents) => {
+                          setDispatchPaymentConsents((state) => mergeConsentRecords(state, consents));
+                          await runPayment(consents);
+                        },
+                      })
+                    ) {
+                      onBusy(false);
+                      return;
+                    }
+                    onError(r.message || "Payment failed.");
+                    onBusy(false);
+                    return;
+                  }
+                  if (r.url) {
+                    window.location.href = r.url;
+                    return;
+                  }
+                  onError("Stripe checkout could not be started.");
                   onBusy(false);
-                  return;
-                }
-                if (r.url) {
-                  window.location.href = r.url;
-                  return;
-                }
-                onError("Stripe checkout could not be started.");
-                onBusy(false);
+                };
+                await runPayment();
               }}
             >
               Authorize Dispatch & Hold Card
@@ -853,28 +906,52 @@ export default function HomeownerJobDetailPanel({
               className="w-full rounded-xl bg-primary px-3 py-2.5 text-sm font-semibold text-white hover:bg-primary/90 disabled:opacity-60"
               disabled={busy || !allChecked(retailPaymentConsents, paymentConsentKeys)}
               onClick={async () => {
-                if (!allChecked(retailPaymentConsents, paymentConsentKeys)) {
-                  onError("Please authorize the payment amount under the stated cancellation/refund rules.");
-                  return;
-                }
-                onBusy(true);
-                onError(null);
-                try {
-                  const r = await payRetail(job.id, consentsFromState(retailPaymentConsents));
-                  if (r.ok) {
-                    if (r.url) {
-                      window.location.href = r.url;
-                      return;
-                    }
-                    onError("Stripe checkout could not be started.");
-                  } else {
-                    onError(r.message || "Payment failed.");
+                const runRetailPayment = async (extraConsents?: Record<string, boolean>) => {
+                  const consentState = mergeConsentRecords(retailPaymentConsents, extraConsents);
+                  const missing = ackGate.missingConsentKeys(consentState, paymentConsentKeys);
+                  if (missing.length) {
+                    ackGate.prompt({
+                      missing,
+                      currentState: consentState,
+                      description: "Authorize payment by accepting the required acknowledgments below.",
+                      onConfirm: async (consents) => {
+                        setRetailPaymentConsents((state) => mergeConsentRecords(state, consents));
+                        await runRetailPayment(consents);
+                      },
+                    });
+                    return;
                   }
-                } catch (err: unknown) {
-                  onError(err instanceof Error ? err.message : "Payment request failed.");
-                } finally {
-                  onBusy(false);
-                }
+                  onBusy(true);
+                  onError(null);
+                  try {
+                    const r = await payRetail(job.id, consentsFromState(consentState));
+                    if (r.ok) {
+                      if (r.url) {
+                        window.location.href = r.url;
+                        return;
+                      }
+                      onError("Stripe checkout could not be started.");
+                    } else if (
+                      ackGate.promptFromResponse(r, {
+                        currentState: consentState,
+                        fallbackMissing: paymentConsentKeys,
+                        onConfirm: async (consents) => {
+                          setRetailPaymentConsents((state) => mergeConsentRecords(state, consents));
+                          await runRetailPayment(consents);
+                        },
+                      })
+                    ) {
+                      return;
+                    } else {
+                      onError(r.message || "Payment failed.");
+                    }
+                  } catch (err: unknown) {
+                    onError(err instanceof Error ? err.message : "Payment request failed.");
+                  } finally {
+                    onBusy(false);
+                  }
+                };
+                await runRetailPayment();
               }}
             >
               Pay FixBridge
@@ -1112,6 +1189,7 @@ export default function HomeownerJobDetailPanel({
           ) : null}
         </div>
       ) : null}
+      {ackGate.modal}
     </>
   );
 

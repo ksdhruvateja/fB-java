@@ -25,6 +25,7 @@ import { ConsentCheckbox, ConsentSection, consentsFromState, allChecked } from "
 import type { ConsentState } from "./ConsentCheckbox";
 import type { AcceptanceType } from "./legalDocuments";
 import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
+import { mergeConsentRecords, useAcknowledgmentGate } from "./useAcknowledgmentGate";
 
 const SERVICE_TIMING_OPTIONS = [
   { value: "weekday", label: "Scheduled weekday", hint: "Standard dispatch · best availability", icon: CalendarDays },
@@ -148,6 +149,7 @@ export default function HireProfessionalWizard({
   });
   const [dispatchPricing, setDispatchPricing] = useState<CheckoutBreakdown | null>(null);
   const [pricingLoading, setPricingLoading] = useState(false);
+  const ackGate = useAcknowledgmentGate();
 
   const dispatchConsentKeys: AcceptanceType[] = [
     "PROFESSIONAL_DISPATCH_PROVIDER_ACK",
@@ -266,7 +268,17 @@ export default function HireProfessionalWizard({
     if (idx < HIRE_STEPS.length - 1) setStep(HIRE_STEPS[idx + 1]);
   }
 
-  async function savePreferences() {
+  function applyConsentMerge(extra?: Record<string, boolean>) {
+    if (!extra) return;
+    setDispatchConsents((state) => mergeConsentRecords(state, extra));
+    setPaymentConsents((state) => mergeConsentRecords(state, extra));
+  }
+
+  function combinedConsentState(extra?: Record<string, boolean>) {
+    return mergeConsentRecords(mergeConsentRecords(dispatchConsents, paymentConsents), extra);
+  }
+
+  async function savePreferences(extraConsents?: Record<string, boolean>) {
     setBusy(true);
     onError(null);
     try {
@@ -274,6 +286,7 @@ export default function HireProfessionalWizard({
         preferredDate ||
         (serviceTiming === "same-day" ? addDaysFromToday(0) : undefined) ||
         (serviceTiming === "evening-weekend" ? nextWeekendDate() : undefined);
+      const consentState = mergeConsentRecords(dispatchConsents, extraConsents);
       const r = await requestProfessionalDispatch(job.id, {
         serviceTiming,
         preferredDate: resolvedDate,
@@ -281,9 +294,21 @@ export default function HireProfessionalWizard({
         propertyPurpose,
         transactionStage,
         discountCode: discountCode.trim() || undefined,
-        consents: consentsFromState(dispatchConsents),
+        consents: consentsFromState(consentState),
       });
       if (!r.ok || !r.job) {
+        if (
+          ackGate.promptFromResponse(r, {
+            currentState: consentState,
+            fallbackMissing: dispatchConsentKeys,
+            onConfirm: async (consents) => {
+              applyConsentMerge(consents);
+              await savePreferences(consents);
+            },
+          })
+        ) {
+          return false;
+        }
         onError(r.message || "Could not save your dispatch request.");
         return false;
       }
@@ -300,20 +325,29 @@ export default function HireProfessionalWizard({
     setStep("checkout");
   }
 
-  async function handlePay() {
-    if (!allChecked(dispatchConsents, dispatchConsentKeys)) {
-      onError("Please complete all dispatch acknowledgments before continuing.");
-      return;
-    }
-    if (!allChecked(paymentConsents, paymentConsentKeys)) {
-      onError("Please authorize the payment amount under the stated cancellation/refund rules.");
+  async function handlePay(extraConsents?: Record<string, boolean>) {
+    const consentState = combinedConsentState(extraConsents);
+    const missing = [
+      ...ackGate.missingConsentKeys(consentState, dispatchConsentKeys),
+      ...ackGate.missingConsentKeys(consentState, paymentConsentKeys),
+    ];
+    if (missing.length) {
+      ackGate.prompt({
+        missing,
+        currentState: consentState,
+        description: "Review and accept the dispatch and payment acknowledgments below to authorize your professional visit.",
+        onConfirm: async (consents) => {
+          applyConsentMerge(consents);
+          await handlePay(consents);
+        },
+      });
       return;
     }
     setBusy(true);
     onError(null);
     try {
       if (!prefsSaved) {
-        const ok = await savePreferences();
+        const ok = await savePreferences(extraConsents);
         if (!ok) return;
       }
       const code = dispatchCouponPreview?.code || job.discountCode || undefined;
@@ -326,8 +360,20 @@ export default function HireProfessionalWizard({
         return;
       }
       if (prepared.job) onJobUpdated(prepared.job);
-      const r = await payDispatchFee(job.id, code, consentsFromState(paymentConsents));
+      const r = await payDispatchFee(job.id, code, consentsFromState(consentState));
       if (!r.ok) {
+        if (
+          ackGate.promptFromResponse(r, {
+            currentState: consentState,
+            fallbackMissing: [...dispatchConsentKeys, ...paymentConsentKeys],
+            onConfirm: async (consents) => {
+              applyConsentMerge(consents);
+              await handlePay(consents);
+            },
+          })
+        ) {
+          return;
+        }
         onError(r.message || "Payment unsuccessful. Your request has not been submitted for dispatch.");
         return;
       }
@@ -785,6 +831,7 @@ export default function HireProfessionalWizard({
           </button>
         )}
       </div>
+      {ackGate.modal}
     </div>
   );
 }

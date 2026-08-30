@@ -346,15 +346,19 @@ export async function getHomeownerLegalStatus(pool, userId) {
     const k = r.document_key || r.acceptance_type;
     if (!latestByKey[k]) latestByKey[k] = r;
   }
-  return keys.map((doc) => {
-    const acc = latestByKey[doc.key] || latestByKey[doc.acceptanceType];
-    const current = acc && acc.document_version === doc.version;
-    return {
-      ...doc,
-      accepted: Boolean(acc),
-      acceptedCurrentVersion: current,
-      acceptedAt: acc?.accepted_at || null,
-      acceptedVersion: acc?.document_version || null,
-    };
-  });
+  return keys
+    .map((key) => {
+      const doc = docs.find((item) => item.key === key);
+      if (!doc) return null;
+      const acc = latestByKey[key] || latestByKey[doc.acceptanceType];
+      const current = acc && acc.document_version === doc.version;
+      return {
+        ...doc,
+        accepted: Boolean(acc),
+        acceptedCurrentVersion: current,
+        acceptedAt: acc?.accepted_at || null,
+        acceptedVersion: acc?.document_version || null,
+      };
+    })
+    .filter(Boolean);
 }
