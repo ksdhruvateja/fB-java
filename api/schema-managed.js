@@ -1352,6 +1352,15 @@ export async function initManagedSchema(pool) {
     CREATE INDEX IF NOT EXISTS idx_referral_rel_status
     ON referral_relationships (status, type)
   `);
+  try {
+    await pool.query(`
+      ALTER TABLE referral_relationships
+      ADD CONSTRAINT chk_referral_no_self_referral
+      CHECK (referred_user_id IS NULL OR referrer_user_id <> referred_user_id)
+    `);
+  } catch {
+    /* constraint may already exist */
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS referral_credits (

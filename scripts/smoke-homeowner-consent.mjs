@@ -104,6 +104,24 @@ async function main() {
     partialDispatch.missingAcceptanceTypes?.join(', ')
   );
 
+  const acceptAllBypass = await fetch(`${API}/api/homeowner/consent/action`, {
+    method: 'POST',
+    headers: withTerms.h,
+    body: JSON.stringify({
+      actionKey: 'PROFESSIONAL_DISPATCH',
+      acceptAll: true,
+      consents: {
+        PROFESSIONAL_DISPATCH_PROVIDER_ACK: true,
+        PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK: true,
+      },
+    }),
+  }).then(json);
+  ok(
+    'acceptAll alone does not bypass missing dispatch acknowledgments',
+    !acceptAllBypass.ok && acceptAllBypass.code === 'HOMEOWNER_DISPATCH_CONSENT_REQUIRED',
+    acceptAllBypass.missingAcceptanceTypes?.join(', ')
+  );
+
   const fullDispatch = await fetch(`${API}/api/homeowner/consent/action`, {
     method: 'POST',
     headers: withTerms.h,

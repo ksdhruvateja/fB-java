@@ -3,6 +3,7 @@ import type { ConsentState } from "./ConsentCheckbox";
 import { consentsFromState } from "./ConsentCheckbox";
 import type { AcceptanceType } from "./legalDocuments";
 import RequiredAcknowledgmentsModal from "./RequiredAcknowledgmentsModal";
+import { DISPATCH_ACKNOWLEDGMENT_KEYS, isDispatchAcknowledgmentType } from "./consentAcceptAll";
 
 export function parseMissingAcknowledgments(r: {
   ok?: boolean;
@@ -50,6 +51,7 @@ export function useAcknowledgmentGate() {
   const [description, setDescription] = useState(
     "Please review and accept the following before continuing."
   );
+  const [acceptAllKeys, setAcceptAllKeys] = useState<AcceptanceType[] | undefined>(undefined);
   const onConfirmRef = useRef<((consents: Record<string, boolean>) => void | Promise<void>) | null>(
     null
   );
@@ -65,6 +67,7 @@ export function useAcknowledgmentGate() {
       currentState?: ConsentState;
       title?: string;
       description?: string;
+      acceptAllKeys?: AcceptanceType[];
       onConfirm: (consents: Record<string, boolean>) => void | Promise<void>;
     }) => {
       if (!opts.missing.length) return false;
@@ -72,6 +75,11 @@ export function useAcknowledgmentGate() {
       setDraft(opts.currentState || {});
       setTitle(opts.title || "Required acknowledgments");
       setDescription(opts.description || "Please review and accept the following before continuing.");
+      const dispatchOnly =
+        opts.missing.length > 0 && opts.missing.every((type) => isDispatchAcknowledgmentType(type));
+      setAcceptAllKeys(
+        opts.acceptAllKeys ?? (dispatchOnly ? DISPATCH_ACKNOWLEDGMENT_KEYS : undefined)
+      );
       onConfirmRef.current = opts.onConfirm;
       setOpen(true);
       return true;
@@ -111,6 +119,7 @@ export function useAcknowledgmentGate() {
       title={title}
       description={description}
       missingTypes={missing}
+      acceptAllKeys={acceptAllKeys}
       value={draft}
       onChange={setDraft}
       onClose={close}

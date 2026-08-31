@@ -24,6 +24,8 @@ import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCoupo
 import { ConsentCheckbox, ConsentSection, consentsFromState, allChecked } from "./ConsentCheckbox";
 import type { ConsentState } from "./ConsentCheckbox";
 import type { AcceptanceType } from "./legalDocuments";
+import AcceptAllConsents from "./AcceptAllConsents";
+import { DISPATCH_ACKNOWLEDGMENT_KEYS } from "./consentAcceptAll";
 import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 import { mergeConsentRecords, useAcknowledgmentGate } from "./useAcknowledgmentGate";
 
@@ -151,13 +153,7 @@ export default function HireProfessionalWizard({
   const [pricingLoading, setPricingLoading] = useState(false);
   const ackGate = useAcknowledgmentGate();
 
-  const dispatchConsentKeys: AcceptanceType[] = [
-    "PROFESSIONAL_DISPATCH_PROVIDER_ACK",
-    "PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK",
-    "VISIT_FEE_ACK",
-    "HOMEOWNER_SERVICE_AGREEMENT",
-    "VISIT_CANCELLATION_POLICY",
-  ];
+  const dispatchConsentKeys: AcceptanceType[] = DISPATCH_ACKNOWLEDGMENT_KEYS;
   const paymentConsentKeys: AcceptanceType[] = ["PAYMENT_AUTHORIZATION", "PAYMENT_VISIT_POLICY"];
 
   const baseDispatchFee = job.visitFeeAmount ?? job.pricing?.contractor_visit_fee ?? 125;
@@ -690,7 +686,10 @@ export default function HireProfessionalWizard({
               <p className="text-xs text-muted-foreground leading-relaxed">
                 Authorizing charges the amount shown under AUTHORIZED NOW. Your request is sent to FixBridge only after payment succeeds.
               </p>
-              <ConsentSection title="Dispatch acknowledgments">
+              <ConsentSection
+                title="Dispatch acknowledgments"
+                description="Required before requesting a professional"
+              >
                 <ConsentCheckbox
                   id="dispatch-provider"
                   checked={dispatchConsents.PROFESSIONAL_DISPATCH_PROVIDER_ACK === true}
@@ -724,6 +723,12 @@ export default function HireProfessionalWizard({
                   label="I agree to the Visit/Cancellation Policy."
                   documentKey="VISIT_CANCELLATION_POLICY"
                   documentLabel="Visit/Cancellation Policy"
+                />
+                <AcceptAllConsents
+                  id="dispatch-accept-all"
+                  keys={dispatchConsentKeys}
+                  state={dispatchConsents}
+                  onChange={setDispatchConsents}
                 />
               </ConsentSection>
               <ConsentSection title="Payment authorization">

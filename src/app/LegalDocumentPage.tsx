@@ -56,7 +56,14 @@ export default function LegalDocumentPage({ pathname, onNavigateHome }: Props) {
             <ArrowLeft className="h-4 w-4" />
             Back
           </button>
-          <BrandLogo variant="nav" tone="black" className="h-7" />
+          <button
+            type="button"
+            onClick={onNavigateHome}
+            className="rounded-md outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-primary/40"
+            aria-label="FixBridge home"
+          >
+            <BrandLogo variant="nav" tone="black" className="h-7" />
+          </button>
         </div>
       </header>
 

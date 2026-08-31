@@ -509,3 +509,25 @@ Local app: **http://localhost:5000** (Vite → API **3001**)
 | Service-date eligibility | **PARTIAL** (compliance recheck at dispatch; check-in hook TBD) |
 | Provider suspension | **PARTIAL** (`compliance_status` / `is_blocked`) |
 | Agreement/compliance evidence | **PASS** (versioned acceptances + job authorizations) |
+
+---
+
+## PARTNER REFERRAL — Self-referral prevention
+
+**Date:** 2026-08-30
+
+| Check | Result |
+|-------|--------|
+| Self-referral by user ID blocked | **PASS** (`isSameReferralIdentity` + `applyReferralCode`) |
+| Same-email self-referral blocked | **PASS** (normalized email compare; cross-role same email) |
+| Same-phone detection | **PASS** (`normalizePhone` via `referral-self-guard.js`) |
+| Server-side validation | **PASS** (all referral apply paths; partner attach) |
+| Direct API bypass blocked | **PASS** (`POST /api/referrals/apply` → `SELF_REFERRAL_NOT_ALLOWED`) |
+| Self-referral earns no reward | **PASS** (`referralRewardsAllowed` + `grantHomeownerCredits` guard) |
+| Self-referral earns no commission | **PASS** (`grantContractorBonus` guard) |
+| Signup continues with invalid referral removed | **PASS** (signup try/catch; referral rejected only) |
+| Duplicate referral protection | **PASS** (`UNIQUE(referred_user_id)`) |
+| Admin audit event | **PASS** (`SELF_REFERRAL_BLOCKED` in `audit_logs`) |
+| Database invariant | **PASS** (`chk_referral_no_self_referral` CHECK constraint) |
+
+**Regression:** `npm run smoke:referral-self`

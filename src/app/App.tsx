@@ -162,13 +162,22 @@ function Nav({
   const border = overHero ? "border-white/30" : "border-border";
   const navLogoTone = !overHero && !isDark ? "black" : "color";
 
+  const goToHome = () => {
+    onNavigate("home");
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>("[data-scroll-root]")?.scrollTo({ top: 0, behavior: "smooth" });
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  };
+
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-transparent pt-[env(safe-area-inset-top)] transition-colors duration-300">
       <div className="relative w-full px-5 sm:px-6 lg:px-10 xl:px-12 2xl:px-16 py-2.5 sm:py-3.5 min-h-[3.25rem] flex items-center">
         <button
-          onClick={() => onNavigate("home")}
+          type="button"
+          onClick={goToHome}
           className="relative z-10 flex shrink-0 items-center min-w-0"
-          aria-label={brand.productName}
+          aria-label={`${brand.productName} home`}
         >
           <BrandLogo
             variant="nav"
@@ -374,9 +383,14 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
         {/* Brand */}
         <div className="pb-8 mb-8 border-b border-border/70 lg:border-0 lg:pb-0 lg:mb-0">
           <div className="lg:hidden">
-            <div className="mb-4">
+            <button
+              type="button"
+              onClick={() => onNavigate("home")}
+              className="mb-4 inline-flex rounded-md outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-primary/40"
+              aria-label={`${brand.productName} home`}
+            >
               <BrandLogo variant="nav" />
-            </div>
+            </button>
             <p className="text-sm text-muted-foreground max-w-sm leading-relaxed mb-3">
               The middle layer between homeowners and licensed local contractors — handling
               matching, trust, and paperwork so neither side has to.
@@ -391,9 +405,14 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
         {/* Desktop / tablet: brand + 3 columns · Mobile: 2-column link split */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-x-4 gap-y-8 sm:gap-x-8 sm:gap-y-10 mb-8 sm:mb-10 md:mb-12">
           <div className="hidden lg:block lg:col-span-2 pr-6">
-            <div className="mb-4">
+            <button
+              type="button"
+              onClick={() => onNavigate("home")}
+              className="mb-4 inline-flex rounded-md outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-primary/40"
+              aria-label={`${brand.productName} home`}
+            >
               <BrandLogo variant="nav" />
-            </div>
+            </button>
             <p className="text-sm text-muted-foreground max-w-xs leading-relaxed mb-4">
               The middle layer between homeowners and licensed local contractors — handling
               matching, trust, and paperwork so neither side has to.

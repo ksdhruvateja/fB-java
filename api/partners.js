@@ -1,5 +1,7 @@
 import { brand } from './brand.js';
 import { sendMail } from './mail.js';
+import { isPartnerSelfReferral, logSelfReferralBlocked } from './referral-self-guard.js';
+import { auditReferral } from './referrals.js';
 
 /** Partner-visible statuses only (never pricing, net bids, or payment details). */
 export const PARTNER_VISIBLE_STATUSES = [
@@ -90,6 +92,29 @@ export async function syncPartnerReferralFromJob(pool, jobId, jobStatus) {
   const job = jobs[0];
   if (!job?.partner_id && !job?.partner_code) return null;
 
+  if (job.homeowner_user_id && job.partner_id) {
+    const { rows: partners } = await pool.query(`SELECT * FROM partners WHERE id=$1`, [job.partner_id]);
+    const { rows: homeowners } = await pool.query(`SELECT id, email, phone FROM users WHERE id=$1`, [
+      job.homeowner_user_id,
+    ]);
+    const partner = partners[0];
+    const homeowner = homeowners[0];
+    const identity = isPartnerSelfReferral(partner, homeowner);
+    if (identity.blocked) {
+      await logSelfReferralBlocked(pool, auditReferral, {
+        referredUserId: job.homeowner_user_id,
+        partnerId: job.partner_id,
+        reason: identity.reason,
+        via: 'syncPartnerReferralFromJob',
+      });
+      await pool.query(
+        `UPDATE managed_jobs SET partner_id=NULL, partner_code=NULL, referral_status=NULL WHERE id=$1`,
+        [jobId]
+      );
+      return { blocked: true, reason: identity.reason };
+    }
+  }
+
   let referral;
   const existing = await pool.query(
     `SELECT * FROM partner_referrals WHERE job_id=$1 ORDER BY id DESC LIMIT 1`,
@@ -170,6 +195,48 @@ async function emailPartnerStatusUpdate(pool, job, partnerStatus) {
   } catch (e) {
     console.error('[Partner referral email failed]', e.message);
   }
+}
+
+export async function attachPartnerToJob(pool, jobId, partner, homeownerUserId, { actorId = null } = {}) {
+  if (!partner || !jobId) return { ok: false, message: 'Partner or job missing.' };
+  if (homeownerUserId) {
+    const { rows: homeowners } = await pool.query(`SELECT id, email, phone FROM users WHERE id=$1`, [
+      homeownerUserId,
+    ]);
+    const identity = isPartnerSelfReferral(partner, homeowners[0]);
+    if (identity.blocked) {
+      await logSelfReferralBlocked(pool, auditReferral, {
+        referredUserId: homeownerUserId,
+        partnerId: partner.id,
+        reason: identity.reason,
+        actorId,
+        via: 'attachPartnerToJob',
+      });
+      return { ok: false, blocked: true, code: 'SELF_REFERRAL_NOT_ALLOWED', reason: identity.reason };
+    }
+  }
+  await pool.query(
+    `UPDATE managed_jobs SET
+       partner_id=$1,
+       partner_code=$2,
+       referral_source=COALESCE(referral_source, 'partner_link'),
+       referring_name=COALESCE(NULLIF(referring_name,''), $3),
+       referring_company=COALESCE(NULLIF(referring_company,''), $4),
+       referring_email=COALESCE(NULLIF(referring_email,''), $5),
+       referring_phone=COALESCE(NULLIF(referring_phone,''), $6),
+       referral_status='referral_received'
+     WHERE id=$7`,
+    [
+      partner.id,
+      partner.code,
+      partner.name,
+      partner.company || null,
+      partner.email || null,
+      partner.phone || null,
+      jobId,
+    ]
+  );
+  return { ok: true, partner };
 }
 
 export function intakeShareUrl(code, appUrl) {

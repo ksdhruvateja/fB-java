@@ -4,12 +4,14 @@ import { ConsentCheckbox, ConsentSection } from "./ConsentCheckbox";
 import type { ConsentState } from "./ConsentCheckbox";
 import type { AcceptanceType } from "./legalDocuments";
 import { definitionForType } from "./acknowledgmentDefinitions";
+import AcceptAllConsents from "./AcceptAllConsents";
 
 export default function RequiredAcknowledgmentsModal({
   open,
   title = "Required acknowledgments",
   description = "Please review and accept the following before continuing.",
   missingTypes,
+  acceptAllKeys,
   value,
   onChange,
   onClose,
@@ -20,6 +22,7 @@ export default function RequiredAcknowledgmentsModal({
   title?: string;
   description?: string;
   missingTypes: AcceptanceType[];
+  acceptAllKeys?: AcceptanceType[];
   value: ConsentState;
   onChange: (next: ConsentState) => void;
   onClose: () => void;
@@ -35,6 +38,7 @@ export default function RequiredAcknowledgmentsModal({
   if (!open) return null;
 
   const allAccepted = missingTypes.every((type) => value[type] === true);
+  const acceptAllVisible = acceptAllKeys != null && acceptAllKeys.length > 0;
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
@@ -73,6 +77,14 @@ export default function RequiredAcknowledgmentsModal({
                 />
               );
             })}
+            {acceptAllVisible ? (
+              <AcceptAllConsents
+                id="required-ack-accept-all"
+                keys={acceptAllKeys}
+                state={value}
+                onChange={onChange}
+              />
+            ) : null}
           </ConsentSection>
         </div>
 

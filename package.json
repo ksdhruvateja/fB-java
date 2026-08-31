@@ -46,6 +46,8 @@
     "smoke:dispatch-diy-safety": "node scripts/smoke-dispatch-diy-safety.mjs",
     "smoke:assessment-async": "node --env-file=.env scripts/smoke-assessment-async.mjs",
     "smoke:service-catalog": "node scripts/smoke-service-catalog.mjs",
+    "smoke:referral-self": "node --env-file=.env scripts/smoke-referral-self-block.mjs",
+    "smoke:accept-all": "node scripts/smoke-accept-all-consents.mjs",
     "brand:logo": "node scripts/process-brand-logo.mjs"
   },
   "dependencies": {

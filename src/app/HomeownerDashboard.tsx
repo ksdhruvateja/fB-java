@@ -88,7 +88,6 @@ import {
  jobsForSegment,
  jobsForProperty,
  countQuotesWaiting,
- mobileHeaderTitle,
  sanitizeDashTab,
  sanitizeJobsSegment,
  isHomeownerTabRendered,
@@ -2038,9 +2037,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <div className="flex min-w-0 items-center gap-1">
  {canBack && <AppBackButton onBack={goBack} className="-ml-1 shrink-0" />}
  <div className="min-w-0">
- <p className="[font-family:'Barlow_Condensed',sans-serif] text-xl font-black uppercase tracking-tight">
- {mobileHeaderTitle(tab)}
- </p>
+ <AppLogo onHome={goHome} variant="auth" className="mb-0.5" />
  <p className="truncate text-[10px] text-muted-foreground">{user.name}</p>
  </div>
  </div>

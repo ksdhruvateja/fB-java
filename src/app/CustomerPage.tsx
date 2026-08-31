@@ -15,7 +15,6 @@ import {
   HardDrive,
 } from "lucide-react";
 import { ScrollReveal, Counter } from "./shared";
-import { BrandLogo } from "./BrandLogo";
 import { FeatureTileIcon } from "./FeatureTileIcon";
 import CustomerTrustSection from "./CustomerTrustSection";
 import { brand } from "../config/brand";
@@ -129,12 +128,11 @@ export default function CustomerPage({
     offset: ["start start", "end start"],
   });
   const imageScale = useTransform(scrollYProgress, [0, 1], [1, 1.12]);
-  const brandY = useTransform(scrollYProgress, [0, 1], [0, 80]);
   const contentOpacity = useTransform(scrollYProgress, [0, 0.55], [1, 0]);
 
   return (
     <>
-      {/* ── Hero: full-bleed photo + brand as the composition ─────────────── */}
+      {/* ── Hero: full-bleed photo ───────────────────────────────────────── */}
       <section ref={heroRef} className="relative min-h-[100svh] min-h-[100dvh] flex flex-col overflow-hidden bg-black">
         <motion.div className="absolute inset-0" style={{ scale: imageScale }}>
           <img
@@ -186,13 +184,6 @@ export default function CustomerPage({
                 How FixBridge Works
               </a>
             </div>
-          </motion.div>
-
-          <motion.div style={{ y: brandY }} className="w-full flex justify-start items-end">
-            <BrandLogo
-              variant="hero"
-              className="drop-shadow-[0_8px_28px_rgba(0,0,0,0.5)] max-h-[min(22vh,12.5rem)] sm:max-h-[min(24vh,11rem)] md:max-h-[min(26vh,12.5rem)]"
-            />
           </motion.div>
         </motion.div>
       </section>

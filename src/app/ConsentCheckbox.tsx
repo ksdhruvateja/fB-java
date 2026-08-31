@@ -60,10 +60,12 @@ export function ConsentCheckbox({
 
 export function ConsentSection({
   title,
+  description,
   optional,
   children,
 }: {
   title: string;
+  description?: string;
   optional?: boolean;
   children: React.ReactNode;
 }) {
@@ -73,6 +75,9 @@ export function ConsentSection({
         {title}
         {optional ? " (optional)" : " (required)"}
       </legend>
+      {description ? (
+        <p className="px-1 text-xs text-muted-foreground -mt-0.5">{description}</p>
+      ) : null}
       {children}
     </fieldset>
   );

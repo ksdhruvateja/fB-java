@@ -43,6 +43,7 @@ function requestMeta(req) {
 
 function parseConsentsFromBody(body = {}) {
   const out = new Set();
+  // acceptAll / accept_all are UI-only shortcuts — never substitute for individual acceptance records.
   if (body?.consents && typeof body.consents === 'object' && !Array.isArray(body.consents)) {
     for (const [type, val] of Object.entries(body.consents)) {
       if (val === true) out.add(String(type).toUpperCase());

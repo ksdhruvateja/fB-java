@@ -92,6 +92,7 @@ import {
   publicPartnerView,
   syncPartnerReferralFromJob,
   intakeShareUrl,
+  attachPartnerToJob,
   PARTNER_STATUS_LABELS,
 } from './partners.js';
 import {
@@ -2404,27 +2405,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (partnerCode) {
         const partner = await lookupPartnerByCode(pool, partnerCode);
         if (partner) {
-          await pool.query(
-            `UPDATE managed_jobs SET
-               partner_id=$1,
-               partner_code=$2,
-               referral_source=COALESCE(referral_source, 'partner_link'),
-               referring_name=COALESCE(NULLIF(referring_name,''), $3),
-               referring_company=COALESCE(NULLIF(referring_company,''), $4),
-               referring_email=COALESCE(NULLIF(referring_email,''), $5),
-               referring_phone=COALESCE(NULLIF(referring_phone,''), $6),
-               referral_status='referral_received'
-             WHERE id=$7`,
-            [
-              partner.id,
-              partner.code,
-              partner.name,
-              partner.company || null,
-              partner.email || null,
-              partner.phone || null,
-              job.id,
-            ]
-          );
+          const attached = await attachPartnerToJob(pool, job.id, partner, user.id, {
+            actorId: user.id,
+          });
+          if (!attached.ok && attached.blocked) {
+            console.warn('partner self-referral blocked on public job create:', attached.reason);
+          }
         } else {
           await pool.query(
             `UPDATE managed_jobs SET partner_code=$1, referral_status='referral_received' WHERE id=$2`,
@@ -2581,27 +2567,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         await processReferralAward(pool, req.authUser, partnerCode);
         const partner = await lookupPartnerByCode(pool, partnerCode);
         if (partner) {
-          await pool.query(
-            `UPDATE managed_jobs SET
-               partner_id=$1,
-               partner_code=$2,
-               referral_source=COALESCE(referral_source, 'partner_link'),
-               referring_name=COALESCE(NULLIF(referring_name,''), $3),
-               referring_company=COALESCE(NULLIF(referring_company,''), $4),
-               referring_email=COALESCE(NULLIF(referring_email,''), $5),
-               referring_phone=COALESCE(NULLIF(referring_phone,''), $6),
-               referral_status='referral_received'
-             WHERE id=$7`,
-            [
-              partner.id,
-              partner.code,
-              partner.name,
-              partner.company || null,
-              partner.email || null,
-              partner.phone || null,
-              job.id,
-            ]
-          );
+          const attached = await attachPartnerToJob(pool, job.id, partner, req.authUser.id, {
+            actorId: req.authUser.id,
+          });
+          if (!attached.ok && attached.blocked) {
+            console.warn('partner self-referral blocked on job create:', attached.reason);
+          }
         } else {
           // Keep typed code even if not yet in partners table; admin can still see it
           await pool.query(

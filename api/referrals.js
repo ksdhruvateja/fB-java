@@ -4,6 +4,13 @@
  */
 import crypto from 'crypto';
 import { brand } from './brand.js';
+import {
+  isSameReferralIdentity,
+  logSelfReferralBlocked,
+  referralRewardsAllowed,
+  selfReferralError,
+  SELF_REFERRAL_CODE,
+} from './referral-self-guard.js';
 
 export const REFERRAL_TYPES = {
   HOMEOWNER_HOMEOWNER: 'homeowner_homeowner',
@@ -240,8 +247,21 @@ export async function applyReferralCode(pool, referredUserId, rawCode, { actorId
   );
   const referrer = referrers[0];
   if (!referrer) return { ok: false, message: 'Referral code not found.' };
-  if (Number(referrer.id) === Number(referredUserId)) {
-    return { ok: false, message: 'You cannot use your own referral code.' };
+
+  const identity = isSameReferralIdentity(referrer, referred);
+  if (identity.blocked) {
+    await logSelfReferralBlocked(pool, auditReferral, {
+      referrerUserId: referrer.id,
+      referredUserId,
+      reason: identity.reason,
+      actorId: actorId || referredUserId,
+      via: 'applyReferralCode',
+    });
+    return selfReferralError({
+      reason: identity.reason,
+      referrerUserId: Number(referrer.id),
+      referredUserId: Number(referredUserId),
+    });
   }
 
   const { rows: emailDup } = await pool.query(
@@ -340,6 +360,13 @@ export async function getCreditBalances(pool, userId) {
 }
 
 async function grantHomeownerCredits(pool, rel) {
+  if (!referralRewardsAllowed(rel)) {
+    await pool.query(
+      `UPDATE referral_relationships SET status='invalid', invalid_reason=$2, updated_at=NOW() WHERE id=$1`,
+      [rel.id, 'Self-referral blocked before credit issuance']
+    );
+    return;
+  }
   const { rows: existing } = await pool.query(
     `SELECT id FROM referral_credits WHERE relationship_id=$1 AND kind='earn'`,
     [rel.id]
@@ -363,6 +390,13 @@ async function grantHomeownerCredits(pool, rel) {
 }
 
 async function grantContractorBonus(pool, rel) {
+  if (!referralRewardsAllowed(rel)) {
+    await pool.query(
+      `UPDATE referral_relationships SET status='invalid', invalid_reason=$2, updated_at=NOW() WHERE id=$1`,
+      [rel.id, 'Self-referral blocked before bonus issuance']
+    );
+    return;
+  }
   const { rows: existing } = await pool.query(
     `SELECT id FROM referral_payout_bonuses WHERE relationship_id=$1`,
     [rel.id]
@@ -390,6 +424,13 @@ export async function qualifyReferralOnPaidService(pool, { jobId, homeownerUserI
   );
   const rel = rels[0];
   if (!rel) return { ok: true, skipped: true };
+  if (!referralRewardsAllowed(rel)) {
+    await pool.query(
+      `UPDATE referral_relationships SET status='invalid', invalid_reason='Self-referral blocked', updated_at=NOW() WHERE id=$1`,
+      [rel.id]
+    );
+    return { ok: true, skipped: true, selfReferralBlocked: true };
+  }
   if (['reward_earned', 'reward_available', 'reward_used'].includes(rel.status)) {
     return { ok: true, alreadyRewarded: true };
   }
@@ -542,4 +583,4 @@ export async function contractorBonusSummary(pool, contractorUserId) {
   return { totalCents: total, pendingCents: pending, paidCents: paid };
 }
 
-export { DEFAULT_CONFIG, auditReferral };
+export { DEFAULT_CONFIG, auditReferral, SELF_REFERRAL_CODE };
