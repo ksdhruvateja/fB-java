@@ -69,7 +69,7 @@ export default function HomeownerLegalPanel() {
                   rel="noopener noreferrer"
                   className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl border border-border px-3 py-2 text-xs font-medium hover:bg-muted/50"
                 >
-                  View agreement
+                  View
                   <ExternalLink className="h-3.5 w-3.5" />
                 </a>
               </div>

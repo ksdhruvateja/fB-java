@@ -45,6 +45,7 @@ import {
   completeGoogleMarketingPreferences,
   signInWithGoogle,
 } from "./marketingApi";
+import { clearPendingReferralCode, getPendingReferralCode } from "./referralSession";
 import type { ConsentState } from "./ConsentCheckbox";
 import type { AcceptanceType } from "./legalDocuments";
 import { AuthMobileActions } from "./AuthMobileActions";
@@ -84,6 +85,8 @@ export default function HomeownerLogin({
  const [marketingSmsOptIn, setMarketingSmsOptIn] = useState(false);
  const [googleOnboarding, setGoogleOnboarding] = useState(false);
  const [googlePendingUser, setGooglePendingUser] = useState<AuthUser | null>(null);
+ const [googleConsentPending, setGoogleConsentPending] = useState(false);
+ const [pendingGoogleCredential, setPendingGoogleCredential] = useState<string | null>(null);
 
  const [reportStep, setReportStep] = useState<ReportStep>(0);
  const [reportTradeId, setReportTradeId] = useState<ServiceTradeId | "">("");
@@ -259,27 +262,37 @@ export default function HomeownerLogin({
  }
  };
 
- const handleGoogleCredential = async (credential: string) => {
+ const handleGoogleCredential = async (credential: string, opts?: { forceConsents?: boolean }) => {
  setLoading(true);
  setError("");
  try {
+ const referredByCode = getPendingReferralCode() || undefined;
  const body: Record<string, unknown> = {
- consents: consentsFromState(accountConsents),
+ role: "homeowner",
+ consents: opts?.forceConsents || tab === "signup" ? consentsFromState(accountConsents) : undefined,
  marketingEmailOptIn: tab === "signup" ? marketingEmailOptIn : false,
  marketingSmsOptIn: tab === "signup" ? marketingSmsOptIn : false,
  phone: tab === "report" ? reportPhone : undefined,
+ referredByCode,
  };
- const data = await signInWithGoogle(credential, body);
+ const data = await signInWithGoogle(credential, body, "homeowner");
  if (!data.ok) {
  if (data.code === "CONSENT_REQUIRED") {
- setError("You must agree to the Terms of Service and Privacy Policy before continuing with Google.");
+ setPendingGoogleCredential(credential);
+ setGoogleConsentPending(true);
+ setLoading(false);
+ return;
+ }
+ if (data.code === "ACCOUNT_SUSPENDED") {
+ setError(data.message || "This account is not active.");
  } else {
- setError(data.message || "Google sign-in failed.");
+ setError(data.message || "We couldn't sign you in with Google. Please try again.");
  }
  setLoading(false);
  return;
  }
  saveSession(data.token, data.user);
+ clearPendingReferralCode();
  if (data.needsMarketingOnboarding) {
  setGooglePendingUser(data.user);
  setGoogleOnboarding(true);
@@ -288,10 +301,21 @@ export default function HomeownerLogin({
  }
  onLogin(data.user);
  } catch {
- setError("Google sign-in failed.");
+ setError("We couldn't sign you in with Google. Please try again.");
  } finally {
  setLoading(false);
  }
+ };
+
+ const completeGoogleConsentSignup = async () => {
+ if (!pendingGoogleCredential) return;
+ if (!accountConsents.ACCOUNT_TERMS || !accountConsents.PRIVACY_POLICY) {
+ setError("You must agree to the Terms of Service and Privacy Policy.");
+ return;
+ }
+ setGoogleConsentPending(false);
+ await handleGoogleCredential(pendingGoogleCredential, { forceConsents: true });
+ setPendingGoogleCredential(null);
  };
 
  const completeGoogleOnboarding = async () => {
@@ -483,6 +507,21 @@ export default function HomeownerLogin({
  </div>
  </div>
  )}
+ {(tab === "login" || tab === "signup") && (
+ <div className="space-y-3">
+ <GoogleSignInButton
+ disabled={loading}
+ text={tab === "signup" ? "signup_with" : "signin_with"}
+ onCredential={(cred) => void handleGoogleCredential(cred)}
+ />
+ <div className="flex items-center gap-3 text-xs text-neutral-400">
+ <span className="h-px flex-1 bg-neutral-200" />
+ or
+ <span className="h-px flex-1 bg-neutral-200" />
+ </div>
+ </div>
+ )}
+
  {tab === "signup" && (
  <AuthTextField
  value={fullName}
@@ -519,20 +558,8 @@ export default function HomeownerLogin({
  )}
 
  <AuthError message={error} />
-
- {(tab === "login" || tab === "signup") && (
- <div className="mt-4 space-y-3">
- <div className="flex items-center gap-3 text-xs text-neutral-400">
- <span className="h-px flex-1 bg-neutral-200" />
- or
- <span className="h-px flex-1 bg-neutral-200" />
- </div>
- <GoogleSignInButton
- disabled={loading || (tab === "signup" && (!accountConsents.ACCOUNT_TERMS || !accountConsents.PRIVACY_POLICY))}
- text={tab === "signup" ? "signup_with" : "signin_with"}
- onCredential={(cred) => void handleGoogleCredential(cred)}
- />
- </div>
+ {loading && (tab === "login" || tab === "signup") && (
+ <p className="text-center text-xs text-neutral-500">Signing you in…</p>
  )}
 
  {(tab === "signup" || (tab === "report" && reportStep === 3)) && (
@@ -630,6 +657,57 @@ export default function HomeownerLogin({
  </AuthPanel>
  </motion.div>
  </AuthShell>
+
+ {googleConsentPending && (
+ <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+ <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+ <h2 className="text-lg font-bold text-neutral-900">Complete your account</h2>
+ <p className="mt-1 text-sm text-neutral-500">
+ Google verified your identity. Accept the required policies to finish creating your FixBridge account.
+ </p>
+ <div className="mt-4 space-y-3">
+ <ConsentCheckbox
+ id="google-terms"
+ checked={accountConsents.ACCOUNT_TERMS === true}
+ onChange={(v) => setAccountConsents((s) => ({ ...s, ACCOUNT_TERMS: v }))}
+ label="I agree to the FixBridge Terms of Service."
+ documentKey="HOMEOWNER_TERMS"
+ documentLabel="Terms of Service"
+ />
+ <ConsentCheckbox
+ id="google-privacy"
+ checked={accountConsents.PRIVACY_POLICY === true}
+ onChange={(v) => setAccountConsents((s) => ({ ...s, PRIVACY_POLICY: v }))}
+ label="I agree to the FixBridge Privacy Policy."
+ documentKey="PRIVACY_POLICY"
+ documentLabel="Privacy Policy"
+ />
+ </div>
+ <AuthError message={error} />
+ <div className="mt-5 flex gap-2">
+ <button
+ type="button"
+ className="flex-1 rounded-full border border-neutral-200 py-3 text-sm font-semibold text-neutral-700"
+ onClick={() => {
+ setGoogleConsentPending(false);
+ setPendingGoogleCredential(null);
+ setError("");
+ }}
+ >
+ Cancel
+ </button>
+ <button
+ type="button"
+ disabled={loading}
+ onClick={() => void completeGoogleConsentSignup()}
+ className="flex-1 rounded-full bg-primary py-3 text-sm font-bold text-white disabled:opacity-60"
+ >
+ {loading ? "Creating account…" : "Continue"}
+ </button>
+ </div>
+ </div>
+ </div>
+ )}
 
  {googleOnboarding && (
  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">

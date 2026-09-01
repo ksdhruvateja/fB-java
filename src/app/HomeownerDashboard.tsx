@@ -71,6 +71,7 @@ import HomeownerHomeProtection from "./HomeownerHomeProtection";
 import HomeownerReferEarn from "./HomeownerReferEarn";
 import HomeownerLegalPanel from "./HomeownerLegalPanel";
 import HomeownerCommunicationPreferences from "./HomeownerCommunicationPreferences";
+import HomeownerSignInMethods from "./HomeownerSignInMethods";
 import { buildHomeUpdatesSnapshot, type HomeUpdateItem } from "./homeUpdates";
 import { buildPassportAiContext } from "./propertyPassport";
 import AppErrorBoundary, { DashboardTabFallback } from "./AppErrorBoundary";
@@ -108,7 +109,14 @@ import { clearAssistantHandoff, readAssistantHandoff } from "./assistantHandoff"
 import HomeownerGoProPlans, { type GoProPlanCard } from "./HomeownerGoProPlans";
 import SubscriptionSuccessModal from "./SubscriptionSuccessModal";
 import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
-import { ConsentCheckbox, ConsentSection } from "./ConsentCheckbox";
+import DiySafetyStartModal from "./DiySafetyStartModal";
+import DiyGuidedSafetyBar from "./DiyGuidedSafetyBar";
+import DiyEmergencyBanner from "./DiyEmergencyBanner";
+import DiyStopProfessionalBar from "./DiyStopProfessionalBar";
+import DiySafetyFeedback from "./DiySafetyFeedback";
+import DiyIncidentReportForm from "./DiyIncidentReportForm";
+import { DIY_PROFESSIONAL_HANDOFF_MESSAGE, DIY_SESSION_REMINDER, riskStatusLabel } from "./diySafetyCopy";
+import { stopDiyAndEscalate } from "./diySafetyApi";
 import { fetchHomeownerConsentStatus, recordConsentAction } from "./homeownerConsentApi";
 import { useAcknowledgmentGate } from "./useAcknowledgmentGate";
 import HomeownerLocalEstimate, { EstimateLoadingSteps } from "./HomeownerLocalEstimate";
@@ -124,8 +132,8 @@ import { isValidUsZip, normalizeZip, zipInputProps } from "./zipCode";
 function formatChatMessage(text: string): string {
  if (!text) return "";
  return text
- .replace(/^#+\s+/gm, "") // strip markdown headers
- .replace(/\*\*/g, ""); // strip markdown bolding
+ .replace(/^#+\s+/gm, "")
+ .replace(/\*\*/g, "");
 }
 
 function assessmentStringList(value: unknown): string[] {
@@ -498,9 +506,14 @@ export default function HomeownerDashboard({
  const [diyStepIndex, setDiyStepIndex] = useState(0);
  const [diyCompletedSteps, setDiyCompletedSteps] = useState<Record<number, boolean>>({});
  const [diySafetyAccepted, setDiySafetyAccepted] = useState(false);
+ const [diyUserStopActive, setDiyUserStopActive] = useState(false);
+ const [diyShowProfessionalHandoff, setDiyShowProfessionalHandoff] = useState(false);
  const [diyConsentOpen, setDiyConsentOpen] = useState(false);
- const [diyConsentChecked, setDiyConsentChecked] = useState(false);
+ const [diyJudgmentChecked, setDiyJudgmentChecked] = useState(false);
+ const [diyAbilityChecked, setDiyAbilityChecked] = useState(false);
  const [diyConsentBusy, setDiyConsentBusy] = useState(false);
+ const [diyConsentAfter, setDiyConsentAfter] = useState<"guided" | "chat" | null>(null);
+ const [pendingDiyChatText, setPendingDiyChatText] = useState<string | null>(null);
  const diyAckGate = useAcknowledgmentGate();
 
  // AI DIY Chat
@@ -525,22 +538,33 @@ export default function HomeownerDashboard({
  });
  }, [user.id]);
 
- async function startGuidedDiy() {
+ async function openDiySafetyModal(after: "guided" | "chat", pendingChat?: string) {
  if (activeJob?.diyRiskLevel === "red" || activeJob?.aiAssessment?.diy_risk_level === "red") {
  setError("Guided DIY is not available for this safety risk. Please request a professional.");
  return;
  }
+ setDiyConsentAfter(after);
+ setPendingDiyChatText(pendingChat || null);
+ setDiyJudgmentChecked(false);
+ setDiyAbilityChecked(false);
+ setDiyConsentOpen(true);
+ }
+
+ async function startGuidedDiy() {
  if (diySafetyAccepted) {
  setDiyIsGuided(true);
  return;
  }
- setDiyConsentChecked(false);
- setDiyConsentOpen(true);
+ await openDiySafetyModal("guided");
  }
 
  async function confirmDiySafetyConsent(extraConsents?: Record<string, boolean>) {
- const consents = { DIY_SAFETY: true, ...extraConsents };
- if (!consents.DIY_SAFETY) return;
+ const consents = {
+ DIY_SAFETY: true,
+ DIY_SAFETY_ABILITY_ACK: true,
+ ...extraConsents,
+ };
+ if (!consents.DIY_SAFETY || !consents.DIY_SAFETY_ABILITY_ACK) return;
  setDiyConsentBusy(true);
  const r = await recordConsentAction({
  actionKey: "DIY_START",
@@ -551,10 +575,11 @@ export default function HomeownerDashboard({
  if (!r.ok) {
  if (
  diyAckGate.promptFromResponse(r, {
- currentState: { DIY_SAFETY: diyConsentChecked },
- fallbackMissing: ["DIY_SAFETY"],
+ currentState: { DIY_SAFETY: diyJudgmentChecked, DIY_SAFETY_ABILITY_ACK: diyAbilityChecked },
+ fallbackMissing: ["DIY_SAFETY", "DIY_SAFETY_ABILITY_ACK"],
  onConfirm: async (next) => {
- setDiyConsentChecked(true);
+ setDiyJudgmentChecked(true);
+ setDiyAbilityChecked(true);
  await confirmDiySafetyConsent(next);
  },
  })
@@ -566,7 +591,32 @@ export default function HomeownerDashboard({
  }
  setDiySafetyAccepted(true);
  setDiyConsentOpen(false);
+ if (diyConsentAfter === "guided") {
  setDiyIsGuided(true);
+ } else if (diyConsentAfter === "chat" && pendingDiyChatText) {
+ const text = pendingDiyChatText;
+ setPendingDiyChatText(null);
+ await sendDiyChatMessage(text);
+ }
+ setDiyConsentAfter(null);
+ }
+
+ function requestProfessionalFromDiyModal() {
+ setDiyConsentOpen(false);
+ setDiyConsentAfter(null);
+ setPendingDiyChatText(null);
+ setDiyShowProfessionalHandoff(true);
+ setAssessmentMode("expert");
+ }
+
+ async function stopDiyAndGetProfessional() {
+ setDiyIsGuided(false);
+ setDiyUserStopActive(true);
+ if (activeJob?.id) {
+ void stopDiyAndEscalate(activeJob.id);
+ }
+ setDiyShowProfessionalHandoff(true);
+ setAssessmentMode("expert");
  }
 
  const selectedJob = useMemo(
@@ -1869,9 +1919,14 @@ export default function HomeownerDashboard({
  125;
  const dispatchHoldAmount = dispatchCouponPreview?.discountedAmount ?? baseDispatchFee;
 
- async function sendDiyChatMessage() {
- if (!diyChatInput.trim() || !activeJob) return;
- const text = diyChatInput.trim();
+ async function sendDiyChatMessage(forcedText?: string) {
+ const text = (forcedText ?? diyChatInput).trim();
+ if (!text || !activeJob) return;
+ if (!diySafetyAccepted) {
+ setDiyChatInput(text);
+ await openDiySafetyModal("chat", text);
+ return;
+ }
  setDiyChatInput("");
  setDiyChatBusy(true);
 
@@ -1921,8 +1976,31 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  const payloadMessages = [systemContext, ackContext, ...updatedMessages];
  const result = await chatWithAi(payloadMessages, { jobId: activeJob.id });
 
+ if (result.riskLevel === "red" || result.escalated) {
+ setActiveJob((prev) =>
+ prev
+ ? {
+ ...prev,
+ diyRiskLevel: "red",
+ aiAssessment: prev.aiAssessment
+ ? { ...prev.aiAssessment, diy_risk_level: "red", safe_diy_allowed: false, diy_steps: [] }
+ : prev.aiAssessment,
+ }
+ : prev
+ );
+ setDiyIsGuided(false);
+ }
+
+ if (result.userStopRequested) {
+ setDiyUserStopActive(true);
+ setDiyIsGuided(false);
+ }
+
  if (result.reply) {
  setDiyChatMessages([...updatedMessages, { role: "assistant", content: result.reply }]);
+ } else if (result.code === "DIY_SAFETY_ACKNOWLEDGMENT_REQUIRED") {
+ setDiySafetyAccepted(false);
+ await openDiySafetyModal("chat", text);
  } else {
  setDiyChatMessages([...updatedMessages, { role: "assistant", content: result.error || "Sorry, I encountered an error. Please try again." }]);
  }
@@ -2279,45 +2357,21 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  />
 
  {diyConsentOpen ? (
- <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-4 sm:items-center">
- <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-xl">
- <h3 className="text-lg font-semibold">Guided DIY safety acknowledgment</h3>
- <p className="mt-1 text-sm text-muted-foreground">
- Before using Guided DIY, confirm you understand the safety limits of AI guidance.
- </p>
- <div className="mt-4">
- <ConsentSection title="Required">
- <ConsentCheckbox
- id="diy-safety-consent"
- checked={diyConsentChecked}
- onChange={setDiyConsentChecked}
- label="I understand FixBridge AI guidance is informational, may be wrong, and I must stop if the task is unsafe or beyond my ability."
- documentKey="DIY_SAFETY_DISCLAIMER"
- documentLabel="AI / DIY Safety Disclaimer"
+ <DiySafetyStartModal
+ open={diyConsentOpen}
+ busy={diyConsentBusy}
+ judgmentChecked={diyJudgmentChecked}
+ abilityChecked={diyAbilityChecked}
+ onJudgmentChange={setDiyJudgmentChecked}
+ onAbilityChange={setDiyAbilityChecked}
+ onClose={() => {
+ setDiyConsentOpen(false);
+ setDiyConsentAfter(null);
+ setPendingDiyChatText(null);
+ }}
+ onRequestProfessional={requestProfessionalFromDiyModal}
+ onStartGuidedDiy={() => void confirmDiySafetyConsent()}
  />
- </ConsentSection>
- </div>
- <div className="mt-5 flex flex-wrap justify-end gap-2">
- <button
- type="button"
- className="rounded-xl border border-border px-4 py-2 text-sm font-semibold"
- onClick={() => setDiyConsentOpen(false)}
- disabled={diyConsentBusy}
- >
- Cancel
- </button>
- <button
- type="button"
- className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
- disabled={!diyConsentChecked || diyConsentBusy}
- onClick={() => void confirmDiySafetyConsent()}
- >
- {diyConsentBusy ? <Loader2 className="h-4 w-4 animate-spin inline" /> : null}
- Start Guided DIY
- </button>
- </div>
- </div>
- </div>
  ) : null}
  {diyAckGate.modal}
 
@@ -3009,6 +3063,11 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
  )}
  <HomeownerLocalEstimate job={activeJob} />
+ {diyShowProfessionalHandoff ? (
+ <p className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-foreground">
+ {DIY_PROFESSIONAL_HANDOFF_MESSAGE}
+ </p>
+ ) : null}
  <HireProfessionalWizard
  job={activeJob}
  busy={busy}
@@ -3073,17 +3132,40 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
  ) : (
  <div className="space-y-4">
+ {diySafetyAccepted ? (
+ <p className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+ {DIY_SESSION_REMINDER}
+ </p>
+ ) : null}
  {(() => {
  const risk = String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green").toLowerCase();
- if (risk === "red") {
+ const reasonCodes = (activeJob.diyRiskReasonCodes ||
+ activeJob.aiAssessment?.diy_risk_reason_codes ||
+ []) as string[];
+ const emergencyCodes = new Set(["GAS", "FIRE", "CO", "LIVE_ELECTRICAL", "FLOOD_ELECTRICAL", "STRUCTURAL", "EMERGENCY"]);
+ const showEmergency = risk === "red" && reasonCodes.some((c) => emergencyCodes.has(String(c)));
  return (
+ <>
+ {showEmergency ? <DiyEmergencyBanner /> : null}
+ {diyUserStopActive ? (
+ <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-950 dark:text-amber-100">
+ <p className="font-semibold">DIY paused</p>
+ <p className="mt-1 text-xs leading-relaxed">
+ You indicated you want to stop or need help. Request a professional when you are ready — your issue details will carry over.
+ </p>
+ </div>
+ ) : null}
+ <p className="sr-only" aria-live="polite">
+ Safety status: {riskStatusLabel(risk)}
+ </p>
+ {risk === "red" ? (
  <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-red-950 dark:text-red-100 space-y-3">
  <div className="flex gap-3">
  <ShieldAlert className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
  <div className="text-sm">
- <p className="font-semibold">Safety risk detected</p>
+ <p className="font-semibold">Potential Safety Risk Detected</p>
  <p className="mt-1 text-xs leading-relaxed opacity-90">
- Do not attempt this repair yourself. Follow immediate safety steps and request a licensed professional.
+ Based on the information provided, this situation may involve a significant safety risk. Do not attempt the repair yourself. Follow the immediate safety guidance below and request professional assistance.
  </p>
  </div>
  </div>
@@ -3096,36 +3178,38 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  ) : null}
  <button
  type="button"
- onClick={() => setAssessmentMode("expert")}
+ onClick={() => void stopDiyAndGetProfessional()}
  className="inline-flex items-center rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white"
  >
  Request a Professional
  </button>
  </div>
- );
- }
- if (risk === "yellow") {
- return (
+ ) : null}
+ {risk === "yellow" ? (
  <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-amber-950 dark:text-amber-100 flex gap-3">
  <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
  <div className="text-sm">
- <p className="font-semibold">Caution — Limited DIY Guidance</p>
+ <p className="font-semibold">Use Caution</p>
  <p className="mt-1 opacity-90 text-xs leading-relaxed">
- We can help with low-risk checks, but this issue may require a professional.
+ We can help with limited, low-risk checks, but this issue may require professional service. Avoid opening, disassembling, climbing, handling hazardous materials, or performing work outside your experience.
  </p>
  <button
  type="button"
- onClick={() => setAssessmentMode("expert")}
+ onClick={() => void stopDiyAndGetProfessional()}
  className="mt-3 inline-flex items-center rounded-lg border border-primary px-3 py-1.5 text-xs font-semibold text-primary"
  >
- Get a Pro
+ Get a Professional
  </button>
  </div>
  </div>
+ ) : null}
+ </>
  );
- }
- return null;
  })()}
+ <DiyStopProfessionalBar
+ onStop={() => void stopDiyAndGetProfessional()}
+ onGetProfessional={() => void stopDiyAndGetProfessional()}
+ />
  {/* DIY Caution Banner if not safe */}
  {!activeJob.aiAssessment?.safe_diy_allowed && String(activeJob.diyRiskLevel || "green") !== "red" && (
  <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-4 text-red-950 dark:text-red-100 flex gap-3">
@@ -3227,6 +3311,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </p>
  ) : diyIsGuided ? (
  <div className="space-y-4">
+ <DiyGuidedSafetyBar onGetProfessional={() => void stopDiyAndGetProfessional()} />
  {/* Progress bar */}
  <div>
  <div className="flex justify-between text-xs text-muted-foreground mb-1">
@@ -3359,6 +3444,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  )}
  </div>
 
+ <DiyIncidentReportForm jobId={activeJob.id} />
+
  {/* Right Side: AI Assistant Chat (Sticky on Desktop) */}
  <div className="lg:sticky lg:top-24 space-y-4">
  <style dangerouslySetInnerHTML={{__html: `
@@ -3411,8 +3498,18 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  }`}
  >
  <p className="whitespace-pre-line pr-5">{formatChatMessage(msg.content)}</p>
- 
- {/* Speak button overlay */}
+ {msg.role === "assistant" ? (
+ <DiySafetyFeedback
+ jobId={activeJob.id}
+ riskLevel={String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green")}
+ messageIndex={idx}
+ chatExcerpt={msg.content}
+ onUnsafe={() => {
+ setDiyUserStopActive(true);
+ setDiyIsGuided(false);
+ }}
+ />
+ ) : null}
  <button
  type="button"
  onClick={() => speakText(msg.content)}
@@ -3438,29 +3535,40 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
 
  {/* Chat input form */}
+ {(() => {
+ const chatRisk = String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green").toLowerCase();
+ const chatBlocked = chatRisk === "red" || diyUserStopActive;
+ return (
  <form
  onSubmit={(e) => {
  e.preventDefault();
+ if (chatBlocked) return;
  void sendDiyChatMessage();
  }}
  className="flex gap-2 border-t border-border pt-3"
  >
  <input
  type="text"
- disabled={diyChatBusy}
+ disabled={diyChatBusy || chatBlocked}
  value={diyChatInput}
  onChange={(e) => setDiyChatInput(e.target.value)}
- placeholder="Ask a question about instructions..."
+ placeholder={
+ chatBlocked
+ ? "Chat paused — request a professional for help"
+ : "Ask a question about instructions..."
+ }
  className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-xs focus:border-[#FF4D1C] focus:outline-none focus:ring-1 focus:ring-[#FF4D1C] disabled:opacity-50 text-foreground"
  />
  <button
  type="submit"
- disabled={diyChatBusy || !diyChatInput.trim()}
+ disabled={diyChatBusy || chatBlocked || !diyChatInput.trim()}
  className="inline-flex items-center justify-center rounded-lg bg-[#FF4D1C] p-2 text-white hover:brightness-105 active:scale-[0.98] transition disabled:opacity-55"
  >
  <Send className="h-4 w-4" />
  </button>
  </form>
+ );
+ })()}
  </div>
 
  <p className="rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-center text-xs text-muted-foreground">
@@ -3989,6 +4097,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
  )}
 
+ <HomeownerSignInMethods />
  <HomeownerCommunicationPreferences />
  </section>
  )}

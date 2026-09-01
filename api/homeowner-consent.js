@@ -12,9 +12,11 @@ export const ACCEPTANCE_TYPES = {
   ACCOUNT_TERMS: 'ACCOUNT_TERMS',
   PRIVACY_POLICY: 'PRIVACY_POLICY',
   DIY_SAFETY: 'DIY_SAFETY',
+  DIY_SAFETY_ABILITY_ACK: 'DIY_SAFETY_ABILITY_ACK',
   PROFESSIONAL_DISPATCH_PROVIDER_ACK: 'PROFESSIONAL_DISPATCH_PROVIDER_ACK',
   PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK: 'PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK',
   VISIT_FEE_ACK: 'VISIT_FEE_ACK',
+  PROFESSIONAL_REQUEST_BETA_ACK: 'PROFESSIONAL_REQUEST_BETA_ACK',
   HOMEOWNER_SERVICE_AGREEMENT: 'HOMEOWNER_SERVICE_AGREEMENT',
   VISIT_CANCELLATION_POLICY: 'VISIT_CANCELLATION_POLICY',
   QUOTE_SCOPE_APPROVAL: 'QUOTE_SCOPE_APPROVAL',
@@ -249,7 +251,10 @@ export async function validateAndRecordActionConsents(pool, req, {
       metadata: req.body?.consentMetadata || null,
       snapshotId,
       snapshotData:
-        type === 'QUOTE_SCOPE_APPROVAL' || type === 'CHANGE_ORDER_APPROVAL' || type === 'PAYMENT_AUTHORIZATION'
+        type === 'QUOTE_SCOPE_APPROVAL' ||
+        type === 'CHANGE_ORDER_APPROVAL' ||
+        type === 'PAYMENT_AUTHORIZATION' ||
+        type === 'PROFESSIONAL_REQUEST_BETA_ACK'
           ? snapshotData
           : null,
       actionCompleted: true,
@@ -349,6 +354,28 @@ export async function assertHomeownerDispatchConsent(pool, userId, jobId) {
     if (!ok) missing.push(reqItem.acceptanceType);
   }
   return { ok: missing.length === 0, missing };
+}
+
+export async function hasDiySafetyAcknowledgment(pool, userId) {
+  const judgment = await hasCurrentAcceptance(pool, userId, 'DIY_SAFETY');
+  const ability = await hasCurrentAcceptance(pool, userId, 'DIY_SAFETY_ABILITY_ACK');
+  return judgment && ability;
+}
+
+export async function requireDiySafetyAcknowledgment(pool, req, res, { jobId = null } = {}) {
+  const judgment = await hasCurrentAcceptance(pool, req.authUser.id, 'DIY_SAFETY', { jobId });
+  const ability = await hasCurrentAcceptance(pool, req.authUser.id, 'DIY_SAFETY_ABILITY_ACK', { jobId });
+  if (judgment && ability) return true;
+  const missing = [];
+  if (!judgment) missing.push('DIY_SAFETY');
+  if (!ability) missing.push('DIY_SAFETY_ABILITY_ACK');
+  res.status(400).json({
+    ok: false,
+    code: 'DIY_SAFETY_ACKNOWLEDGMENT_REQUIRED',
+    message: 'You must acknowledge the current AI / DIY safety disclosures before continuing.',
+    missingAcceptanceTypes: missing,
+  });
+  return false;
 }
 
 export async function listHomeownerAcceptances(pool, { userId = null, jobId = null, limit = 100 }) {

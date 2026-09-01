@@ -15,6 +15,7 @@ import {
 } from './pricing.js';
 import {
   buildProfessionalDispatchBreakdown,
+  buildProfessionalRequestBetaSnapshot,
   saveProfessionalDispatchSnapshot,
 } from './professional-dispatch-pricing.js';
 import {
@@ -136,6 +137,7 @@ import {
 } from './homeowner-acknowledgments.js';
 import { recordSignupMarketingConsents } from './marketing-consent-service.js';
 import { registerHomeownerConsentRoutes } from './homeowner-consent-routes.js';
+import { registerDiySafetyRoutes } from './diy-safety-routes.js';
 import { registerLegalAdminRoutes } from './legal-admin-routes.js';
 import { recordJobDispatchEvidence } from './job-evidence.js';
 import { loadCurrentComplianceDocuments } from './contractor-compliance.js';
@@ -3135,10 +3137,20 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
 
       if (req.authUser.role !== 'admin') {
+        const rules = await loadPricingRules(pool);
+        let discount = null;
+        if (job.discount_code) {
+          const row = await lookupDiscountByCode(pool, job.discount_code);
+          const checked = validateDiscountRow(row);
+          if (checked.ok) discount = checked.discount;
+        }
+        const breakdown = buildCheckoutBreakdown(job, rules, discount);
+        const betaSnapshot = buildProfessionalRequestBetaSnapshot(breakdown, job);
         const ackOk = await requireHomeownerAcknowledgment(pool, req, res, {
           jobId,
           actionKey: 'PROFESSIONAL_DISPATCH',
-          message: 'You must acknowledge all dispatch disclosures before requesting a professional.',
+          message: 'You must acknowledge the professional service request terms before requesting a professional.',
+          snapshotData: betaSnapshot,
         });
         if (!ackOk) return;
       }
@@ -3455,23 +3467,19 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
 
       if (req.authUser.role !== 'admin') {
+        const betaSnapshot = buildProfessionalRequestBetaSnapshot(snapshot, job);
         const consentResult = await requireActionConsents(pool, req, res, {
           jobId,
-          actionKey: 'PAYMENT_AUTHORIZATION',
+          actionKey: 'PROFESSIONAL_DISPATCH',
           userId: req.authUser.id,
-          snapshotData: {
-            authorizedAmountCents: snapshot.authorizedNowCents,
-            currency: 'usd',
-            bookingId: snapshot.bookingId,
-            breakdown: snapshot,
-          },
-          idempotencyPrefix: `PAYMENT_AUTHORIZATION:${req.authUser.id}:${jobId}:dispatch`,
+          snapshotData: betaSnapshot,
+          idempotencyPrefix: `PROFESSIONAL_DISPATCH:${req.authUser.id}:${jobId}:pay`,
         });
         if (!consentResult) return;
         const payAcceptanceId = (
           await pool.query(
             `SELECT id FROM homeowner_acceptances
-             WHERE user_id=$1 AND job_id=$2 AND acceptance_type='PAYMENT_AUTHORIZATION'
+             WHERE user_id=$1 AND job_id=$2 AND acceptance_type='PROFESSIONAL_REQUEST_BETA_ACK'
              ORDER BY accepted_at DESC LIMIT 1`,
             [req.authUser.id, jobId]
           )
@@ -3480,7 +3488,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           `INSERT INTO payment_authorization_snapshots (
              user_id, job_id, authorized_amount_cents, currency, policy_document_version, acceptance_id
            ) VALUES ($1,$2,$3,$4,$5,$6)`,
-          [req.authUser.id, jobId, snapshot.authorizedNowCents, 'usd', '1.0', payAcceptanceId || null]
+          [
+            req.authUser.id,
+            jobId,
+            snapshot.authorizedNowCents,
+            'usd',
+            'homeowner_professional_request_beta_v1',
+            payAcceptanceId || null,
+          ]
         );
         await saveProfessionalDispatchSnapshot(pool, {
           jobId,
@@ -6862,6 +6877,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
   });
 
   registerHomeownerConsentRoutes(app, {
+    pool,
+    requireAuth,
+    requireAdmin,
+    requirePermission,
+  });
+
+  registerDiySafetyRoutes(app, {
     pool,
     requireAuth,
     requireAdmin,

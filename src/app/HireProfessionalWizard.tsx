@@ -21,11 +21,10 @@ import {
 import type { ManagedJob } from "./managedJobs";
 import { payDispatchFee, prepareCheckout, requestProfessionalDispatch, retailRangeLabel, fetchDispatchPricing, formatMoney, type CheckoutBreakdown } from "./managedJobs";
 import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
-import { ConsentCheckbox, ConsentSection, consentsFromState, allChecked } from "./ConsentCheckbox";
+import ProfessionalServiceRequestBetaCard from "./ProfessionalServiceRequestBetaCard";
+import { consentsFromState, allChecked } from "./ConsentCheckbox";
 import type { ConsentState } from "./ConsentCheckbox";
 import type { AcceptanceType } from "./legalDocuments";
-import AcceptAllConsents from "./AcceptAllConsents";
-import { DISPATCH_ACKNOWLEDGMENT_KEYS } from "./consentAcceptAll";
 import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 import { mergeConsentRecords, useAcknowledgmentGate } from "./useAcknowledgmentGate";
 
@@ -139,22 +138,13 @@ export default function HireProfessionalWizard({
   const [dispatchCouponPreview, setDispatchCouponPreview] = useState<DispatchCouponPreview | null>(null);
   const [prefsSaved, setPrefsSaved] = useState(job.status === "awaiting_service_payment");
   const [dispatchConsents, setDispatchConsents] = useState<ConsentState>({
-    PROFESSIONAL_DISPATCH_PROVIDER_ACK: false,
-    PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK: false,
-    VISIT_FEE_ACK: false,
-    HOMEOWNER_SERVICE_AGREEMENT: false,
-    VISIT_CANCELLATION_POLICY: false,
-  });
-  const [paymentConsents, setPaymentConsents] = useState<ConsentState>({
-    PAYMENT_AUTHORIZATION: false,
-    PAYMENT_VISIT_POLICY: false,
+    PROFESSIONAL_REQUEST_BETA_ACK: false,
   });
   const [dispatchPricing, setDispatchPricing] = useState<CheckoutBreakdown | null>(null);
   const [pricingLoading, setPricingLoading] = useState(false);
   const ackGate = useAcknowledgmentGate();
 
-  const dispatchConsentKeys: AcceptanceType[] = DISPATCH_ACKNOWLEDGMENT_KEYS;
-  const paymentConsentKeys: AcceptanceType[] = ["PAYMENT_AUTHORIZATION", "PAYMENT_VISIT_POLICY"];
+  const dispatchConsentKeys: AcceptanceType[] = ["PROFESSIONAL_REQUEST_BETA_ACK"];
 
   const baseDispatchFee = job.visitFeeAmount ?? job.pricing?.contractor_visit_fee ?? 125;
   const dispatchHoldAmount =
@@ -267,11 +257,10 @@ export default function HireProfessionalWizard({
   function applyConsentMerge(extra?: Record<string, boolean>) {
     if (!extra) return;
     setDispatchConsents((state) => mergeConsentRecords(state, extra));
-    setPaymentConsents((state) => mergeConsentRecords(state, extra));
   }
 
   function combinedConsentState(extra?: Record<string, boolean>) {
-    return mergeConsentRecords(mergeConsentRecords(dispatchConsents, paymentConsents), extra);
+    return mergeConsentRecords(dispatchConsents, extra);
   }
 
   async function savePreferences(extraConsents?: Record<string, boolean>) {
@@ -323,15 +312,12 @@ export default function HireProfessionalWizard({
 
   async function handlePay(extraConsents?: Record<string, boolean>) {
     const consentState = combinedConsentState(extraConsents);
-    const missing = [
-      ...ackGate.missingConsentKeys(consentState, dispatchConsentKeys),
-      ...ackGate.missingConsentKeys(consentState, paymentConsentKeys),
-    ];
+    const missing = ackGate.missingConsentKeys(consentState, dispatchConsentKeys);
     if (missing.length) {
       ackGate.prompt({
         missing,
         currentState: consentState,
-        description: "Review and accept the dispatch and payment acknowledgments below to authorize your professional visit.",
+        description: "Review and accept the professional service request terms below to authorize your visit.",
         onConfirm: async (consents) => {
           applyConsentMerge(consents);
           await handlePay(consents);
@@ -361,7 +347,7 @@ export default function HireProfessionalWizard({
         if (
           ackGate.promptFromResponse(r, {
             currentState: consentState,
-            fallbackMissing: [...dispatchConsentKeys, ...paymentConsentKeys],
+            fallbackMissing: dispatchConsentKeys,
             onConfirm: async (consents) => {
               applyConsentMerge(consents);
               await handlePay(consents);
@@ -683,73 +669,17 @@ export default function HireProfessionalWizard({
                 ) : null}
               </div>
               <PricingBreakdownCard />
+              <AiEstimateDisclaimer compact />
               <p className="text-xs text-muted-foreground leading-relaxed">
                 Authorizing charges the amount shown under AUTHORIZED NOW. Your request is sent to FixBridge only after payment succeeds.
               </p>
-              <ConsentSection
-                title="Dispatch acknowledgments"
-                description="Required before requesting a professional"
-              >
-                <ConsentCheckbox
-                  id="dispatch-provider"
-                  checked={dispatchConsents.PROFESSIONAL_DISPATCH_PROVIDER_ACK === true}
-                  onChange={(v) => setDispatchConsents((s) => ({ ...s, PROFESSIONAL_DISPATCH_PROVIDER_ACK: v }))}
-                  label="I understand the service professional is an independent provider responsible for on-site work, safety, workmanship, tools and personnel."
-                />
-                <ConsentCheckbox
-                  id="dispatch-fixbridge"
-                  checked={dispatchConsents.PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK === true}
-                  onChange={(v) => setDispatchConsents((s) => ({ ...s, PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK: v }))}
-                  label="I understand FixBridge coordinates the request/payment workflow and does not guarantee the provider's work or AI diagnosis."
-                />
-                <ConsentCheckbox
-                  id="dispatch-visit-fee"
-                  checked={dispatchConsents.VISIT_FEE_ACK === true}
-                  onChange={(v) => setDispatchConsents((s) => ({ ...s, VISIT_FEE_ACK: v }))}
-                  label="I understand the visit/diagnostic fee shown is separate from repair work; additional work needs my approval."
-                />
-                <ConsentCheckbox
-                  id="dispatch-agreement"
-                  checked={dispatchConsents.HOMEOWNER_SERVICE_AGREEMENT === true}
-                  onChange={(v) => setDispatchConsents((s) => ({ ...s, HOMEOWNER_SERVICE_AGREEMENT: v }))}
-                  label="I agree to the Homeowner Service Agreement."
-                  documentKey="HOMEOWNER_SERVICE_AGREEMENT"
-                  documentLabel="Homeowner Agreement"
-                />
-                <ConsentCheckbox
-                  id="dispatch-cancel"
-                  checked={dispatchConsents.VISIT_CANCELLATION_POLICY === true}
-                  onChange={(v) => setDispatchConsents((s) => ({ ...s, VISIT_CANCELLATION_POLICY: v }))}
-                  label="I agree to the Visit/Cancellation Policy."
-                  documentKey="VISIT_CANCELLATION_POLICY"
-                  documentLabel="Visit/Cancellation Policy"
-                />
-                <AcceptAllConsents
-                  id="dispatch-accept-all"
-                  keys={dispatchConsentKeys}
-                  state={dispatchConsents}
-                  onChange={setDispatchConsents}
-                />
-              </ConsentSection>
-              <ConsentSection title="Payment authorization">
-                <p className="text-sm font-semibold tabular-nums">
-                  Amount authorized: ${Number(dispatchHoldAmount).toFixed(2)}
-                </p>
-                <ConsentCheckbox
-                  id="payment-auth"
-                  checked={paymentConsents.PAYMENT_AUTHORIZATION === true}
-                  onChange={(v) =>
-                    setPaymentConsents((s) => ({
-                      ...s,
-                      PAYMENT_AUTHORIZATION: v,
-                      PAYMENT_VISIT_POLICY: v,
-                    }))
-                  }
-                  label="I authorize the amount shown under the stated cancellation/refund rules."
-                  documentKey="PAYMENT_VISIT_POLICY"
-                  documentLabel="Payment / Visit Policy"
-                />
-              </ConsentSection>
+              <ProfessionalServiceRequestBetaCard
+                acknowledged={dispatchConsents.PROFESSIONAL_REQUEST_BETA_ACK === true}
+                onAcknowledgedChange={(v) =>
+                  setDispatchConsents((s) => ({ ...s, PROFESSIONAL_REQUEST_BETA_ACK: v }))
+                }
+                disabled={busy}
+              />
             </div>
           )}
         </motion.div>
@@ -824,11 +754,7 @@ export default function HireProfessionalWizard({
           <button
             type="button"
             onClick={() => void handlePay()}
-            disabled={
-              busy ||
-              !allChecked(dispatchConsents, dispatchConsentKeys) ||
-              !allChecked(paymentConsents, paymentConsentKeys)
-            }
+            disabled={busy || !allChecked(dispatchConsents, dispatchConsentKeys)}
             className="ml-auto inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white shadow-lg disabled:opacity-60 sm:flex-none"
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}

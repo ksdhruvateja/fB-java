@@ -8,6 +8,7 @@ import {
   hasCurrentAcceptance,
   listHomeownerAcceptances,
   validateAndRecordActionConsents,
+  hasDiySafetyAcknowledgment,
 } from './homeowner-consent.js';
 import {
   getMarketingPreferences,
@@ -74,7 +75,7 @@ export function registerHomeownerConsentRoutes(app, { pool, requireAuth, require
       const userId = req.authUser.role === 'admin' && req.query.userId
         ? Number(req.query.userId)
         : req.authUser.id;
-      const diy = await hasCurrentAcceptance(pool, userId, 'DIY_SAFETY');
+      const diy = await hasDiySafetyAcknowledgment(pool, userId);
       const prefs = await getMarketingPreferences(pool, userId);
       res.json({
         ok: true,
@@ -137,7 +138,11 @@ export function registerHomeownerConsentRoutes(app, { pool, requireAuth, require
             const { classifyDiyRiskLevel } = await import('./diy-safety.js');
             const assessment =
               typeof job.ai_assessment === 'string' ? JSON.parse(job.ai_assessment) : job.ai_assessment;
-            const classified = classifyDiyRiskLevel(job.description || '', assessment);
+            const extraContext = String(req.body?.contextText || '');
+            const classified = classifyDiyRiskLevel(
+              `${job.description || ''} ${extraContext}`.trim(),
+              assessment
+            );
             if (classified.level === 'red' || job.diy_risk_level === 'red') {
               return res.status(400).json({
                 ok: false,
@@ -145,11 +150,19 @@ export function registerHomeownerConsentRoutes(app, { pool, requireAuth, require
                 message: 'Guided DIY is not available for this safety risk. Request a professional instead.',
               });
             }
+            if (classified.level !== job.diy_risk_level) {
+              await pool.query(`UPDATE managed_jobs SET diy_risk_level=$2, updated_at=NOW() WHERE id=$1`, [
+                jobId,
+                classified.level,
+              ]);
+            }
           }
         }
+        const { getLegalDocument } = await import('./legal-documents.js');
+        const diyDoc = getLegalDocument('DIY_SAFETY_DISCLAIMER');
         await pool.query(`UPDATE users SET diy_safety_accepted_version=$2 WHERE id=$1`, [
           req.authUser.id,
-          '1.0',
+          diyDoc?.version || '1.0',
         ]);
       }
       res.json({ ok: true, recorded: result.recorded || [] });

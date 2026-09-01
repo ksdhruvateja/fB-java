@@ -63,13 +63,29 @@ export async function getGoogleAuthConfig() {
   return api<{ ok: boolean; configured: boolean; clientId: string | null }>("/api/auth/google/config");
 }
 
-export async function signInWithGoogle(credential: string, body: Record<string, unknown> = {}) {
+export async function signInWithGoogle(
+  credential: string,
+  body: Record<string, unknown> = {},
+  role: "homeowner" | "contractor" | "admin" = "homeowner",
+) {
   const res = await fetch("/api/auth/google", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ credential, ...body }),
+    body: JSON.stringify({ credential, role, ...body }),
   });
   return res.json();
+}
+
+export type LinkedSignInMethods = {
+  google: { connected: boolean; email: string | null; avatarUrl: string | null };
+  password: { enabled: boolean };
+  signupMethod: string;
+};
+
+export async function getLinkedSignInMethods() {
+  return api<{ ok: boolean; google?: LinkedSignInMethods["google"]; password?: LinkedSignInMethods["password"]; signupMethod?: string; message?: string }>(
+    "/api/auth/google/linked"
+  );
 }
 
 export async function completeGoogleMarketingPreferences(body: {

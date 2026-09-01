@@ -147,12 +147,13 @@ export function registerMarketingRoutes(app, { pool, requireAuth, requireAdmin, 
   });
 
   // Google OAuth config status (public)
-  app.get('/api/auth/google/config', (_req, res) => {
-    const clientId = process.env.GOOGLE_CLIENT_ID?.trim() || '';
+  app.get('/api/auth/google/config', async (_req, res) => {
+    const { getPublicGoogleClientId, isGoogleOAuthConfigured } = await import('./google-auth-routes.js');
+    const clientId = getPublicGoogleClientId();
     res.json({
       ok: true,
-      configured: Boolean(clientId),
-      clientId: clientId || null,
+      configured: isGoogleOAuthConfigured(),
+      clientId,
     });
   });
 }

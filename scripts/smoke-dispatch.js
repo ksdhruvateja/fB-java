@@ -96,7 +96,7 @@ async function main() {
   await fetch(`${API}/api/managed/jobs/${jobId}/pay-dispatch`, {
     method: 'POST',
     headers: homeHeaders,
-    body: JSON.stringify({}),
+    body: JSON.stringify({ consents: { PROFESSIONAL_REQUEST_BETA_ACK: true } }),
   })
     .then(json)
     .then((r) => console.log(r.ok ? '✓ dispatch fee simulated' : `dispatch fee: ${r.message || 'skipped'}`))

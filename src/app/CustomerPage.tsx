@@ -241,7 +241,7 @@ export default function CustomerPage({
             <ScrollReveal delay={0.16}>
               <ul className="space-y-4 border-l border-border pl-6">
                 {[
-                  "AI repair diagnosis in minutes",
+                  "AI-assisted assessment in minutes",
                   "Transparent regional cost ranges",
                   "Licensed, background-checked pros",
                   "Free to post — pay only when you book",

@@ -33,6 +33,7 @@ import { ensureComplianceDocuments, recalculateDispatchEligible } from './contra
 import {
   checkActionConsentsFromBody,
   validateAndRecordActionConsents,
+  requireDiySafetyAcknowledgment,
 } from './homeowner-consent.js';
 import { recordSignupMarketingConsents } from './marketing-consent-service.js';
 import { registerMarketingRoutes, initMarketingConsent } from './marketing-routes.js';
@@ -884,7 +885,7 @@ function rowToUser(r, { includeDocumentData = true, homeCareSubscription = null 
     addresses: asStringArray(r.profile_addresses),
     isAdmin: r.role === 'admin',
     isBlocked: r.is_blocked === true,
-    isGoogleAccount: r.password === 'GOOGLE_OAUTH',
+    isGoogleAccount: Boolean(r.oauth_google_sub) || r.signup_method === 'google',
     isAppleAccount: r.password === 'APPLE_OAUTH',
     isAuth0Account: r.password === 'AUTH0_OAUTH',
     planCode: r.plan_code || null,
@@ -2920,7 +2921,7 @@ app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
 
   registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser });
   registerMarketingRoutes(app, { pool, requireAuth, requireAdmin, requirePermission });
-  registerGoogleAuthRoutes(app, { pool, makeToken, rowToUser, bcrypt, signupLimiter, requireAuth });
+  registerGoogleAuthRoutes(app, { pool, makeToken, rowToUser, bcrypt, signupLimiter: signInLimiter, requireAuth });
   registerAssessmentProcessor(processManagedJobAssessmentTask);
   registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin });
   registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdmin });
@@ -2965,31 +2966,120 @@ app.post('/api/ai/chat', requireAuth, aiLimiter, async (req, res) => {
 
     let riskLevel = 'green';
     let assessment = null;
+    let jobIdNum = null;
     if (jobId != null && req.authUser.role === 'homeowner') {
+      jobIdNum = Number(jobId);
       const { rows } = await pool.query(
         `SELECT ai_assessment, diy_risk_level, description, homeowner_user_id FROM managed_jobs WHERE id=$1`,
-        [Number(jobId)]
+        [jobIdNum]
       );
       const job = rows[0];
-      if (job && Number(job.homeowner_user_id) === Number(req.authUser.id)) {
-        assessment = typeof job.ai_assessment === 'string' ? JSON.parse(job.ai_assessment) : job.ai_assessment;
+      if (!job || Number(job.homeowner_user_id) !== Number(req.authUser.id)) {
+        return res.status(404).json({ ok: false, message: 'Job not found.' });
+      }
+
+      const ackOk = await requireDiySafetyAcknowledgment(pool, req, res, { jobId: jobIdNum });
+      if (!ackOk) return;
+
+      assessment = typeof job.ai_assessment === 'string' ? JSON.parse(job.ai_assessment) : job.ai_assessment;
         const lastUser = normalized.filter((m) => m.role === 'user').pop()?.content || '';
-        const { classifyDiyRiskLevel } = await import('./diy-safety.js');
-        const classified = classifyDiyRiskLevel(
-          `${lastUser} ${job.description || ''}`,
-          assessment
-        );
-        riskLevel = classified.level;
-        if (riskLevel === 'red') {
+        const {
+          classifyDiyRiskLevel,
+          detectUserDiyStopRequest,
+          detectPromptInjection,
+          redSafetyReply,
+          yellowStopReply,
+          isEmergencyHazard,
+        } = await import('./diy-safety.js');
+        const { recordDiySafetyEvent } = await import('./diy-safety-events.js');
+
+        if (detectPromptInjection(lastUser)) {
+          await recordDiySafetyEvent(pool, {
+            userId: req.authUser.id,
+            jobId: jobIdNum,
+            eventType: 'prompt_injection_blocked',
+            riskLevel: 'red',
+            previousRiskLevel: job.diy_risk_level,
+            riskReasonCodes: ['PROMPT_INJECTION'],
+            metadata: { excerpt: lastUser.slice(0, 200) },
+            req,
+          });
+          await pool.query(`UPDATE managed_jobs SET diy_risk_level='red', updated_at=NOW() WHERE id=$1`, [jobIdNum]);
           return res.json({
             ok: true,
-            reply:
-              '**Safety risk detected.**\n\nDo not attempt this repair yourself.\n\n**Safe actions you can take now:**\n1. Stop using the affected equipment.\n2. Shut off utilities only if you can do so safely.\n3. Leave the area and contact emergency services or your utility provider if there is immediate danger.\n\n**Avoid:** invasive repair steps, opening panels, gas line work, or roof/height work.\n\nRequest a licensed professional through FixBridge for on-site help.',
+            reply: redSafetyReply(),
             source: 'safety_policy',
-            riskLevel,
+            riskLevel: 'red',
+            promptInjectionBlocked: true,
+            emergencyRecommended: true,
           });
         }
-      }
+
+        const classified = classifyDiyRiskLevel(`${lastUser} ${job.description || ''}`, assessment);
+        riskLevel = classified.level;
+
+        if (detectUserDiyStopRequest(lastUser) || classified.userStopRequested) {
+          await recordDiySafetyEvent(pool, {
+            userId: req.authUser.id,
+            jobId: jobIdNum,
+            eventType: 'user_stop',
+            riskLevel: 'yellow',
+            previousRiskLevel: job.diy_risk_level,
+            riskReasonCodes: classified.reasonCodes,
+            req,
+          });
+          return res.json({
+            ok: true,
+            reply: yellowStopReply(),
+            source: 'safety_policy',
+            riskLevel: 'yellow',
+            userStopRequested: true,
+          });
+        }
+
+        if (riskLevel === 'red') {
+          const escalated = job.diy_risk_level !== 'red';
+          await pool.query(`UPDATE managed_jobs SET diy_risk_level='red', updated_at=NOW() WHERE id=$1`, [jobIdNum]);
+          if (escalated) {
+            await recordDiySafetyEvent(pool, {
+              userId: req.authUser.id,
+              jobId: jobIdNum,
+              eventType: 'risk_escalation',
+              riskLevel: 'red',
+              previousRiskLevel: job.diy_risk_level,
+              riskReasonCodes: classified.reasonCodes,
+              metadata: { emergencyRecommended: isEmergencyHazard(classified) },
+              req,
+            });
+          }
+          return res.json({
+            ok: true,
+            reply: redSafetyReply(),
+            source: 'safety_policy',
+            riskLevel,
+            escalated,
+            emergencyRecommended: isEmergencyHazard(classified),
+            reasonCodes: classified.reasonCodes,
+          });
+        }
+
+        if (classified.level !== job.diy_risk_level) {
+          await pool.query(`UPDATE managed_jobs SET diy_risk_level=$2, updated_at=NOW() WHERE id=$1`, [
+            jobIdNum,
+            classified.level,
+          ]);
+          if (classified.level === 'yellow' && job.diy_risk_level === 'green') {
+            await recordDiySafetyEvent(pool, {
+              userId: req.authUser.id,
+              jobId: jobIdNum,
+              eventType: 'risk_escalation',
+              riskLevel: 'yellow',
+              previousRiskLevel: job.diy_risk_level,
+              riskReasonCodes: classified.reasonCodes,
+              req,
+            });
+          }
+        }
     }
 
     const result = await chatWithCustomer({ messages: normalized, riskLevel, assessment });

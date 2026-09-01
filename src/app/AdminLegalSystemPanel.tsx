@@ -8,6 +8,8 @@ import {
 } from "./legalApi";
 import { formatLegalDate, LEGAL_ROUTES } from "./legalDocuments";
 import { FIXBRIDGE_INSURANCE_REQUIREMENTS_PDF_URL, FIXBRIDGE_CONTRACTOR_AGREEMENT_V4_PDF_URL } from "./contractorApplication";
+import { fetchAdminDiySafetyEvents } from "./diySafetyApi";
+import { formatUtcTimestamp } from "./legalDocuments";
 
 export default function AdminLegalSystemPanel() {
   const [loading, setLoading] = useState(true);
@@ -21,6 +23,10 @@ export default function AdminLegalSystemPanel() {
   const [busy, setBusy] = useState(false);
   const [newVersion, setNewVersion] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  const [safetyEvents, setSafetyEvents] = useState<
+    Awaited<ReturnType<typeof fetchAdminDiySafetyEvents>>["events"]
+  >([]);
+  const [safetyLoading, setSafetyLoading] = useState(true);
 
   function reload() {
     setLoading(true);
@@ -33,6 +39,12 @@ export default function AdminLegalSystemPanel() {
 
   useEffect(() => {
     reload();
+    setSafetyLoading(true);
+    void fetchAdminDiySafetyEvents({ priority: true })
+      .then((r) => {
+        if (r.ok && r.events) setSafetyEvents(r.events);
+      })
+      .finally(() => setSafetyLoading(false));
   }, []);
 
   useEffect(() => {
@@ -71,6 +83,14 @@ export default function AdminLegalSystemPanel() {
 
   return (
     <div className="space-y-6">
+      <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-100">
+        <p className="font-semibold">Legal Content Status</p>
+        <p className="mt-1 text-xs opacity-90">
+          Working Product Copy — Counsel Review Recommended. Homeowner AI/DIY and professional dispatch terms
+          should be reviewed by counsel before broad public scale.
+        </p>
+      </div>
+
       <div>
         <h2 className="text-lg font-bold">Legal / System</h2>
         <p className="text-sm text-muted-foreground">
@@ -175,6 +195,38 @@ export default function AdminLegalSystemPanel() {
           </div>
         </div>
       )}
+
+      <div className="rounded-xl border border-border overflow-hidden">
+        <div className="border-b border-border bg-muted/30 px-4 py-2 text-xs font-semibold uppercase tracking-wide">
+          AI / DIY safety events (priority)
+        </div>
+        {safetyLoading ? (
+          <p className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+          </p>
+        ) : (safetyEvents || []).length ? (
+          <ul className="divide-y divide-border max-h-72 overflow-y-auto">
+            {(safetyEvents || []).map((ev) => (
+              <li key={ev.id} className="px-4 py-3 text-xs">
+                <p className="font-semibold">
+                  {ev.eventType}
+                  {ev.feedbackRating ? ` · ${ev.feedbackRating}` : ""}
+                  {ev.incidentType ? ` · ${ev.incidentType}` : ""}
+                </p>
+                <p className="text-muted-foreground mt-0.5">
+                  User {ev.userId}
+                  {ev.jobId != null ? ` · Job ${ev.jobId}` : ""}
+                  {ev.riskLevel ? ` · ${ev.riskLevel}` : ""}
+                </p>
+                {ev.description ? <p className="mt-1 text-muted-foreground line-clamp-2">{ev.description}</p> : null}
+                <p className="mt-1 text-[10px] text-muted-foreground">{formatUtcTimestamp(ev.createdAt)}</p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="p-4 text-sm text-muted-foreground">No priority safety events recorded yet.</p>
+        )}
+      </div>
     </div>
   );
 }

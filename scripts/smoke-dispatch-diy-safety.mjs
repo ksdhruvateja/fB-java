@@ -99,6 +99,9 @@ function main() {
   });
   ok('dynamic escalation to RED', escalate.level === 'red');
 
+  const userStop = classifyDiyRiskLevel("I don't feel safe doing this.", { category: 'plumbing', safe_diy_allowed: true });
+  ok('user unsafe → caution escalation', userStop.userStopRequested === true, userStop.level);
+
   console.log('\nDone.\n');
 }
 

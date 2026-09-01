@@ -22,9 +22,13 @@ export const ACKNOWLEDGMENT_DEFINITIONS: Record<AcceptanceType, AcknowledgmentDe
   },
   DIY_SAFETY: {
     acceptanceType: "DIY_SAFETY",
-    label: "I understand AI-guided DIY is informational only and I am responsible for safety on site.",
+    label: "I understand that FixBridge AI guidance is informational and may not reflect the actual conditions at my property. I will use my own judgment, follow appropriate safety precautions, and stop if I am unsure or do not feel safe performing the task.",
     documentKey: "DIY_SAFETY_DISCLAIMER",
     documentLabel: "AI / DIY Safety Disclaimer",
+  },
+  DIY_SAFETY_ABILITY_ACK: {
+    acceptanceType: "DIY_SAFETY_ABILITY_ACK",
+    label: "I understand that I should not perform work beyond my experience, ability, tools, or comfort level and that I can request a professional through FixBridge instead.",
   },
   PROFESSIONAL_DISPATCH_PROVIDER_ACK: {
     acceptanceType: "PROFESSIONAL_DISPATCH_PROVIDER_ACK",
@@ -34,12 +38,19 @@ export const ACKNOWLEDGMENT_DEFINITIONS: Record<AcceptanceType, AcknowledgmentDe
   PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK: {
     acceptanceType: "PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK",
     label:
-      "I understand FixBridge coordinates the request/payment workflow and does not guarantee the provider's work or AI diagnosis.",
+      "I understand FixBridge coordinates the request/payment workflow and does not guarantee the provider's work or AI assessment.",
   },
   VISIT_FEE_ACK: {
     acceptanceType: "VISIT_FEE_ACK",
     label:
       "I understand the visit/diagnostic fee shown is separate from repair work; additional work needs my approval.",
+  },
+  PROFESSIONAL_REQUEST_BETA_ACK: {
+    acceptanceType: "PROFESSIONAL_REQUEST_BETA_ACK",
+    label:
+      "I understand the contractor visit charge, repair approval process, cancellation terms, and FixBridge beta terms, and I authorize this professional service request.",
+    documentKey: "HOMEOWNER_PROFESSIONAL_REQUEST_BETA",
+    documentLabel: "Professional Service Request (Beta)",
   },
   HOMEOWNER_SERVICE_AGREEMENT: {
     acceptanceType: "HOMEOWNER_SERVICE_AGREEMENT",

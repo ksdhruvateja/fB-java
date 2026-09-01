@@ -88,7 +88,7 @@ function buildOfflineAssessment(input: AssessInput): AiAssessment {
       ? ["Photo uploaded but AI is offline — connect an API key for visual analysis."]
       : ["No photo uploaded."],
     diagnosis: `Offline preview for: ${input.description.trim().slice(0, 200)}`,
-    likelyRootCause: "Connect an AI API key for a real diagnosis.",
+    likelyRootCause: "Connect an AI API key for a live assessment.",
     professionalSteps: ["Connect API key", "Re-run analysis with photo attached"],
     partsNeeded: ["Connect AI for part identification"],
     workScope: ["Real scope available after API connection"],
@@ -231,6 +231,10 @@ export type ChatResult = {
   source?: AiProviderSource | string;
   error?: string;
   model?: string;
+  riskLevel?: string;
+  userStopRequested?: boolean;
+  escalated?: boolean;
+  code?: string;
 };
 
 /** Live customer chat via the same OpenRouter / OpenAI / Gemini provider. */
@@ -254,17 +258,25 @@ export async function chatWithAi(
         jobId: options?.jobId,
       }),
     });
-    const data = (await response.json()) as ChatResult & { message?: string };
+    const data = (await response.json()) as ChatResult & { message?: string; code?: string };
     if (!response.ok) {
       return {
         reply: null,
         source: "error",
         error: data.message ?? data.error ?? `AI chat failed (${response.status})`,
+        code: data.code,
       };
     }
     if (data.reply) {
       cachedConfigured = true;
-      return { reply: data.reply, source: data.source, model: data.model };
+      return {
+        reply: data.reply,
+        source: data.source,
+        model: data.model,
+        riskLevel: data.riskLevel,
+        userStopRequested: data.userStopRequested,
+        escalated: data.escalated,
+      };
     }
     return {
       reply: null,

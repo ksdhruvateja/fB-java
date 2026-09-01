@@ -979,6 +979,38 @@ export async function initManagedSchema(pool) {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_marketing_sms ON users (marketing_sms_opt_in) WHERE role='homeowner'`);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS diy_safety_events (
+      id                   BIGSERIAL PRIMARY KEY,
+      user_id              INT NOT NULL,
+      job_id               BIGINT,
+      event_type           TEXT NOT NULL,
+      risk_level           TEXT,
+      previous_risk_level  TEXT,
+      risk_reason_codes    JSONB,
+      feedback_rating      TEXT,
+      incident_type        TEXT,
+      description          TEXT,
+      metadata             JSONB,
+      ip_address           TEXT,
+      user_agent           TEXT,
+      source_route         TEXT,
+      created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_diy_safety_events_user_created
+    ON diy_safety_events (user_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_diy_safety_events_job
+    ON diy_safety_events (job_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_diy_safety_events_type
+    ON diy_safety_events (event_type, created_at DESC)
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS payment_authorization_snapshots (
       id                      BIGSERIAL PRIMARY KEY,
       user_id                 INT NOT NULL,

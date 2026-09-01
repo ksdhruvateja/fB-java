@@ -3,13 +3,8 @@
  * Usage: node scripts/smoke-accept-all-consents.mjs
  */
 
-const DISPATCH_KEYS = [
-  'PROFESSIONAL_DISPATCH_PROVIDER_ACK',
-  'PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK',
-  'VISIT_FEE_ACK',
-  'HOMEOWNER_SERVICE_AGREEMENT',
-  'VISIT_CANCELLATION_POLICY',
-];
+const DISPATCH_KEYS = ['PROFESSIONAL_REQUEST_BETA_ACK'];
+const DIY_SAFETY_KEYS = ['DIY_SAFETY', 'DIY_SAFETY_ABILITY_ACK'];
 
 function isAcceptAllChecked(state, keys) {
   return keys.length > 0 && keys.every((key) => state[key] === true);
@@ -32,23 +27,15 @@ function main() {
   console.log('\n=== Accept All dispatch acknowledgments ===\n');
 
   const initial = Object.fromEntries(DISPATCH_KEYS.map((k) => [k, false]));
-  ok('Default: all individual false', DISPATCH_KEYS.every((k) => initial[k] === false));
+  ok('Default: beta acknowledgment false', initial.PROFESSIONAL_REQUEST_BETA_ACK === false);
   ok('Default: Accept All false', !isAcceptAllChecked(initial, DISPATCH_KEYS));
 
   const afterAcceptAll = applyAcceptAll(initial, DISPATCH_KEYS, true);
-  ok('Accept All checks all required', isAcceptAllChecked(afterAcceptAll, DISPATCH_KEYS));
-  ok(
-    'Accept All sets each dispatch key',
-    DISPATCH_KEYS.every((k) => afterAcceptAll[k] === true)
-  );
+  ok('Accept All checks beta acknowledgment', isAcceptAllChecked(afterAcceptAll, DISPATCH_KEYS));
+  ok('Accept All sets beta key', afterAcceptAll.PROFESSIONAL_REQUEST_BETA_ACK === true);
 
-  const afterUncheckAgreement = { ...afterAcceptAll, HOMEOWNER_SERVICE_AGREEMENT: false };
-  ok('Uncheck one: agreement false', afterUncheckAgreement.HOMEOWNER_SERVICE_AGREEMENT === false);
-  ok('Uncheck one: Accept All reflects unchecked', !isAcceptAllChecked(afterUncheckAgreement, DISPATCH_KEYS));
-
-  const manual = { ...initial };
-  for (const key of DISPATCH_KEYS) manual[key] = true;
-  ok('Manual check all: Accept All true', isAcceptAllChecked(manual, DISPATCH_KEYS));
+  const afterUncheck = { ...afterAcceptAll, PROFESSIONAL_REQUEST_BETA_ACK: false };
+  ok('Uncheck beta: Accept All reflects unchecked', !isAcceptAllChecked(afterUncheck, DISPATCH_KEYS));
 
   const withMarketing = applyAcceptAll(
     { ...initial, MARKETING_SMS_EMAIL: false },
@@ -58,6 +45,22 @@ function main() {
   ok(
     'Accept All does not check marketing',
     withMarketing.MARKETING_SMS_EMAIL === false && isAcceptAllChecked(withMarketing, DISPATCH_KEYS)
+  );
+
+  console.log('\n=== Accept All DIY safety acknowledgments ===\n');
+
+  const diyInitial = Object.fromEntries(DIY_SAFETY_KEYS.map((k) => [k, false]));
+  ok('DIY default: both unchecked', !isAcceptAllChecked(diyInitial, DIY_SAFETY_KEYS));
+  const diyAfterAll = applyAcceptAll(diyInitial, DIY_SAFETY_KEYS, true);
+  ok('DIY Accept All checks both required keys', isAcceptAllChecked(diyAfterAll, DIY_SAFETY_KEYS));
+  const diyWithMarketing = applyAcceptAll(
+    { ...diyInitial, MARKETING_SMS_EMAIL: false },
+    DIY_SAFETY_KEYS,
+    true
+  );
+  ok(
+    'DIY Accept All does not check marketing',
+    diyWithMarketing.MARKETING_SMS_EMAIL === false && isAcceptAllChecked(diyWithMarketing, DIY_SAFETY_KEYS)
   );
 
   console.log('\nDone.\n');

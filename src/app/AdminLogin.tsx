@@ -4,6 +4,8 @@ import { ArrowRight, Shield, Loader2, KeyRound } from "lucide-react";
 import { signInUser, saveSession, type AuthUser } from "./auth";
 import { brand } from "../config/brand";
 import { startAdminMfa, verifyAdminMfa } from "./platformApi";
+import GoogleSignInButton from "./GoogleSignInButton";
+import { signInWithGoogle } from "./marketingApi";
 import {
   AuthShell,
   AuthPanel,
@@ -34,6 +36,47 @@ export default function AdminLogin({
   const [mfaDemoCode, setMfaDemoCode] = useState<string | null>(null);
   const [pendingUser, setPendingUser] = useState<AuthUser | null>(null);
 
+  const beginAdminMfa = async (user: AuthUser) => {
+    const mfa = await startAdminMfa();
+    setLoading(false);
+    if (!mfa.ok) {
+      setError(
+        (mfa as { message?: string; detail?: string }).detail
+          ? `Could not start MFA: ${(mfa as { detail?: string }).detail}`
+          : (mfa as { message?: string }).message || "Could not start MFA. Please try again."
+      );
+      return false;
+    }
+    setPendingUser(user);
+    setMfaDemoCode(mfa.demoCode ?? null);
+    setMfaStep(true);
+    return true;
+  };
+
+  const handleGoogleCredential = async (credential: string) => {
+    if (loading) return;
+    setError("");
+    setLoading(true);
+    try {
+      const data = await signInWithGoogle(credential, { role: "admin" }, "admin");
+      if (!data.ok) {
+        setError(data.message || "We couldn't sign you in with Google. Please try again.");
+        setLoading(false);
+        return;
+      }
+      if (data.user?.role !== "admin") {
+        setError("This account is not an admin account.");
+        setLoading(false);
+        return;
+      }
+      saveSession(data.token, data.user);
+      await beginAdminMfa(data.user);
+    } catch {
+      setLoading(false);
+      setError("We couldn't sign you in with Google. Please try again.");
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (loading) return;
@@ -51,19 +94,7 @@ export default function AdminLogin({
         setLoading(false);
         return;
       }
-      const mfa = await startAdminMfa();
-      setLoading(false);
-      if (!mfa.ok) {
-        setError(
-          (mfa as { message?: string; detail?: string }).detail
-            ? `Could not start MFA: ${(mfa as { detail?: string }).detail}`
-            : (mfa as { message?: string }).message || "Could not start MFA. Please try again."
-        );
-        return;
-      }
-      setPendingUser(result.user);
-      setMfaDemoCode(mfa.demoCode ?? null);
-      setMfaStep(true);
+      await beginAdminMfa(result.user);
     } catch {
       setLoading(false);
       setError("Something went wrong. Please try again.");
@@ -142,6 +173,17 @@ export default function AdminLogin({
               </div>
 
               <form onSubmit={handleSubmit} className="space-y-4">
+                <GoogleSignInButton
+                  disabled={loading}
+                  text="signin_with"
+                  onCredential={(cred) => void handleGoogleCredential(cred)}
+                />
+                <div className="flex items-center gap-3 text-xs text-neutral-400">
+                  <span className="h-px flex-1 bg-neutral-200" />
+                  or
+                  <span className="h-px flex-1 bg-neutral-200" />
+                </div>
+
                 <AuthEmailField
                   value={email}
                   onChange={setEmail}
@@ -167,6 +209,9 @@ export default function AdminLogin({
                 </div>
 
                 <AuthError message={error} />
+                {loading && (
+                  <p className="text-center text-xs text-neutral-500">Signing you in…</p>
+                )}
 
                 <AuthMobileActions>
                   <AuthPrimaryButton loading={loading}>

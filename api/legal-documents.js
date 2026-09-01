@@ -1,35 +1,43 @@
 /**
  * Canonical legal document registry — version identifiers must match stored acceptances.
+ *
+ * Counsel review note (implementation): Working beta product copy for homeowner professional
+ * dispatch (HOMEOWNER_PROFESSIONAL_REQUEST_BETA). Final legal terms should be reviewed by
+ * New York counsel before broad public scale. Do not surface this note to homeowners.
  */
 
 import { INSURANCE_REQUIREMENTS_CONTENT } from './insurance-requirements-content.js';
+import {
+  HOMEOWNER_LEGAL_CONTENT,
+  HOMEOWNER_LEGAL_EFFECTIVE_DATE,
+} from './legal-homeowner-content.js';
 
 export const LEGAL_DOCUMENTS = {
   HOMEOWNER_TERMS: {
     key: 'HOMEOWNER_TERMS',
     title: 'FixBridge Terms of Service',
-    version: '2026-08-30',
+    version: '2026-09-01',
     route: '/legal/terms',
     acceptanceType: 'ACCOUNT_TERMS',
   },
   PRIVACY_POLICY: {
     key: 'PRIVACY_POLICY',
     title: 'Privacy Policy',
-    version: '2026-08-30',
+    version: '2026-09-01',
     route: '/legal/privacy',
     acceptanceType: 'PRIVACY_POLICY',
   },
   DIY_SAFETY_DISCLAIMER: {
     key: 'DIY_SAFETY_DISCLAIMER',
     title: 'AI / DIY Safety Disclaimer',
-    version: '1.0',
+    version: '1.1',
     route: '/legal/diy-safety',
     acceptanceType: 'DIY_SAFETY',
   },
   HOMEOWNER_SERVICE_AGREEMENT: {
     key: 'HOMEOWNER_SERVICE_AGREEMENT',
-    title: 'Homeowner Service Agreement',
-    version: '1.0',
+    title: 'Homeowner Platform & Professional Service Agreement',
+    version: '1.1',
     route: '/legal/homeowner-service-agreement',
     acceptanceType: 'HOMEOWNER_SERVICE_AGREEMENT',
   },
@@ -53,6 +61,13 @@ export const LEGAL_DOCUMENTS = {
     version: '1.0',
     route: '/legal/marketing-consent',
     acceptanceType: 'MARKETING_SMS_EMAIL',
+  },
+  HOMEOWNER_PROFESSIONAL_REQUEST_BETA: {
+    key: 'HOMEOWNER_PROFESSIONAL_REQUEST_BETA',
+    title: 'Professional Service Request (Beta)',
+    version: 'homeowner_professional_request_beta_v1',
+    route: '/legal/professional-request-beta',
+    acceptanceType: 'PROFESSIONAL_REQUEST_BETA_ACK',
   },
   INSURANCE_REQUIREMENTS: {
     key: 'INSURANCE_REQUIREMENTS',
@@ -96,6 +111,11 @@ export const STANDALONE_ACCEPTANCE_TYPES = {
     title: 'Payment authorization',
     version: '1.0',
   },
+  DIY_SAFETY_ABILITY_ACK: {
+    acceptanceType: 'DIY_SAFETY_ABILITY_ACK',
+    title: 'DIY ability and comfort acknowledgment',
+    version: '1.1',
+  },
 };
 
 export const CONSENT_ACTIONS = {
@@ -114,16 +134,18 @@ export const CONSENT_ACTIONS = {
     code: 'GUEST_CONSENT_REQUIRED',
   },
   DIY_START: {
-    required: [{ acceptanceType: 'DIY_SAFETY', documentKey: 'DIY_SAFETY_DISCLAIMER' }],
-    code: 'DIY_CONSENT_REQUIRED',
+    required: [
+      { acceptanceType: 'DIY_SAFETY', documentKey: 'DIY_SAFETY_DISCLAIMER' },
+      { acceptanceType: 'DIY_SAFETY_ABILITY_ACK' },
+    ],
+    code: 'DIY_SAFETY_ACKNOWLEDGMENT_REQUIRED',
   },
   PROFESSIONAL_DISPATCH: {
     required: [
-      { acceptanceType: 'PROFESSIONAL_DISPATCH_PROVIDER_ACK' },
-      { acceptanceType: 'PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK' },
-      { acceptanceType: 'VISIT_FEE_ACK' },
-      { acceptanceType: 'HOMEOWNER_SERVICE_AGREEMENT', documentKey: 'HOMEOWNER_SERVICE_AGREEMENT' },
-      { acceptanceType: 'VISIT_CANCELLATION_POLICY', documentKey: 'VISIT_CANCELLATION_POLICY' },
+      {
+        acceptanceType: 'PROFESSIONAL_REQUEST_BETA_ACK',
+        documentKey: 'HOMEOWNER_PROFESSIONAL_REQUEST_BETA',
+      },
     ],
     code: 'HOMEOWNER_DISPATCH_CONSENT_REQUIRED',
   },
@@ -190,40 +212,9 @@ export function listLegalDocumentsForClient() {
   }));
 }
 
-/** Short operational summaries — not legal advice. */
+/** Homeowner legal content — working product copy; counsel review recommended. */
 export const LEGAL_DOCUMENT_CONTENT = {
-  HOMEOWNER_TERMS: {
-    heading: 'FixBridge Terms of Service',
-    sections: [
-      { title: 'Service', body: 'FixBridge coordinates homeowner service requests, payments, and provider matching. Contractors are independent businesses.' },
-      { title: 'Accounts', body: 'You are responsible for accurate account information and safeguarding your login credentials.' },
-      { title: 'Payments', body: 'Authorized amounts, cancellation rules, and refund eligibility are described in the Payment / Visit Policy and job-specific disclosures.' },
-    ],
-  },
-  PRIVACY_POLICY: {
-    heading: 'Privacy Policy',
-    sections: [
-      { title: 'Data we collect', body: 'Contact information, property details, job history, and communications needed to deliver the service.' },
-      { title: 'How we use data', body: 'To match providers, process payments, provide support, and improve the platform. Marketing uses require separate opt-in.' },
-      { title: 'Sharing', body: 'Relevant job details are shared with matched contractors and payment processors as needed to complete your request.' },
-    ],
-  },
-  DIY_SAFETY_DISCLAIMER: {
-    heading: 'AI / DIY Safety Disclaimer',
-    sections: [
-      { title: 'Informational only', body: 'FixBridge AI guidance is informational and may be incomplete or incorrect. It is not professional on-site advice.' },
-      { title: 'Stop if unsafe', body: 'Stop immediately if a task involves gas, major electrical work, structural damage, flooding, sewage, fire/smoke/CO, or anything beyond your skill level.' },
-      { title: 'Professional help', body: 'When in doubt, request a licensed professional through FixBridge instead of proceeding with DIY steps.' },
-    ],
-  },
-  HOMEOWNER_SERVICE_AGREEMENT: {
-    heading: 'Homeowner Service Agreement',
-    sections: [
-      { title: 'Independent providers', body: 'On-site work is performed by independent contractors who control their methods, tools, and personnel.' },
-      { title: 'Scope & change orders', body: 'Approved quotes define authorized scope and price. Additional work requires a separate change-order approval.' },
-      { title: 'FixBridge role', body: 'FixBridge coordinates intake, matching, and payment workflow but does not guarantee provider workmanship or AI diagnoses.' },
-    ],
-  },
+  ...HOMEOWNER_LEGAL_CONTENT,
   VISIT_CANCELLATION_POLICY: {
     heading: 'Visit / Cancellation Policy',
     sections: [
@@ -245,6 +236,14 @@ export const LEGAL_DOCUMENT_CONTENT = {
     sections: [
       { title: 'Optional', body: 'Marketing SMS and email are optional and never required to receive FixBridge services.' },
       { title: 'Opt out', body: 'You may opt out of marketing messages at any time. Service-related messages may still be sent for active jobs.' },
+    ],
+  },
+  HOMEOWNER_PROFESSIONAL_REQUEST_BETA: {
+    heading: 'Professional Service Request (Beta)',
+    sections: [
+      { title: 'Beta fee', body: 'FixBridge assessment and coordination fee is waived during beta. Contractor visit/diagnostic charges may still apply.' },
+      { title: 'Visit & repair', body: 'The visit fee covers travel and evaluation only. Additional repair work requires separate approval.' },
+      { title: 'AI assessment', body: 'FixBridge AI guidance is informational only and not a guaranteed diagnosis.' },
     ],
   },
   INSURANCE_REQUIREMENTS: INSURANCE_REQUIREMENTS_CONTENT,

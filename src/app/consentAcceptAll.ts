@@ -1,13 +1,13 @@
 import type { ConsentState } from "./ConsentCheckbox";
 import type { AcceptanceType } from "./legalDocuments";
 
-/** Required homeowner dispatch acknowledgments (Accept All applies only to these). */
-export const DISPATCH_ACKNOWLEDGMENT_KEYS: AcceptanceType[] = [
-  "PROFESSIONAL_DISPATCH_PROVIDER_ACK",
-  "PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK",
-  "VISIT_FEE_ACK",
-  "HOMEOWNER_SERVICE_AGREEMENT",
-  "VISIT_CANCELLATION_POLICY",
+/** Required homeowner dispatch acknowledgment (single beta checkbox). */
+export const DISPATCH_ACKNOWLEDGMENT_KEYS: AcceptanceType[] = ["PROFESSIONAL_REQUEST_BETA_ACK"];
+
+/** Required Guided DIY safety acknowledgments before starting DIY. */
+export const DIY_SAFETY_ACKNOWLEDGMENT_KEYS: AcceptanceType[] = [
+  "DIY_SAFETY",
+  "DIY_SAFETY_ABILITY_ACK",
 ];
 
 export function isAcceptAllChecked(state: ConsentState, keys: AcceptanceType[]): boolean {

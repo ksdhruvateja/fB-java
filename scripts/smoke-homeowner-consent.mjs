@@ -24,11 +24,7 @@ const TERMS_CONSENTS = {
 };
 
 const DISPATCH_CONSENTS = {
-  PROFESSIONAL_DISPATCH_PROVIDER_ACK: true,
-  PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK: true,
-  VISIT_FEE_ACK: true,
-  HOMEOWNER_SERVICE_AGREEMENT: true,
-  VISIT_CANCELLATION_POLICY: true,
+  PROFESSIONAL_REQUEST_BETA_ACK: true,
 };
 
 async function signupHomeowner(ts, body = {}) {
@@ -72,12 +68,19 @@ async function main() {
     headers: withTerms.h,
     body: JSON.stringify({ actionKey: 'DIY_START', consents: {} }),
   }).then(json);
-  ok('DIY without disclaimer blocked', !diyBlocked.ok && diyBlocked.code === 'DIY_CONSENT_REQUIRED', diyBlocked.message);
+  ok(
+    'DIY without disclaimer blocked',
+    !diyBlocked.ok && diyBlocked.code === 'DIY_SAFETY_ACKNOWLEDGMENT_REQUIRED',
+    diyBlocked.message
+  );
 
   const diyOk = await fetch(`${API}/api/homeowner/consent/action`, {
     method: 'POST',
     headers: withTerms.h,
-    body: JSON.stringify({ actionKey: 'DIY_START', consents: { DIY_SAFETY: true } }),
+    body: JSON.stringify({
+      actionKey: 'DIY_START',
+      consents: { DIY_SAFETY: true, DIY_SAFETY_ABILITY_ACK: true },
+    }),
   }).then(json);
   ok('DIY with current disclaimer allowed', diyOk.ok === true, diyOk.message);
 
@@ -92,14 +95,11 @@ async function main() {
     headers: withTerms.h,
     body: JSON.stringify({
       actionKey: 'PROFESSIONAL_DISPATCH',
-      consents: {
-        PROFESSIONAL_DISPATCH_PROVIDER_ACK: true,
-        PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK: true,
-      },
+      consents: {},
     }),
   }).then(json);
   ok(
-    'dispatch 2/3 acknowledgments blocked',
+    'dispatch without beta acknowledgment blocked',
     !partialDispatch.ok && partialDispatch.code === 'HOMEOWNER_DISPATCH_CONSENT_REQUIRED',
     partialDispatch.missingAcceptanceTypes?.join(', ')
   );
@@ -110,14 +110,11 @@ async function main() {
     body: JSON.stringify({
       actionKey: 'PROFESSIONAL_DISPATCH',
       acceptAll: true,
-      consents: {
-        PROFESSIONAL_DISPATCH_PROVIDER_ACK: true,
-        PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK: true,
-      },
+      consents: {},
     }),
   }).then(json);
   ok(
-    'acceptAll alone does not bypass missing dispatch acknowledgments',
+    'acceptAll alone does not bypass beta acknowledgment',
     !acceptAllBypass.ok && acceptAllBypass.code === 'HOMEOWNER_DISPATCH_CONSENT_REQUIRED',
     acceptAllBypass.missingAcceptanceTypes?.join(', ')
   );

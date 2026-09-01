@@ -43,11 +43,16 @@
     "smoke:job-cancel": "node --env-file=.env scripts/smoke-job-cancel.mjs http://127.0.0.1:3001",
     "smoke:contractor-compliance": "node --env-file=.env scripts/smoke-contractor-compliance.mjs http://127.0.0.1:3001",
     "smoke:homeowner-consent": "node --env-file=.env scripts/smoke-homeowner-consent.mjs http://127.0.0.1:3001",
+    "smoke:professional-request-beta": "node --env-file=.env scripts/smoke-professional-request-beta.mjs http://127.0.0.1:3001",
     "smoke:dispatch-diy-safety": "node scripts/smoke-dispatch-diy-safety.mjs",
+    "smoke:diy-safety-guardrails": "node --env-file=.env scripts/smoke-diy-safety-guardrails.mjs http://127.0.0.1:3001",
     "smoke:assessment-async": "node --env-file=.env scripts/smoke-assessment-async.mjs",
     "smoke:service-catalog": "node scripts/smoke-service-catalog.mjs",
     "smoke:referral-self": "node --env-file=.env scripts/smoke-referral-self-block.mjs",
     "smoke:accept-all": "node scripts/smoke-accept-all-consents.mjs",
+    "smoke:legal-ai-integration": "node --env-file=.env scripts/smoke-legal-ai-integration.mjs http://127.0.0.1:3001",
+    "smoke:ai-safety": "node --env-file=.env scripts/smoke-ai-safety.mjs http://127.0.0.1:3001",
+    "smoke:google-auth": "node --env-file=.env scripts/smoke-google-auth.mjs http://127.0.0.1:3001",
     "brand:logo": "node scripts/process-brand-logo.mjs"
   },
   "dependencies": {

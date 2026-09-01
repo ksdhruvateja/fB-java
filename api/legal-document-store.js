@@ -6,7 +6,9 @@ import {
   LEGAL_DOCUMENTS,
   LEGAL_DOCUMENT_CONTENT,
   listLegalDocumentsForClient,
+  STANDALONE_ACCEPTANCE_TYPES,
 } from './legal-documents.js';
+import { HOMEOWNER_LEGAL_EFFECTIVE_DATE } from './legal-homeowner-content.js';
 import {
   INSURANCE_REQUIREMENTS_CONTENT,
   INSURANCE_REQUIREMENTS_META,
@@ -89,8 +91,58 @@ const EXTRA_CONTENT = {
   },
 };
 
+const HOMEOWNER_AUTO_PUBLISH_KEYS = [
+  'HOMEOWNER_TERMS',
+  'PRIVACY_POLICY',
+  'DIY_SAFETY_DISCLAIMER',
+  'HOMEOWNER_SERVICE_AGREEMENT',
+];
+
+function effectiveDateForMeta(meta) {
+  if (meta.version.match(/^\d{4}-\d{2}-\d{2}$/)) return meta.version;
+  if (HOMEOWNER_AUTO_PUBLISH_KEYS.includes(meta.key)) return HOMEOWNER_LEGAL_EFFECTIVE_DATE;
+  return '2026-08-30';
+}
+
 function metaForKey(key) {
   return LEGAL_DOCUMENTS[key] || EXTRA_DOCS[key] || null;
+}
+
+async function ensureHomeownerLegalVersions(pool) {
+  for (const key of HOMEOWNER_AUTO_PUBLISH_KEYS) {
+    const meta = metaForKey(key);
+    if (!meta) continue;
+    const { rows: current } = await pool.query(
+      `SELECT id, version FROM legal_document_versions WHERE document_key=$1 AND status='current' LIMIT 1`,
+      [key]
+    );
+    if (current[0]?.version === meta.version) continue;
+    const { rows: exists } = await pool.query(
+      `SELECT id FROM legal_document_versions WHERE document_key=$1 AND version=$2`,
+      [key, meta.version]
+    );
+    if (!exists[0]) {
+      await publishLegalDocumentVersion(pool, {
+        documentKey: key,
+        title: meta.title,
+        version: meta.version,
+        effectiveDate: effectiveDateForMeta(meta),
+        route: meta.route,
+        audience: meta.audience || 'public',
+        content: contentForKey(key),
+        createdBy: null,
+      });
+      continue;
+    }
+    await pool.query(
+      `UPDATE legal_document_versions SET status='archived' WHERE document_key=$1 AND status='current' AND version<>$2`,
+      [key, meta.version]
+    );
+    await pool.query(
+      `UPDATE legal_document_versions SET status='current' WHERE document_key=$1 AND version=$2`,
+      [key, meta.version]
+    );
+  }
 }
 
 function contentForKey(key) {
@@ -118,7 +170,7 @@ export async function seedLegalDocumentVersions(pool) {
         key,
         meta.title,
         meta.version,
-        meta.version.match(/^\d{4}-\d{2}-\d{2}$/) ? meta.version : '2026-08-30',
+        effectiveDateForMeta(meta),
         meta.route,
         meta.audience || 'public',
         JSON.stringify(contentForKey(key)),
@@ -127,6 +179,7 @@ export async function seedLegalDocumentVersions(pool) {
   }
   await ensureInsuranceRequirementsVersion(pool);
   await ensureContractorAgreementVersions(pool);
+  await ensureHomeownerLegalVersions(pool);
 }
 
 /** Preserve historical v3 as archived; publish v4 as current without mutating acceptance rows. */
@@ -230,7 +283,7 @@ export async function getCurrentLegalDocument(pool, key) {
     key: upper,
     title: meta.title,
     version: meta.version,
-    effectiveDate: meta.version.match(/^\d{4}-\d{2}-\d{2}$/) ? meta.version : '2026-08-30',
+    effectiveDate: effectiveDateForMeta(meta),
     route: meta.route,
     acceptanceType: meta.acceptanceType || null,
     audience: meta.audience || 'public',
@@ -351,11 +404,21 @@ export async function getHomeownerLegalStatus(pool, userId) {
       const doc = docs.find((item) => item.key === key);
       if (!doc) return null;
       const acc = latestByKey[key] || latestByKey[doc.acceptanceType];
-      const current = acc && acc.document_version === doc.version;
+      let accepted = Boolean(acc);
+      let acceptedCurrentVersion = acc && acc.document_version === doc.version;
+      if (key === 'DIY_SAFETY_DISCLAIMER') {
+        const abilityAcc = latestByKey.DIY_SAFETY_ABILITY_ACK;
+        const abilityVersion = STANDALONE_ACCEPTANCE_TYPES.DIY_SAFETY_ABILITY_ACK?.version || '1.0';
+        accepted = Boolean(acc && abilityAcc);
+        acceptedCurrentVersion =
+          Boolean(acc && abilityAcc) &&
+          acc.document_version === doc.version &&
+          abilityAcc.document_version === abilityVersion;
+      }
       return {
         ...doc,
-        accepted: Boolean(acc),
-        acceptedCurrentVersion: current,
+        accepted,
+        acceptedCurrentVersion,
         acceptedAt: acc?.accepted_at || null,
         acceptedVersion: acc?.document_version || null,
       };

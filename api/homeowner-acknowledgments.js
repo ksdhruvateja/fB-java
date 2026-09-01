@@ -12,4 +12,6 @@ export {
   recordMarketingConsent,
   assertHomeownerDispatchConsent,
   listHomeownerAcceptances,
+  hasDiySafetyAcknowledgment,
+  requireDiySafetyAcknowledgment,
 } from './homeowner-consent.js';

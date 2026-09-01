@@ -6,6 +6,7 @@ export type LegalDocumentKey =
   | "VISIT_CANCELLATION_POLICY"
   | "PAYMENT_VISIT_POLICY"
   | "MARKETING_CONSENT"
+  | "HOMEOWNER_PROFESSIONAL_REQUEST_BETA"
   | "CONTRACTOR_AGREEMENT"
   | "MANAGED_ADDENDUM"
   | "INSURANCE_REQUIREMENTS"
@@ -19,6 +20,7 @@ export const LEGAL_ROUTES: Record<LegalDocumentKey, string> = {
   VISIT_CANCELLATION_POLICY: "/legal/visit-cancellation",
   PAYMENT_VISIT_POLICY: "/legal/payment-visit-policy",
   MARKETING_CONSENT: "/legal/marketing-consent",
+  HOMEOWNER_PROFESSIONAL_REQUEST_BETA: "/legal/professional-request-beta",
   CONTRACTOR_AGREEMENT: "/legal/contractor-agreement",
   MANAGED_ADDENDUM: "/legal/managed-addendum",
   INSURANCE_REQUIREMENTS: "/legal/insurance-requirements",
@@ -36,6 +38,7 @@ export const LEGAL_SLUG_TO_KEY: Record<string, LegalDocumentKey> = {
   "visit-cancellation": "VISIT_CANCELLATION_POLICY",
   "payment-visit-policy": "PAYMENT_VISIT_POLICY",
   "marketing-consent": "MARKETING_CONSENT",
+  "professional-request-beta": "HOMEOWNER_PROFESSIONAL_REQUEST_BETA",
   "contractor-agreement": "CONTRACTOR_AGREEMENT",
   "managed-addendum": "MANAGED_ADDENDUM",
   "insurance-requirements": "INSURANCE_REQUIREMENTS",
@@ -82,9 +85,11 @@ export type AcceptanceType =
   | "ACCOUNT_TERMS"
   | "PRIVACY_POLICY"
   | "DIY_SAFETY"
+  | "DIY_SAFETY_ABILITY_ACK"
   | "PROFESSIONAL_DISPATCH_PROVIDER_ACK"
   | "PROFESSIONAL_DISPATCH_FIXBRIDGE_ACK"
   | "VISIT_FEE_ACK"
+  | "PROFESSIONAL_REQUEST_BETA_ACK"
   | "HOMEOWNER_SERVICE_AGREEMENT"
   | "VISIT_CANCELLATION_POLICY"
   | "QUOTE_SCOPE_APPROVAL"

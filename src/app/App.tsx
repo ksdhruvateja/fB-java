@@ -17,6 +17,7 @@ import GoProPublicPage from "./GoProPublicPage";
 import SubscriptionSuccessModal from "./SubscriptionSuccessModal";
 import SubscriptionCancelModal from "./SubscriptionCancelModal";
 import { getStoredUser, validateToken, clearSession, loadAllUsers, saveSession, type AuthUser, type UserRole, type ResetRole } from "./auth";
+import { storePendingReferralCode } from "./referralSession";
 import { brand } from "../config/brand";
 import { PAID_HOME_CARE_PLAN_CODE, isPaidHomeCarePlan } from "./subscriptionCatalog";
 import { hasProEntitlement } from "./proFeatures";
@@ -598,6 +599,11 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const path = window.location.pathname.replace(/\/+$/, "") || "/";
     const isResetPath = path === "/reset-password" || path.endsWith("/reset-password");
+
+    const referralFromUrl = params.get("ref") || params.get("referral");
+    if (referralFromUrl) {
+      storePendingReferralCode(referralFromUrl);
+    }
 
     if (params.get("go-pro") === "1" || params.get("subscribe") === "1") {
       setPage("go-pro");

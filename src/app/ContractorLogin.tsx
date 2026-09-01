@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { motion } from "motion/react";
 import { ArrowRight, Loader2 } from "lucide-react";
-import { signInUser, signUpUser, type AuthUser } from "./auth";
+import { signInUser, signUpUser, saveSession, updateUserProfile, type AuthUser } from "./auth";
 import ForgotPasswordModal from "./ForgotPasswordModal";
+import GoogleSignInButton from "./GoogleSignInButton";
+import { signInWithGoogle } from "./marketingApi";
 import {
   AuthShell,
   AuthPanel,
@@ -48,6 +50,53 @@ export default function ContractorLogin({
   const [showForgot, setShowForgot] = useState(false);
   const [application, setApplication] = useState<ContractorApplication>(() => emptyContractorApplication());
   const [docs, setDocs] = useState<ContractorApplicationDocs>(emptyDocs);
+  const [googleShellAccount, setGoogleShellAccount] = useState(false);
+
+  const handleGoogleCredential = async (credential: string) => {
+    if (loading) return;
+    setError("");
+    setLoading(true);
+    try {
+      const body: Record<string, unknown> = {
+        role: "contractor",
+        intent: tab,
+        agreeContractorAgreementV4: application.agreeContractorAgreementV4 === true,
+      };
+      const data = await signInWithGoogle(credential, body, "contractor");
+      if (!data.ok) {
+        if (data.code === "CONTRACTOR_AGREEMENT_REQUIRED") {
+          setError("Accept the FixBridge Contractor Agreement before continuing with Google.");
+        } else if (data.code === "ACCOUNT_SUSPENDED") {
+          setError(data.message || "This account is not active.");
+        } else {
+          setError(data.message || "We couldn't sign you in with Google. Please try again.");
+        }
+        setLoading(false);
+        return;
+      }
+      saveSession(data.token, data.user);
+      if (data.needsContractorApplication) {
+        const profile = data.googleProfile || {};
+        setEmail(String(profile.email || data.user.email || ""));
+        setPassword("");
+        setApplication((prev) => ({
+          ...prev,
+          contactName: String(profile.name || prev.contactName || ""),
+          companyEmail: String(profile.email || prev.companyEmail || ""),
+          contactEmail: String(profile.email || prev.contactEmail || ""),
+        }));
+        setGoogleShellAccount(true);
+        setTab("signup");
+        setLoading(false);
+        return;
+      }
+      onLogin(data.user);
+    } catch {
+      setError("We couldn't sign you in with Google. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -83,6 +132,47 @@ export default function ContractorLogin({
       }
 
       const profile = applicationToProfileFields(app);
+      if (googleShellAccount) {
+        const result = await updateUserProfile({
+          name: profile.name || app.contactName,
+          trade: profile.trade,
+          licenseNumber: profile.licenseNumber,
+          phone: profile.phone,
+          address: profile.address,
+          contactEmail: profile.contactEmail,
+          companyName: profile.companyName,
+          companyDetails: profile.companyDetails,
+          insuranceDetails: profile.insuranceDetails,
+          serviceZips: profile.serviceZips,
+          travelRadiusMiles: profile.travelRadiusMiles,
+          visitFee: profile.visitFee,
+          emergencyVisitFee: profile.emergencyVisitFee,
+          minimumLaborFee: profile.minimumLaborFee,
+          contractorApplication: app as unknown as Record<string, unknown>,
+          licenseDocumentName: docs.license?.name,
+          licenseDocumentData: docs.license?.data,
+          insuranceDocumentName: docs.insurance?.name,
+          insuranceDocumentData: docs.insurance?.data,
+          idDocumentName: docs.idDoc?.name,
+          idDocumentData: docs.idDoc?.data,
+          w9DocumentName: docs.w9?.name,
+          w9DocumentData: docs.w9?.data,
+          businessRegistrationName: docs.businessRegistration?.name,
+          businessRegistrationData: docs.businessRegistration?.data,
+          businessLicenseName: docs.businessLicense?.name,
+          businessLicenseData: docs.businessLicense?.data,
+          diversityDocumentName: docs.diversityCert?.name,
+          diversityDocumentData: docs.diversityCert?.data,
+        });
+        setLoading(false);
+        if (!result.ok) {
+          setError(result.message);
+          return;
+        }
+        onLogin(result.user);
+        return;
+      }
+
       const result = await signUpUser({
         role: "contractor",
         name: profile.name || app.contactName,
@@ -158,6 +248,7 @@ export default function ContractorLogin({
               onChange={(t) => {
                 setTab(t);
                 setError("");
+                setGoogleShellAccount(false);
                 if (t === "signup") {
                   setEmail("");
                   setPassword("");
@@ -179,6 +270,19 @@ export default function ContractorLogin({
             </p>
 
             <form onSubmit={handleSubmit} className="mt-5 space-y-4">
+              <div className="space-y-3">
+                <GoogleSignInButton
+                  disabled={loading || (tab === "signup" && !application.agreeContractorAgreementV4)}
+                  text={tab === "signup" ? "signup_with" : "signin_with"}
+                  onCredential={(cred) => void handleGoogleCredential(cred)}
+                />
+                <div className="flex items-center gap-3 text-xs text-neutral-400">
+                  <span className="h-px flex-1 bg-neutral-200" />
+                  or
+                  <span className="h-px flex-1 bg-neutral-200" />
+                </div>
+              </div>
+
               {tab === "signup" && (
                 <div className="rounded-xl border border-neutral-200 bg-neutral-50/80 p-4 space-y-4">
                   <ContractorAgreementComplianceNotice
@@ -213,6 +317,7 @@ export default function ContractorLogin({
                   placeholder="you@email.com"
                   label="Email address"
                 />
+                {!googleShellAccount && (
                 <AuthPasswordField
                   value={password}
                   onChange={setPassword}
@@ -220,6 +325,12 @@ export default function ContractorLogin({
                   onToggleShow={() => setShowPass((s) => !s)}
                   autoComplete={tab === "signup" ? "new-password" : "current-password"}
                 />
+                )}
+                {googleShellAccount && (
+                  <p className="text-xs text-neutral-500">
+                    Signed in with Google as {email}. Complete your application below.
+                  </p>
+                )}
               </div>
 
               {tab === "login" && (
@@ -231,6 +342,9 @@ export default function ContractorLogin({
               )}
 
               <AuthError message={error} />
+              {loading && (
+                <p className="text-center text-xs text-neutral-500">Signing you in…</p>
+              )}
 
               <AuthMobileActions>
                 <AuthPrimaryButton loading={loading}>
