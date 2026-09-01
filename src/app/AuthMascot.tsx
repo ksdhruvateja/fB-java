@@ -506,7 +506,7 @@ function FixBridgeProCharacter({
           animate={{ opacity: 1 }}
           className="mt-2 text-center text-xs font-medium tracking-wide text-white/50"
         >
-          {variant === "contractor" ? "Your pro portal" : variant === "admin" ? "Staff access" : "Trusted local pros"}
+          {variant === "contractor" ? "Your pro portal" : variant === "admin" ? "Staff access" : "Trusted pros nationwide"}
         </motion.p>
       )}
     </motion.div>

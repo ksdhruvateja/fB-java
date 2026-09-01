@@ -37,7 +37,7 @@ const FEATURES = [
   {
     title: "Certified Process",
     year: "2026",
-    body: "Built for NYC & Long Island homeowners who want clarity first.",
+    body: "Built for homeowners nationwide who want clarity first.",
     icon: BadgeCheck,
     tone: "steel" as const,
   },
@@ -68,7 +68,7 @@ const MOBILE_STEPS = [
   {
     num: "03",
     title: "Compare real bids",
-    body: "Local pros send priced estimates you can review side by side.",
+    body: "Verified pros send priced estimates you can review side by side.",
     icon: Scale,
   },
   {
@@ -92,7 +92,7 @@ const MOBILE_PERKS = [
   { icon: Clock, label: "No pressure calls" },
   { icon: BadgeCheck, label: "Verified process" },
   { icon: Cpu, label: "AI + human check" },
-  { icon: MapPin, label: "NYC & Long Island" },
+  { icon: MapPin, label: "Nationwide" },
 ];
 
 function BentoCard({
@@ -226,7 +226,7 @@ export default function CustomerPage({
               style={{ fontSize: "clamp(2.5rem,7vw,5.5rem)" }}
             >
               <span className="block">We connect homeowners</span>
-              <span className="block md:pl-[8%]">with vetted local contractors —</span>
+              <span className="block md:pl-[8%]">with vetted contractors nationwide —</span>
               <span className="block md:pl-[16%]">no guesswork, no cold calls.</span>
             </h2>
           </ScrollReveal>
@@ -235,14 +235,14 @@ export default function CustomerPage({
             <ScrollReveal delay={0.08}>
               <p className="text-muted-foreground text-base md:text-lg leading-relaxed max-w-md">
                 {brand.productName} turns a vague repair into a clear assessment and competing bids —
-                so you hire with confidence across NYC & Long Island.
+                so you hire with confidence anywhere in the United States.
               </p>
             </ScrollReveal>
             <ScrollReveal delay={0.16}>
               <ul className="space-y-4 border-l border-border pl-6">
                 {[
                   "AI repair diagnosis in minutes",
-                  "Transparent neighborhood cost ranges",
+                  "Transparent regional cost ranges",
                   "Licensed, background-checked pros",
                   "Free to post — pay only when you book",
                 ].map((line) => (
@@ -423,7 +423,7 @@ export default function CustomerPage({
                 <ArrowRight size={15} />
               </button>
               <p className="mt-2.5 text-center font-mono text-[10px] tracking-[0.16em] uppercase text-white/35">
-                Free to post · NYC & Long Island
+                Free to post · Nationwide
               </p>
             </ScrollReveal>
           </div>
@@ -485,7 +485,7 @@ export default function CustomerPage({
                   </p>
                 </div>
                 <div className="flex items-center gap-2 font-mono text-[10px] tracking-[0.2em] uppercase text-white/35">
-                  <MapPin size={11} /> NYC & Long Island
+                  <MapPin size={11} /> Nationwide
                 </div>
               </div>
             </BentoCard>
@@ -610,7 +610,7 @@ export default function CustomerPage({
               contractors.
             </h2>
             <p className="text-white/55 text-base sm:text-lg mb-8 sm:mb-10 max-w-md mx-auto leading-relaxed">
-              Post free. Get assessed. Hire with real bids — NYC & Long Island.
+              Post free. Get assessed. Hire with real bids — nationwide.
             </p>
             <button
               onClick={onGetStarted}

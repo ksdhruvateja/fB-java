@@ -1,8 +1,9 @@
 import { motion } from "motion/react";
-import { Camera, CheckCircle2 } from "lucide-react";
-import { AuthFieldLabel, authInputClass } from "./AuthShell";
+import { Camera, CheckCircle2, Check } from "lucide-react";
+import { AuthFieldLabel } from "./AuthShell";
 import AddressAutocompleteField from "./AddressAutocompleteField";
 import ServiceAdaptiveQuestions from "./ServiceAdaptiveQuestions";
+import { useAuthSurfaceStyles } from "./authSurfaceStyles";
 import {
   SERVICE_TRADE_OPTIONS,
   SERVICE_LOCATION_OPTIONS,
@@ -59,13 +60,15 @@ export function GuestReportSummary({
   reportState: string;
   reportZip: string;
 }) {
+  const s = useAuthSurfaceStyles();
+
   return (
-    <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-3.5 text-sm dark:border-border dark:bg-muted/20">
-      <p className="font-semibold text-foreground">
+    <div className={`p-3.5 text-sm ${s.surface}`}>
+      <p className={s.surfaceTitle}>
         {reportLocation && reportTradeId ? serviceRequestTitle(reportLocation, reportTradeId) : "Service request"}
       </p>
-      <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{reportDescription}</p>
-      <p className="mt-1 text-xs text-muted-foreground">
+      <p className={`mt-1 line-clamp-2 text-xs ${s.surfaceMuted}`}>{reportDescription}</p>
+      <p className={`mt-1 text-xs ${s.surfaceMuted}`}>
         {[reportAddressLine1, reportAddressLine2, reportCity, reportState, reportZip].filter(Boolean).join(", ")}
       </p>
     </div>
@@ -73,6 +76,7 @@ export function GuestReportSummary({
 }
 
 export default function GuestReportSteps(props: Props) {
+  const s = useAuthSurfaceStyles();
   const {
     reportStep,
     reportTradeId,
@@ -110,27 +114,29 @@ export default function GuestReportSteps(props: Props) {
         transition={{ duration: 0.22 }}
         className="space-y-3"
       >
-        <p className="text-sm font-semibold">What do you need?</p>
-        <p className="text-xs text-muted-foreground">Pick the closest match — AI refines the exact service.</p>
+        <p className={`text-sm ${s.heading}`}>What do you need?</p>
+        <p className={`text-xs ${s.muted}`}>Pick the closest match — AI refines the exact service.</p>
         <div className="grid grid-cols-2 gap-2.5">
           {SERVICE_TRADE_OPTIONS.map((opt) => {
             const selected = reportTradeId === opt.id;
             return (
-              <button
+              <motion.button
                 key={opt.id}
                 type="button"
+                whileTap={{ scale: 0.96 }}
                 onClick={() => {
                   setReportTradeId(opt.id);
                   setError("");
                 }}
-                className={`rounded-xl border px-3 py-3 text-left text-sm font-semibold transition ${
-                  selected
-                    ? "border-neutral-900 bg-neutral-50 dark:border-primary dark:bg-primary/5"
-                    : "border-neutral-200 bg-white dark:border-border dark:bg-background"
-                }`}
+                className={`relative rounded-xl border px-3 py-3 text-left text-sm font-semibold transition active:scale-[0.98] ${s.optionButton(selected)}`}
               >
+                {selected ? (
+                  <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-white">
+                    <Check size={12} strokeWidth={3} />
+                  </span>
+                ) : null}
                 {opt.label}
-              </button>
+              </motion.button>
             );
           })}
         </div>
@@ -148,27 +154,29 @@ export default function GuestReportSteps(props: Props) {
         transition={{ duration: 0.22 }}
         className="space-y-3"
       >
-        <p className="text-sm font-semibold">Where is it?</p>
-        <p className="text-xs text-muted-foreground">Choose the area of your home.</p>
+        <p className={`text-sm ${s.heading}`}>Where is it?</p>
+        <p className={`text-xs ${s.muted}`}>Choose the area of your home.</p>
         <div className="grid grid-cols-2 gap-2.5">
           {SERVICE_LOCATION_OPTIONS.map((loc) => {
             const selected = reportLocation === loc;
             return (
-              <button
+              <motion.button
                 key={loc}
                 type="button"
+                whileTap={{ scale: 0.96 }}
                 onClick={() => {
                   setReportLocation(loc);
                   setError("");
                 }}
-                className={`rounded-xl border px-3 py-3 text-sm font-semibold transition ${
-                  selected
-                    ? "border-neutral-900 bg-neutral-50 dark:border-primary dark:bg-primary/5"
-                    : "border-neutral-200 bg-white dark:border-border dark:bg-background"
-                }`}
+                className={`relative rounded-xl border px-3 py-3 text-sm font-semibold transition active:scale-[0.98] ${s.optionButton(selected)}`}
               >
+                {selected ? (
+                  <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-white">
+                    <Check size={12} strokeWidth={3} />
+                  </span>
+                ) : null}
                 {loc}
-              </button>
+              </motion.button>
             );
           })}
         </div>
@@ -193,12 +201,14 @@ export default function GuestReportSteps(props: Props) {
             placeholder="What's happening? When did it start?"
             value={reportDescription}
             onChange={(e) => setReportDescription(e.target.value)}
-            className={`${authInputClass} min-h-[96px] resize-y`}
+            className={`${s.input} min-h-[96px] resize-y`}
           />
         </div>
         <div>
           <AuthFieldLabel soft>Photo or video (optional)</AuthFieldLabel>
-          <label className="group flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-neutral-300 bg-neutral-50 px-4 py-6 text-center transition hover:border-neutral-400 hover:bg-white dark:border-border dark:bg-muted/20">
+          <label
+            className={`group flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-6 text-center transition active:scale-[0.99] ${s.uploadZone}`}
+          >
             <span className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary transition group-hover:scale-105">
               {mediaDataUrl ? <CheckCircle2 size={20} /> : <Camera size={20} />}
             </span>

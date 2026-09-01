@@ -83,7 +83,7 @@ const PRINCIPLES = [
 ];
 
 const COVERAGE = [
-  "NYC boroughs and Long Island service coverage",
+  "Nationwide service coverage",
   "Licensed trade verification and profile trust signals",
   "AI-guided repair intake before job posting",
   "Structured bidding flow for apples-to-apples quotes",
@@ -252,12 +252,12 @@ export default function AboutPage({
                     <span className="font-mono text-[10px] text-muted-foreground shrink-0">Current market</span>
                   </div>
                   <p className="text-sm font-medium text-foreground mb-1">
-                    Built for homeowners and contractors across NYC & Long Island
+                    Built for homeowners and contractors across the United States
                   </p>
                   <div className="flex items-center gap-1">
                     <MapPin size={11} className="text-muted-foreground" />
                     <p className="font-mono text-[11px] text-muted-foreground">
-                      Boroughs, Nassau, and Suffolk
+                      Nationwide · United States
                     </p>
                   </div>
                 </div>

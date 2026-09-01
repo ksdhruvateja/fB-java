@@ -6,9 +6,15 @@ import { BrandLogo } from "./BrandLogo";
 import { brand } from "../config/brand";
 import AuthMascot from "./AuthMascot";
 import { AuthMascotProvider, useAuthMascot, type AuthMascotVariant } from "./AuthMascotContext";
+import AuthSplitBrandPanel, { type AuthSplitRole } from "./AuthSplitBrandPanel";
+import AuthMobileSplitHero from "./AuthMobileSplitHero";
+import { AuthThemeProvider, useAuthTheme } from "./AuthThemeContext";
 
 export const authInputClass =
   "w-full rounded-2xl border border-neutral-200/90 bg-neutral-50/80 px-4 py-3.5 text-[15px] text-foreground placeholder:text-neutral-400 outline-none transition focus:border-primary/50 focus:bg-white focus:ring-4 focus:ring-primary/10 dark:border-border dark:bg-muted/30 dark:focus:bg-background";
+
+export const authInputClassDark =
+  "w-full rounded-xl border border-white/25 bg-white/5 px-4 py-3.5 text-[15px] text-white placeholder:text-white/40 outline-none transition focus:border-primary/60 focus:bg-white/10 focus:ring-4 focus:ring-primary/15";
 
 /** @deprecated Use authInputClass — kept for gradual migration */
 export const authInputClassHomeowner = authInputClass;
@@ -17,15 +23,26 @@ export function AuthFieldLabel({
   children,
   soft,
   required,
+  dark,
 }: {
   children: ReactNode;
   soft?: boolean;
   required?: boolean;
+  dark?: boolean;
 }) {
+  const themeDark = useAuthTheme() === "dark";
+  const isDark = dark ?? themeDark;
+
   return (
     <span
       className={`mb-1.5 block font-medium ${
-        soft ? "text-[13px] text-neutral-600 dark:text-muted-foreground" : "text-[11px] font-semibold tracking-wide text-muted-foreground"
+        isDark
+          ? soft
+            ? "text-[13px] text-white/80"
+            : "text-[11px] font-semibold tracking-wide text-white/70"
+          : soft
+            ? "text-[13px] text-neutral-600 dark:text-muted-foreground"
+            : "text-[11px] font-semibold tracking-wide text-muted-foreground"
       }`}
     >
       {children}
@@ -35,13 +52,19 @@ export function AuthFieldLabel({
 }
 
 export function AuthError({ message }: { message: string }) {
+  const theme = useAuthTheme();
+  const dark = theme === "dark";
   if (!message) return null;
   return (
     <motion.div
       role="alert"
       initial={{ opacity: 0, y: -6 }}
       animate={{ opacity: 1, y: 0 }}
-      className="rounded-2xl border border-red-200/80 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/35 dark:text-red-300"
+      className={
+        dark
+          ? "rounded-xl border border-red-400/40 bg-red-500/10 px-4 py-3 text-sm text-red-100"
+          : "rounded-2xl border border-red-200/80 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/35 dark:text-red-300"
+      }
     >
       {message}
     </motion.div>
@@ -245,6 +268,7 @@ export function AuthShell({
   aside,
   contentWide = false,
   variant = "default",
+  split,
   mascot,
   loading,
   error,
@@ -255,6 +279,13 @@ export function AuthShell({
   aside?: ReactNode;
   contentWide?: boolean;
   variant?: "default" | "homeowner";
+  split?: {
+    role: AuthSplitRole;
+    title: string;
+    subtitle?: string;
+    body: string;
+    footer?: ReactNode;
+  };
   mascot?: {
     variant: AuthMascotVariant;
     title: string;
@@ -266,6 +297,57 @@ export function AuthShell({
   loading?: boolean;
   error?: boolean;
 }) {
+  if (split) {
+    return (
+      <AuthThemeProvider theme="split">
+        <div className="grid min-h-screen lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+          <div className="hidden lg:block">
+            <AuthSplitBrandPanel
+              role={split.role}
+              title={split.title}
+              subtitle={split.subtitle}
+              body={split.body}
+              onHome={onBack}
+              footer={split.footer}
+            />
+          </div>
+
+          <div className="relative flex min-h-[100dvh] flex-col bg-white text-neutral-900 lg:min-h-screen">
+            <BrandLogo
+              variant="mark"
+              tone="color"
+              className="pointer-events-none absolute -bottom-10 -right-6 hidden h-44 w-44 opacity-[0.05] lg:block"
+            />
+
+            <AuthMobileSplitHero
+              role={split.role}
+              title={split.title}
+              subtitle={split.subtitle}
+              body={split.body}
+              onBack={onBack}
+              backLabel={backLabel}
+            />
+
+            <div className="relative z-10 hidden items-center justify-end gap-3 px-10 py-4 lg:flex">
+              <button
+                type="button"
+                onClick={onBack}
+                className="inline-flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm text-neutral-500 transition hover:bg-neutral-50 hover:text-neutral-800"
+              >
+                <ArrowLeft size={15} />
+                {backLabel}
+              </button>
+            </div>
+
+            <main className="relative z-20 -mt-8 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain rounded-t-[1.75rem] bg-white px-5 pb-4 pt-6 shadow-[0_-14px_48px_rgba(15,23,42,0.12)] sm:px-8 lg:mt-0 lg:justify-center lg:overflow-visible lg:rounded-none lg:px-12 lg:py-10 lg:shadow-none">
+              <div className={`mx-auto w-full ${contentWide ? "max-w-3xl" : "max-w-[440px]"}`}>{children}</div>
+            </main>
+          </div>
+        </div>
+      </AuthThemeProvider>
+    );
+  }
+
   const useMascotLayout = Boolean(mascot);
 
   if (useMascotLayout && mascot) {
@@ -369,8 +451,11 @@ export function AuthPanel({
 }: {
   children: ReactNode;
   className?: string;
-  variant?: "default" | "homeowner";
+  variant?: "default" | "homeowner" | "split-dark" | "split";
 }) {
+  if (variant === "split-dark" || variant === "split") {
+    return <div className={`w-full ${className}`}>{children}</div>;
+  }
   const isMascot = variant === "homeowner" || variant === "default";
   return (
     <div
@@ -394,12 +479,73 @@ export function AuthTabs<T extends string>({
   tabs: { id: T; label: string }[];
   value: T;
   onChange: (id: T) => void;
-  variant?: "default" | "homeowner";
+  variant?: "default" | "homeowner" | "split-dark" | "split";
 }) {
   const activeIndex = Math.max(
     0,
     tabs.findIndex((t) => t.id === value),
   );
+
+  if (variant === "split-dark" || variant === "split") {
+    return (
+      <>
+        {/* Mobile: pill tabs */}
+        <div
+          role="tablist"
+          className="mt-5 flex gap-2 overflow-x-auto pb-1 scrollbar-none snap-x snap-mandatory lg:hidden"
+        >
+          {tabs.map((t) => {
+            const active = value === t.id;
+            return (
+              <motion.button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => onChange(t.id)}
+                whileTap={{ scale: 0.96 }}
+                layout
+                className={`snap-start shrink-0 rounded-full px-4 py-2.5 text-sm font-semibold transition ${
+                  active
+                    ? "bg-primary text-white shadow-[0_8px_20px_rgba(255,77,28,0.35)]"
+                    : "bg-neutral-100 text-neutral-600 active:bg-neutral-200"
+                }`}
+              >
+                {t.label}
+              </motion.button>
+            );
+          })}
+        </div>
+
+        {/* Desktop: underline tabs */}
+        <div role="tablist" className="mt-6 hidden gap-6 border-b border-neutral-200 lg:flex">
+          {tabs.map((t) => {
+            const active = value === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => onChange(t.id)}
+                className={`relative pb-3 text-[15px] font-semibold transition ${
+                  active ? "text-primary" : "text-neutral-500 hover:text-neutral-800"
+                }`}
+              >
+                {t.label}
+                {active && (
+                  <motion.span
+                    layoutId="split-auth-tab"
+                    className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-primary"
+                  />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </>
+    );
+  }
 
   if (variant === "homeowner") {
     return (
@@ -481,32 +627,49 @@ export function AuthSwitchCard({
   actionLabel: string;
   onAction: () => void;
   secondary?: ReactNode;
-  variant?: "default" | "homeowner";
+  variant?: "default" | "homeowner" | "split-dark" | "split";
 }) {
   const isHome = variant === "homeowner";
+  const isSplit = variant === "split-dark" || variant === "split";
   return (
     <div
       className={`mt-8 text-center ${
-        isHome
-          ? "border-t border-neutral-200 pt-6 dark:border-border"
-          : "rounded-2xl border border-dashed border-neutral-200/80 bg-neutral-50/60 p-4 dark:border-border dark:bg-muted/20"
+        isSplit
+          ? "border-t border-neutral-200 pt-6"
+          : isHome
+            ? "border-t border-neutral-200 pt-6 dark:border-border"
+            : "rounded-2xl border border-dashed border-neutral-200/80 bg-neutral-50/60 p-4 dark:border-border dark:bg-muted/20"
       }`}
     >
-      <p className={`mb-2.5 text-sm ${isHome ? "text-neutral-600 dark:text-muted-foreground" : "text-muted-foreground"}`}>
+      <p
+        className={`mb-2.5 text-sm ${
+          isSplit
+            ? "text-neutral-600"
+            : isHome
+              ? "text-neutral-600 dark:text-muted-foreground"
+              : "text-muted-foreground"
+        }`}
+      >
         {prompt}
       </p>
       <button
         type="button"
         onClick={onAction}
         className={
-          isHome
-            ? "text-sm font-semibold text-neutral-900 underline-offset-4 hover:underline dark:text-foreground"
-            : "w-full rounded-xl border border-neutral-200 bg-white py-2.5 text-sm font-semibold text-foreground transition hover:border-primary/35 hover:bg-primary/5 dark:border-border dark:bg-card"
+          isSplit
+            ? "text-sm font-semibold text-primary underline-offset-4 hover:underline"
+            : isHome
+              ? "text-sm font-semibold text-neutral-900 underline-offset-4 hover:underline dark:text-foreground"
+              : "w-full rounded-xl border border-neutral-200 bg-white py-2.5 text-sm font-semibold text-foreground transition hover:border-primary/35 hover:bg-primary/5 dark:border-border dark:bg-card"
         }
       >
         {actionLabel}
       </button>
-      {secondary ? <div className={`mt-3 ${isHome ? "" : "border-t border-neutral-200/70 pt-3 dark:border-border"}`}>{secondary}</div> : null}
+      {secondary ? (
+        <div className={`mt-3 ${isHome || isSplit ? "" : "border-t border-neutral-200/70 pt-3 dark:border-border"}`}>
+          {secondary}
+        </div>
+      ) : null}
     </div>
   );
 }

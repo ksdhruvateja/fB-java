@@ -12,13 +12,11 @@ import {
  ShieldCheck,
  Star,
  Lock,
- Wrench,
- Home,
- Zap,
 } from "lucide-react";
-import { signInUser, signUpUser, createPublicGuestJob, type AuthUser } from "./auth";
+import { signInUser, signUpUser, createPublicGuestJob, saveSession, type AuthUser } from "./auth";
 import GuestReportSteps, { GuestReportSummary } from "./GuestReportSteps";
 import ForgotPasswordModal from "./ForgotPasswordModal";
+import { useAuthSurfaceStyles } from "./authSurfaceStyles";
 import {
  AuthShell,
  AuthPanel,
@@ -26,7 +24,6 @@ import {
  AuthFieldLabel,
  AuthError,
  AuthSwitchCard,
- authInputClass,
 } from "./AuthShell";
 import { AuthEmailField, AuthPasswordField, AuthTextField } from "./AuthFormFields";
 import AddressAutocompleteField from "./AddressAutocompleteField";
@@ -43,8 +40,15 @@ import {
 } from "./serviceRequestFlow";
 import { isValidUsZip, normalizeZip } from "./zipCode";
 import { ConsentCheckbox, ConsentSection, consentsFromState } from "./ConsentCheckbox";
+import GoogleSignInButton from "./GoogleSignInButton";
+import {
+  completeGoogleMarketingPreferences,
+  signInWithGoogle,
+} from "./marketingApi";
 import type { ConsentState } from "./ConsentCheckbox";
 import type { AcceptanceType } from "./legalDocuments";
+import { AuthMobileActions } from "./AuthMobileActions";
+import { AuthReportStepper } from "./AuthReportStepper";
 
 type ReportStep = 0 | 1 | 2 | 3;
 
@@ -76,7 +80,10 @@ export default function HomeownerLogin({
    ACCOUNT_TERMS: false,
    PRIVACY_POLICY: false,
  });
- const [marketingConsent, setMarketingConsent] = useState(false);
+ const [marketingEmailOptIn, setMarketingEmailOptIn] = useState(false);
+ const [marketingSmsOptIn, setMarketingSmsOptIn] = useState(false);
+ const [googleOnboarding, setGoogleOnboarding] = useState(false);
+ const [googlePendingUser, setGooglePendingUser] = useState<AuthUser | null>(null);
 
  const [reportStep, setReportStep] = useState<ReportStep>(0);
  const [reportTradeId, setReportTradeId] = useState<ServiceTradeId | "">("");
@@ -94,6 +101,7 @@ export default function HomeownerLogin({
  const [mediaDataUrl, setMediaDataUrl] = useState<string | null>(null);
  const [mediaType, setMediaType] = useState<string | null>(null);
  const [mediaName, setMediaName] = useState("");
+ const authStyles = useAuthSurfaceStyles();
 
  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
  const file = e.target.files?.[0];
@@ -206,7 +214,8 @@ export default function HomeownerLogin({
  contactPhone: reportPhone,
  email: reportEmail,
  consents: consentsFromState(accountConsents),
- marketingConsent,
+ marketingEmailOptIn,
+ marketingSmsOptIn,
  });
  setLoading(false);
  if (!result.ok) {
@@ -233,7 +242,8 @@ export default function HomeownerLogin({
  email,
  password,
  consents: consentsFromState(accountConsents),
- marketingConsent,
+ marketingEmailOptIn,
+ marketingSmsOptIn,
  })
  : await signInUser("homeowner", email, password);
  setLoading(false);
@@ -249,13 +259,64 @@ export default function HomeownerLogin({
  }
  };
 
+ const handleGoogleCredential = async (credential: string) => {
+ setLoading(true);
+ setError("");
+ try {
+ const body: Record<string, unknown> = {
+ consents: consentsFromState(accountConsents),
+ marketingEmailOptIn: tab === "signup" ? marketingEmailOptIn : false,
+ marketingSmsOptIn: tab === "signup" ? marketingSmsOptIn : false,
+ phone: tab === "report" ? reportPhone : undefined,
+ };
+ const data = await signInWithGoogle(credential, body);
+ if (!data.ok) {
+ if (data.code === "CONSENT_REQUIRED") {
+ setError("You must agree to the Terms of Service and Privacy Policy before continuing with Google.");
+ } else {
+ setError(data.message || "Google sign-in failed.");
+ }
+ setLoading(false);
+ return;
+ }
+ saveSession(data.token, data.user);
+ if (data.needsMarketingOnboarding) {
+ setGooglePendingUser(data.user);
+ setGoogleOnboarding(true);
+ setLoading(false);
+ return;
+ }
+ onLogin(data.user);
+ } catch {
+ setError("Google sign-in failed.");
+ } finally {
+ setLoading(false);
+ }
+ };
+
+ const completeGoogleOnboarding = async () => {
+ setLoading(true);
+ setError("");
+ const r = await completeGoogleMarketingPreferences({
+ marketingEmailOptIn,
+ marketingSmsOptIn,
+ });
+ setLoading(false);
+ if (!r.ok) {
+ setError(r.message || "Could not save preferences.");
+ return;
+ }
+ setGoogleOnboarding(false);
+ if (googlePendingUser) onLogin(googlePendingUser);
+ };
+
  const titles = {
  report: "What do you need help with?",
  login: "Welcome back",
  signup: "Create your account",
  } as const;
  const subtitles = {
- report: "A few quick details and we'll connect you with vetted local pros.",
+ report: "A few quick details and we'll connect you with vetted pros nationwide.",
  login: "Sign in to track jobs, messages, and your home profile.",
  signup: "Free to join - you only pay when you book a pro.",
  } as const;
@@ -276,44 +337,16 @@ export default function HomeownerLogin({
  <AuthShell
  onBack={handleShellBack}
  backLabel={tab === "report" && reportStep > 0 ? "Back" : "Back to site"}
- loading={loading}
- error={Boolean(error)}
- mascot={{
- variant: "homeowner",
- title: titles[tab],
- subtitle: subtitles[tab],
- hero: {
- line1: "Need something fixed?",
- line2: "We've got you covered.",
- subtitle:
- "Connect with trusted professionals for repairs, maintenance, and services across NYC & Long Island.",
- trustTitle: "Trusted. Verified. Reliable.",
- trustBody:
- "Real bids from licensed, background-checked pros - no subscription, no cold calls.",
- },
- features: (
- <div className="space-y-4">
- {[
- { icon: Wrench, title: "Repairs", text: "Fix it right the first time." },
- { icon: Home, title: "Maintenance", text: "Keep your home running smoothly." },
- { icon: Zap, title: "Emergency help", text: "We're here when you need us most." },
- ].map(({ icon: Icon, title, text }) => (
- <div key={title} className="flex items-center gap-3">
- <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/10 text-primary ring-1 ring-white/10">
- <Icon size={18} strokeWidth={1.75} />
- </span>
- <div>
- <p className="text-sm font-semibold text-white">{title}</p>
- <p className="mt-0.5 text-xs leading-relaxed text-white/60">{text}</p>
- </div>
- </div>
- ))}
- </div>
- ),
+ contentWide={tab === "report"}
+ split={{
+ role: "homeowner",
+ title: "Your home, handled with care.",
+ subtitle: "Welcome to FixBridge",
+ body: "Describe what you need, get AI guidance, and connect with trusted professionals nationwide.",
  }}
  >
  <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}>
- <AuthPanel variant="homeowner">
+ <AuthPanel variant="split">
  <AnimatePresence mode="wait">
  <motion.div
  key={tab}
@@ -322,17 +355,17 @@ export default function HomeownerLogin({
  exit={{ opacity: 0, y: -4 }}
  transition={{ duration: 0.2 }}
  >
- <h1 className="text-[26px] font-semibold tracking-tight text-neutral-900 sm:text-[28px] dark:text-foreground">
+ <h1 className="hidden text-[26px] font-bold tracking-tight text-primary sm:text-[28px] lg:block">
  {titles[tab]}
  </h1>
- <p className="mt-2 text-[15px] leading-relaxed text-neutral-600 dark:text-muted-foreground">
+ <p className="mt-2 hidden text-[15px] leading-relaxed text-neutral-500 lg:block">
  {subtitles[tab]}
  </p>
  </motion.div>
  </AnimatePresence>
 
  <AuthTabs
- variant="homeowner"
+ variant="split"
  value={tab}
  onChange={(t) => {
  setTab(t);
@@ -351,30 +384,20 @@ export default function HomeownerLogin({
  ]}
  />
 
+ <p className="mt-4 text-lg font-bold text-neutral-900 lg:hidden">{titles[tab]}</p>
+ <p className="mt-1 text-sm text-neutral-500 lg:hidden">{subtitles[tab]}</p>
+
  {tab === "report" && (
- <div className="mt-6">
- <p className="text-[13px] text-neutral-500 dark:text-muted-foreground">
- Step {reportStep + 1} of {REPORT_STEPS.length} | {REPORT_STEPS[reportStep].hint}
- </p>
- <div className="mt-2 flex gap-1">
- {REPORT_STEPS.map((s) => (
- <button
- key={s.id}
- type="button"
- onClick={() => {
- if (s.id <= reportStep) {
+ <AuthReportStepper
+ steps={REPORT_STEPS}
+ current={reportStep}
+ onStepClick={(step) => {
+ if (step <= reportStep) {
  setError("");
- setReportStep(s.id as ReportStep);
+ setReportStep(step as ReportStep);
  }
  }}
- className={`h-1 flex-1 rounded-full transition ${
- s.id <= reportStep ? "bg-neutral-900 dark:bg-primary" : "bg-neutral-200 dark:bg-muted"
- }`}
- aria-label={`Go to ${s.label}`}
  />
- ))}
- </div>
- </div>
  )}
 
  <form onSubmit={handleSubmit} className="mt-4 space-y-4">
@@ -421,7 +444,7 @@ export default function HomeownerLogin({
  reportState={reportState}
  reportZip={reportZip}
  />
- <div className="flex items-center gap-2 text-sm font-semibold">
+ <div className={`flex items-center gap-2 text-sm font-semibold ${authStyles.title}`}>
  <UserRound size={16} className="text-primary" />
  How can we reach you?
  </div>
@@ -433,7 +456,7 @@ export default function HomeownerLogin({
  value={reportName}
  onChange={(e) => setReportName(e.target.value)}
  required
- className={authInputClass}
+ className={authStyles.input}
  />
  </div>
  <div>
@@ -444,7 +467,7 @@ export default function HomeownerLogin({
  value={reportEmail}
  onChange={(e) => setReportEmail(e.target.value)}
  required
- className={authInputClass}
+ className={authStyles.input}
  />
  </div>
  <div>
@@ -455,7 +478,7 @@ export default function HomeownerLogin({
  value={reportPhone}
  onChange={(e) => setReportPhone(e.target.value)}
  required
- className={authInputClass}
+ className={authStyles.input}
  />
  </div>
  </div>
@@ -488,7 +511,7 @@ export default function HomeownerLogin({
  <button
  type="button"
  onClick={() => setShowForgot(true)}
- className="text-[13px] font-medium text-neutral-600 underline-offset-2 hover:underline dark:text-muted-foreground"
+ className="text-[13px] font-medium text-primary underline-offset-2 hover:underline"
  >
  Forgot password?
  </button>
@@ -496,6 +519,21 @@ export default function HomeownerLogin({
  )}
 
  <AuthError message={error} />
+
+ {(tab === "login" || tab === "signup") && (
+ <div className="mt-4 space-y-3">
+ <div className="flex items-center gap-3 text-xs text-neutral-400">
+ <span className="h-px flex-1 bg-neutral-200" />
+ or
+ <span className="h-px flex-1 bg-neutral-200" />
+ </div>
+ <GoogleSignInButton
+ disabled={loading || (tab === "signup" && (!accountConsents.ACCOUNT_TERMS || !accountConsents.PRIVACY_POLICY))}
+ text={tab === "signup" ? "signup_with" : "signin_with"}
+ onCredential={(cred) => void handleGoogleCredential(cred)}
+ />
+ </div>
+ )}
 
  {(tab === "signup" || (tab === "report" && reportStep === 3)) && (
  <div className="space-y-3">
@@ -517,26 +555,37 @@ export default function HomeownerLogin({
  documentLabel="Privacy Policy"
  />
  </ConsentSection>
- <ConsentSection title="Marketing" optional>
+ <ConsentSection title="Stay updated with FixBridge" optional>
  <ConsentCheckbox
- id="marketing"
+ id="marketing-email"
  required={false}
- checked={marketingConsent}
- onChange={setMarketingConsent}
- label="Yes, FixBridge may send me marketing by SMS/email."
- documentKey="MARKETING_CONSENT"
- documentLabel="Marketing policy"
+ checked={marketingEmailOptIn}
+ onChange={setMarketingEmailOptIn}
+ label="Email me FixBridge offers, home-care tips, promotions, and service updates."
  />
+ <ConsentCheckbox
+ id="marketing-sms"
+ required={false}
+ checked={marketingSmsOptIn}
+ onChange={setMarketingSmsOptIn}
+ label="Send me promotional text messages and special offers."
+ />
+ <p className="text-[11px] leading-relaxed text-neutral-500 pl-1">
+ By opting in to SMS, you agree to receive recurring promotional text messages from FixBridge. Message and data rates may apply. Message frequency varies. Reply STOP to unsubscribe. See our{" "}
+ <a href="/legal/privacy-policy" className="text-primary underline-offset-2 hover:underline">Privacy Policy</a> and{" "}
+ <a href="/legal/homeowner-terms" className="text-primary underline-offset-2 hover:underline">Terms</a>.
+ </p>
  </ConsentSection>
  </div>
  )}
 
+ <AuthMobileActions>
  <div className="flex gap-2">
  {tab === "report" && reportStep > 0 && (
  <button
  type="button"
  onClick={goBackReport}
- className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-neutral-200 bg-white px-4 py-3.5 text-sm font-semibold text-neutral-800 transition hover:bg-neutral-50 dark:border-border dark:bg-card"
+ className="inline-flex items-center justify-center gap-1.5 rounded-full border border-neutral-200 bg-white px-4 py-3.5 text-sm font-semibold text-neutral-800 transition active:scale-[0.97] hover:border-neutral-300 hover:bg-neutral-50"
  >
  <ArrowLeft size={15} />
  Back
@@ -545,7 +594,7 @@ export default function HomeownerLogin({
  <button
  type="submit"
  disabled={loading}
- className="group flex flex-1 items-center justify-center gap-2 rounded-2xl bg-neutral-900 py-4 text-[15px] font-semibold text-white shadow-[0_16px_40px_rgba(23,23,23,0.18)] transition hover:bg-neutral-800 disabled:opacity-60 dark:bg-primary dark:shadow-[0_16px_40px_rgba(255,77,28,0.25)] dark:hover:bg-primary/90"
+ className="group flex flex-1 items-center justify-center gap-2 rounded-full bg-primary py-4 text-[15px] font-bold text-white shadow-[0_12px_32px_rgba(255,77,28,0.35)] transition active:scale-[0.98] hover:brightness-105 disabled:opacity-60"
  >
  {loading ? (
  <Loader2 size={15} className="animate-spin" />
@@ -557,9 +606,10 @@ export default function HomeownerLogin({
  )}
  </button>
  </div>
+ </AuthMobileActions>
  </form>
 
- <div className="mt-6 flex flex-wrap justify-center gap-4 border-t border-neutral-100 pt-5 text-xs text-neutral-500 lg:hidden dark:border-border dark:text-muted-foreground">
+ <div className="mt-6 flex flex-wrap justify-center gap-4 border-t border-neutral-200 pt-5 text-xs text-neutral-500">
  <span className="inline-flex items-center gap-1.5">
  <ShieldCheck size={14} className="text-emerald-600" /> Verified professionals
  </span>
@@ -567,12 +617,12 @@ export default function HomeownerLogin({
  <Lock size={14} /> Secure payments
  </span>
  <span className="inline-flex items-center gap-1.5">
- Local service coverage
+ Nationwide coverage
  </span>
  </div>
 
  <AuthSwitchCard
- variant="homeowner"
+ variant="split"
  prompt="Are you a licensed contractor?"
               actionLabel="Go to contractor portal"
  onAction={onGoContractor}
@@ -580,6 +630,40 @@ export default function HomeownerLogin({
  </AuthPanel>
  </motion.div>
  </AuthShell>
+
+ {googleOnboarding && (
+ <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+ <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+ <h2 className="text-lg font-bold text-neutral-900">Stay connected with FixBridge</h2>
+ <p className="mt-1 text-sm text-neutral-500">Both options are optional. You can change these anytime in Settings.</p>
+ <div className="mt-4 space-y-3">
+ <ConsentCheckbox
+ id="google-marketing-email"
+ required={false}
+ checked={marketingEmailOptIn}
+ onChange={setMarketingEmailOptIn}
+ label="Email me offers, promotions, and home-care tips."
+ />
+ <ConsentCheckbox
+ id="google-marketing-sms"
+ required={false}
+ checked={marketingSmsOptIn}
+ onChange={setMarketingSmsOptIn}
+ label="Send me promotional texts and special offers."
+ />
+ </div>
+ <AuthError message={error} />
+ <button
+ type="button"
+ disabled={loading}
+ onClick={() => void completeGoogleOnboarding()}
+ className="mt-5 w-full rounded-full bg-primary py-3 text-sm font-bold text-white disabled:opacity-60"
+ >
+ {loading ? "Saving…" : "Continue"}
+ </button>
+ </div>
+ </div>
+ )}
  </>
  );
 }

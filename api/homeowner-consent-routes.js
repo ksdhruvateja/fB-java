@@ -7,9 +7,12 @@ import { getCurrentLegalDocument, listCurrentLegalDocuments } from './legal-docu
 import {
   hasCurrentAcceptance,
   listHomeownerAcceptances,
-  recordMarketingConsent,
   validateAndRecordActionConsents,
 } from './homeowner-consent.js';
+import {
+  getMarketingPreferences,
+  updateMarketingPreferences,
+} from './marketing-consent-service.js';
 
 export function registerHomeownerConsentRoutes(app, { pool, requireAuth, requireAdmin, requirePermission }) {
   const need = typeof requirePermission === 'function'
@@ -72,10 +75,14 @@ export function registerHomeownerConsentRoutes(app, { pool, requireAuth, require
         ? Number(req.query.userId)
         : req.authUser.id;
       const diy = await hasCurrentAcceptance(pool, userId, 'DIY_SAFETY');
+      const prefs = await getMarketingPreferences(pool, userId);
       res.json({
         ok: true,
         diySafetyAccepted: diy,
-        marketingConsent: req.authUser.marketing_consent === true,
+        marketingConsent: prefs?.emailMarketing?.subscribed || prefs?.smsMarketing?.subscribed || false,
+        marketingEmailOptIn: prefs?.emailMarketing?.subscribed === true,
+        marketingSmsOptIn: prefs?.smsMarketing?.subscribed === true,
+        preferences: prefs,
       });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Could not load consent status.' });
@@ -157,14 +164,24 @@ export function registerHomeownerConsentRoutes(app, { pool, requireAuth, require
       if (req.authUser.role !== 'homeowner') {
         return res.status(403).json({ ok: false, message: 'Homeowners only.' });
       }
-      const consented = req.body?.consented === true;
-      await recordMarketingConsent(pool, {
+      const emailOptIn = typeof req.body?.emailOptIn === 'boolean'
+        ? req.body.emailOptIn
+        : req.body?.consented === true;
+      const smsOptIn = typeof req.body?.smsOptIn === 'boolean'
+        ? req.body.smsOptIn
+        : req.body?.consented === true;
+      const prefs = await updateMarketingPreferences(pool, {
         userId: req.authUser.id,
-        consented,
-        channels: req.body?.channels || ['sms', 'email'],
+        emailOptIn,
+        smsOptIn,
+        source: 'homeowner_settings',
         req,
       });
-      res.json({ ok: true, marketingConsent: consented });
+      res.json({
+        ok: true,
+        marketingConsent: prefs.emailMarketing.subscribed || prefs.smsMarketing.subscribed,
+        preferences: prefs,
+      });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Could not update marketing preference.' });
     }

@@ -12,6 +12,7 @@ import {
   authInputClass,
 } from "./AuthShell";
 import { AuthEmailField, AuthPasswordField, AuthPrimaryButton } from "./AuthFormFields";
+import { AuthMobileActions } from "./AuthMobileActions";
 import ForgotPasswordModal from "./ForgotPasswordModal";
 
 export default function AdminLogin({
@@ -94,10 +95,10 @@ export default function AdminLogin({
     }
   };
 
-  const mascotTitle = mfaStep ? "Verify it's you" : "Staff sign in";
-  const mascotSubtitle = mfaStep
-    ? "Enter the 6-digit code sent to your device."
-    : `${brand.productName} admin access — MFA required for all staff.`;
+  const splitTitle = mfaStep ? "Verify your identity" : "Secure staff access";
+  const splitBody = mfaStep
+    ? "Enter the verification code sent to your device to complete sign-in."
+    : `${brand.productName} admin portal — multi-factor authentication is required for all staff sessions.`;
 
   return (
     <AuthShell
@@ -111,19 +112,11 @@ export default function AdminLogin({
           : onBack
       }
       backLabel={mfaStep ? "Back to credentials" : "Back to site"}
-      loading={loading}
-      error={Boolean(error)}
-      mascot={{
-        variant: "admin",
-        title: mascotTitle,
-        subtitle: mascotSubtitle,
-        hero: {
-          line1: mfaStep ? "Verify it's you." : "Staff access.",
-          line2: mfaStep ? "One more step." : "Secure sign in.",
-          subtitle: mascotSubtitle,
-          trustTitle: "MFA protected.",
-          trustBody: "All admin sessions require multi-factor verification.",
-        },
+      split={{
+        role: "admin",
+        title: splitTitle,
+        subtitle: "Staff portal",
+        body: splitBody,
       }}
     >
       <AnimatePresence mode="wait">
@@ -135,16 +128,16 @@ export default function AdminLogin({
             exit={{ opacity: 0, y: -8 }}
             className="w-full"
           >
-            <AuthPanel>
-              <div className="mb-6">
-                <p className="font-mono text-[10px] tracking-[0.2em] uppercase text-muted-foreground mb-1">
+            <AuthPanel variant="split">
+              <div className="mb-6 hidden lg:block">
+                <p className="font-mono text-[10px] tracking-[0.2em] uppercase text-neutral-500 mb-1">
                   {brand.productName} staff
                 </p>
-                <h1 className="text-[26px] font-semibold tracking-tight text-neutral-900 dark:text-foreground">
-                  Admin sign in
+                <h1 className="text-[26px] font-bold tracking-tight text-primary">
+                  Log in
                 </h1>
-                <p className="mt-2 text-[15px] text-neutral-600 dark:text-muted-foreground">
-                  Staff access only — MFA required
+                <p className="mt-2 text-[15px] text-neutral-500">
+                  Please fill in your credentials to log in.
                 </p>
               </div>
 
@@ -175,16 +168,18 @@ export default function AdminLogin({
 
                 <AuthError message={error} />
 
-                <AuthPrimaryButton loading={loading}>
-                  {loading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <>
-                      Continue to MFA
-                      <ArrowRight className="h-4 w-4" />
-                    </>
-                  )}
-                </AuthPrimaryButton>
+                <AuthMobileActions>
+                  <AuthPrimaryButton loading={loading}>
+                    {loading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <>
+                        Continue to MFA
+                        <ArrowRight className="h-4 w-4" />
+                      </>
+                    )}
+                  </AuthPrimaryButton>
+                </AuthMobileActions>
               </form>
             </AuthPanel>
             {showForgot ? (
@@ -203,19 +198,29 @@ export default function AdminLogin({
             exit={{ opacity: 0, y: -8 }}
             className="w-full"
           >
-            <AuthPanel>
-              <div className="mb-6 flex items-start gap-3">
+            <AuthPanel variant="split">
+              <div className="mb-4 flex items-center gap-3 lg:hidden">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                  <KeyRound className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">Step 2 of 2</p>
+                  <p className="text-base font-bold text-primary">Two-factor verification</p>
+                </div>
+              </div>
+
+              <div className="mb-6 hidden items-start gap-3 lg:flex">
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
                   <KeyRound className="h-5 w-5" />
                 </div>
                 <div>
-                  <p className="font-mono text-[10px] tracking-[0.2em] uppercase text-muted-foreground mb-1">
+                  <p className="font-mono text-[10px] tracking-[0.2em] uppercase text-neutral-500 mb-1">
                     Step 2 of 2
                   </p>
-                  <h1 className="text-[26px] font-semibold tracking-tight text-neutral-900 dark:text-foreground">
+                  <h1 className="text-[26px] font-bold tracking-tight text-primary">
                     Two-factor verification
                   </h1>
-                  <p className="mt-1 text-[15px] text-neutral-600 dark:text-muted-foreground">
+                  <p className="mt-1 text-[15px] text-neutral-500">
                     Enter the 6-digit code to continue
                   </p>
                 </div>
@@ -223,7 +228,9 @@ export default function AdminLogin({
 
               <form onSubmit={handleMfa} className="space-y-4">
                 <div>
-                  <AuthFieldLabel soft>Verification code</AuthFieldLabel>
+                  <AuthFieldLabel soft>
+                    Verification code
+                  </AuthFieldLabel>
                   <input
                     type="text"
                     inputMode="numeric"
@@ -232,7 +239,7 @@ export default function AdminLogin({
                     required
                     autoComplete="one-time-code"
                     placeholder="••••••"
-                    className={`${authInputClass} text-center text-2xl font-mono tracking-[0.45em]`}
+                    className={`${authInputClass} border-b text-center text-2xl font-mono tracking-[0.45em] rounded-none bg-transparent`}
                     value={mfaCode}
                     onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ""))}
                   />
@@ -247,19 +254,21 @@ export default function AdminLogin({
 
                 <AuthError message={error} />
 
-                <AuthPrimaryButton loading={loading} disabled={mfaCode.length < 4}>
-                  {loading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <>
-                      <Shield className="h-4 w-4" />
-                      Verify & sign in
-                    </>
-                  )}
-                </AuthPrimaryButton>
+                <AuthMobileActions>
+                  <AuthPrimaryButton loading={loading} disabled={mfaCode.length < 4}>
+                    {loading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <>
+                        <Shield className="h-4 w-4" />
+                        Verify & sign in
+                      </>
+                    )}
+                  </AuthPrimaryButton>
+                </AuthMobileActions>
               </form>
 
-              <p className="mt-4 text-center text-xs text-muted-foreground">
+              <p className="mt-4 text-center text-xs text-neutral-500">
                 Didn&apos;t receive a code?{" "}
                 <button
                   type="button"

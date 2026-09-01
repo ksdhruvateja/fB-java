@@ -133,8 +133,8 @@ import {
   validateAndRecordActionConsents,
   checkActionConsentsFromBody,
   assertHomeownerDispatchConsent,
-  recordMarketingConsent,
 } from './homeowner-acknowledgments.js';
+import { recordSignupMarketingConsents } from './marketing-consent-service.js';
 import { registerHomeownerConsentRoutes } from './homeowner-consent-routes.js';
 import { registerLegalAdminRoutes } from './legal-admin-routes.js';
 import { recordJobDispatchEvidence } from './job-evidence.js';
@@ -2325,9 +2325,17 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       });
 
       await ensureUserReferralCodeInline(pool, user);
-      if (b.marketingConsent === true) {
-        await recordMarketingConsent(pool, { userId: user.id, consented: true, req });
-      }
+      const emailOptIn =
+        b.marketingEmailOptIn === true || b.marketingConsent === true;
+      const smsOptIn =
+        b.marketingSmsOptIn === true || b.marketingConsent === true;
+      await recordSignupMarketingConsents(pool, {
+        userId: user.id,
+        emailOptIn,
+        smsOptIn,
+        source: 'signup',
+        req,
+      });
       if (b.partnerCode) {
         await processReferralAward(pool, user, b.partnerCode);
       }

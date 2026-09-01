@@ -43,7 +43,7 @@ const SERVICE_OPTIONS = [
   "General",
 ];
 
-const TRUST_MARKS = ["AI Assessment", "NYC & LI", "Real Bids", "Free to Post", "Verified Reviews"];
+const TRUST_MARKS = ["AI Assessment", "Nationwide", "Real Bids", "Free to Post", "Verified Reviews"];
 
 /** Soft job textures for photo-style cards (no person portraits). */
 const CARD_PHOTOS = [

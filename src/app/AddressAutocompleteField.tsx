@@ -3,6 +3,7 @@ import { Loader2, MapPin, Pencil } from "lucide-react";
 import { checkServiceAreaCoverage } from "./addressApi";
 import { placesAutocomplete, reverseGeocode } from "./platformApi";
 import { isValidUsZip, normalizeZip } from "./zipCode";
+import { useAuthSurfaceStyles } from "./authSurfaceStyles";
 
 type Props = {
   idPrefix?: string;
@@ -46,6 +47,7 @@ export default function AddressAutocompleteField({
   const [coverageOk, setCoverageOk] = useState<boolean | null>(null);
   const debounceRef = useRef<number | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const s = useAuthSurfaceStyles();
 
   useEffect(() => {
     setQuery(streetAddress);
@@ -125,34 +127,38 @@ export default function AddressAutocompleteField({
   return (
     <div className="space-y-3" ref={wrapRef}>
       <div>
-        <label htmlFor={`${idPrefix}-street`} className="text-xs font-semibold text-muted-foreground">
+        <label htmlFor={`${idPrefix}-street`} className={`text-xs font-semibold ${s.muted}`}>
           Start typing your address
         </label>
         <div className="relative mt-1">
-          <MapPin className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <MapPin className={`pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 ${s.muted}`} />
           <input
             id={`${idPrefix}-street`}
             type="text"
             autoComplete="street-address"
-            placeholder="123 Main St, Brooklyn"
+            placeholder="123 Main St, Austin"
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
             onFocus={() => suggestions.length > 0 && setOpen(true)}
-            className="w-full rounded-xl border border-border bg-background py-2.5 pl-9 pr-10 text-sm outline-none focus:border-primary/40 focus:ring-[3px] focus:ring-primary/10"
+            className={`${s.fieldControl} py-2.5 pl-9 pr-10`}
           />
           {loading ? (
-            <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
+            <Loader2 className={`absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin ${s.muted}`} />
           ) : null}
           {open && suggestions.length > 0 ? (
-            <ul className="absolute z-20 mt-1 max-h-48 w-full overflow-auto rounded-xl border border-border bg-card py-1 shadow-lg">
-              {suggestions.map((s) => (
-                <li key={s.place_id || s.description}>
+            <ul
+              className={`absolute z-20 mt-1 max-h-48 w-full overflow-auto rounded-xl border py-1 shadow-lg ${
+                s.dark ? "border-white/20 bg-[#132a52] text-white" : "border-border bg-card"
+              }`}
+            >
+              {suggestions.map((suggestion) => (
+                <li key={suggestion.place_id || suggestion.description}>
                   <button
                     type="button"
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted"
-                    onClick={() => void pickSuggestion(s.description)}
+                    className={`w-full px-3 py-2 text-left text-sm ${s.dark ? "hover:bg-white/10" : "hover:bg-muted"}`}
+                    onClick={() => void pickSuggestion(suggestion.description)}
                   >
-                    {s.description}
+                    {suggestion.description}
                   </button>
                 </li>
               ))}
@@ -170,38 +176,34 @@ export default function AddressAutocompleteField({
       </div>
 
       <label className="grid gap-1 text-sm">
-        <span className="text-xs font-semibold text-muted-foreground">Unit / Apartment</span>
+        <span className={`text-xs font-semibold ${s.muted}`}>Unit / Apartment</span>
         <input
           type="text"
           autoComplete="address-line2"
           placeholder="Apt 4B, Suite 200…"
           value={unit}
           onChange={(e) => onUnitChange(e.target.value)}
-          className="rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary/40"
+          className={s.fieldControl}
         />
       </label>
 
       {manualMode ? (
         <div className="grid gap-3 sm:grid-cols-3">
           <label className="grid gap-1 text-sm sm:col-span-1">
-            <span className="text-xs font-semibold text-muted-foreground">City</span>
-            <input
-              value={city}
-              onChange={(e) => onCityChange(e.target.value)}
-              className="rounded-xl border border-border bg-background px-3 py-2 text-sm"
-            />
+            <span className={`text-xs font-semibold ${s.muted}`}>City</span>
+            <input value={city} onChange={(e) => onCityChange(e.target.value)} className={s.fieldControl} />
           </label>
           <label className="grid gap-1 text-sm">
-            <span className="text-xs font-semibold text-muted-foreground">State</span>
+            <span className={`text-xs font-semibold ${s.muted}`}>State</span>
             <input
               value={state}
               onChange={(e) => onStateChange(e.target.value.toUpperCase().slice(0, 2))}
               maxLength={2}
-              className="rounded-xl border border-border bg-background px-3 py-2 text-sm uppercase"
+              className={`${s.fieldControl} uppercase`}
             />
           </label>
           <label className="grid gap-1 text-sm">
-            <span className="text-xs font-semibold text-muted-foreground">ZIP</span>
+            <span className={`text-xs font-semibold ${s.muted}`}>ZIP</span>
             <input
               value={zip}
               onChange={(e) => {
@@ -209,7 +211,7 @@ export default function AddressAutocompleteField({
                 onZipChange(v);
                 if (isValidUsZip(v)) void runCoverageCheck(v);
               }}
-              className="rounded-xl border border-border bg-background px-3 py-2 text-sm"
+              className={s.fieldControl}
             />
           </label>
         </div>
@@ -223,7 +225,7 @@ export default function AddressAutocompleteField({
       {coverageOk === false ? (
         <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
           {coverageMsg ||
-            "This ZIP may be outside our current service area. You can still submit — we'll confirm coverage."}
+            "We'll confirm service availability for your ZIP before dispatch."}
         </p>
       ) : null}
     </div>

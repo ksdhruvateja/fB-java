@@ -681,7 +681,7 @@ export default function AdminPricingPanel({
                       }
                       className="w-full accent-[#FF4D1C]"
                     />
-                    <p className="text-xs text-muted-foreground">e.g. 1.08 = +8% for NYC/LI</p>
+                    <p className="text-xs text-muted-foreground">e.g. 1.08 = +8% regional cost adjustment</p>
                   </div>
                 </div>
               </div>

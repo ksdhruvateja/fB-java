@@ -678,10 +678,10 @@ export async function initManagedSchema(pool) {
     const { rows: existingReviews } = await pool.query(`SELECT COUNT(*)::int AS c FROM site_reviews`);
     if (allowMarketingSeed && (existingReviews[0]?.c || 0) === 0) {
       const seeds = [
-        ['Maria Santos', 'Astoria, Queens', 'Plumbing', 5, 'Ceiling leak the night before Thanksgiving. Three bids by morning — the contractor who won was excellent and cleaned up after.', true],
-        ['Tony Marchetti', 'Huntington, LI', 'HVAC', 5, 'Thought I needed a full HVAC replacement. The AI flagged a capacitor issue — $180 fix. Nobody tried to upsell me.', true],
-        ['Devon Williams', 'Flushing, Queens', 'Electrical', 5, 'The AI broke down my panel upgrade better than any contractor I had spoken to. I finally understood what I was paying for.', true],
-        ['Rachel Kim', 'Park Slope, Brooklyn', 'General', 5, 'Four bids within 24 hours. The AI estimate was spot on — the winning contractor came in right at the middle of the range.', true],
+        ['Maria Santos', 'Denver, CO', 'Plumbing', 5, 'Ceiling leak the night before Thanksgiving. Three bids by morning — the contractor who won was excellent and cleaned up after.', true],
+        ['Tony Marchetti', 'Charlotte, NC', 'HVAC', 5, 'Thought I needed a full HVAC replacement. The AI flagged a capacitor issue — $180 fix. Nobody tried to upsell me.', true],
+        ['Devon Williams', 'Seattle, WA', 'Electrical', 5, 'The AI broke down my panel upgrade better than any contractor I had spoken to. I finally understood what I was paying for.', true],
+        ['Rachel Kim', 'Atlanta, GA', 'General', 5, 'Four bids within 24 hours. The AI estimate was spot on — the winning contractor came in right at the middle of the range.', true],
       ];
       for (const s of seeds) {
         await pool.query(
@@ -928,19 +928,55 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS marketing_opt_out_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS diy_safety_accepted_version TEXT`);
 
+  // Channel-specific marketing consent (email vs SMS are independent)
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS marketing_email_opt_in BOOLEAN DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS marketing_sms_opt_in BOOLEAN DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS marketing_email_opt_in_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS marketing_sms_opt_in_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS marketing_email_opt_out_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS marketing_sms_opt_out_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS marketing_preferences_collected_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_method TEXT DEFAULT 'email'`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS oauth_google_sub TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_avatar_url TEXT`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_oauth_google_sub ON users (oauth_google_sub) WHERE oauth_google_sub IS NOT NULL`);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS marketing_consent_events (
       id               BIGSERIAL PRIMARY KEY,
       user_id          INT NOT NULL,
+      channel          TEXT,
+      action           TEXT,
       consented        BOOLEAN NOT NULL,
       channels         JSONB,
       consent_version  TEXT,
+      source           TEXT,
+      admin_user_id    INT,
       ip_address       TEXT,
       user_agent       TEXT,
       source_route     TEXT,
       created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE marketing_consent_events ADD COLUMN IF NOT EXISTS channel TEXT`);
+  await pool.query(`ALTER TABLE marketing_consent_events ADD COLUMN IF NOT EXISTS action TEXT`);
+  await pool.query(`ALTER TABLE marketing_consent_events ADD COLUMN IF NOT EXISTS source TEXT`);
+  await pool.query(`ALTER TABLE marketing_consent_events ADD COLUMN IF NOT EXISTS admin_user_id INT`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS marketing_unsubscribe_tokens (
+      id          BIGSERIAL PRIMARY KEY,
+      user_id     INT NOT NULL,
+      channel     TEXT NOT NULL DEFAULT 'email',
+      token_hash  TEXT NOT NULL,
+      expires_at  TIMESTAMPTZ NOT NULL,
+      used_at     TIMESTAMPTZ,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_marketing_unsub_token_hash ON marketing_unsubscribe_tokens (token_hash)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_marketing_email ON users (marketing_email_opt_in) WHERE role='homeowner'`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_marketing_sms ON users (marketing_sms_opt_in) WHERE role='homeowner'`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS payment_authorization_snapshots (

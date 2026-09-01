@@ -33,8 +33,10 @@ import { ensureComplianceDocuments, recalculateDispatchEligible } from './contra
 import {
   checkActionConsentsFromBody,
   validateAndRecordActionConsents,
-  recordMarketingConsent,
 } from './homeowner-consent.js';
+import { recordSignupMarketingConsents } from './marketing-consent-service.js';
+import { registerMarketingRoutes, initMarketingConsent } from './marketing-routes.js';
+import { registerGoogleAuthRoutes } from './google-auth-routes.js';
 import { writeAudit } from './audit.js';
 import { getStripe, stripeConfigured } from './stripe.js';
 import {
@@ -422,6 +424,7 @@ export async function initDb() {
       await initSupportTicketSchema(pool);
       await initHomeownerAdminSchema(pool);
       await initSubscriptionPlansSchema(pool);
+      await initMarketingConsent(pool);
       await migratePrimaryAdminEmail();
       await ensureDemoUsers();
       initDb._done = true;
@@ -629,6 +632,7 @@ export async function initDb() {
   await initSupportTicketSchema(pool);
   await initHomeownerAdminSchema(pool);
   await initSubscriptionPlansSchema(pool);
+  await initMarketingConsent(pool);
 
   console.log('[FixBridge API] DB ready ✓');
   initDb._done = true;
@@ -1359,9 +1363,17 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
           userId: rows[0].id,
           idempotencyPrefix: `signup:${rows[0].id}`,
         });
-        if (req.body?.marketingConsent === true) {
-          await recordMarketingConsent(pool, { userId: rows[0].id, consented: true, req });
-        }
+        const emailOptIn =
+          req.body?.marketingEmailOptIn === true || req.body?.marketingConsent === true;
+        const smsOptIn =
+          req.body?.marketingSmsOptIn === true || req.body?.marketingConsent === true;
+        await recordSignupMarketingConsents(pool, {
+          userId: rows[0].id,
+          emailOptIn,
+          smsOptIn,
+          source: 'signup',
+          req,
+        });
       } catch (consentErr) {
         console.error('homeowner consent on signup:', consentErr);
       }
@@ -2570,7 +2582,7 @@ app.put('/api/lifecycle/:jobId/rating', requireAuth, async (req, res) => {
            ON CONFLICT DO NOTHING`,
           [
             clampString(req.authUser.name || 'Homeowner', 80),
-            clampString(req.body?.location || 'NYC & Long Island', 80),
+            clampString(req.body?.location || 'United States', 80),
             clampString(req.body?.serviceType || 'Home repair', 60),
             rating,
             review.trim(),
@@ -2907,6 +2919,8 @@ app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
 });
 
   registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser });
+  registerMarketingRoutes(app, { pool, requireAuth, requireAdmin, requirePermission });
+  registerGoogleAuthRoutes(app, { pool, makeToken, rowToUser, bcrypt, signupLimiter, requireAuth });
   registerAssessmentProcessor(processManagedJobAssessmentTask);
   registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin });
   registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdmin });

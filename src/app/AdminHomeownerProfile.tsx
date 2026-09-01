@@ -7,6 +7,11 @@ import {
 } from "lucide-react";
 import { formatMoney } from "./managedJobs";
 import { getAdminHomeownerProfile, listHomeownerNotes, addHomeownerNote } from "./platformApi";
+import {
+  adminUnsubscribeMarketing,
+  getAdminMarketingPreferences,
+  type MarketingPreferences,
+} from "./marketingApi";
 import { formatAddressLines } from "./addressFormat";
 
 type TabId =
@@ -87,6 +92,8 @@ export default function AdminHomeownerProfile({
   const [notes, setNotes] = useState<Array<{ id: number; note: string; adminName?: string; createdAt: string; relatedJobId?: number | null; relatedTicketId?: number | null }>>([]);
   const [noteText, setNoteText] = useState("");
   const [noteBusy, setNoteBusy] = useState(false);
+  const [marketingPrefs, setMarketingPrefs] = useState<MarketingPreferences | null>(null);
+  const [marketingBusy, setMarketingBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -109,7 +116,12 @@ export default function AdminHomeownerProfile({
   }, [userId]);
 
   useEffect(() => {
-    if (tab !== "notes") return;
+    void getAdminMarketingPreferences(userId).then((r) => {
+      if (r.ok && r.preferences) setMarketingPrefs(r.preferences);
+    });
+  }, [userId]);
+
+  useEffect(() => {
     void listHomeownerNotes(userId).then((r) => {
       if (r.ok) setNotes(r.notes || []);
     });
@@ -246,6 +258,57 @@ export default function AdminHomeownerProfile({
             <div><dt className="text-xs uppercase text-muted-foreground">Recent payment</dt><dd className="mt-1">{txns[0] ? formatMoney(Number(txns[0].amount)) : "—"}</dd></div>
             <div><dt className="text-xs uppercase text-muted-foreground">Open support</dt><dd className="mt-1">{tickets.find((t) => !["resolved", "closed"].includes(String(t.status)))?.subject || "None"}</dd></div>
           </dl>
+          <div className="space-y-4">
+          <div className="rounded-2xl border border-border bg-card p-5 text-sm">
+            <p className="font-semibold mb-3">Marketing Preferences</p>
+            {marketingPrefs ? (
+              <dl className="space-y-2">
+                <div className="flex justify-between gap-4 py-1">
+                  <dt className="text-muted-foreground">Email Marketing</dt>
+                  <dd className="font-medium">{marketingPrefs.emailMarketing.subscribed ? "Subscribed" : "Unsubscribed"}</dd>
+                </div>
+                <div className="flex justify-between gap-4 py-1">
+                  <dt className="text-muted-foreground">SMS Marketing</dt>
+                  <dd className="font-medium">{marketingPrefs.smsMarketing.subscribed ? "Subscribed" : "Unsubscribed"}</dd>
+                </div>
+                <div className="flex justify-between gap-4 py-1 text-xs">
+                  <dt className="text-muted-foreground">Signup method</dt>
+                  <dd>{marketingPrefs.signupMethod || "email"}</dd>
+                </div>
+              </dl>
+            ) : (
+              <p className="text-muted-foreground text-xs">Loading marketing preferences…</p>
+            )}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={marketingBusy || !marketingPrefs?.emailMarketing.subscribed}
+                onClick={async () => {
+                  setMarketingBusy(true);
+                  const r = await adminUnsubscribeMarketing(userId, ["email"]);
+                  if (r.ok && r.preferences) setMarketingPrefs(r.preferences);
+                  setMarketingBusy(false);
+                }}
+                className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted/40 disabled:opacity-40"
+              >
+                Unsubscribe Email Marketing
+              </button>
+              <button
+                type="button"
+                disabled={marketingBusy || !marketingPrefs?.smsMarketing.subscribed}
+                onClick={async () => {
+                  setMarketingBusy(true);
+                  const r = await adminUnsubscribeMarketing(userId, ["sms"]);
+                  if (r.ok && r.preferences) setMarketingPrefs(r.preferences);
+                  setMarketingBusy(false);
+                }}
+                className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted/40 disabled:opacity-40"
+              >
+                Unsubscribe SMS Marketing
+              </button>
+            </div>
+            <p className="mt-2 text-[11px] text-muted-foreground">Admin can process unsubscribe requests only — not opt users into marketing.</p>
+          </div>
           <div className="rounded-2xl border border-border bg-card p-5">
             <p className="text-sm font-semibold mb-3">Recent Activity</p>
             <ul className="space-y-2 text-sm">
@@ -257,6 +320,7 @@ export default function AdminHomeownerProfile({
               ))}
               {activity.length === 0 && <li className="text-muted-foreground">No activity yet.</li>}
             </ul>
+          </div>
           </div>
         </div>
       )}

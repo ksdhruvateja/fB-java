@@ -190,7 +190,7 @@ async function main() {
     body: JSON.stringify({
       rating: 5,
       text: 'Anonymous spam review that must be rejected by the server.',
-      location: 'NYC',
+      location: 'United States',
     }),
   }).then(json);
   ok('anon review rejected', anon.status === 401 || anon.ok === false, `status=${anon.status}`, 'HIGH');

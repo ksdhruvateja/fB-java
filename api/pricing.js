@@ -36,7 +36,7 @@ export const DEFAULT_PRICING_RULES = {
   reserve_hold_days: 7,     // days before reserve is eligible for release
   target_gross_margin: 0.25,
   minimum_gross_profit: 75,
-  location_factor: 1.08, // NYC/LI pilot
+  location_factor: 1.08, // default regional adjustment baseline
   urgency_surcharges: {
     low: 0,
     medium: 0.05,
@@ -172,7 +172,7 @@ export function estimateContractorNet(assessment, rules = DEFAULT_PRICING_RULES)
 export function getLocationFactorByZip(zip) {
   if (!zip) return null;
   const z = String(zip).trim();
-  // NYC + Long Island (FixBridge pilot market)
+  // Major US metro pricing tiers (ZIP prefix)
   if (/^(100|101|102|103|104|110|111|112|113|114|116)/.test(z)) {
     return 1.25;
   }
@@ -194,7 +194,7 @@ export function getLocationFactorByZip(zip) {
   if (/^(750|751|752|770|771|772)/.test(z)) {
     return 1.05;
   }
-  // Tri-state suburbs near NYC
+  // Northeast suburbs
   if (/^(070|071|072|073|074|076|077|078|079)/.test(z)) return 1.18;
   if (/^(068|069)/.test(z)) return 1.16;
   return 1.0;

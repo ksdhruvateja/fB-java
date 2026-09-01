@@ -19,7 +19,7 @@ const REVIEWS: ContractorReview[] = [
   {
     name: "Mike D'Angelo",
     trade: "Licensed Plumber",
-    location: "Astoria, Queens",
+    location: "Denver, CO",
     rating: 5,
     title: "Stopped buying junk leads",
     text: `I was dropping about $350 a month on lead sites and half never picked up. On ${brand.productName} I only bid jobs with photos and a clear scope — closed 7 of my last 12.`,
@@ -29,17 +29,17 @@ const REVIEWS: ContractorReview[] = [
   {
     name: "Priya Shah",
     trade: "Master Electrician",
-    location: "Hicksville, Long Island",
+    location: "Austin, TX",
     rating: 5,
     title: "Homeowners already know the scope",
-    text: "The AI write-up means fewer 'can you just look at it' calls. People in Nassau actually read the estimate notes before I show up. Saves me a wasted trip almost every week.",
+    text: "The AI write-up means fewer 'can you just look at it' calls. Homeowners actually read the estimate notes before I show up. Saves me a wasted trip almost every week.",
     verified: true,
     detail: "22 jobs won",
   },
   {
     name: "Tony Morales",
     trade: "HVAC Technician",
-    location: "Bay Ridge, Brooklyn",
+    location: "Phoenix, AZ",
     rating: 4,
     title: "Won on quality, not speed",
     text: "I don't race to bid first anymore. Homeowners compare my license, reviews, and price next to other HVAC guys. Feels fair — I booked three boiler swaps last month that way.",
@@ -49,10 +49,10 @@ const REVIEWS: ContractorReview[] = [
   {
     name: "Denise Walsh",
     trade: "General Contractor",
-    location: "Riverhead, LI",
+    location: "Nashville, TN",
     rating: 5,
     title: "Zero fee to stay listed",
-    text: "No monthly subscription, no bidding war for a phone number. I keep my profile up with insurance docs once, then pick painting and carpentry jobs in Suffolk when my crew has open days.",
+    text: "No monthly subscription, no bidding war for a phone number. I keep my profile up with insurance docs once, then pick painting and carpentry jobs in my service area when my crew has open days.",
     verified: true,
     detail: "$0 monthly fees",
   },
@@ -61,7 +61,7 @@ const REVIEWS: ContractorReview[] = [
 const TRUST_MARKS = [
   "Licensed Pros",
   "One-time Verify",
-  "NYC & LI Jobs",
+  "Nationwide Jobs",
   "Full Specs",
   "No Lead Auctions",
   "Free to Bid",
@@ -262,11 +262,11 @@ export default function ContractorReviewsSection() {
               Contractors Review
             </h2>
             <p className="text-muted-foreground text-sm sm:text-base max-w-lg mx-auto inline-flex flex-wrap items-center justify-center gap-2">
-              <span>What licensed local pros say about winning work on {brand.productName}</span>
+              <span>What licensed pros nationwide say about winning work on {brand.productName}</span>
               <span className="inline-flex items-center gap-1.5">
                 <StarRating value={avg} tone="coral" size={14} />
                 <span>
-                  {avg.toFixed(1)} from verified contractors across NYC & Long Island.
+                  {avg.toFixed(1)} from verified contractors across the country.
                 </span>
               </span>
             </p>

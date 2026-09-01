@@ -452,7 +452,7 @@ export default function ContractorPage({
               apply. Zero dollars to join.
             </p>
             <p className="text-sm font-medium text-white/95 leading-relaxed max-w-md">
-              Verified professionals · Secure payments · Local coverage
+              Verified professionals · Secure payments · Nationwide coverage
             </p>
           </ScrollReveal>
 

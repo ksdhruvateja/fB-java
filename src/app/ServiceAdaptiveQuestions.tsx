@@ -1,5 +1,6 @@
 import type { AdaptiveAnswers, AdaptiveField } from "./serviceRequestFlow";
 import { adaptiveFieldsForTrade } from "./serviceRequestFlow";
+import { useAuthSurfaceStyles } from "./authSurfaceStyles";
 
 function FieldControl({
   field,
@@ -10,10 +11,12 @@ function FieldControl({
   value: string | number | boolean | string[] | undefined;
   onChange: (id: string, next: string | number | boolean | string[]) => void;
 }) {
+  const s = useAuthSurfaceStyles();
+
   if (field.type === "select") {
     return (
       <select
-        className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary/40"
+        className={s.fieldControl}
         value={String(value ?? "")}
         onChange={(e) => onChange(field.id, e.target.value)}
       >
@@ -34,7 +37,7 @@ function FieldControl({
         min={field.min}
         max={field.max}
         placeholder={field.placeholder}
-        className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary/40"
+        className={s.fieldControl}
         value={value === undefined || value === "" ? "" : String(value)}
         onChange={(e) => onChange(field.id, e.target.value === "" ? "" : Number(e.target.value))}
       />
@@ -46,7 +49,7 @@ function FieldControl({
       <input
         type="text"
         placeholder={field.placeholder}
-        className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary/40"
+        className={s.fieldControl}
         value={String(value ?? "")}
         onChange={(e) => onChange(field.id, e.target.value)}
       />
@@ -67,9 +70,7 @@ function FieldControl({
               onChange(field.id, next);
             }}
             className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
-              on
-                ? "border-primary bg-primary text-white"
-                : "border-border bg-card hover:border-primary/40"
+              on ? "border-primary bg-primary text-white" : s.chipOff
             }`}
           >
             {o.label}
@@ -91,6 +92,7 @@ export default function ServiceAdaptiveQuestions({
 }) {
   const safeAnswers = answers && typeof answers === "object" ? answers : {};
   const { family, fields } = adaptiveFieldsForTrade(tradeId);
+  const s = useAuthSurfaceStyles();
   if (!tradeId || fields.length === 0) return null;
 
   const heading =
@@ -101,15 +103,15 @@ export default function ServiceAdaptiveQuestions({
         : "A few quick questions";
 
   return (
-    <div className="space-y-4 rounded-2xl border border-border/70 bg-muted/15 p-4">
+    <div className={`space-y-4 rounded-2xl border p-4 ${s.panel}`}>
       <div>
-        <p className="text-sm font-semibold">{heading}</p>
-        <p className="mt-0.5 text-xs text-muted-foreground">Only what matters for this service — skip anything you&apos;re not sure about.</p>
+        <p className={`text-sm ${s.heading}`}>{heading}</p>
+        <p className={`mt-0.5 text-xs ${s.muted}`}>Only what matters for this service — skip anything you&apos;re not sure about.</p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
         {fields.map((field) => (
           <label key={field.id} className={`grid gap-1.5 text-sm ${field.type === "checkbox" ? "sm:col-span-2" : ""}`}>
-            <span className="text-xs font-medium text-muted-foreground">{field.label}</span>
+            <span className={`text-xs font-medium ${s.muted}`}>{field.label}</span>
             <FieldControl
               field={field}
               value={safeAnswers[field.id]}

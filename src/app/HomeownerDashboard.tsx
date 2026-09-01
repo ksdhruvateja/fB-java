@@ -70,6 +70,7 @@ import HomeownerPropertyCare from "./HomeownerPropertyCare";
 import HomeownerHomeProtection from "./HomeownerHomeProtection";
 import HomeownerReferEarn from "./HomeownerReferEarn";
 import HomeownerLegalPanel from "./HomeownerLegalPanel";
+import HomeownerCommunicationPreferences from "./HomeownerCommunicationPreferences";
 import { buildHomeUpdatesSnapshot, type HomeUpdateItem } from "./homeUpdates";
 import { buildPassportAiContext } from "./propertyPassport";
 import AppErrorBoundary, { DashboardTabFallback } from "./AppErrorBoundary";
@@ -2826,7 +2827,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  {activeJob?.aiAssessment
  ? activeJob.aiAssessment.disclaimer ||
  "AI-assisted assessment, not a professional diagnosis."
- : "Reviewing your request and preparing your local price estimate."}
+ : "Reviewing your request and preparing your price estimate."}
  </p>
  </div>
  </div>
@@ -3987,6 +3988,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </p>
  </div>
  )}
+
+ <HomeownerCommunicationPreferences />
  </section>
  )}
 

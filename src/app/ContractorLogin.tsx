@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { motion } from "motion/react";
-import { ArrowRight, Bell, Loader2, FileCheck, DollarSign } from "lucide-react";
+import { ArrowRight, Loader2 } from "lucide-react";
 import { signInUser, signUpUser, type AuthUser } from "./auth";
 import ForgotPasswordModal from "./ForgotPasswordModal";
-import { brand } from "../config/brand";
 import {
   AuthShell,
   AuthPanel,
@@ -13,6 +12,7 @@ import {
   AuthSwitchCard,
 } from "./AuthShell";
 import { AuthEmailField, AuthPasswordField, AuthPrimaryButton } from "./AuthFormFields";
+import { AuthMobileActions } from "./AuthMobileActions";
 import ContractorApplicationForm, {
   type ContractorApplicationDocs,
   emptyContractorApplicationDocs,
@@ -129,15 +129,6 @@ export default function ContractorLogin({
     }
   };
 
-  const contractorTitles = {
-    login: "Welcome back, pro",
-    signup: "Join the network",
-  } as const;
-  const contractorSubtitles = {
-    login: "Sign in to view job matches, submit bids, and track your earnings.",
-    signup: `Apply free — company, insurance, W-9, and pricing required to join ${brand.productName}.`,
-  } as const;
-
   return (
     <>
       {showForgot && <ForgotPasswordModal role="contractor" onClose={() => setShowForgot(false)} />}
@@ -145,50 +136,24 @@ export default function ContractorLogin({
       <AuthShell
         onBack={onBack}
         contentWide={tab === "signup"}
-        loading={loading}
-        error={Boolean(error)}
-        mascot={{
-          variant: "contractor",
-          title: contractorTitles[tab],
-          subtitle: contractorSubtitles[tab],
-          hero: {
-            line1: "Grow your business.",
-            line2: "Get matched jobs.",
-            subtitle: "Join verified homeowners looking for licensed pros across NYC & Long Island.",
-            trustTitle: "Free to join. Pay when you win.",
-            trustBody: "No monthly fees — submit bids on real jobs with full specs before you quote.",
-          },
-          features: (
-            <div className="space-y-4">
-              {[
-                { icon: Bell, title: "Matched jobs", text: "In your trade and service area." },
-                { icon: FileCheck, title: "Full specs", text: "Know the job before you bid." },
-                { icon: DollarSign, title: "$0 to join", text: "No monthly fee to stay listed." },
-              ].map(({ icon: Icon, title, text }) => (
-                <div key={title} className="flex items-center gap-3">
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/10 text-primary ring-1 ring-white/10">
-                    <Icon size={18} strokeWidth={1.75} />
-                  </span>
-                  <div>
-                    <p className="text-sm font-semibold text-white">{title}</p>
-                    <p className="mt-0.5 text-xs leading-relaxed text-white/60">{text}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ),
+        split={{
+          role: "contractor",
+          title: "Grow your business with real jobs.",
+          subtitle: "Contractor portal",
+          body: "Get matched with homeowners in your trade and service area nationwide. Free to join — pay when you win.",
         }}
       >
         <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
-          <AuthPanel>
-            <h1 className="text-[26px] font-semibold tracking-tight text-neutral-900 sm:text-[28px] dark:text-foreground">
-              {tab === "login" ? "Contractor sign in" : "Contractor application"}
+          <AuthPanel variant="split">
+            <h1 className="hidden text-[26px] font-bold tracking-tight text-primary sm:text-[28px] lg:block">
+              {tab === "login" ? "Log in" : "Apply"}
             </h1>
-            <p className="mt-2 text-[15px] leading-relaxed text-neutral-600 dark:text-muted-foreground">
-              {contractorSubtitles[tab]}
+            <p className="mt-2 hidden text-[15px] leading-relaxed text-neutral-500 lg:block">
+              Enter your credentials to access your contractor account.
             </p>
 
             <AuthTabs
+              variant="split"
               value={tab}
               onChange={(t) => {
                 setTab(t);
@@ -206,9 +171,16 @@ export default function ContractorLogin({
               ]}
             />
 
+            <p className="mt-4 text-lg font-bold text-neutral-900 lg:hidden">
+              {tab === "login" ? "Log in" : "Apply"}
+            </p>
+            <p className="mt-1 text-sm text-neutral-500 lg:hidden">
+              Enter your credentials to access your contractor account.
+            </p>
+
             <form onSubmit={handleSubmit} className="mt-5 space-y-4">
               {tab === "signup" && (
-                <>
+                <div className="rounded-xl border border-neutral-200 bg-neutral-50/80 p-4 space-y-4">
                   <ContractorAgreementComplianceNotice
                     compact
                     showCheckbox
@@ -219,19 +191,19 @@ export default function ContractorLogin({
                   />
                   <InsuranceComplianceNotice compact />
                   <ContractorApplicationForm
-                  mode="signup"
-                  value={application}
-                  onChange={setApplication}
-                  docs={docs}
-                  onDocsChange={setDocs}
-                  accountEmail={email}
-                />
-                </>
+                    mode="signup"
+                    value={application}
+                    onChange={setApplication}
+                    docs={docs}
+                    onDocsChange={setDocs}
+                    accountEmail={email}
+                  />
+                </div>
               )}
 
-              <div className={tab === "signup" ? "rounded-xl border border-border bg-muted/20 p-4 space-y-4" : "space-y-4"}>
+              <div className={tab === "signup" ? "rounded-xl border border-neutral-200 bg-neutral-50/80 p-4 space-y-4" : "space-y-4"}>
                 {tab === "signup" && (
-                  <p className="font-mono text-[10px] tracking-[0.18em] uppercase text-muted-foreground">
+                  <p className="font-mono text-[10px] tracking-[0.18em] uppercase text-neutral-500">
                     Account login
                   </p>
                 )}
@@ -260,19 +232,22 @@ export default function ContractorLogin({
 
               <AuthError message={error} />
 
-              <AuthPrimaryButton loading={loading}>
-                {loading ? (
-                  <Loader2 size={15} className="animate-spin" />
-                ) : (
-                  <>
-                    {tab === "login" ? "Access contractor dashboard" : "Submit application"}
-                    <ArrowRight size={15} className="transition-transform group-hover:translate-x-1" />
-                  </>
-                )}
-              </AuthPrimaryButton>
+              <AuthMobileActions>
+                <AuthPrimaryButton loading={loading}>
+                  {loading ? (
+                    <Loader2 size={15} className="animate-spin" />
+                  ) : (
+                    <>
+                      {tab === "login" ? "Access contractor dashboard" : "Submit application"}
+                      <ArrowRight size={15} className="transition-transform group-hover:translate-x-1" />
+                    </>
+                  )}
+                </AuthPrimaryButton>
+              </AuthMobileActions>
             </form>
 
             <AuthSwitchCard
+              variant="split"
               prompt="Looking to hire a contractor instead?"
               actionLabel="Sign in as a Homeowner →"
               onAction={onGoHomeowner}

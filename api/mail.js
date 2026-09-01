@@ -53,7 +53,7 @@ async function getTransporter() {
  * Send an email via Gmail SMTP.
  * @returns {{ ok: boolean, simulated?: boolean, messageId?: string, message?: string }}
  */
-export async function sendMail({ to, subject, html, text }) {
+export async function sendMail({ to, subject, html, text, headers = {} }) {
   const recipient = String(to || '').trim();
   if (!recipient) return { ok: false, message: 'Missing recipient.' };
 
@@ -78,6 +78,7 @@ export async function sendMail({ to, subject, html, text }) {
       subject: subject || `(no subject) ${brand.productName || 'FixBridge'}`,
       html: html || undefined,
       text: text || undefined,
+      headers: headers && typeof headers === 'object' ? headers : undefined,
     });
     return { ok: true, messageId: info.messageId };
   } catch (e) {
@@ -96,4 +97,43 @@ export function mailStatus() {
     userSet,
     passSet,
   };
+}
+
+function appBaseUrl() {
+  return (process.env.APP_URL || process.env.URL || 'http://localhost:8888').replace(/\/$/, '');
+}
+
+/**
+ * Send promotional/marketing email with List-Unsubscribe headers.
+ * Transactional emails should use sendMail() directly without this helper.
+ */
+export async function sendPromotionalMail(pool, {
+  userId,
+  to,
+  subject,
+  html,
+  text,
+}) {
+  const { createUnsubscribeToken } = await import('./marketing-consent-service.js');
+  const token = await createUnsubscribeToken(pool, userId, 'email');
+  const unsubUrl = `${appBaseUrl()}/marketing/unsubscribe?token=${encodeURIComponent(token)}&channel=email`;
+  const oneClickUrl = `${appBaseUrl()}/api/marketing/unsubscribe?token=${encodeURIComponent(token)}&channel=email`;
+
+  const footer = `
+    <p style="font-size:12px;color:#666;margin-top:24px;">
+      <a href="${unsubUrl}">Unsubscribe</a> from FixBridge marketing emails.
+      You will still receive important account and service messages.
+    </p>`;
+  const textFooter = `\n\nUnsubscribe from marketing emails: ${unsubUrl}`;
+
+  return sendMail({
+    to,
+    subject,
+    html: `${html || ''}${footer}`,
+    text: `${text || ''}${textFooter}`,
+    headers: {
+      'List-Unsubscribe': `<${oneClickUrl}>, <mailto:unsubscribe@fixbridge.app?subject=unsubscribe>`,
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+    },
+  });
 }

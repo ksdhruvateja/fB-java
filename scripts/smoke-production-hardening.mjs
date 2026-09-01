@@ -43,7 +43,7 @@ async function main() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       name: 'Spam',
-      location: 'NYC',
+      location: 'United States',
       rating: 5,
       text: 'This is a spam review that should be rejected by auth.',
     }),

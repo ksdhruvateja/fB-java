@@ -194,6 +194,8 @@ export async function signUpUser(user: {
   referredByCode?: string;
   consents?: Record<string, boolean>;
   marketingConsent?: boolean;
+  marketingEmailOptIn?: boolean;
+  marketingSmsOptIn?: boolean;
 }): Promise<{ ok: true; user: AuthUser } | { ok: false; message: string }> {
   try {
     const res = await fetch("/api/auth/signup", {
@@ -396,6 +398,8 @@ export async function createPublicGuestJob(jobData: {
   email: string;
   consents?: Record<string, boolean>;
   marketingConsent?: boolean;
+  marketingEmailOptIn?: boolean;
+  marketingSmsOptIn?: boolean;
 }): Promise<{ ok: true; user: AuthUser; job: any } | { ok: false; message: string }> {
   try {
     const res = await fetch("/api/public/jobs", {

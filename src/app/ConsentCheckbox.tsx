@@ -2,6 +2,7 @@ import { useState } from "react";
 import LegalDocumentModal from "./LegalDocumentModal";
 import type { AcceptanceType } from "./legalDocuments";
 import type { LegalDocumentKey } from "./legalDocuments";
+import { useAuthSurfaceStyles } from "./authSurfaceStyles";
 
 export function ConsentCheckbox({
   id,
@@ -21,19 +22,20 @@ export function ConsentCheckbox({
   documentLabel?: string;
 }) {
   const [docOpen, setDocOpen] = useState(false);
+  const s = useAuthSurfaceStyles();
 
   return (
     <>
-      <label htmlFor={id} className="flex items-start gap-2.5 text-sm leading-snug cursor-pointer">
+      <label htmlFor={id} className={`flex items-start gap-2.5 text-sm leading-snug cursor-pointer ${s.consentText}`}>
         <input
           id={id}
           type="checkbox"
-          className="mt-0.5 h-4 w-4 shrink-0 rounded border-border"
+          className={`mt-0.5 h-4 w-4 shrink-0 rounded ${s.dark ? "border-white/40 bg-white/10" : "border-border"}`}
           checked={checked}
           onChange={(e) => onChange(e.target.checked)}
         />
         <span>
-          <span className={required ? "" : "text-muted-foreground"}>{label}</span>
+          <span className={required ? "" : s.consentOptional}>{label}</span>
           {documentKey ? (
             <>
               {" "}
@@ -69,14 +71,16 @@ export function ConsentSection({
   optional?: boolean;
   children: React.ReactNode;
 }) {
+  const s = useAuthSurfaceStyles();
+
   return (
-    <fieldset className="space-y-2.5 rounded-xl border border-border bg-muted/10 p-3">
-      <legend className="px-1 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+    <fieldset className={`space-y-2.5 rounded-xl border p-3 ${s.fieldset}`}>
+      <legend className={`px-1 text-[11px] font-bold uppercase tracking-wider ${s.legend}`}>
         {title}
         {optional ? " (optional)" : " (required)"}
       </legend>
       {description ? (
-        <p className="px-1 text-xs text-muted-foreground -mt-0.5">{description}</p>
+        <p className={`px-1 text-xs -mt-0.5 ${s.consentOptional}`}>{description}</p>
       ) : null}
       {children}
     </fieldset>

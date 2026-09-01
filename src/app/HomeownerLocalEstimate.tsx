@@ -85,7 +85,7 @@ export function HomeownerLocalEstimate({
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
-            Estimated local price
+            Estimated price for your area
           </p>
           <p className={`font-semibold tabular-nums text-foreground ${compact ? "text-lg" : "text-2xl"}`}>
             {retailRangeLabel(job)}

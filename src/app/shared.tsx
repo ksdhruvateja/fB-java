@@ -102,7 +102,7 @@ export const TICKER_ITEMS = [
   "Licensed & Vetted Contractors",
   "AI Repair Assessment",
   "No Subscription Needed",
-  "NYC & Long Island",
+  "Nationwide",
   "Free to Post",
   "Real Bids Only",
   "Background-Checked Pros",

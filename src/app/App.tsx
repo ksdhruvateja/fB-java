@@ -33,6 +33,7 @@ import {
   roleHomePage,
 } from "./navigation";
 import LegalDocumentPage from "./LegalDocumentPage";
+import MarketingUnsubscribePage from "./MarketingUnsubscribePage";
 import { PUBLIC_FOOTER_LEGAL_LINKS, PUBLIC_CONTRACTOR_LEGAL_LINKS } from "./legalDocuments";
 import { applySiteMeta } from "./siteMeta";
 
@@ -392,12 +393,12 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
               <BrandLogo variant="nav" />
             </button>
             <p className="text-sm text-muted-foreground max-w-sm leading-relaxed mb-3">
-              The middle layer between homeowners and licensed local contractors — handling
+              The middle layer between homeowners and licensed contractors nationwide — handling
               matching, trust, and paperwork so neither side has to.
             </p>
             <div className="flex items-center gap-2">
               <MapPin size={11} className="text-primary shrink-0" />
-              <span className="font-mono text-[11px] text-muted-foreground">NYC & Long Island</span>
+              <span className="font-mono text-[11px] text-muted-foreground">Nationwide</span>
             </div>
           </div>
         </div>
@@ -414,12 +415,12 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
               <BrandLogo variant="nav" />
             </button>
             <p className="text-sm text-muted-foreground max-w-xs leading-relaxed mb-4">
-              The middle layer between homeowners and licensed local contractors — handling
+              The middle layer between homeowners and licensed contractors nationwide — handling
               matching, trust, and paperwork so neither side has to.
             </p>
             <div className="flex items-center gap-2">
               <MapPin size={11} className="text-primary shrink-0" />
-              <span className="font-mono text-[11px] text-muted-foreground">NYC & Long Island</span>
+              <span className="font-mono text-[11px] text-muted-foreground">Nationwide</span>
             </div>
           </div>
 
@@ -457,7 +458,7 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
         <div className="border border-border p-4 sm:p-5 mb-8 sm:mb-10 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 sm:gap-4 bg-background">
           <div className="min-w-0">
             <p className="text-sm font-medium text-foreground mb-0.5">
-              Are you a licensed contractor in NYC or Long Island?
+              Are you a licensed contractor?
             </p>
             <p className="font-mono text-[11px] text-muted-foreground leading-relaxed">
               Join 312+ pros getting matched with real jobs — zero monthly fees.
@@ -561,11 +562,29 @@ export default function App() {
     const p = window.location.pathname.replace(/\/+$/, "") || "/";
     return p === "/legal" || p.startsWith("/legal/") ? p : null;
   });
+  const [marketingUnsub, setMarketingUnsub] = useState<{ token: string; channel: string } | null>(() => {
+    if (typeof window === "undefined") return null;
+    const p = window.location.pathname.replace(/\/+$/, "") || "/";
+    if (p !== "/marketing/unsubscribe") return null;
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token") || "";
+    if (!token) return null;
+    return { token, channel: params.get("channel") || "email" };
+  });
 
   useEffect(() => {
     const syncLegalPath = () => {
       const p = window.location.pathname.replace(/\/+$/, "") || "/";
       setLegalPath(p === "/legal" || p.startsWith("/legal/") ? p : null);
+      if (p === "/marketing/unsubscribe") {
+        const params = new URLSearchParams(window.location.search);
+        const token = params.get("token") || "";
+        setMarketingUnsub(
+          token ? { token, channel: params.get("channel") || "email" } : null
+        );
+      } else {
+        setMarketingUnsub(null);
+      }
     };
     syncLegalPath();
     window.addEventListener("popstate", syncLegalPath);
@@ -940,6 +959,28 @@ export default function App() {
               setResetParams(null);
               navigate(next);
             }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (marketingUnsub) {
+    return (
+      <div className={`${isDark ? "dark" : ""} size-full`} style={{ colorScheme: isDark ? "dark" : "light" }}>
+        <div className="size-full overflow-y-auto bg-background text-foreground [font-family:'DM_Sans',sans-serif]">
+          <MarketingUnsubscribePage
+            token={marketingUnsub.token}
+            channel={marketingUnsub.channel}
+            onManagePreferences={
+              currentUser?.role === "homeowner"
+                ? () => {
+                    window.history.pushState({}, "", "/");
+                    setMarketingUnsub(null);
+                    setPage("homeowner-dashboard");
+                  }
+                : undefined
+            }
           />
         </div>
       </div>

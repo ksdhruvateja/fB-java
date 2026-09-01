@@ -33,6 +33,7 @@ import AdminHomeCareProPanel from "./AdminHomeCareProPanel";
 import AdminVisitFeePanel from "./AdminVisitFeePanel";
 import AdminReferralsPanel from "./AdminReferralsPanel";
 import AdminHomeownerInvoicePanel from "./AdminHomeownerInvoicePanel";
+import AdminHomeownersDirectory from "./AdminHomeownersDirectory";
 import AdminHomeownerProfile from "./AdminHomeownerProfile";
 import AdminHomeownerRecordFocus, {
   type HomeownerRecordFocus,
@@ -3189,165 +3190,43 @@ export default function AdminPanel({
               </form>
             </div>
 
-            <div className={`${cardClass} overflow-hidden`}>
-              <div className="border-b border-border/60 bg-muted/30 px-6 py-4 space-y-3">
-                <div>
-                  <h3 className="font-semibold">Customer search</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Search by name, phone, email, or customer ID.
-                  </p>
-                </div>
-                <div className="relative max-w-lg">
-                  <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <input
-                    type="search"
-                    value={homeownerSearch}
-                    onChange={(e) => setHomeownerSearch(e.target.value)}
-                    placeholder="Search customers..."
-                    className={`${fieldClass} pl-9`}
-                  />
-                </div>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-sm">
-                  <thead>
-                    <tr className="border-b border-border bg-muted/20 text-muted-foreground text-xs font-medium uppercase">
-                      <th className="px-6 py-3">Customer</th>
-                      <th className="px-6 py-3">Contact</th>
-                      <th className="px-6 py-3">Membership Plan</th>
-                      <th className="px-6 py-3">Joined Date</th>
-                      <th className="px-6 py-3 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/60">
-                    {subStats?.customers && subStats.customers.length > 0 ? (
-                      subStats.customers.map((c) => (
-                        <tr key={c.id} className="hover:bg-muted/10">
-                          <td className="px-6 py-4">
-                            <p className="font-medium">{c.name}</p>
-                            <p className="font-mono text-[11px] text-muted-foreground">#{c.id}</p>
-                          </td>
-                          <td className="px-6 py-4">
-                            <p>{c.email}</p>
-                            <p className="text-xs text-muted-foreground">{c.phone || "—"}</p>
-                          </td>
-                          <td className="px-6 py-4">
-                            {isPaidHomeCarePlan(c.planCode) ? (
-                              <div className="flex flex-col gap-0.5">
-                                <span className="inline-flex items-center self-start gap-1 rounded-full bg-amber-500/10 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400">
-                                  {displayPlanLabel(c.planCode)}
-                                </span>
-                                <span className="text-[10px] text-emerald-600 font-semibold pl-1">Active</span>
-                                {c.isTrial ? (
-                                  <span className="text-[10px] text-teal-600 dark:text-teal-400 font-semibold pl-1">
-                                    Trial: {c.trialDaysLeft} {c.trialDaysLeft === 1 ? "day" : "days"} left
-                                  </span>
-                                ) : (
-                                  c.currentPeriodEnd && (
-                                    <span className="text-[10px] text-muted-foreground pl-1">
-                                      Renews: {new Date(c.currentPeriodEnd).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                                    </span>
-                                  )
-                                )}
-                              </div>
-                            ) : (
-                              <span className="inline-flex items-center rounded-full bg-slate-500/10 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:text-slate-400">
-                                {displayPlanLabel(c.planCode)}
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 text-muted-foreground text-xs">
-                            {new Date(c.createdAt).toLocaleDateString(undefined, {
-                              year: "numeric",
-                              month: "short",
-                              day: "numeric",
-                            })}
-                          </td>
-                          <td className="px-6 py-4 text-right">
-                            <div className="flex flex-wrap items-center justify-end gap-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setHomeownerRecordFocus(null);
-                                  setSelectedHomeownerProfileId(c.id);
-                                }}
-                                className="inline-flex items-center gap-1 rounded bg-foreground px-3 py-1.5 text-xs font-semibold text-background hover:opacity-90 transition"
-                              >
-                                Open Profile
-                              </button>
-                              <button
-                                type="button"
-                                disabled={isReadOnly}
-                                onClick={async () => {
-                                  try {
-                                    const r = await adminSendPasswordReset(c.id);
-                                    if (r.ok) {
-                                      setMessage(`Password reset email sent to ${c.email}.`);
-                                    } else {
-                                      alert(r.message || "Could not send password reset.");
-                                    }
-                                  } catch (err: any) {
-                                    alert(err.message || "Could not send password reset.");
-                                  }
-                                }}
-                                className="inline-flex items-center gap-1 rounded border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted/40 transition disabled:opacity-50"
-                              >
-                                <Mail className="h-3.5 w-3.5" />
-                                Send Password Reset Email
-                              </button>
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  setInvoiceModalHomeowner({ id: c.id, name: c.name, email: c.email });
-                                  setInvoiceModalJobId("");
-                                  setInvoiceModalJobs([]);
-                                  setInvoiceModalLoading(true);
-                                  try {
-                                    const r = await adminHomeownerJobs(c.id);
-                                    if (r.ok) {
-                                      setInvoiceModalJobs(r.jobs || []);
-                                      if (r.jobs?.length === 1) setInvoiceModalJobId(r.jobs[0].id);
-                                    }
-                                  } finally {
-                                    setInvoiceModalLoading(false);
-                                  }
-                                }}
-                                className="inline-flex items-center gap-1 rounded border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted/40 transition"
-                              >
-                                Send invoice
-                              </button>
-                            {!isPaidHomeCarePlan(c.planCode) ? (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setOverrideHomeownerId(c.id);
-                                  setOverrideHomeownerName(c.name);
-                                  setStaffNameInput("");
-                                }}
-                                className="inline-flex items-center gap-1 rounded bg-[#FF4D1C] hover:bg-[#FF4D1C]/90 px-3 py-1.5 text-xs font-semibold text-white transition shadow-sm"
-                              >
-                                Upgrade to HomeCare Pro
-                              </button>
-                            ) : (
-                              <span className="text-xs text-muted-foreground italic">HomeCare Pro active</span>
-                            )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))
-                    ) : (
-                      <tr>
-                        <td colSpan={5} className="px-6 py-8 text-center text-muted-foreground">
-                          {homeownerSearch.trim()
-                            ? "No customers match that search."
-                            : "No customer homeowners registered yet."}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            <AdminHomeownersDirectory
+              legacyCustomers={subStats?.customers}
+              isReadOnly={isReadOnly}
+              onOpenProfile={(id) => {
+                setHomeownerRecordFocus(null);
+                setSelectedHomeownerProfileId(id);
+              }}
+              onSendPasswordReset={async ({ id, email }) => {
+                try {
+                  const r = await adminSendPasswordReset(id);
+                  if (r.ok) setMessage(`Password reset email sent to ${email}.`);
+                  else alert(r.message || "Could not send password reset.");
+                } catch (err: unknown) {
+                  alert(err instanceof Error ? err.message : "Could not send password reset.");
+                }
+              }}
+              onSendInvoice={async ({ id, name, email }) => {
+                setInvoiceModalHomeowner({ id, name, email });
+                setInvoiceModalJobId("");
+                setInvoiceModalJobs([]);
+                setInvoiceModalLoading(true);
+                try {
+                  const r = await adminHomeownerJobs(id);
+                  if (r.ok) {
+                    setInvoiceModalJobs(r.jobs || []);
+                    if (r.jobs?.length === 1) setInvoiceModalJobId(r.jobs[0].id);
+                  }
+                } finally {
+                  setInvoiceModalLoading(false);
+                }
+              }}
+              onUpgrade={({ id, name }) => {
+                setOverrideHomeownerId(id);
+                setOverrideHomeownerName(name);
+                setStaffNameInput("");
+              }}
+            />
               </>
             )}
           </section>

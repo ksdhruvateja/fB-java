@@ -2,9 +2,22 @@ import type { InputHTMLAttributes, ReactNode } from "react";
 import { Eye, EyeOff, Lock, Mail, UserRound } from "lucide-react";
 import { AuthFieldLabel } from "./AuthShell";
 import { useAuthMascotOptional } from "./AuthMascotContext";
+import { useAuthTheme } from "./AuthThemeContext";
 
 export const authFieldClass =
   "w-full rounded-2xl border border-neutral-200/90 bg-neutral-50/80 px-4 py-3.5 pl-11 text-[15px] text-foreground placeholder:text-neutral-400 outline-none transition focus:border-primary/50 focus:bg-white focus:ring-4 focus:ring-primary/10 dark:border-border dark:bg-muted/30 dark:focus:bg-background";
+
+export const authFieldClassDark =
+  "w-full rounded-xl border border-white/25 bg-white/5 px-4 py-3.5 pl-11 text-[15px] text-white placeholder:text-white/40 outline-none transition focus:border-primary/60 focus:bg-white/10 focus:ring-4 focus:ring-primary/15";
+
+export const authFieldClassSplit =
+  "w-full border-0 border-b border-neutral-300 bg-transparent px-0 py-3 pl-9 text-[15px] text-neutral-900 placeholder:text-neutral-400 outline-none transition focus:border-primary focus:ring-0 rounded-none";
+
+function fieldClass(theme: "light" | "dark" | "split") {
+  if (theme === "dark") return authFieldClassDark;
+  if (theme === "split") return authFieldClassSplit;
+  return authFieldClass;
+}
 
 function wireMascotInput(
   mascot: ReturnType<typeof useAuthMascotOptional>,
@@ -55,15 +68,18 @@ export function AuthEmailField({
   label = "Email address",
 }: EmailFieldProps) {
   const mascot = useAuthMascotOptional();
+  const theme = useAuthTheme();
   const handlers = wireMascotInput(mascot, "email", { onChange });
+  const iconClass =
+    theme === "dark" ? "text-white/45" : theme === "split" ? "text-neutral-400" : "text-neutral-400";
 
   return (
     <div>
-      <AuthFieldLabel soft required={required}>
+      <AuthFieldLabel soft required={required} dark={theme === "dark"}>
         {label}
       </AuthFieldLabel>
       <div className="relative">
-        <Mail className="pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-neutral-400" />
+        <Mail className={`pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2 ${iconClass}`} />
         <input
           type="email"
           placeholder={placeholder}
@@ -76,7 +92,7 @@ export function AuthEmailField({
           onBlur={handlers.onBlur}
           required={required}
           autoComplete={autoComplete}
-          className={authFieldClass}
+          className={fieldClass(theme)}
         />
       </div>
     </div>
@@ -105,6 +121,15 @@ export function AuthPasswordField({
   label = "Password",
 }: PasswordFieldProps) {
   const mascot = useAuthMascotOptional();
+  const theme = useAuthTheme();
+  const iconClass =
+    theme === "dark" ? "text-white/45" : theme === "split" ? "text-neutral-400" : "text-neutral-400";
+  const toggleClass =
+    theme === "dark"
+      ? "text-white/50 hover:bg-white/10 hover:text-white"
+      : theme === "split"
+        ? "text-neutral-400 hover:text-neutral-700"
+        : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-muted";
 
   const handleFocus = () => {
     mascot?.setFocusField("password");
@@ -119,11 +144,11 @@ export function AuthPasswordField({
 
   return (
     <div>
-      <AuthFieldLabel soft required={required}>
+      <AuthFieldLabel soft required={required} dark={theme === "dark"}>
         {label}
       </AuthFieldLabel>
       <div className="relative">
-        <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-neutral-400" />
+        <Lock className={`pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2 ${iconClass}`} />
         <input
           type={show ? "text" : "password"}
           placeholder={placeholder}
@@ -133,7 +158,7 @@ export function AuthPasswordField({
           onBlur={() => mascot?.setFocusField(null)}
           required={required}
           autoComplete={autoComplete}
-          className={`${authFieldClass} pr-12`}
+          className={`${fieldClass(theme)} pr-12`}
         />
         <button
           type="button"
@@ -141,7 +166,7 @@ export function AuthPasswordField({
             onToggleShow();
             mascot?.setMood(show ? "focus-password" : "peek");
           }}
-          className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-muted"
+          className={`absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1.5 transition ${toggleClass}`}
           aria-label={show ? "Hide password" : "Show password"}
         >
           {show ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -168,15 +193,18 @@ export function AuthTextField({
   required?: boolean;
 } & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "className">) {
   const mascot = useAuthMascotOptional();
+  const theme = useAuthTheme();
   const handlers = wireMascotInput(mascot, "text", { onChange });
+  const iconClass =
+    theme === "dark" ? "text-white/45" : theme === "split" ? "text-neutral-400" : "text-neutral-400";
 
   return (
     <div>
-      <AuthFieldLabel soft required={required}>
+      <AuthFieldLabel soft required={required} dark={theme === "dark"}>
         {label}
       </AuthFieldLabel>
       <div className="relative">
-        <Icon className="pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-neutral-400" />
+        <Icon className={`pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2 ${iconClass}`} />
         <input
           {...rest}
           type="text"
@@ -189,7 +217,7 @@ export function AuthTextField({
           }}
           onFocus={handlers.onFocus}
           onBlur={handlers.onBlur}
-          className={authFieldClass}
+          className={fieldClass(theme)}
         />
       </div>
     </div>
@@ -205,11 +233,27 @@ export function AuthPrimaryButton({
   loading?: boolean;
   disabled?: boolean;
 }) {
+  const theme = useAuthTheme();
+  if (theme === "split") {
+    return (
+      <button
+        type="submit"
+        disabled={disabled || loading}
+        className="group flex w-full items-center justify-center gap-2 rounded-full bg-primary py-4 text-[15px] font-bold text-white shadow-[0_12px_32px_rgba(255,77,28,0.35)] transition active:scale-[0.98] hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {children}
+      </button>
+    );
+  }
   return (
     <button
       type="submit"
       disabled={disabled || loading}
-      className="group flex w-full items-center justify-center gap-2 rounded-2xl bg-neutral-900 py-4 text-[15px] font-semibold text-white shadow-[0_16px_40px_rgba(23,23,23,0.18)] transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-primary dark:shadow-[0_16px_40px_rgba(255,77,28,0.25)] dark:hover:bg-primary/90"
+      className={
+        theme === "split" || theme === "dark"
+          ? "group flex w-full items-center justify-center gap-2 rounded-full bg-primary py-4 text-[15px] font-bold text-white shadow-[0_12px_32px_rgba(255,77,28,0.35)] transition active:scale-[0.98] hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
+          : "group flex w-full items-center justify-center gap-2 rounded-2xl bg-neutral-900 py-4 text-[15px] font-semibold text-white shadow-[0_16px_40px_rgba(23,23,23,0.18)] transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-primary dark:shadow-[0_16px_40px_rgba(255,77,28,0.25)] dark:hover:bg-primary/90"
+      }
     >
       {children}
     </button>
