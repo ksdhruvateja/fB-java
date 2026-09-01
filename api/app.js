@@ -229,8 +229,8 @@ function contractorTradeMatchesCategory(contractorTrade, category) {
   return words.some((w) => normalizedTrade.includes(w));
 }
 
-const PRIMARY_ADMIN_EMAIL = process.env.PRIMARY_ADMIN_EMAIL?.trim() || 'ksdt2702@gmail.com';
-const LEGACY_ADMIN_EMAILS = ['admin@fixbridge.local'];
+const PRIMARY_ADMIN_EMAIL = process.env.PRIMARY_ADMIN_EMAIL?.trim() || 'admin@fixbridge.com';
+const LEGACY_ADMIN_EMAILS = ['admin@fixbridge.local', 'admin@fixbridge.us', 'ksdt2702@gmail.com'];
 
 const DEMO_USERS = [
   { role: 'homeowner',   name: 'Maria Santos', email: 'maria@example.com',       plainPassword: 'demo123',  is_admin: false, trade: null,             license_number: null },

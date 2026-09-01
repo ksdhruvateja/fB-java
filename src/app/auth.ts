@@ -371,7 +371,7 @@ export function getDemoUser(role: UserRole): AuthUser {
     return {
       role: "admin",
       name: "Ops Admin",
-      email: "ksdt2702@gmail.com",
+      email: "admin@fixbridge.com",
       password: "admin123",
       isAdmin: true,
     };

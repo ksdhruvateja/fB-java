@@ -2,8 +2,8 @@ import pg from 'pg';
 import bcrypt from 'bcryptjs';
 import { postgresSslOptions } from '../api/db-ssl.js';
 
-const email = process.env.PRIMARY_ADMIN_EMAIL?.trim() || 'ksdt2702@gmail.com';
-const legacyEmails = ['admin@fixbridge.local'];
+const email = process.env.PRIMARY_ADMIN_EMAIL?.trim() || 'admin@fixbridge.com';
+const legacyEmails = ['admin@fixbridge.local', 'admin@fixbridge.us', 'ksdt2702@gmail.com'];
 const password = process.env.PRIMARY_ADMIN_PASSWORD?.trim() || 'admin123';
 const neonUrl = process.env.NEON_DATABASE_URL || process.env.DATABASE_URL;
 if (!neonUrl) {

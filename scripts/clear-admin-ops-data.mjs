@@ -24,7 +24,7 @@ const pool = new pg.Pool({
   max: 3,
 });
 
-const KEEP_ADMIN_EMAIL = process.env.PRIMARY_ADMIN_EMAIL?.trim() || 'ksdt2702@gmail.com';
+const KEEP_ADMIN_EMAIL = process.env.PRIMARY_ADMIN_EMAIL?.trim() || 'admin@fixbridge.com';
 
 /** Tables to empty when present (order does not matter with CASCADE). */
 const TRUNCATE_CANDIDATES = [

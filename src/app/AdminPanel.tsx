@@ -3408,7 +3408,7 @@ export default function AdminPanel({
                           </td>
                           <td className="px-6 py-4">
                             <select
-                              disabled={busyStaffId === s.id || isReadOnly || s.email === "ksdt2702@gmail.com"}
+                              disabled={busyStaffId === s.id || isReadOnly || s.email === "admin@fixbridge.com"}
                               className="rounded-lg border border-border bg-background px-2.5 py-1 text-xs outline-none focus:border-[#FF4D1C] disabled:opacity-60 text-foreground"
                               value={s.adminAccessLevel || "read-write"}
                               onChange={async (e) => {
