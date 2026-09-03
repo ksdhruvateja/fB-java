@@ -3,8 +3,9 @@
  * Usage: node --env-file=.env scripts/smoke-security-idor.mjs
  */
 import { loginAdminWithMfa } from './smoke-auth.mjs';
+import { resolveSmokeApiBase } from './smoke-api-base.mjs';
 
-const API = process.env.API_BASE || 'http://127.0.0.1:3001';
+const API = resolveSmokeApiBase();
 
 async function json(res) {
   const text = await res.text();

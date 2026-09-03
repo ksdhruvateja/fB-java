@@ -1034,12 +1034,20 @@ export default function AdminPanel({
       setServerSearch(null);
       return;
     }
+    let cancelled = false;
     const t = window.setTimeout(() => {
       void adminUniversalSearch(q)
-        .then((r) => setServerSearch(r.results))
-        .catch(() => setServerSearch(null));
+        .then((r) => {
+          if (!cancelled) setServerSearch(r.results);
+        })
+        .catch(() => {
+          if (!cancelled) setServerSearch(null);
+        });
     }, 300);
-    return () => window.clearTimeout(t);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
   }, [globalSearch]);
 
   function openAdminComms(opts: {

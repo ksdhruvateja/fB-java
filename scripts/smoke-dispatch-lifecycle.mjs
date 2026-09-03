@@ -3,8 +3,9 @@
  * Runs focused smokes in sequence — extend as fixtures mature.
  */
 import { spawn } from 'node:child_process';
+import { resolveSmokeApiBase } from './smoke-api-base.mjs';
 
-const API = process.argv[2] || process.env.API_BASE || 'http://127.0.0.1:3001';
+const API = resolveSmokeApiBase();
 const scripts = [
   'smoke-dispatch-quotes-team.mjs',
   'smoke-inapp-communications.mjs',
@@ -20,7 +21,7 @@ function run(script) {
     const child = spawn(process.execPath, ['--env-file=.env', `scripts/${script}`, API], {
       stdio: 'inherit',
       shell: false,
-      env: process.env,
+      env: { ...process.env, API_BASE: API, API_BASE_URL: API },
     });
     child.on('close', (code) => resolve(code === 0));
   });

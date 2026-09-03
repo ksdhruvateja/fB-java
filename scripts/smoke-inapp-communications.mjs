@@ -3,8 +3,9 @@
  * Usage: node --env-file=.env scripts/smoke-inapp-communications.mjs [API_BASE]
  */
 import { parseJsonResponse } from './smoke-assessment-poll.mjs';
+import { resolveSmokeApiBase } from './smoke-api-base.mjs';
 
-const API = process.argv[2] || process.env.API_BASE || 'http://127.0.0.1:3001';
+const API = resolveSmokeApiBase();
 const stamp = Date.now();
 
 let passed = 0;

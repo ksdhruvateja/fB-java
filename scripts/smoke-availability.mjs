@@ -1,7 +1,9 @@
 /**
  * Availability API smoke tests.
  */
-const API = process.argv[2] || process.env.API_BASE || 'http://127.0.0.1:3001';
+import { resolveSmokeApiBase } from './smoke-api-base.mjs';
+
+const API = resolveSmokeApiBase();
 
 async function json(res) {
   const text = await res.text();

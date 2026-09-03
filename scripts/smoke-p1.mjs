@@ -5,8 +5,9 @@
 import { spawnSync } from 'child_process';
 import pg from 'pg';
 import { loginAdminWithMfa as loginAdminShared } from './smoke-auth.mjs';
+import { resolveSmokeApiBase } from './smoke-api-base.mjs';
 
-const API = process.env.API_BASE || 'http://127.0.0.1:3001';
+const API = resolveSmokeApiBase();
 const DATABASE_URL = process.env.DATABASE_URL || process.env.NEON_DATABASE_URL;
 
 const results = [];
@@ -20,7 +21,7 @@ function runScript(script) {
   const r = spawnSync(process.execPath, ['--env-file=.env', script], {
     cwd: process.cwd(),
     encoding: 'utf8',
-    env: { ...process.env, API_BASE: API },
+    env: { ...process.env, API_BASE: API, API_BASE_URL: API },
   });
   const pass = r.status === 0;
   const tail = (r.stdout || r.stderr || '').trim().split('\n').slice(-3).join(' | ');
