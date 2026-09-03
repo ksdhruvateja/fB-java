@@ -23,6 +23,7 @@ import { processSuccessfulPayment } from './payment-settlement.js';
 import { isAdminRole, isHomeownerOwner } from './auth-helpers.js';
 import { formatAddressLines, normalizeBillToAddress } from './address-format.js';
 import { convertProposalToInvoice } from './quote-invoice-service.js';
+import { createInAppNotification } from './in-app-notifications.js';
 
 async function audit(pool, actorUserId, action, entityType, entityId, detail) {
   try {
@@ -227,6 +228,7 @@ function serializeQuoteDocument(row) {
     changeReason: row.change_reason || null,
     contractorFindings: row.contractor_findings || null,
     quoteOptionLabel: row.quote_option_label || null,
+    quoteOptionTitle: row.quote_option_title || null,
     optionGroup: row.option_group || null,
     optionSelectionStatus: row.option_selection_status || 'pending',
     assignedEmployeeId: row.assigned_employee_id != null ? Number(row.assigned_employee_id) : null,
@@ -288,7 +290,7 @@ async function supersedeSiblingQuotes(pool, proposalId, jobId, actorUserId) {
   const versionNumber = Number(curRow.version_number || 1);
 
   if (optionGroup) {
-    // Revisions only: supersede lower versions within the same option group
+    // Revisions only: supersede lower versions of the SAME option letter, never sibling alternatives.
     await pool.query(
       `UPDATE proposals SET
          status='superseded',
@@ -297,10 +299,11 @@ async function supersedeSiblingQuotes(pool, proposalId, jobId, actorUserId) {
        WHERE job_id=$2
          AND id != $1
          AND option_group=$3
+         AND COALESCE(quote_option_label,'') = COALESCE($5,'')
          AND COALESCE(version_number,1) < $4
          AND status IN ('sent','viewed','draft')
          AND COALESCE(status,'') != 'superseded'`,
-      [proposalId, jobId, optionGroup, versionNumber],
+      [proposalId, jobId, optionGroup, versionNumber, curRow.quote_option_label || ''],
     );
   } else {
     await pool.query(
@@ -599,8 +602,10 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
       }
       const revisionHistory = await loadQuoteRevisionHistory(pool, quote.id);
       const { rows: jobQuotes } = await pool.query(
-        `SELECT id, quote_number, status, version_number, retail_amount, document_totals, created_at, published_at, superseded_at
-         FROM proposals WHERE job_id=$1 ORDER BY created_at ASC`,
+        `SELECT id, quote_number, status, version_number, retail_amount, document_totals, created_at, published_at,
+                superseded_at, quote_option_label, quote_option_title, option_group, option_selection_status,
+                contractor_quote_amount, contractor_net, admin_discount, discount_value
+         FROM proposals WHERE job_id=$1 ORDER BY quote_option_label NULLS LAST, version_number ASC, created_at ASC`,
         [quote.jobId]
       );
       const previousRevision =
@@ -623,6 +628,17 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
           createdAt: q.created_at,
           publishedAt: q.published_at,
           supersededAt: q.superseded_at,
+          quoteOptionLabel: q.quote_option_label || null,
+          quoteOptionTitle: q.quote_option_title || null,
+          optionGroup: q.option_group || null,
+          optionSelectionStatus: q.option_selection_status || 'pending',
+          contractorAmount:
+            q.contractor_quote_amount != null
+              ? Number(q.contractor_quote_amount)
+              : q.contractor_net != null
+                ? Number(q.contractor_net)
+                : null,
+          discount: Number(q.admin_discount || q.discount_value || 0),
         })),
         activity: activity.map((a) => ({
           id: Number(a.id),
@@ -716,8 +732,9 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
            coupon_code=$27,
            contractor_findings=$28,
            assigned_employee_id=$29,
-           quote_option_label=$30
-         WHERE id=$31`,
+           quote_option_label=$30,
+           quote_option_title=$31
+         WHERE id=$32`,
         [
           JSON.stringify(doc.lineItems),
           doc.discountType,
@@ -751,6 +768,7 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
             ? Number(req.body.assignedEmployeeId) || null
             : rows[0].assigned_employee_id,
           String(req.body?.quoteOptionLabel ?? rows[0].quote_option_label ?? '').trim() || null,
+          String(req.body?.quoteOptionTitle ?? rows[0].quote_option_title ?? '').trim() || null,
           id,
         ]
       );
@@ -880,6 +898,27 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
       await supersedeSiblingQuotes(pool, id, quote.jobId, req.authUser.id);
       await audit(pool, req.authUser.id, 'quote_sent', 'proposal', id, { sendEmail, sendSms, emailTo, phoneTo });
 
+      if (req.body?.skipNotify !== true && quote.homeownerUserId) {
+        const isRevision = Number(quote.versionNumber || 1) > 1;
+        try {
+          await createInAppNotification(pool, {
+            userId: quote.homeownerUserId,
+            userRole: 'homeowner',
+            jobId: quote.jobId,
+            type: isRevision ? 'quote_revised' : 'quote_ready',
+            title: isRevision ? 'Quote revised' : 'Quote ready',
+            message: isRevision
+              ? `An updated quote is ready for review.`
+              : `Your quote ${quote.quoteNumber} is ready.`,
+            entityType: 'quote',
+            entityId: id,
+            metadata: { quoteNumber: quote.quoteNumber, versionNumber: quote.versionNumber || 1 },
+          });
+        } catch {
+          /* non-fatal */
+        }
+      }
+
       const { rows: refreshed } = await pool.query(quoteSelectSql(`WHERE p.id=$1`), [id]);
       res.json({
         ok: true,
@@ -904,6 +943,39 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
         if (typeof val === 'string') return val;
         return JSON.stringify(val);
       };
+      const asOption = req.body?.asOption === true;
+      const groupId = asOption
+        ? src.option_group || `job-${src.job_id}-options`
+        : src.option_group || null;
+      let optionLabel = String(req.body?.quoteOptionLabel || '').trim() || null;
+      const optionTitle = String(req.body?.quoteOptionTitle || '').trim() || null;
+      if (asOption && !optionLabel) {
+        const { rows: existing } = await pool.query(
+          `SELECT quote_option_label FROM proposals WHERE job_id=$1 AND quote_option_label IS NOT NULL AND quote_option_label <> ''`,
+          [src.job_id],
+        );
+        const used = new Set(
+          existing.map((r) => String(r.quote_option_label || '').replace(/^option\s+/i, '').trim().charAt(0).toUpperCase()).filter(Boolean),
+        );
+        if (!used.has('A') && !src.quote_option_label) {
+          await pool.query(
+            `UPDATE proposals SET quote_option_label='A', option_group=$1 WHERE id=$2`,
+            [groupId, src.id],
+          );
+          used.add('A');
+        } else if (src.quote_option_label) {
+          used.add(String(src.quote_option_label).replace(/^option\s+/i, '').trim().charAt(0).toUpperCase());
+        }
+        let letter = 'B';
+        for (let i = 0; i < 26; i += 1) {
+          const L = String.fromCharCode(65 + i);
+          if (!used.has(L)) {
+            letter = L;
+            break;
+          }
+        }
+        optionLabel = letter;
+      }
       const { rows: created } = await pool.query(
         `INSERT INTO proposals
           (job_id, bid_id, scope_summary, retail_amount, deposit_amount, timeline, warranty, exclusions,
@@ -912,10 +984,11 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
            quote_valid_until, customer_line_items, service_charge, expected_margin_pct,
            discount_type, discount_value, shipping_amount, shipping_label, additional_charges,
            tax_mode, tax_value, customer_notes, terms_conditions, internal_notes,
-           contractor_quote_amount, contractor_notes, contractor_special_conditions, company_name, bill_to, document_totals)
+           contractor_quote_amount, contractor_notes, contractor_special_conditions, company_name, bill_to, document_totals,
+           quote_option_label, quote_option_title, option_group, version_number)
          VALUES
           ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'draft',$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
-           $23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38)
+           $23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,1)
          RETURNING *`,
         [
           src.job_id,
@@ -956,8 +1029,17 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
           src.company_name,
           asJsonb(src.bill_to),
           asJsonb(src.document_totals),
+          optionLabel,
+          optionTitle,
+          groupId,
         ]
       );
+      if (asOption && groupId) {
+        await pool.query(
+          `UPDATE proposals SET option_group=$1 WHERE job_id=$2 AND (id=$3 OR quote_option_label IS NOT NULL)`,
+          [groupId, src.job_id, src.id],
+        );
+      }
       const quoteNumber = `FBQ-${String(created[0].id).padStart(5, '0')}`;
       await pool.query(`UPDATE proposals SET quote_number=$1 WHERE id=$2`, [quoteNumber, created[0].id]);
       await logQuoteActivity(pool, {
@@ -972,6 +1054,173 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
     } catch (e) {
       console.error('duplicate quote:', e);
       res.status(500).json({ ok: false, message: 'Could not duplicate quote.' });
+    }
+  });
+
+  app.get('/api/admin/jobs/:jobId/quote-options', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const jobId = Number(req.params.jobId);
+      const { rows } = await pool.query(
+        `SELECT p.*,
+                COALESCE(p.contractor_quote_amount, p.contractor_net) AS contractor_amount_resolved
+         FROM proposals p
+         WHERE p.job_id=$1
+         ORDER BY COALESCE(p.quote_option_label,'ZZ'), COALESCE(p.version_number,1) ASC, p.created_at ASC`,
+        [jobId],
+      );
+      const options = rows.map((row) => {
+        const quote = serializeQuoteDocument(row);
+        const customerTotal = Number(quote.total || quote.retailAmount || 0);
+        const contractorAmount = Number(quote.contractorQuoteAmount || quote.contractorNet || 0);
+        return {
+          ...quote,
+          customerTotal,
+          contractorAmount,
+          margin: Math.round((customerTotal - contractorAmount) * 100) / 100,
+          letter: String(quote.quoteOptionLabel || '').replace(/^option\s+/i, '').trim() || null,
+          customerTitle: quote.quoteOptionTitle || null,
+          historical: ['superseded', 'declined', 'canceled', 'cancelled'].includes(String(quote.status || '').toLowerCase()),
+        };
+      });
+      return res.json({ ok: true, options, groupId: options.find((o) => o.optionGroup)?.optionGroup || null });
+    } catch (e) {
+      console.error('admin quote options:', e);
+      return res.status(500).json({ ok: false, message: 'Could not load quote options.' });
+    }
+  });
+
+  app.post('/api/admin/quotes/:id/send-option-group', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { rows } = await pool.query(quoteSelectSql(`WHERE p.id=$1`), [id]);
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Quote not found.' });
+      const quote = serializeQuoteDocument(rows[0]);
+      const groupId = quote.optionGroup || `job-${quote.jobId}-options`;
+      await pool.query(
+        `UPDATE proposals SET option_group=$1
+         WHERE job_id=$2 AND (id=$3 OR (quote_option_label IS NOT NULL AND quote_option_label <> ''))`,
+        [groupId, quote.jobId, id],
+      );
+      const { rows: groupRows } = await pool.query(
+        `SELECT * FROM proposals
+         WHERE job_id=$1 AND option_group=$2
+           AND status IN ('draft','sent','viewed')
+           AND COALESCE(status,'') != 'superseded'
+         ORDER BY quote_option_label NULLS LAST, id ASC`,
+        [quote.jobId, groupId],
+      );
+      if (groupRows.length < 1) {
+        return res.status(400).json({ ok: false, message: 'No options to send.' });
+      }
+      for (const row of groupRows) {
+        await pool.query(
+          `UPDATE proposals SET status='sent', published_at=COALESCE(published_at, NOW()), option_group=$2 WHERE id=$1`,
+          [row.id, groupId],
+        );
+        await logQuoteActivity(pool, {
+          proposalId: row.id,
+          jobId: quote.jobId,
+          actorUserId: req.authUser.id,
+          action: 'quote_option_group_sent',
+          detail: { groupId, count: groupRows.length },
+        });
+      }
+      await pool.query(`UPDATE managed_jobs SET active_proposal_id=$1, updated_at=NOW() WHERE id=$2`, [
+        groupRows[0].id,
+        quote.jobId,
+      ]);
+
+      const sendEmail = req.body?.sendEmail !== false;
+      const emailTo = String(req.body?.email || quote.billTo?.email || quote.homeownerEmail || '').trim();
+      const delivery = { email: null };
+      const acceptUrl = `${appBaseUrl()}/homeowner?job=${quote.jobId}&focus=quote`;
+      if (sendEmail) {
+        if (!emailTo) return res.status(400).json({ ok: false, message: 'No customer email available.' });
+        const cards = groupRows
+          .map((r, idx) => {
+            const q = serializeQuoteDocument(r);
+            const letter = q.quoteOptionLabel || String.fromCharCode(65 + idx);
+            const title = q.quoteOptionTitle || q.scopeSummary || 'Service option';
+            return `<div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin:12px 0;">
+              <p style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#FF4D1C;font-weight:700;">Option ${escapeHtml(letter)}</p>
+              <p style="font-size:18px;font-weight:700;margin:4px 0;">${escapeHtml(title)}</p>
+              <p style="font-size:22px;font-weight:700;margin:8px 0;">${money(q.total)}</p>
+              ${q.scopeSummary ? `<p style="color:#4b5563;font-size:14px;">${escapeHtml(q.scopeSummary)}</p>` : ''}
+            </div>`;
+          })
+          .join('');
+        delivery.email = await sendEmailSafe({
+          to: emailTo,
+          subject: String(req.body?.subject || '').trim() || `Your ${brand.productName} service options`,
+          html: renderEmailLayout({
+            category: 'Quote',
+            headline: 'Choose the option that works best for you',
+            firstName: quote.billTo?.name || quote.homeownerName,
+            paragraphs: [
+              String(req.body?.message || '').trim() ||
+                'Review the service options below and select one in your FixBridge account.',
+            ],
+            bodyHtml: cards,
+            cta: { label: 'REVIEW OPTIONS', href: acceptUrl },
+          }),
+        });
+      }
+
+      if (quote.homeownerUserId) {
+        await createInAppNotification(pool, {
+          userId: quote.homeownerUserId,
+          userRole: 'homeowner',
+          jobId: quote.jobId,
+          type: 'quote_ready',
+          title: 'Quote options ready',
+          message: `Choose from ${groupRows.length} service options.`,
+          entityType: 'quote',
+          entityId: groupRows[0].id,
+          metadata: { optionGroup: groupId, optionCount: groupRows.length },
+        });
+      }
+
+      const { rows: refreshed } = await pool.query(quoteSelectSql(`WHERE p.id=$1`), [id]);
+      return res.json({
+        ok: true,
+        sent: groupRows.length,
+        quote: serializeQuoteDocument(refreshed[0]),
+        delivery,
+        message: `Sent ${groupRows.length} option${groupRows.length === 1 ? '' : 's'}.`,
+      });
+    } catch (e) {
+      console.error('send option group:', e);
+      return res.status(500).json({ ok: false, message: 'Could not send options.' });
+    }
+  });
+
+  app.post('/api/admin/quotes/:id/remove-draft-option', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { rows } = await pool.query(`SELECT * FROM proposals WHERE id=$1`, [id]);
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Quote not found.' });
+      const st = String(rows[0].status || '').toLowerCase();
+      const selection = String(rows[0].option_selection_status || '').toLowerCase();
+      if (['accepted', 'approved', 'converted', 'paid'].includes(st) || selection === 'accepted') {
+        return res.status(409).json({ ok: false, message: 'Cannot remove an accepted or historical option.' });
+      }
+      if (st !== 'draft') {
+        return res.status(409).json({
+          ok: false,
+          message: 'Only draft options can be removed. Cancel sent options instead.',
+        });
+      }
+      await pool.query(`UPDATE proposals SET status='canceled' WHERE id=$1`, [id]);
+      await logQuoteActivity(pool, {
+        proposalId: id,
+        jobId: rows[0].job_id,
+        actorUserId: req.authUser.id,
+        action: 'quote_option_removed',
+        detail: { quoteOptionLabel: rows[0].quote_option_label || null },
+      });
+      return res.json({ ok: true });
+    } catch (e) {
+      return res.status(500).json({ ok: false, message: 'Could not remove option.' });
     }
   });
 

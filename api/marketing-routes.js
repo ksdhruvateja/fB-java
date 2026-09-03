@@ -146,15 +146,16 @@ export function registerMarketingRoutes(app, { pool, requireAuth, requireAdmin, 
     }
   });
 
-  // Google OAuth config status (public)
+  // Google OAuth config status (public) — never expose GOOGLE_CLIENT_SECRET or invalid IDs
   app.get('/api/auth/google/config', async (_req, res) => {
-    const { getPublicGoogleClientId, isGoogleOAuthConfigured } = await import('./google-auth-routes.js');
-    const clientId = getPublicGoogleClientId();
-    res.json({
-      ok: true,
-      configured: isGoogleOAuthConfigured(),
-      clientId,
-    });
+    const { getPublicGoogleOAuthStatus } = await import('./google-auth-routes.js');
+    const status = getPublicGoogleOAuthStatus();
+    const body = { ...status };
+    // Defense-in-depth: strip any accidental secret-shaped keys
+    for (const key of Object.keys(body)) {
+      if (/secret|password|private/i.test(key)) delete body[key];
+    }
+    res.json(body);
   });
 }
 

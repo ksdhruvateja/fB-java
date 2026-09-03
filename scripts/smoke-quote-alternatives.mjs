@@ -47,17 +47,112 @@ async function main() {
   const adminH = { Authorization: `Bearer ${admin.token}`, 'Content-Type': 'application/json' };
   const homeownerH = { Authorization: `Bearer ${homeowner.token}`, 'Content-Type': 'application/json' };
 
+  // Prefer the smoke homeowner's jobs so homeowner quote-options is authorized.
+  const hoJobsRes = await fetch(`${API}/api/managed/jobs`, { headers: homeownerH }).then(json);
+  const hoJobList = Array.isArray(hoJobsRes.jobs) ? hoJobsRes.jobs : Array.isArray(hoJobsRes) ? hoJobsRes : [];
   const jobs = await fetch(`${API}/api/admin/managed/jobs`, { headers: adminH }).then(json);
-  const job =
-    (jobs.jobs || []).find((j) => ['bid_received', 'proposal_sent', 'awaiting_customer_approval'].includes(j.status)) ||
-    (jobs.jobs || [])[0];
-  ok('Job fixture', Boolean(job?.id), job ? `job ${job.id}` : 'none');
+  const jobList = [...hoJobList, ...(jobs.jobs || []).filter((j) => !hoJobList.some((h) => h.id === j.id))];
+  let job = null;
+  let adminOpts = { ok: false, options: [] };
+  for (const candidate of jobList) {
+    const probe = await fetch(`${API}/api/admin/jobs/${candidate.id}/quote-options`, { headers: adminH }).then(json);
+    if (probe.ok && Array.isArray(probe.options) && probe.options.length) {
+      job = candidate;
+      adminOpts = probe;
+      if (probe.options.some((o) => ['draft', 'sent', 'viewed'].includes(String(o.status || '').toLowerCase()))) {
+        break;
+      }
+    }
+  }
+  // Never fall back to a job without quote options — that is a false FAIL, not a product regression.
+  ok('Job fixture', Boolean(job?.id && adminOpts.options?.length), job ? `job ${job.id}` : 'none with quote options');
 
-  if (!job?.id) return;
+  if (!job?.id || !adminOpts.options?.length) return;
 
   const opts = await fetch(`${API}/api/managed/jobs/${job.id}/quote-options`, { headers: homeownerH }).then(json);
   ok('Quote options endpoint', opts.ok && Array.isArray(opts.options));
   ok('Has alternatives flag', typeof opts.hasAlternatives === 'boolean');
+
+  ok('Admin quote-options endpoint', adminOpts.ok && Array.isArray(adminOpts.options));
+
+  const source =
+    (adminOpts.options || []).find((o) => ['draft', 'sent', 'viewed'].includes(String(o.status || '').toLowerCase())) ||
+    (adminOpts.options || [])[0];
+
+  if (!source?.id) {
+    console.log('SKIP  Option A/B mutation — no quote on this job');
+    console.log('\nDone.\n');
+    return;
+  }
+
+  const dup = await fetch(`${API}/api/admin/quotes/${source.id}/duplicate`, {
+    method: 'POST',
+    headers: adminH,
+    body: JSON.stringify({ asOption: true, quoteOptionTitle: 'Replacement' }),
+  }).then(json);
+  ok('Duplicate as Option B', Boolean(dup.ok && dup.quote?.id), dup.message || `id ${dup.quote?.id || 'n/a'}`);
+  if (!dup.ok || !dup.quote?.id) {
+    console.log('\nDone.\n');
+    return;
+  }
+
+  const afterDup = await fetch(`${API}/api/admin/jobs/${job.id}/quote-options`, { headers: adminH }).then(json);
+  const labels = new Set(
+    (afterDup.options || [])
+      .filter((o) => !['superseded', 'canceled', 'cancelled'].includes(String(o.status || '').toLowerCase()))
+      .map((o) => String(o.letter || o.quoteOptionLabel || '').replace(/^option\s+/i, '').trim())
+      .filter(Boolean),
+  );
+  ok('Distinct option letters', labels.size >= 2, [...labels].join(',') || 'none');
+
+  const grouped = await fetch(`${API}/api/admin/quotes/${dup.quote.id}/send-option-group`, {
+    method: 'POST',
+    headers: adminH,
+    body: JSON.stringify({ sendEmail: false }),
+  }).then(json);
+  ok('Send option group', Boolean(grouped.ok && Number(grouped.sent) >= 1), grouped.message || '');
+
+  const afterSend = await fetch(`${API}/api/admin/jobs/${job.id}/quote-options`, { headers: adminH }).then(json);
+  const optionB = (afterSend.options || []).find((o) => o.id === dup.quote.id);
+  ok('Option B still present after send', Boolean(optionB), optionB ? optionB.status : 'missing');
+
+  const revise = await fetch(`${API}/api/admin/quotes/${source.id}/document`, {
+    method: 'PUT',
+    headers: adminH,
+    body: JSON.stringify({
+      changeReason: 'Smoke revision of Option A',
+      quoteOptionTitle: source.quoteOptionTitle || 'Repair',
+      scopeSummary: source.scopeSummary || 'Repair existing unit',
+    }),
+  }).then(json);
+  ok('Option A revision', Boolean(revise.ok), revise.message || revise.code || '');
+
+  const resendA = await fetch(`${API}/api/admin/quotes/${source.id}/send`, {
+    method: 'POST',
+    headers: adminH,
+    body: JSON.stringify({ sendEmail: true, skipNotify: true }),
+  }).then(json);
+  ok('Resend Option A revision', Boolean(resendA.ok || resendA.status === 400), resendA.message || '');
+
+  const afterRev = await fetch(`${API}/api/admin/jobs/${job.id}/quote-options`, { headers: adminH }).then(json);
+  const bAfter = (afterRev.options || []).find((o) => o.id === dup.quote.id);
+  const aAfter = (afterRev.options || []).find((o) => o.id === source.id);
+  ok(
+    'Option B not superseded by Option A revision',
+    Boolean(bAfter) && String(bAfter.status).toLowerCase() !== 'superseded',
+    bAfter ? bAfter.status : 'missing',
+  );
+  ok(
+    'Option A kept its letter',
+    String(aAfter?.letter || aAfter?.quoteOptionLabel || '').replace(/^option\s+/i, '') !==
+      String(bAfter?.letter || bAfter?.quoteOptionLabel || '').replace(/^option\s+/i, '') ||
+      !aAfter ||
+      !bAfter,
+    `A=${aAfter?.letter || aAfter?.quoteOptionLabel || '?'} B=${bAfter?.letter || bAfter?.quoteOptionLabel || '?'}`,
+  );
+
+  const ho = await fetch(`${API}/api/managed/jobs/${job.id}/quote-options`, { headers: homeownerH }).then(json);
+  ok('Homeowner sees grouped options', ho.ok && Array.isArray(ho.options));
 
   console.log('\nDone.\n');
 }

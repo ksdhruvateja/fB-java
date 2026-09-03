@@ -16,7 +16,9 @@ export type AdminTab =
   | "pro-plans"
   | "homecare-pro"
   | "visit-fee"
-  | "legal-system";
+  | "legal-system"
+  | "communications"
+  | "disputes";
 
 export const ADMIN_TABS = new Set<AdminTab>([
   "overview",
@@ -37,6 +39,8 @@ export const ADMIN_TABS = new Set<AdminTab>([
   "homecare-pro",
   "visit-fee",
   "legal-system",
+  "communications",
+  "disputes",
 ]);
 
 export function sanitizeAdminTab(value: unknown): AdminTab {

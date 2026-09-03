@@ -1,7 +1,7 @@
 /**
  * Job operational event hooks for dispatch, technician assignment, and milestones.
- * Notification wiring can subscribe to these records later.
  */
+import { createInAppNotification } from './in-app-notifications.js';
 
 export const JOB_OPERATIONAL_EVENT_TYPES = [
   'contractor_assigned',
@@ -34,7 +34,106 @@ export async function recordJobOperationalEvent(pool, {
       JSON.stringify(detail || {}),
     ]
   );
-  return rows[0] || null;
+  const recorded = rows[0] || null;
+  try {
+    await notifyOperationalEvent(pool, {
+      jobId,
+      eventType,
+      contractorUserId,
+      employeeId,
+      detail,
+    });
+  } catch {
+    /* non-fatal */
+  }
+  return recorded;
+}
+
+async function notifyOperationalEvent(pool, { jobId, eventType, contractorUserId, employeeId, detail }) {
+  const { rows: jobs } = await pool.query(
+    `SELECT id, homeowner_user_id, assigned_contractor_user_id, title, booking_id FROM managed_jobs WHERE id=$1`,
+    [jobId],
+  );
+  const job = jobs[0];
+  if (!job) return;
+  const homeownerId = Number(job.homeowner_user_id);
+  const contractorId = Number(contractorUserId || job.assigned_contractor_user_id || 0);
+  const employeeName = detail?.employeeName || detail?.technicianName || null;
+  const companyName = detail?.companyName || null;
+  const booking = job.booking_id || `FB-${jobId}`;
+
+  const homeownerCopy = {
+    contractor_assigned: {
+      type: 'contractor_assigned',
+      title: 'Contractor assigned',
+      message: companyName
+        ? `${companyName} has been assigned to ${booking}.`
+        : `A contractor has been assigned to ${booking}.`,
+      focus: 'tracking',
+    },
+    technician_assigned: {
+      type: 'technician_assigned',
+      title: 'Technician assigned',
+      message: employeeName
+        ? `${employeeName} is assigned to your visit for ${booking}.`
+        : `A technician has been assigned to ${booking}.`,
+      focus: 'tracking',
+    },
+    contractor_dispatched: {
+      type: 'contractor_dispatched',
+      title: 'Contractor dispatched',
+      message: `Your professional is on the way for ${booking}.`,
+      focus: 'tracking',
+    },
+    technician_arrived: {
+      type: 'technician_arrived',
+      title: 'Technician arrived',
+      message: employeeName ? `${employeeName} has arrived on site.` : `Your technician has arrived for ${booking}.`,
+      focus: 'tracking',
+    },
+    job_started: {
+      type: 'job_started',
+      title: 'Work started',
+      message: `Work has started on ${booking}.`,
+      focus: 'tracking',
+    },
+    job_completed: {
+      type: 'job_completed',
+      title: 'Job completed',
+      message: `${job.title || 'Your service'} is complete — review and confirm when ready.`,
+      focus: 'completion',
+    },
+  }[eventType];
+
+  if (homeownerCopy && homeownerId) {
+    await createInAppNotification(pool, {
+      userId: homeownerId,
+      userRole: 'homeowner',
+      jobId,
+      type: homeownerCopy.type,
+      title: homeownerCopy.title,
+      message: homeownerCopy.message,
+      entityType: 'job',
+      entityId: jobId,
+      metadata: { focus: homeownerCopy.focus, employeeId, contractorUserId: contractorId || null },
+    });
+  }
+
+  if (contractorId && ['contractor_assigned', 'technician_assigned', 'contractor_dispatched'].includes(eventType)) {
+    await createInAppNotification(pool, {
+      userId: contractorId,
+      userRole: 'contractor',
+      jobId,
+      type: eventType === 'contractor_assigned' ? 'job_assigned' : eventType,
+      title: eventType === 'contractor_assigned' ? 'Job assigned' : homeownerCopy?.title || 'Job update',
+      message:
+        eventType === 'contractor_assigned'
+          ? `You have been assigned ${booking}.`
+          : homeownerCopy?.message || `Update on ${booking}.`,
+      entityType: 'job',
+      entityId: jobId,
+    });
+  }
 }
 
 export async function loadJobTimeline(pool, jobId) {

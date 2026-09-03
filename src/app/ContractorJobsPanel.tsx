@@ -27,6 +27,7 @@ import {
   type ContractorPayout,
   type PayoutAccount,
 } from "./managedJobs";
+import StaleItemNotice from "./StaleItemNotice";
 import ChangeOrderPanel from "./ChangeOrderPanel";
 import JobTimelinePanel from "./JobTimelinePanel";
 import { JobEarningsCard } from "./ContractorPayoutsPanel";
@@ -73,6 +74,7 @@ export default function ContractorJobsPanel({
   payoutByJobId,
   payoutAccount,
   onViewPayouts,
+  initialJobId = null,
 }: {
   jobs: ManagedJob[];
   busy: boolean;
@@ -82,6 +84,7 @@ export default function ContractorJobsPanel({
   payoutByJobId?: Map<number, ContractorPayout>;
   payoutAccount?: PayoutAccount | null;
   onViewPayouts?: () => void;
+  initialJobId?: number | null;
 }) {
   const [filter, setFilter] = useState<JobFilter>("all");
   const [employees, setEmployees] = useState<ContractorEmployee[]>([]);
@@ -92,7 +95,15 @@ export default function ContractorJobsPanel({
       if (r.ok) setEmployees((r.employees || []).filter((e) => e.active));
     });
   }, []);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(initialJobId);
+  const [dismissedStale, setDismissedStale] = useState(false);
+
+  useEffect(() => {
+    if (initialJobId) {
+      setSelectedId(initialJobId);
+      setDismissedStale(false);
+    }
+  }, [initialJobId]);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [completeSummary, setCompleteSummary] = useState("");
   const [healthSystem, setHealthSystem] = useState("HVAC");
@@ -109,10 +120,14 @@ export default function ContractorJobsPanel({
   const isMobile = useIsMobile();
 
   const filtered = useMemo(() => jobs.filter((j) => matchesFilter(j, filter)), [jobs, filter]);
-  const selected = useMemo(
-    () => filtered.find((j) => j.id === selectedId) || filtered[0] || jobs.find((j) => j.id === selectedId) || null,
-    [filtered, selectedId, jobs]
-  );
+  const requestedMissing =
+    !dismissedStale && Boolean(initialJobId) && jobs.length > 0 && !jobs.some((j) => j.id === initialJobId);
+  const selected = useMemo(() => {
+    if (selectedId) {
+      return jobs.find((j) => j.id === selectedId) || filtered.find((j) => j.id === selectedId) || null;
+    }
+    return requestedMissing ? null : filtered[0] || null;
+  }, [filtered, selectedId, jobs, requestedMissing]);
 
   const filters: { id: JobFilter; label: string }[] = [
     { id: "all", label: "All Jobs" },
@@ -129,6 +144,15 @@ export default function ContractorJobsPanel({
         <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase">Jobs</h1>
         <p className="mt-1 text-sm text-muted-foreground">Filter, open a workspace, and run the job from start to complete.</p>
       </div>
+
+      {requestedMissing ? (
+        <StaleItemNotice
+          onBack={() => {
+            setDismissedStale(true);
+            setSelectedId(null);
+          }}
+        />
+      ) : null}
 
       <div className="flex flex-wrap gap-2">
         {filters.map((f) => (

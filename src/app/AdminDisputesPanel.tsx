@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { disputeAdminAction, fetchAdminDisputeDetail, fetchAdminDisputes, type Dispute } from "./disputesApi";
 import JobTimelinePanel from "./JobTimelinePanel";
+import StaleItemNotice from "./StaleItemNotice";
 
 export default function AdminDisputesPanel({
   initialDisputeId,
@@ -17,6 +18,7 @@ export default function AdminDisputesPanel({
   const [detail, setDetail] = useState<Awaited<ReturnType<typeof fetchAdminDisputeDetail>> | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [stale, setStale] = useState(false);
   const [actionReason, setActionReason] = useState("");
 
   useEffect(() => {
@@ -47,9 +49,16 @@ export default function AdminDisputesPanel({
   async function loadDetail(id: number) {
     try {
       const r = await fetchAdminDisputeDetail(id);
+      if (!r?.dispute) {
+        setDetail(null);
+        setStale(true);
+        return;
+      }
+      setStale(false);
       setDetail(r);
-    } catch (e) {
-      onMessage?.(e instanceof Error ? e.message : "Could not load dispute.");
+    } catch {
+      setDetail(null);
+      setStale(true);
     }
   }
 
@@ -106,7 +115,14 @@ export default function AdminDisputesPanel({
       </aside>
 
       <section className="space-y-4">
-        {!selectedId || !d ? (
+        {stale ? (
+          <StaleItemNotice
+            onBack={() => {
+              setStale(false);
+              setSelectedId(null);
+            }}
+          />
+        ) : !selectedId || !d ? (
           <div className="rounded-2xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
             Select a dispute to review job context, payout state, and communications.
           </div>

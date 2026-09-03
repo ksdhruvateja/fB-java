@@ -96,6 +96,11 @@ export type QuoteDocument = {
   termsConditions?: string | null;
   internalNotes?: string | null;
   scopeSummary?: string | null;
+  quoteOptionLabel?: string | null;
+  quoteOptionTitle?: string | null;
+  optionGroup?: string | null;
+  optionSelectionStatus?: string | null;
+  versionNumber?: number;
   timeline?: string | null;
   warranty?: string | null;
   exclusions?: string | null;

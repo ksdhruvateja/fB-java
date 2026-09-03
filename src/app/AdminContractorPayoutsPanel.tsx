@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Loader2, Check, AlertCircle } from "lucide-react";
+import StaleItemNotice from "./StaleItemNotice";
 import {
   adminApprovePayout,
   adminAdjustPayout,
@@ -38,8 +39,22 @@ function econAmount(cents: number | null | undefined) {
   return formatCents(cents);
 }
 
-export default function AdminContractorPayoutsPanel() {
+function tabForStatus(status: string) {
+  const s = String(status || "").toLowerCase();
+  if (s === "approved") return "approved";
+  if (s === "processing") return "processing";
+  if (s === "paid") return "paid";
+  if (s.includes("fail") || s.includes("hold")) return "failed";
+  return "pending_approval";
+}
+
+export default function AdminContractorPayoutsPanel({
+  initialPayoutId = null,
+}: {
+  initialPayoutId?: number | null;
+}) {
   const [tab, setTab] = useState<string>("pending_approval");
+  const [stale, setStale] = useState(false);
   const [payouts, setPayouts] = useState<ContractorPayout[]>([]);
   const [summary, setSummary] = useState<{
     pendingApproval: { count: number; totalCents: number };
@@ -68,6 +83,35 @@ export default function AdminContractorPayoutsPanel() {
   useEffect(() => {
     load();
   }, [tab]);
+
+  useEffect(() => {
+    if (!initialPayoutId) {
+      setStale(false);
+      return;
+    }
+    let cancelled = false;
+    adminGetPayoutDetail(initialPayoutId)
+      .then((r) => {
+        if (cancelled) return;
+        if (!r.ok || !r.payout) {
+          setStale(true);
+          setSelected(null);
+          return;
+        }
+        setStale(false);
+        setTab(tabForStatus(r.payout.status));
+        setSelected(r.payout);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setStale(true);
+          setSelected(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialPayoutId]);
 
   useEffect(() => {
     if (!selected) {
@@ -175,6 +219,15 @@ export default function AdminContractorPayoutsPanel() {
           </button>
         ))}
       </div>
+
+      {stale ? (
+        <StaleItemNotice
+          onBack={() => {
+            setStale(false);
+            setSelected(null);
+          }}
+        />
+      ) : null}
 
       {message && (
         <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{message}</p>

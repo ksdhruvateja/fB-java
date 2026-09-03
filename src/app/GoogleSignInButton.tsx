@@ -59,7 +59,7 @@ export default function GoogleSignInButton({
     (async () => {
       const cfg = await getGoogleAuthConfig();
       if (cancelled) return;
-      if (!cfg.ok || !cfg.configured || !cfg.clientId) {
+      if (!cfg.ok || !cfg.googleOAuthEnabled || !cfg.configured || !cfg.clientId) {
         setConfigured(false);
         return;
       }

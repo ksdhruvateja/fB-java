@@ -52,7 +52,9 @@ import ContractorSupportPanel from "./ContractorSupportPanel";
 import MessagesPanel from "./MessagesPanel";
 import NotificationBell from "./NotificationBell";
 import { useInAppComms } from "./useInAppComms";
-import { formatBadgeCount } from "./notificationsApi";
+import { formatBadgeCount, type InAppNotification } from "./notificationsApi";
+import { resolveNotificationTarget, STALE_CONTENT_MESSAGE } from "./navigateFromNotification";
+import StaleItemNotice from "./StaleItemNotice";
 import ContractorStripeConnectCard from "./ContractorStripeConnectCard";
 import ContractorExpiryAlert from "./ContractorExpiryAlert";
 import {
@@ -141,6 +143,10 @@ export default function ContractorDashboard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [focusInviteId, setFocusInviteId] = useState<number | null>(null);
+  const [focusJobId, setFocusJobId] = useState<number | null>(null);
+  const [focusPayoutId, setFocusPayoutId] = useState<number | null>(null);
+  const [focusConversationId, setFocusConversationId] = useState<number | null>(null);
+  const [staleNotice, setStaleNotice] = useState<string | null>(null);
   const { unreadNotifications, unreadMessages, refresh: refreshComms } = useInAppComms(true);
 
   const [application, setApplication] = useState<ContractorApplication>(() => applicationFromUser(user));
@@ -485,6 +491,41 @@ export default function ContractorDashboard({
     });
   };
 
+  function handleNotificationNavigate(n: InAppNotification) {
+    setStaleNotice(null);
+    const target = resolveNotificationTarget(n, "contractor");
+    if (target.kind === "contractor_messages") {
+      setFocusConversationId(target.conversationId || null);
+      go("messages");
+      return;
+    }
+    if (target.kind === "contractor_compliance") {
+      go("compliance");
+      return;
+    }
+    if (target.kind === "contractor_payout") {
+      setPayoutSubTab(target.failed ? "account" : "earnings");
+      setFocusPayoutId(target.payoutId || null);
+      go("payouts");
+      return;
+    }
+    if (target.kind === "contractor_invite" && target.jobId) {
+      const inv = invites.find((i) => i.jobId === target.jobId);
+      setFocusInviteId(inv?.id ?? target.jobId);
+      go("invites");
+      return;
+    }
+    if (target.kind === "contractor_job" && target.jobId) {
+      if (jobs.length > 0 && !jobs.some((j) => j.id === target.jobId)) {
+        setStaleNotice(STALE_CONTENT_MESSAGE);
+      }
+      setFocusJobId(target.jobId);
+      go("jobs");
+      return;
+    }
+    go("messages");
+  }
+
   const goToPayoutAccount = () => {
     setPayoutSubTab("account");
     go("payouts");
@@ -546,7 +587,7 @@ export default function ContractorDashboard({
           <NotificationBell
             unreadCount={unreadNotifications}
             onRefreshCounts={refreshComms}
-            onNavigate={() => go("messages")}
+            onNavigate={handleNotificationNavigate}
           />
           <button type="button" onClick={onToggleDark} className="rounded-md p-2 hover:bg-muted" aria-label="Theme">
             {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
@@ -598,6 +639,17 @@ export default function ContractorDashboard({
           {error && (
             <div className="mb-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</div>
           )}
+          {staleNotice ? (
+            <div className="mb-4">
+              <StaleItemNotice
+                message={staleNotice}
+                onBack={() => {
+                  setStaleNotice(null);
+                  setFocusJobId(null);
+                }}
+              />
+            </div>
+          ) : null}
 
           {tab === "dashboard" && (
             <ContractorOverviewPanel
@@ -640,6 +692,7 @@ export default function ContractorDashboard({
               payoutByJobId={payoutByJobId}
               payoutAccount={payoutAccount}
               onViewPayouts={() => go("payouts")}
+              initialJobId={focusJobId}
             />
           )}
 
@@ -753,6 +806,7 @@ export default function ContractorDashboard({
               onRefresh={refresh}
               initialSubTab={payoutSubTab}
               stripeReturnMessage={stripeReturnMessage}
+              initialPayoutId={focusPayoutId}
             />
           )}
 
@@ -828,7 +882,7 @@ export default function ContractorDashboard({
           )}
 
           {tab === "messages" && (
-            <MessagesPanel role="contractor" onUnreadChange={refreshComms} />
+            <MessagesPanel role="contractor" initialConversationId={focusConversationId} onUnreadChange={refreshComms} />
           )}
           {tab === "settings" && (
             <section className="mx-auto max-w-3xl space-y-4">

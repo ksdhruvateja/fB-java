@@ -46,8 +46,14 @@ function StatusBadge({ status }: { status: string }) {
   return <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${cls}`}>{status}</span>;
 }
 
-export default function AdminFinancePanel({ onMessage }: { onMessage: (msg: string) => void }) {
-  const [subTab, setSubTab] = useState<FinanceTab>("overview");
+export default function AdminFinancePanel({
+  onMessage,
+  initialPayoutId = null,
+}: {
+  onMessage: (msg: string) => void;
+  initialPayoutId?: number | null;
+}) {
+  const [subTab, setSubTab] = useState<FinanceTab>(initialPayoutId ? "payouts" : "overview");
   const [range, setRange] = useState<DateRange>("30d");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -59,6 +65,10 @@ export default function AdminFinancePanel({ onMessage }: { onMessage: (msg: stri
   const [paymentSearch, setPaymentSearch] = useState("");
   const [invoices, setInvoices] = useState<Array<Record<string, unknown>>>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
+
+  useEffect(() => {
+    if (initialPayoutId) setSubTab("payouts");
+  }, [initialPayoutId]);
 
   useEffect(() => {
     if (subTab !== "overview") return;
@@ -237,7 +247,7 @@ export default function AdminFinancePanel({ onMessage }: { onMessage: (msg: stri
         </div>
       )}
 
-      {subTab === "payouts" && <AdminContractorPayoutsPanel />}
+      {subTab === "payouts" && <AdminContractorPayoutsPanel initialPayoutId={initialPayoutId} />}
       {subTab === "profitability" && <AdminOrderLedgerPanel onMessage={onMessage} />}
       {subTab === "invoices" && (
         <div className="overflow-x-auto rounded-2xl border border-border">

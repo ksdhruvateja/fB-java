@@ -148,7 +148,7 @@ import {
   recordJobOperationalEvent,
 } from './job-operational-events.js';
 import { convertProposalToInvoice } from './quote-invoice-service.js';
-import { assertEmployeeAssignable, serializeEmployee } from './contractor-employees.js';
+import { createInAppNotification, notifyAdmins } from './in-app-notifications.js';
 
 async function ensureUserReferralCodeInline(pool, r) {
   if (r.referral_code) return r.referral_code;
@@ -750,6 +750,19 @@ async function notifyAdminsNewJobForQuote(pool, { job, homeowner }) {
   notifyOps(msg);
 
   try {
+    await notifyAdmins(pool, {
+      type: 'new_service_request',
+      title: 'New service request',
+      message: msg,
+      jobId: job.id,
+      entityType: 'job',
+      entityId: job.id,
+    });
+  } catch {
+    /* non-fatal */
+  }
+
+  try {
     const { rows: admins } = await pool.query(
       `SELECT email, name FROM users WHERE role='admin' AND COALESCE(is_blocked,false)=false AND email IS NOT NULL`
     );
@@ -780,6 +793,19 @@ async function notifyAdminsHomeownerApprovedQuote(pool, { job, homeowner, propos
     `${homeowner?.name || 'Customer'} (${homeowner?.email || '—'}). Request contractor dispatch when ready.`;
 
   notifyOps(msg);
+
+  try {
+    await notifyAdmins(pool, {
+      type: 'quote_accepted',
+      title: 'Quote accepted',
+      message: msg,
+      jobId: job.id,
+      entityType: 'quote',
+      entityId: proposal?.id || job.active_proposal_id || job.id,
+    });
+  } catch {
+    /* non-fatal */
+  }
 
   try {
     const { rows: admins } = await pool.query(
@@ -815,6 +841,19 @@ async function notifyAdminsDispatchServiceRequest(pool, { job, homeowner, amount
     `${category} • ${area}. Customer paid: $${paid}.${couponNote} Status: ${statusLabel}.`;
 
   notifyOps(msg);
+
+  try {
+    await notifyAdmins(pool, {
+      type: 'new_service_request',
+      title: 'New paid service request',
+      message: msg,
+      jobId: job.id,
+      entityType: 'job',
+      entityId: job.id,
+    });
+  } catch {
+    /* non-fatal */
+  }
 
   try {
     const { rows: admins } = await pool.query(
@@ -1065,6 +1104,20 @@ export async function processManagedJobAssessmentTask(pool, { jobId, actorUserId
       return { ok: false, code };
     }
     await pushStatus(pool, id, job.status, 'ai_review_complete', actorId, 'AI assessment complete');
+    try {
+      await createInAppNotification(pool, {
+        userId: job.homeowner_user_id,
+        userRole: 'homeowner',
+        jobId: id,
+        type: 'ai_assessment_ready',
+        title: 'AI assessment ready',
+        message: 'Your assessment is ready to review.',
+        entityType: 'job',
+        entityId: id,
+      });
+    } catch {
+      /* non-fatal */
+    }
     console.log('[assessment] complete', { jobId: id, durationMs: Date.now() - started });
     return { ok: true };
   } catch (err) {
@@ -1197,13 +1250,27 @@ function serializeProposal(row, viewer) {
     base.homeownerPhone = row.homeowner_phone || row.job_contact_phone || null;
     base.discountType = row.discount_type || null;
     base.shippingAmount = row.shipping_amount != null ? Number(row.shipping_amount) : null;
+    base.quoteOptionLabel = row.quote_option_label || null;
+    base.quoteOptionTitle = row.quote_option_title || null;
+    base.optionGroup = row.option_group || null;
+    base.optionSelectionStatus = row.option_selection_status || 'pending';
+    base.versionNumber = Number(row.version_number || 1);
+    base.contractorQuoteAmount =
+      row.contractor_quote_amount != null
+        ? Number(row.contractor_quote_amount)
+        : row.contractor_net != null
+          ? Number(row.contractor_net)
+          : null;
   }
   if (isCustomer) {
     base.customerLineItems = row.customer_line_items;
     base.quoteValidUntil = row.quote_valid_until;
     base.couponCode = row.coupon_code;
     base.quoteOptionLabel = row.quote_option_label || null;
+    base.quoteOptionTitle = row.quote_option_title || null;
     base.optionGroup = row.option_group || null;
+    base.optionSelectionStatus = row.option_selection_status || 'pending';
+    base.versionNumber = Number(row.version_number || 1);
   }
   if (!isAdmin && !isCustomer) {
     // Contractors must not see retail
@@ -3772,6 +3839,20 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
 
       await audit(pool, req.authUser.id, 'contractor_invited', 'managed_job', jobId, { contractorUserId });
+      try {
+        await createInAppNotification(pool, {
+          userId: contractorUserId,
+          userRole: 'contractor',
+          jobId,
+          type: 'job_invitation',
+          title: 'Job invitation',
+          message: `You've been invited to ${job.booking_id || `FB-${jobId}`}.`,
+          entityType: 'job',
+          entityId: jobId,
+        });
+      } catch {
+        /* non-fatal */
+      }
       const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       res.json({
         ok: true,
@@ -4539,7 +4620,8 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         [jobId],
       );
       const options = rows.map((r) => serializeProposal(r, req.authUser));
-      const hasAlternatives = options.filter((o) => o.optionGroup).length > 1;
+      const labeled = options.filter((o) => o.quoteOptionLabel || o.optionGroup);
+      const hasAlternatives = labeled.length > 1;
       return res.json({ ok: true, options, hasAlternatives });
     } catch (e) {
       return res.status(500).json({ ok: false, message: 'Server error' });
@@ -4742,6 +4824,24 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         homeowner: req.authUser,
         proposal: prop,
       });
+      try {
+        const inv = convertResult.invoice;
+        if (inv && jobs[0].homeowner_user_id && !convertResult.alreadyConverted) {
+          await createInAppNotification(pool, {
+            userId: jobs[0].homeowner_user_id,
+            userRole: 'homeowner',
+            jobId,
+            type: 'invoice_created',
+            title: 'Invoice created',
+            message: `Invoice ${inv.invoiceNumber || ''} is ready.`,
+            entityType: 'invoice',
+            entityId: inv.id,
+            metadata: { quoteId: prop.id, versionNumber },
+          });
+        }
+      } catch {
+        /* non-fatal */
+      }
 
       res.json({
         ok: true,
@@ -5324,18 +5424,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
             },
           });
         }
-        await pool.query(
-          `INSERT INTO notifications (user_id, job_id, type, title, message)
-           VALUES ($1,$2,'job_completed',$3,$4)`,
-          [
-            job.homeowner_user_id,
-            jobId,
-            isRecurring ? `${serviceLabel} complete` : 'Service marked complete',
-            isRecurring
-              ? `Your ${serviceLabel} is complete.${report.summary ? ' ' + report.summary : ''}`
-              : `${job.title || 'Your service'} is complete — review and confirm when ready.`,
-          ]
-        );
+        await recordJobOperationalEvent(pool, {
+          jobId,
+          eventType: 'job_completed',
+          contractorUserId: job.assigned_contractor_user_id,
+          employeeId: job.assigned_employee_id || null,
+          actorUserId: req.authUser.id,
+          detail: { summary: report.summary || null },
+        });
       } catch (_e) {
         /* non-fatal */
       }
@@ -7162,6 +7258,37 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           `UPDATE payments SET status='failed' WHERE stripe_payment_intent=$1`,
           [pi.id]
         );
+        try {
+          const { rows: pays } = await pool.query(
+            `SELECT job_id, homeowner_user_id FROM payments WHERE stripe_payment_intent=$1 LIMIT 1`,
+            [pi.id],
+          );
+          const pay = pays[0];
+          if (pay?.job_id) {
+            await notifyAdmins(pool, {
+              type: 'payment_failed',
+              title: 'Payment failed',
+              message: `A homeowner payment failed for job FB-${pay.job_id}.`,
+              jobId: pay.job_id,
+              entityType: 'job',
+              entityId: pay.job_id,
+            });
+            if (pay.homeowner_user_id) {
+              await createInAppNotification(pool, {
+                userId: pay.homeowner_user_id,
+                userRole: 'homeowner',
+                jobId: pay.job_id,
+                type: 'payment_failed',
+                title: 'Payment unsuccessful',
+                message: 'Your payment did not go through. You can retry from the invoice.',
+                entityType: 'invoice',
+                entityId: pay.job_id,
+              });
+            }
+          }
+        } catch {
+          /* non-fatal */
+        }
       }
 
       if (event.type === 'checkout.session.expired') {

@@ -14,6 +14,7 @@ import {
 } from "./messagingApi";
 import { formatRelativeTime } from "./notificationsApi";
 import { getStoredToken } from "./auth";
+import StaleItemNotice from "./StaleItemNotice";
 
 type Role = "homeowner" | "contractor" | "admin";
 
@@ -98,6 +99,7 @@ export default function MessagesPanel({
   const [loadingThread, setLoadingThread] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [staleThread, setStaleThread] = useState(false);
   const [showMobileThread, setShowMobileThread] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -118,6 +120,7 @@ export default function MessagesPanel({
   const loadThread = useCallback(async (id: number) => {
     setLoadingThread(true);
     setError(null);
+    setStaleThread(false);
     try {
       const r = await fetchConversation(id);
       setActiveConv(r.conversation);
@@ -125,7 +128,14 @@ export default function MessagesPanel({
       await markConversationRead(id);
       onUnreadChange?.();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not load conversation.");
+      const msg = e instanceof Error ? e.message : "Could not load conversation.";
+      if (/not found|not allowed|forbidden/i.test(msg)) {
+        setStaleThread(true);
+        setActiveConv(null);
+        setMessages([]);
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoadingThread(false);
     }
@@ -170,6 +180,7 @@ export default function MessagesPanel({
   }, [messages]);
 
   const openConversation = (id: number) => {
+    setStaleThread(false);
     setSelectedId(id);
     if (isMobile) setShowMobileThread(true);
   };
@@ -295,7 +306,17 @@ export default function MessagesPanel({
 
   const threadPane = (
     <div className={`flex min-h-0 flex-1 flex-col ${isMobile && !showMobileThread ? "hidden" : "flex"}`}>
-      {selectedId && activeConv ? (
+      {staleThread ? (
+        <div className="flex flex-1 items-center justify-center p-6">
+          <StaleItemNotice
+            onBack={() => {
+              setStaleThread(false);
+              setSelectedId(null);
+              setShowMobileThread(false);
+            }}
+          />
+        </div>
+      ) : selectedId && activeConv ? (
         <>
           <div className="flex items-center gap-2 border-b border-border px-3 py-3">
             {isMobile ? (
@@ -412,6 +433,10 @@ export default function MessagesPanel({
             </div>
           </div>
         </>
+      ) : selectedId && loadingThread ? (
+        <div className="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading conversation…
+        </div>
       ) : (
         <div className="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
           Select a conversation to view messages.

@@ -55,6 +55,8 @@
     "smoke:availability": "node --env-file=.env scripts/smoke-availability.mjs http://127.0.0.1:3001",
     "smoke:quote-alternatives": "node --env-file=.env scripts/smoke-quote-alternatives.mjs http://127.0.0.1:3001",
     "smoke:universal-search": "node --env-file=.env scripts/smoke-universal-search.mjs http://127.0.0.1:3001",
+    "smoke:p0-remediation": "node --env-file=.env scripts/smoke-p0-remediation.mjs",
+    "attachment:stats": "node --env-file=.env scripts/attachment-storage-stats.mjs",
     "smoke:email": "node scripts/smoke-email.mjs",
     "email:preview": "node scripts/email-preview.mjs all",
     "smoke:service-catalog": "node scripts/smoke-service-catalog.mjs",

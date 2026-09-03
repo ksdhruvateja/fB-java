@@ -7,6 +7,7 @@ import { ensurePayoutRecordForJob, logPayoutAudit } from './payout-db.js';
 import { tipAmountCentsFromMeta } from './tips.js';
 import { captureStripeProcessingFees, persistStripeProcessingFees } from './stripe.js';
 import { FINANCIAL_EVENT, recordFinancialEvent } from './financial-ledger.js';
+import { createInAppNotification } from './in-app-notifications.js';
 
 export const HOLDABLE_PAYOUT_STATUSES = new Set([
   PAYOUT_STATUS.PENDING_JOB_COMPLETION,
@@ -512,10 +513,35 @@ export async function processSuccessfulPayment(pool, {
           contractorId: payout.contractor_id,
           amountCents: Number(payout.net_amount_cents || 0),
           createdBy: actorUserId,
+          metadata: { fromPaymentId: paymentRow.id },
         });
       }
     } catch (e) {
       console.warn('[settlement] fee capture:', e.message);
+    }
+  }
+
+  if (!alreadySettled) {
+    try {
+      let uid = homeownerUserId;
+      if (!uid) {
+        const { rows: jobRows } = await pool.query(`SELECT homeowner_user_id FROM managed_jobs WHERE id=$1`, [jobId]);
+        uid = jobRows[0]?.homeowner_user_id;
+      }
+      if (uid) {
+        await createInAppNotification(pool, {
+          userId: uid,
+          userRole: 'homeowner',
+          jobId,
+          type: 'payment_received',
+          title: 'Payment received',
+          message: 'Your payment was received. Thank you.',
+          entityType: 'invoice',
+          entityId: invoiceId,
+        });
+      }
+    } catch {
+      /* non-fatal */
     }
   }
 

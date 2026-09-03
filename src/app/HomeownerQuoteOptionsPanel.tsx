@@ -3,7 +3,12 @@ import { Loader2 } from "lucide-react";
 import { approveProposal, formatMoney, type ManagedJob, type Proposal } from "./managedJobs";
 import { getStoredToken } from "./auth";
 
-type QuoteOption = Proposal & { quoteOptionLabel?: string | null; optionGroup?: string | null };
+type QuoteOption = Proposal & {
+  quoteOptionLabel?: string | null;
+  quoteOptionTitle?: string | null;
+  optionGroup?: string | null;
+  total?: number;
+};
 
 async function fetchQuoteOptions(jobId: number) {
   const token = getStoredToken();
@@ -13,6 +18,11 @@ async function fetchQuoteOptions(jobId: number) {
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || "Could not load quote options");
   return data as { ok: boolean; options: QuoteOption[]; hasAlternatives: boolean };
+}
+
+function optionLetter(opt: QuoteOption, idx: number) {
+  const raw = String(opt.quoteOptionLabel || "").replace(/^option\s+/i, "").trim();
+  return raw || String.fromCharCode(65 + idx);
 }
 
 export default function HomeownerQuoteOptionsPanel({
@@ -83,22 +93,26 @@ export default function HomeownerQuoteOptionsPanel({
 
   return (
     <div className="space-y-4">
-      <p className="text-sm font-semibold">Choose your service option</p>
-      <div className="grid gap-3 sm:grid-cols-2">
+      <p className="text-sm font-semibold">Choose the option that works best for you</p>
+      <div className="grid grid-cols-1 gap-3 overflow-x-hidden">
         {activeOptions.map((opt, idx) => {
-          const label = opt.quoteOptionLabel || `Option ${String.fromCharCode(65 + idx)}`;
+          const letter = optionLetter(opt, idx);
+          const title = opt.quoteOptionTitle || opt.scopeSummary || "Service option";
           return (
-            <div key={opt.id} className="rounded-xl border border-border bg-card p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-primary">{label}</p>
-              <p className="mt-1 font-medium">{opt.scopeSummary || "Service option"}</p>
-              <p className="mt-2 text-2xl font-semibold tabular-nums">{formatMoney(opt.retailAmount)}</p>
+            <div key={opt.id} className="min-w-0 rounded-xl border border-border bg-card p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-primary">Option {letter}</p>
+              <p className="mt-1 break-words font-medium">{title}</p>
+              <p className="mt-2 text-2xl font-semibold tabular-nums">{formatMoney(Number(opt.total ?? opt.retailAmount ?? 0))}</p>
+              {opt.scopeSummary && opt.quoteOptionTitle ? (
+                <p className="mt-2 break-words text-sm text-muted-foreground">{opt.scopeSummary}</p>
+              ) : null}
               <button
                 type="button"
                 disabled={selectingId != null}
                 onClick={() => void selectOption(opt.id)}
                 className="mt-4 w-full rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
               >
-                {selectingId === opt.id ? "Selecting…" : `Select ${label}`}
+                {selectingId === opt.id ? "Selecting…" : `Select Option ${letter}`}
               </button>
             </div>
           );

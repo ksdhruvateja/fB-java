@@ -49,6 +49,7 @@ import {
   type QuoteLineItem,
 } from "./quoteDocument";
 import { StructuredAddressFields } from "./UsLocationFields";
+import AdminQuoteOptionsPanel from "./AdminQuoteOptionsPanel";
 import {
   formatAddressLines,
   normalizeStructuredAddress,
@@ -177,7 +178,16 @@ function QuoteDocumentEditor({
     snapshot?: Record<string, unknown>;
   } | null>(null);
   const [jobQuoteHistory, setJobQuoteHistory] = useState<
-    { id: number; quoteNumber?: string; status: string; versionNumber: number; total: number }[]
+    {
+      id: number;
+      quoteNumber?: string;
+      status: string;
+      versionNumber: number;
+      total: number;
+      quoteOptionLabel?: string | null;
+      quoteOptionTitle?: string | null;
+      supersededAt?: string | null;
+    }[]
   >([]);
   const [modal, setModal] = useState<ModalKind>(null);
 
@@ -198,6 +208,9 @@ function QuoteDocumentEditor({
   const [contractorNotes, setContractorNotes] = useState("");
   const [contractorWarranty, setContractorWarranty] = useState("");
   const [contractorSpecial, setContractorSpecial] = useState("");
+  const [optionLabel, setOptionLabel] = useState("");
+  const [optionTitle, setOptionTitle] = useState("");
+  const [scopeSummary, setScopeSummary] = useState("");
   const [validUntil, setValidUntil] = useState("");
   const [billTo, setBillTo] = useState({
     name: "",
@@ -314,6 +327,9 @@ function QuoteDocumentEditor({
     setContractorNotes(doc.contractorNotes || "");
     setContractorWarranty(doc.warranty || "");
     setContractorSpecial(doc.contractorSpecialConditions || "");
+    setOptionLabel(doc.quoteOptionLabel || "");
+    setOptionTitle(doc.quoteOptionTitle || "");
+    setScopeSummary(doc.scopeSummary || "");
     setValidUntil(doc.quoteValidUntil ? new Date(doc.quoteValidUntil).toISOString().slice(0, 10) : "");
     const addr = normalizeStructuredAddress({
       ...(doc.billTo || {}),
@@ -410,6 +426,9 @@ function QuoteDocumentEditor({
     warranty: contractorWarranty,
     quoteValidUntil: validUntil || null,
     couponCode: jobCoupon?.code || quote?.couponCode || null,
+    scopeSummary,
+    quoteOptionLabel: optionLabel || null,
+    quoteOptionTitle: optionTitle || null,
   });
 
   const applyJobCouponToDiscount = () => {
@@ -717,6 +736,18 @@ function QuoteDocumentEditor({
                   </div>
                 </div>
 
+                <div className="grid gap-3 rounded-xl border border-border p-3 sm:grid-cols-3">
+                  <Field label="Option letter">
+                    <input className={inputClass} disabled={locked} value={optionLabel} onChange={(e) => setOptionLabel(e.target.value.toUpperCase().slice(0, 8))} placeholder="A" />
+                  </Field>
+                  <Field label="Customer title">
+                    <input className={inputClass} disabled={locked} value={optionTitle} onChange={(e) => setOptionTitle(e.target.value)} placeholder="Repair" />
+                  </Field>
+                  <Field label="Scope" className="sm:col-span-3">
+                    <textarea className={inputClass} rows={2} disabled={locked} value={scopeSummary} onChange={(e) => setScopeSummary(e.target.value)} placeholder="Repair existing unit…" />
+                  </Field>
+                </div>
+
                 {previousRevision ? (
                   <div className="grid gap-4 rounded-2xl border border-border bg-muted/20 p-4 lg:grid-cols-3">
                     <div>
@@ -761,7 +792,9 @@ function QuoteDocumentEditor({
                             className="font-mono text-primary hover:underline"
                             onClick={() => void openQuote(h.id)}
                           >
-                            {h.quoteNumber || `FBQ-${h.id}`} v{h.versionNumber}
+                            {h.quoteNumber || `FBQ-${h.id}`}
+                            {h.quoteOptionLabel ? ` · Option ${h.quoteOptionLabel}` : ""}
+                            {h.quoteOptionTitle ? ` — ${h.quoteOptionTitle}` : ""} v{h.versionNumber}
                           </button>
                           <span>{formatMoney(h.total)}</span>
                           <span className="text-xs text-muted-foreground">{formatStatusLabel(h.status)}</span>
@@ -769,6 +802,16 @@ function QuoteDocumentEditor({
                       ))}
                     </ul>
                   </div>
+                ) : null}
+
+                {quote.jobId ? (
+                  <AdminQuoteOptionsPanel
+                    jobId={quote.jobId}
+                    currentQuoteId={quote.id}
+                    onOpenQuote={(id) => void openQuote(id)}
+                    onMessage={onMessage}
+                    onChanged={notifyChanged}
+                  />
                 ) : null}
 
                 {/* Bill to + job meta */}

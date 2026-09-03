@@ -326,7 +326,10 @@ export type Proposal = {
   createdAt?: string | null;
   publishedAt?: string | null;
   quoteOptionLabel?: string | null;
+  quoteOptionTitle?: string | null;
   optionGroup?: string | null;
+  optionSelectionStatus?: string | null;
+  versionNumber?: number;
   createdByName?: string | null;
   createdById?: number | null;
   pricingAdjustments?: Array<Record<string, unknown>>;
@@ -1146,11 +1149,49 @@ export async function adminSendQuote(
   );
 }
 
-export async function adminDuplicateQuote(id: number) {
+export async function adminDuplicateQuote(
+  id: number,
+  body: { asOption?: boolean; quoteOptionLabel?: string; quoteOptionTitle?: string } = {},
+) {
   return api<{ ok: boolean; quote?: import("./quoteDocument").QuoteDocument; message?: string }>(
     `/api/admin/quotes/${id}/duplicate`,
-    { method: "POST", body: JSON.stringify({}) }
+    { method: "POST", body: JSON.stringify(body) }
   );
+}
+
+export async function adminJobQuoteOptions(jobId: number) {
+  return api<{
+    ok: boolean;
+    options?: Array<
+      import("./quoteDocument").QuoteDocument & {
+        customerTotal?: number;
+        contractorAmount?: number;
+        margin?: number;
+        letter?: string | null;
+        customerTitle?: string | null;
+        historical?: boolean;
+      }
+    >;
+    groupId?: string | null;
+    message?: string;
+  }>(`/api/admin/jobs/${jobId}/quote-options`);
+}
+
+export async function adminSendQuoteOptionGroup(
+  id: number,
+  body: { sendEmail?: boolean; email?: string; subject?: string; message?: string } = {},
+) {
+  return api<{ ok: boolean; sent?: number; quote?: import("./quoteDocument").QuoteDocument; message?: string }>(
+    `/api/admin/quotes/${id}/send-option-group`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+}
+
+export async function adminRemoveDraftQuoteOption(id: number) {
+  return api<{ ok: boolean; message?: string }>(`/api/admin/quotes/${id}/remove-draft-option`, {
+    method: "POST",
+    body: "{}",
+  });
 }
 
 export async function adminCancelQuote(id: number, reason?: string) {

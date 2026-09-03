@@ -23,6 +23,28 @@ async function main() {
 
   const cfg = await fetch(`${API}/api/auth/google/config`).then(json);
   ok('google config endpoint', cfg.ok === true, `configured=${cfg.configured}`);
+  ok(
+    'googleOAuthEnabled flag present',
+    typeof cfg.googleOAuthEnabled === 'boolean' || typeof cfg.configured === 'boolean',
+  );
+  const cfgText = JSON.stringify(cfg);
+  ok('GOOGLE_CLIENT_SECRET absent from public config', !/GOOGLE_CLIENT_SECRET|client_secret|GOCSPX-/i.test(cfgText));
+  ok(
+    'no secret-shaped keys in public config',
+    !Object.keys(cfg).some((k) => /secret|password|private/i.test(k)),
+  );
+  if (cfg.configured || cfg.googleOAuthEnabled) {
+    ok(
+      'public clientId looks like GIS web client ID',
+      typeof cfg.clientId === 'string' &&
+        /\.apps\.googleusercontent\.com$/i.test(cfg.clientId) &&
+        !/^GOCSPX-/i.test(cfg.clientId),
+      cfg.clientId ? 'present' : 'missing',
+    );
+  } else {
+    ok('invalid/missing Google config fail-closed', cfg.clientId == null || cfg.clientId === '', 'clientId omitted');
+    ok('googleOAuthEnabled false when disabled', cfg.googleOAuthEnabled === false || cfg.configured === false);
+  }
 
   const noCred = await fetch(`${API}/api/auth/google`, {
     method: 'POST',

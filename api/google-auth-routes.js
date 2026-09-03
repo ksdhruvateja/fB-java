@@ -8,20 +8,53 @@ import { checkActionConsentsFromBody, validateAndRecordActionConsents } from './
 import { applyReferralCode, ensureReferralCode } from './referrals.js';
 import { syncUserHomeCareEntitlement, toPublicHomeCareSubscriptionDto } from './subscription-state.js';
 
+function looksLikeGoogleWebClientId(value) {
+  const v = String(value || '').trim();
+  if (!v) return false;
+  if (/^GOCSPX-/i.test(v)) return false;
+  if (/^(sk_|pk_|whsec_|rk_)/i.test(v)) return false;
+  return /^[\w-]+\.apps\.googleusercontent\.com$/i.test(v) && !v.toLowerCase().startsWith('gocspx-');
+}
+
 function googleClientId() {
-  return (
+  const raw =
     process.env.GOOGLE_CLIENT_ID?.trim() ||
     process.env.VITE_GOOGLE_CLIENT_ID?.trim() ||
-    ''
-  );
+    '';
+  if (!raw) return '';
+  if (!looksLikeGoogleWebClientId(raw)) {
+    console.warn('[google-auth] GOOGLE_CLIENT_ID is not a valid GIS client ID; ignoring.');
+    return '';
+  }
+  return raw;
 }
 
 export function isGoogleOAuthConfigured() {
   return Boolean(googleClientId());
 }
 
+/** Public GIS client ID only — never returns secret-shaped or invalid values. */
 export function getPublicGoogleClientId() {
   return googleClientId() || null;
+}
+
+/** Safe public OAuth status for browser clients. Omits clientId when disabled. */
+export function getPublicGoogleOAuthStatus() {
+  const clientId = getPublicGoogleClientId();
+  const enabled = Boolean(clientId);
+  if (!enabled) {
+    return {
+      ok: true,
+      googleOAuthEnabled: false,
+      configured: false,
+    };
+  }
+  return {
+    ok: true,
+    googleOAuthEnabled: true,
+    configured: true,
+    clientId,
+  };
 }
 
 async function verifyGoogleIdToken(idToken) {

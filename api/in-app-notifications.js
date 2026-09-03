@@ -22,6 +22,75 @@ export async function initInAppNotificationSchema(pool) {
     CREATE INDEX IF NOT EXISTS idx_notifications_user_archived
     ON notifications (user_id, archived_at, created_at DESC)
   `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_notifications_job
+    ON notifications (job_id, created_at DESC)
+    WHERE job_id IS NOT NULL
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_notifications_entity
+    ON notifications (entity_type, entity_id)
+    WHERE entity_type IS NOT NULL
+  `);
+}
+
+export function defaultNotificationActionUrl({
+  type,
+  userRole = null,
+  jobId = null,
+  entityType = null,
+  entityId = null,
+} = {}) {
+  const t = String(type || '').toLowerCase();
+  const role = String(userRole || '').toLowerCase();
+  const eid = entityId != null && Number.isFinite(Number(entityId)) ? Number(entityId) : null;
+  const jid = jobId != null && Number.isFinite(Number(jobId)) ? Number(jobId) : null;
+  const et = String(entityType || '').toLowerCase();
+
+  if (et === 'conversation' && eid) {
+    if (role === 'admin') return `/admin?tab=communications&conversation=${eid}`;
+    if (role === 'contractor') return `/contractor?tab=messages&conversation=${eid}`;
+    return `/homeowner?tab=inbox&conversation=${eid}`;
+  }
+  if (et === 'dispute' && eid) {
+    if (role === 'admin') return `/admin?tab=disputes&dispute=${eid}`;
+    return jid ? `/homeowner?tab=jobs&job=${jid}&focus=dispute` : '/homeowner?tab=jobs';
+  }
+  if (et === 'payout' && eid) {
+    if (role === 'admin') return `/admin?tab=finance&payout=${eid}`;
+    return `/contractor?tab=payouts&payout=${eid}`;
+  }
+  if (et === 'quote' && jid) {
+    if (role === 'admin') return `/admin?job=${jid}&tab=quotes`;
+    return `/homeowner?tab=jobs&job=${jid}&focus=quote`;
+  }
+  if (et === 'invoice' && jid) {
+    return `/homeowner?tab=jobs&job=${jid}&focus=invoice`;
+  }
+  if (t.includes('compliance') && role === 'contractor') {
+    return '/contractor?tab=compliance';
+  }
+  if (t.includes('invite') && role === 'contractor' && jid) {
+    return `/contractor?tab=invites&job=${jid}`;
+  }
+  if (jid) {
+    if (role === 'admin') return `/admin?job=${jid}`;
+    if (role === 'contractor') return `/contractor?tab=jobs&job=${jid}`;
+    if (t.includes('quote')) return `/homeowner?tab=jobs&job=${jid}&focus=quote`;
+    if (t.includes('invoice') || t.includes('payment')) return `/homeowner?tab=jobs&job=${jid}&focus=invoice`;
+    if (
+      t.includes('dispatch') ||
+      t.includes('arriv') ||
+      t.includes('technician') ||
+      t.includes('assigned') ||
+      t.includes('travel')
+    ) {
+      return `/homeowner?tab=jobs&job=${jid}&focus=tracking`;
+    }
+    if (t.includes('complete')) return `/homeowner?tab=jobs&job=${jid}&focus=completion`;
+    return `/homeowner?tab=jobs&job=${jid}`;
+  }
+  return null;
 }
 
 function rowToNotification(r) {
@@ -64,6 +133,16 @@ export async function createInAppNotification(pool, {
   const safeType = clampString(type, 80);
   if (!safeType || !safeTitle) return null;
 
+  const resolvedUrl =
+    actionUrl ||
+    defaultNotificationActionUrl({
+      type: safeType,
+      userRole,
+      jobId,
+      entityType,
+      entityId,
+    });
+
   const { rows } = await pool.query(
     `INSERT INTO notifications
       (user_id, user_role, job_id, type, title, message, entity_type, entity_id, action_url, metadata)
@@ -78,7 +157,7 @@ export async function createInAppNotification(pool, {
       safeMessage,
       entityType ? clampString(entityType, 60) : null,
       entityId != null ? Number(entityId) : null,
-      actionUrl ? clampString(actionUrl, 500) : null,
+      resolvedUrl ? clampString(resolvedUrl, 500) : null,
       metadata ? JSON.stringify(metadata) : null,
     ],
   );

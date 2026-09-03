@@ -241,6 +241,11 @@ export async function initManagedSchema(pool) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_public_id
     ON payments (public_id) WHERE public_id IS NOT NULL
   `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_payments_job
+    ON payments (job_id, created_at DESC)
+    WHERE job_id IS NOT NULL
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS transfers (
@@ -1852,10 +1857,38 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS assigned_employee_id INT`);
   await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS contractor_findings TEXT`);
   await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS quote_option_label TEXT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS quote_option_title TEXT`);
   await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS option_group TEXT`);
   await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS option_selection_status TEXT DEFAULT 'pending'`);
   await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS superseded_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS superseded_by_proposal_id INT`);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_proposals_job_option_group
+    ON proposals (job_id, option_group)
+    WHERE option_group IS NOT NULL
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_proposals_job
+    ON proposals (job_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_managed_jobs_homeowner
+    ON managed_jobs (homeowner_user_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_managed_jobs_contractor
+    ON managed_jobs (assigned_contractor_user_id, created_at DESC)
+    WHERE assigned_contractor_user_id IS NOT NULL
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_managed_jobs_status
+    ON managed_jobs (status, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_managed_jobs_assigned_employee
+    ON managed_jobs (assigned_employee_id)
+    WHERE assigned_employee_id IS NOT NULL
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS quote_revision_snapshots (

@@ -1,5 +1,11 @@
 import { clampString } from './security.js';
 import { createInAppNotification, notifyAdmins } from './in-app-notifications.js';
+import {
+  saveAttachment,
+  getAttachment,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+} from './attachment-storage.js';
 
 export const CONVERSATION_TYPES = ['homeowner_admin', 'contractor_admin'];
 export const CONVERSATION_STATUSES = ['open', 'resolved', 'closed'];
@@ -11,8 +17,9 @@ export const ALLOWED_MIME = new Set([
   'application/pdf',
 ]);
 export const MAX_BODY_LEN = 8000;
-export const MAX_ATTACHMENTS = 5;
-export const MAX_ATTACHMENT_BYTES = 2_500_000;
+export const MAX_ATTACHMENTS = MAX_ATTACHMENTS_PER_MESSAGE;
+export const MAX_ATTACHMENT_BYTES_LIMIT = MAX_ATTACHMENT_BYTES;
+export { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE };
 export const MAX_MESSAGES_PER_MINUTE = 30;
 
 const rateBuckets = new Map();
@@ -90,6 +97,14 @@ export async function initMessagingSchema(pool) {
       storage_data TEXT NOT NULL,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
+  `);
+
+  await pool.query(`ALTER TABLE message_attachments ADD COLUMN IF NOT EXISTS storage_provider TEXT DEFAULT 'database'`);
+  await pool.query(`ALTER TABLE message_attachments ADD COLUMN IF NOT EXISTS storage_key TEXT`);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_message_attachments_storage_key
+    ON message_attachments (storage_key)
+    WHERE storage_key IS NOT NULL
   `);
 
   await pool.query(`
@@ -238,7 +253,7 @@ function validateAttachment(att) {
     data = m[2];
   }
   const bufLen = Buffer.byteLength(data, 'base64');
-  if (bufLen > MAX_ATTACHMENT_BYTES) return { ok: false, message: 'Attachment too large.' };
+  if (bufLen > MAX_ATTACHMENT_BYTES) return { ok: false, message: `Max attachment size is ${Math.round(MAX_ATTACHMENT_BYTES / 1_000_000 * 10) / 10}MB.` };
   return {
     ok: true,
     mime,
@@ -501,11 +516,18 @@ export function registerMessagingRoutes(app, { pool, requireAuth, requireAdmin }
       const access = await getConversationAccess(pool, att.conversation_id, req.authUser);
       if (!access.ok) return res.status(access.status).json({ ok: false, message: access.message });
 
-      const buf = Buffer.from(att.storage_data, 'base64');
+      const loaded = await getAttachment(pool, {
+        id: att.id,
+        namespace: 'message',
+        storageProvider: att.storage_provider,
+        storageKey: att.storage_key,
+        storageData: att.storage_data,
+      });
+      if (!loaded.ok) return res.status(404).json({ ok: false, message: 'Not found.' });
       res.setHeader('Content-Type', att.mime_type || 'application/octet-stream');
       res.setHeader('Content-Disposition', `inline; filename="${safeFileName(att.file_name)}"`);
       res.setHeader('Cache-Control', 'private, no-store');
-      return res.send(buf);
+      return res.send(loaded.data);
     } catch (e) {
       console.error('download attachment:', e);
       return res.status(500).json({ ok: false, message: 'Could not load attachment.' });
@@ -518,7 +540,7 @@ async function sendMessageInternal(pool, { conversation, authUser, body, attachm
   const atts = Array.isArray(attachments) ? attachments : [];
   if (!text && atts.length === 0) throw new Error('Message body or attachment required.');
   if (text.length > MAX_BODY_LEN) throw new Error('Message too long.');
-  if (atts.length > MAX_ATTACHMENTS) throw new Error('Too many attachments.');
+  if (atts.length > MAX_ATTACHMENTS_PER_MESSAGE) throw new Error(`Maximum ${MAX_ATTACHMENTS_PER_MESSAGE} attachments per message.`);
 
   if (idempotencyKey) {
     const { rows: dup } = await pool.query(
@@ -551,12 +573,31 @@ async function sendMessageInternal(pool, { conversation, authUser, body, attachm
   for (const raw of atts) {
     const check = validateAttachment(raw);
     if (!check.ok) throw new Error(check.message);
+    const saved = await saveAttachment(pool, {
+      namespace: 'message',
+      entityId: message.id,
+      fileName: check.fileName,
+      mimeType: check.mime,
+      data: check.data,
+      uploaderUserId: authUser.id,
+    });
+    if (!saved.ok) throw new Error(saved.message || 'Attachment rejected.');
     const { rows: attRows } = await pool.query(
       `INSERT INTO message_attachments
-        (message_id, conversation_id, uploader_user_id, file_name, mime_type, byte_size, storage_data)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
+        (message_id, conversation_id, uploader_user_id, file_name, mime_type, byte_size, storage_data, storage_provider, storage_key)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING *`,
-      [message.id, conversation.id, authUser.id, check.fileName, check.mime, check.byteSize, check.data],
+      [
+        message.id,
+        conversation.id,
+        authUser.id,
+        saved.fileName,
+        saved.mimeType,
+        saved.sizeBytes,
+        saved.storageData || check.data,
+        saved.provider,
+        saved.storageKey,
+      ],
     );
     savedAttachments.push(rowToAttachment(attRows[0]));
   }

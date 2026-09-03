@@ -122,6 +122,7 @@ export default function HomeownerJobDetailPanel({
   onNeedAddress,
   forceEditSchedule = false,
   onEditScheduleConsumed,
+  focus,
 }: {
   job: ManagedJob;
   proposal: Proposal | null;
@@ -142,9 +143,24 @@ export default function HomeownerJobDetailPanel({
   }) => void;
   forceEditSchedule?: boolean;
   onEditScheduleConsumed?: () => void;
+  focus?: "quote" | "invoice" | "tracking" | "completion" | "dispute" | null;
 }) {
   const isMobile = useIsMobile();
   const editable = canEditHomeownerJob(job.status);
+
+  useEffect(() => {
+    if (!focus) return;
+    const id =
+      focus === "quote"
+        ? `job-quote-section-${job.id}`
+        : focus === "invoice"
+          ? `job-invoice-section-${job.id}`
+          : focus === "completion" || focus === "dispute"
+            ? `job-completion-section-${job.id}`
+            : `job-tracking-section-${job.id}`;
+    const el = document.getElementById(id);
+    el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [focus, job.id]);
 
   const [dispatchCouponPreview, setDispatchCouponPreview] = useState<DispatchCouponPreview | null>(null);
 
@@ -1033,6 +1049,7 @@ export default function HomeownerJobDetailPanel({
       ) : null}
 
       {showInvoicePay ? (
+        <div id={`job-invoice-section-${job.id}`}>
         <DetailSection mobile={isMobile} title="Invoice payment" defaultOpen badge="Due">
           <div className="space-y-3 rounded-lg border border-primary/20 bg-primary/5 p-4">
             {job.invoiceNumber ? (
@@ -1062,6 +1079,7 @@ export default function HomeownerJobDetailPanel({
             />
           </div>
         </DetailSection>
+        </div>
       ) : null}
 
       {showCompletionReport && job.completionReport ? (
@@ -1149,6 +1167,7 @@ export default function HomeownerJobDetailPanel({
       ) : null}
 
       {showReviewForm ? (
+        <div id={`job-completion-section-${job.id}`}>
         <DetailSection mobile={isMobile} title="Confirm your service" defaultOpen>
           <HomeownerJobCompletionPanel
             job={job}
@@ -1158,6 +1177,7 @@ export default function HomeownerJobDetailPanel({
             existingDispute={hasOpenDispute || job.status === "disputed"}
           />
         </DetailSection>
+        </div>
       ) : null}
 
       {showReviewForm ? (

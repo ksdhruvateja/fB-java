@@ -18,6 +18,7 @@ import {
   summarizeConnectAccount,
 } from './stripe.js';
 import { writeAudit } from './audit.js';
+import { createInAppNotification, notifyAdmins } from './in-app-notifications.js';
 
 export async function loadPayoutSettings(pool) {
   const { rows } = await pool.query(`SELECT * FROM payout_settings WHERE id='default'`);
@@ -37,11 +38,29 @@ export async function logPayoutAudit(pool, { payoutId, action, previousStatus, n
   );
 }
 
-export async function notifyContractorPayout(pool, { contractorId, jobId, type, title, message }) {
-  await pool.query(
-    `INSERT INTO notifications (user_id, job_id, type, title, message) VALUES ($1,$2,$3,$4,$5)`,
-    [contractorId, jobId || null, type, title, message]
-  );
+export async function notifyContractorPayout(pool, { contractorId, jobId, type, title, message, payoutId = null }) {
+  await createInAppNotification(pool, {
+    userId: contractorId,
+    userRole: 'contractor',
+    jobId: jobId || null,
+    type,
+    title,
+    message,
+    entityType: 'payout',
+    entityId: payoutId || null,
+    metadata: { payoutId: payoutId || null },
+  });
+  if (String(type || '').includes('fail')) {
+    await notifyAdmins(pool, {
+      type: 'payout_failed',
+      title: 'Payout failed',
+      message,
+      jobId: jobId || null,
+      entityType: 'payout',
+      entityId: payoutId || null,
+      metadata: { payoutId: payoutId || null, contractorId },
+    });
+  }
 }
 
 export async function buildContractorPayoutAccountView(pool, contractorId) {
@@ -387,8 +406,9 @@ export async function ensurePayoutRecordForJob(pool, jobId, { initialStatus, act
   await notifyContractorPayout(pool, {
     contractorId: job.assigned_contractor_user_id,
     jobId,
-    type: 'payout_created',
-    title: 'Payout record created',
+    payoutId: payout.id,
+    type: 'payout_available',
+    title: 'Payout available',
     message: `A payout of $${(amounts.netBeforeInstantCents / 100).toFixed(2)} for ${job.booking_id || `Job #FB-${jobId}`} is pending admin approval.`,
   });
 
@@ -562,8 +582,9 @@ export async function approveAndReleasePayout(pool, payoutId, adminUserId, { adj
   await notifyContractorPayout(pool, {
     contractorId: payout.contractor_id,
     jobId: payout.job_id,
-    type: 'payout_approved',
-    title: 'Payout approved',
+    payoutId,
+    type: 'payout_released',
+    title: 'Payout released',
     message: `Your $${(netAmountCents / 100).toFixed(2)} payout for ${payout.job_ref || `Job #FB-${payout.job_id}`} has been approved.`,
   });
 
@@ -733,8 +754,9 @@ export async function requestInstantPayout(pool, payoutId, contractorUserId) {
   await notifyContractorPayout(pool, {
     contractorId: contractorUserId,
     jobId: payout.job_id,
-    type: simulate ? 'instant_payout_completed' : 'instant_payout_processing',
-    title: simulate ? 'Instant payout completed' : 'Instant payout processing',
+    payoutId,
+    type: simulate ? 'payout_released' : 'payout_available',
+    title: simulate ? 'Payout released' : 'Instant payout processing',
     message: simulate
       ? `Your instant payout of $${(payoutToContractorCents / 100).toFixed(2)} for ${payout.job_ref} has been sent.`
       : `Your instant payout of $${(payoutToContractorCents / 100).toFixed(2)} for ${payout.job_ref} is processing.`,
@@ -774,8 +796,9 @@ export async function handlePayoutWebhookUpdate(pool, event) {
       await notifyContractorPayout(pool, {
         contractorId: rows[0].contractor_id,
         jobId: rows[0].job_id,
-        type: 'payout_completed',
-        title: 'Payout completed',
+        payoutId: rows[0].id,
+        type: 'payout_released',
+        title: 'Payout released',
         message: `Your payout for ${rows[0].job_ref || `Job #FB-${rows[0].job_id}`} has been deposited.`,
       });
     }
@@ -802,6 +825,7 @@ export async function handlePayoutWebhookUpdate(pool, event) {
       await notifyContractorPayout(pool, {
         contractorId: rows[0].contractor_id,
         jobId: rows[0].job_id,
+        payoutId: rows[0].id,
         type: 'payout_failed',
         title: 'Payout failed',
         message: `Your payout for ${rows[0].job_ref} failed: ${reason}. Please update your Stripe account.`,

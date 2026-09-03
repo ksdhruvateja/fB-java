@@ -6,7 +6,7 @@ import { applyPaymentRiskToPayouts } from './payment-settlement.js';
 import { createInAppNotification, notifyAdmins } from './in-app-notifications.js';
 import { recordJobOperationalEvent } from './job-operational-events.js';
 import { clampString } from './security.js';
-import { saveAttachment, MAX_ATTACHMENT_BYTES } from './attachment-storage.js';
+import { saveAttachment, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE } from './attachment-storage.js';
 
 export const DISPUTE_CATEGORIES = {
   work_incomplete: 'Work incomplete',
@@ -132,6 +132,10 @@ export async function initDisputeSchema(pool) {
   await pool.query(`ALTER TABLE disputes ADD COLUMN IF NOT EXISTS contractor_user_id INT`);
   await pool.query(`ALTER TABLE disputes ADD COLUMN IF NOT EXISTS assigned_employee_id INT`);
   await pool.query(`ALTER TABLE disputes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_disputes_job ON disputes (job_id, created_at DESC)
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dispute_events (
@@ -346,7 +350,7 @@ export function registerDisputeRoutes(app, { pool, requireAuth, requireAdmin, re
 
       const attachments = [];
       if (Array.isArray(req.body?.attachments)) {
-        for (const a of req.body.attachments.slice(0, 5)) {
+        for (const a of req.body.attachments.slice(0, MAX_ATTACHMENTS_PER_MESSAGE)) {
           const data = String(a?.data || a?.base64 || '');
           if (!data || data.length > MAX_ATTACHMENT_BYTES * 1.4) continue;
           attachments.push({

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Bell, MessageSquare } from "lucide-react";
 import type { InboxSegment } from "./homeownerNav";
 import MessagesPanel from "./MessagesPanel";
@@ -6,6 +6,7 @@ import NotificationsPage from "./NotificationsPage";
 import type { InAppNotification } from "./notificationsApi";
 import type { ManagedJob } from "./managedJobs";
 import { formatBadgeCount } from "./notificationsApi";
+import { resolveNotificationTarget } from "./navigateFromNotification";
 
 const SEGMENTS: { id: InboxSegment; label: string; icon: React.ElementType }[] = [
   { id: "messages", label: "Messages", icon: MessageSquare },
@@ -17,6 +18,8 @@ export default function HomeownerInboxPanel({
   onRefreshCounts,
   unreadMessages = 0,
   unreadNotifications = 0,
+  onNavigateNotification,
+  initialConversationId = null,
 }: {
   jobs?: ManagedJob[];
   homeUpdates?: unknown[];
@@ -26,10 +29,25 @@ export default function HomeownerInboxPanel({
   onRefreshCounts?: () => void;
   unreadMessages?: number;
   unreadNotifications?: number;
+  onNavigateNotification?: (n: InAppNotification) => void;
+  initialConversationId?: number | null;
 }) {
-  const [segment, setSegment] = useState<InboxSegment>("messages");
+  const [segment, setSegment] = useState<InboxSegment>(initialConversationId ? "messages" : "messages");
+
+  useEffect(() => {
+    if (initialConversationId) setSegment("messages");
+  }, [initialConversationId]);
 
   const handleNotificationNavigate = (n: InAppNotification) => {
+    if (onNavigateNotification) {
+      onNavigateNotification(n);
+      return;
+    }
+    const target = resolveNotificationTarget(n, "homeowner");
+    if (target.kind === "homeowner_job" || target.kind === "homeowner_assessment") {
+      onOpenJob(target.jobId);
+      return;
+    }
     if (n.jobId) onOpenJob(n.jobId);
   };
 
@@ -69,7 +87,7 @@ export default function HomeownerInboxPanel({
       </div>
 
       {segment === "messages" ? (
-        <MessagesPanel role="homeowner" onUnreadChange={onRefreshCounts} />
+        <MessagesPanel role="homeowner" initialConversationId={initialConversationId} onUnreadChange={onRefreshCounts} />
       ) : (
         <NotificationsPage onNavigate={handleNotificationNavigate} />
       )}

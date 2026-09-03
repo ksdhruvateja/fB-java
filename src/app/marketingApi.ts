@@ -60,7 +60,12 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export async function getGoogleAuthConfig() {
-  return api<{ ok: boolean; configured: boolean; clientId: string | null }>("/api/auth/google/config");
+  return api<{
+    ok: boolean;
+    googleOAuthEnabled?: boolean;
+    configured: boolean;
+    clientId?: string | null;
+  }>("/api/auth/google/config");
 }
 
 export async function signInWithGoogle(

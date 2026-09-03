@@ -11,6 +11,7 @@ import { initManagedSchema } from './schema-managed.js';
 import { initSupportTicketSchema, registerSupportTicketRoutes } from './support-tickets.js';
 import { initInAppNotificationSchema, registerInAppNotificationRoutes } from './in-app-notifications.js';
 import { initMessagingSchema, registerMessagingRoutes } from './messaging.js';
+import { registerAttachmentAdminRoutes } from './attachment-storage.js';
 import { initDisputeSchema } from './disputes.js';
 import { initAvailabilitySchema, registerAvailabilityRoutes } from './availability-routes.js';
 import { registerAdminSearchRoutes } from './admin-search.js';
@@ -53,6 +54,8 @@ import {
   completePasswordReset,
 } from './password-reset.js';
 import { mailStatus } from './mail.js';
+import { uspsConfigured } from './usps-address.js';
+import { EMAIL_FROM_ADDRESS, EMAIL_REPLY_TO } from './email/email-config.js';
 import {
   loadJobForReview,
   insertJobReview,
@@ -2386,6 +2389,7 @@ app.post('/api/jobs', requireAuth, async (req, res) => {
 // ── Notifications (in-app) ───────────────────────────────────────────────────
 registerInAppNotificationRoutes(app, { pool, requireAuth });
 registerMessagingRoutes(app, { pool, requireAuth, requireAdmin });
+registerAttachmentAdminRoutes(app, { pool, requireAuth, requireAdmin });
 registerAvailabilityRoutes(app, { pool, requireAuth, requireAdmin });
 registerAdminSearchRoutes(app, { pool, requireAuth, requireAdmin });
 
@@ -3137,16 +3141,40 @@ app.get('/api/health', async (_req, res) => {
 
 app.get('/api/admin/production-config', requireAuth, requireAdmin, requirePermission('settings.view'), (_req, res) => {
   const production = isProduction;
+  const appUrl = (process.env.APP_URL || process.env.URL || '').trim();
+  const fromEmail = EMAIL_FROM_ADDRESS;
+  const replyTo = EMAIL_REPLY_TO;
+  const classify = (ok, invalid = false) => {
+    if (invalid) return 'INVALID_FORMAT';
+    if (!ok) return 'MISSING';
+    return 'PRESENT';
+  };
+  const appUrlInvalid = Boolean(appUrl) && /localhost|127\.0\.0\.1|\.example\.com/i.test(appUrl);
+  const emailInvalid = Boolean(fromEmail) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fromEmail);
+  const replyInvalid = Boolean(replyTo) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(replyTo);
+  const stripeKey = (process.env.STRIPE_SECRET_KEY || '').trim();
+  const stripeInvalid = Boolean(stripeKey) && !/^sk_(test|live)_/.test(stripeKey);
+  const googleRaw = (process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '').trim();
+  const googleId = googleRaw && /^[\w-]+\.apps\.googleusercontent\.com$/i.test(googleRaw) && !/^GOCSPX-/i.test(googleRaw)
+    ? googleRaw
+    : '';
+  const googleIdInvalid = Boolean(googleRaw) && !googleId;
   const checks = [
-    { key: 'SESSION_SECRET', ok: Boolean(process.env.SESSION_SECRET), required: production },
-    { key: 'NEON_DATABASE_URL', ok: Boolean(process.env.NEON_DATABASE_URL), required: production },
-    { key: 'STRIPE_SECRET_KEY', ok: stripeConfigured(), required: production },
-    { key: 'STRIPE_WEBHOOK_SECRET', ok: Boolean(process.env.STRIPE_WEBHOOK_SECRET?.trim()), required: production },
-    { key: 'APP_URL', ok: Boolean(process.env.APP_URL?.trim() || process.env.URL?.trim()), required: production },
-    { key: 'demo_seed_disabled_in_prod', ok: production ? !allowDemoSeed() : true, required: true },
-    { key: 'ssl_reject_unauthorized', ok: postgresSslOptions().rejectUnauthorized === true || !production, required: production },
-  ];
-  const missingRequired = checks.filter((c) => c.required && !c.ok).map((c) => c.key);
+    { key: 'SESSION_SECRET', status: classify(Boolean(process.env.SESSION_SECRET)), required: production },
+    { key: 'NEON_DATABASE_URL', status: classify(Boolean(process.env.NEON_DATABASE_URL)), required: production },
+    { key: 'STRIPE_SECRET_KEY', status: classify(stripeConfigured(), stripeInvalid), required: production },
+    { key: 'STRIPE_WEBHOOK_SECRET', status: classify(Boolean(process.env.STRIPE_WEBHOOK_SECRET?.trim())), required: production },
+    { key: 'APP_URL', status: classify(Boolean(appUrl), production && appUrlInvalid), required: production, localhost: appUrlInvalid },
+    { key: 'FIXBRIDGE_FROM_EMAIL', status: classify(Boolean(fromEmail), emailInvalid), required: false },
+    { key: 'FIXBRIDGE_REPLY_TO_EMAIL', status: classify(Boolean(replyTo), replyInvalid), required: false },
+    { key: 'EMAIL_CREDENTIALS', status: classify(mailStatus().configured), required: false },
+    { key: 'USPS', status: classify(uspsConfigured()), required: false },
+    { key: 'GOOGLE_CLIENT_ID', status: classify(Boolean(googleId), googleIdInvalid), required: false },
+    { key: 'ATTACHMENT_STORAGE_PROVIDER', status: classify(true), required: false },
+    { key: 'demo_seed_disabled_in_prod', status: classify(production ? !allowDemoSeed() : true), required: true },
+    { key: 'ssl_reject_unauthorized', status: classify(postgresSslOptions().rejectUnauthorized === true || !production), required: production },
+  ].map((c) => ({ ...c, ok: c.status === 'PRESENT' }));
+  const missingRequired = checks.filter((c) => c.required && c.status !== 'PRESENT').map((c) => c.key);
   res.json({
     ok: missingRequired.length === 0,
     production,

@@ -91,6 +91,7 @@ import {
  propertyCareSectionForTab,
  jobsForSegment,
  jobsForProperty,
+ jobSegment,
  countQuotesWaiting,
  sanitizeDashTab,
  sanitizeJobsSegment,
@@ -103,7 +104,9 @@ import HomeownerMoreMenu from "./HomeownerMoreMenu";
 import HomeownerInboxPanel from "./HomeownerInboxPanel";
 import NotificationBell from "./NotificationBell";
 import { useInAppComms } from "./useInAppComms";
-import { formatBadgeCount } from "./notificationsApi";
+import { formatBadgeCount, type InAppNotification } from "./notificationsApi";
+import { resolveNotificationTarget, STALE_CONTENT_MESSAGE } from "./navigateFromNotification";
+import StaleItemNotice from "./StaleItemNotice";
 import HomeownerPropertySheet from "./HomeownerPropertySheet";
 import HomeownerJobDetailPanel from "./HomeownerJobDetailPanel";
 import HomeownerPaymentsPanel from "./HomeownerPaymentsPanel";
@@ -387,6 +390,9 @@ export default function HomeownerDashboard({
  const [loading, setLoading] = useState(true);
  const [error, setError] = useState<string | null>(null);
  const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
+ const [jobFocus, setJobFocus] = useState<"quote" | "invoice" | "tracking" | "completion" | "dispute" | null>(null);
+ const [inboxConversationId, setInboxConversationId] = useState<number | null>(null);
+ const [staleNotice, setStaleNotice] = useState<string | null>(null);
  const { unreadNotifications, unreadMessages, refresh: refreshComms } = useInAppComms(true);
  const [proposal, setProposal] = useState<Proposal | null>(null);
  const [busy, setBusy] = useState(false);
@@ -641,10 +647,15 @@ export default function HomeownerDashboard({
  const filteredJobs = useMemo(() => jobsForSegment(jobs, jobsSegment), [jobs, jobsSegment]);
 
  useEffect(() => {
- if (tab === "jobs" && filteredJobs.length && selectedJobId == null) {
+ if (tab !== "jobs" || loading) return;
+ if (selectedJobId != null && jobs.length > 0 && !jobs.some((j) => j.id === selectedJobId)) {
+ setStaleNotice(STALE_CONTENT_MESSAGE);
+ return;
+ }
+ if (filteredJobs.length && selectedJobId == null && !staleNotice) {
  setSelectedJobId(filteredJobs[0].id);
  }
- }, [tab, filteredJobs, selectedJobId, jobsSegment]);
+ }, [tab, filteredJobs, selectedJobId, jobsSegment, loading, jobs, staleNotice]);
 
  const primaryProperty = useMemo(() => {
  if (primaryPropertyId != null) {
@@ -705,6 +716,39 @@ export default function HomeownerDashboard({
  jobsSegment: segment,
  jobId: jobId ?? null,
  });
+ }
+
+ function handleNotificationNavigate(n: InAppNotification) {
+ setStaleNotice(null);
+ const target = resolveNotificationTarget(n, "homeowner");
+ if (target.kind === "homeowner_messages") {
+ setInboxConversationId(target.conversationId || null);
+ navigateTab("inbox");
+ return;
+ }
+ if (target.kind === "homeowner_assessment" && target.jobId) {
+ setJobFocus(null);
+ openJobsSegment("active", target.jobId);
+ setSelectedJobId(target.jobId);
+ return;
+ }
+ if (target.kind === "homeowner_job" && target.jobId) {
+ setJobFocus(target.focus || null);
+ const job = jobs.find((j) => j.id === target.jobId);
+ if (!loading && jobs.length > 0 && !job) {
+ setStaleNotice(STALE_CONTENT_MESSAGE);
+ openJobsSegment("active", target.jobId);
+ return;
+ }
+ const segment = job ? (jobSegment(job) as JobsSegment) : "active";
+ openJobsSegment(segment === "quotes" || target.focus === "quote" ? "quotes" : segment, target.jobId);
+ return;
+ }
+ if (target.kind === "stale") {
+ setStaleNotice(STALE_CONTENT_MESSAGE);
+ return;
+ }
+ navigateTab("inbox");
  }
 
  const applyNavFrame = useCallback((f: HomeownerNavFrame) => {
@@ -2188,10 +2232,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <NotificationBell
  unreadCount={unreadNotifications}
  onRefreshCounts={refreshComms}
- onNavigate={(n) => {
- if (n.jobId) openJobsSegment("active", n.jobId);
- else navigateTab("inbox");
- }}
+ onNavigate={handleNotificationNavigate}
  />
  </div>
  </header>
@@ -2325,6 +2366,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <HomeownerInboxPanel
  jobs={jobs}
  onOpenJob={(id) => openJobsSegment("active", id)}
+ onNavigateNotification={handleNotificationNavigate}
+ initialConversationId={inboxConversationId}
  onRefreshCounts={refreshComms}
  unreadMessages={unreadMessages}
  unreadNotifications={unreadNotifications}
@@ -2365,6 +2408,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <HomeownerInboxPanel
  jobs={jobs}
  onOpenJob={(id) => openJobsSegment("active", id)}
+ onNavigateNotification={handleNotificationNavigate}
+ initialConversationId={inboxConversationId}
  onRefreshCounts={refreshComms}
  unreadMessages={unreadMessages}
  unreadNotifications={unreadNotifications}
@@ -3664,6 +3709,15 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
 
  {tab === "jobs" && (
  <section className="mx-auto max-w-5xl space-y-4">
+ {staleNotice ? (
+ <StaleItemNotice
+ message={staleNotice}
+ onBack={() => {
+ setStaleNotice(null);
+ setSelectedJobId(null);
+ }}
+ />
+ ) : null}
  {invoicePaymentMsg ? (
  <p
  className={`rounded-xl border px-4 py-3 text-sm ${
@@ -3760,11 +3814,12 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </button>
  ))}
  </div>
- {(selectedJob || filteredJobs[0]) && (
+ {(selectedJob || (!staleNotice && filteredJobs[0])) && (
  <div className={`space-y-3 ${isMobile && !selectedJobId ? "hidden" : ""}`}>
  {isMobile && selectedJobId && (
  <AppBackButton onBack={goBack} label="Back to Jobs" className="-ml-1" />
  )}
+ <div id={`job-tracking-section-${(selectedJob || (!staleNotice && filteredJobs[0]))?.id || ""}`}>
  <ServiceTrackingCard
  job={selectedJob || filteredJobs[0]}
  onMessage={() => {
@@ -3776,6 +3831,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  // Keep details visible; scroll-friendly cue via force flag
  }}
  />
+ </div>
  {showTechMessage && (
  <div className="rounded-[1.5rem] border border-border bg-card p-4 space-y-3">
  <p className="text-sm font-semibold">Message technician</p>
@@ -3825,6 +3881,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  onBusy={setBusy}
  onError={setError}
  onRefresh={refresh}
+ focus={jobFocus}
  forceEditSchedule={forceEditSchedule}
  onEditScheduleConsumed={() => setForceEditSchedule(false)}
  onNeedAddress={({

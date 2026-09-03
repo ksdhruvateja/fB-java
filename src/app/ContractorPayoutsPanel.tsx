@@ -18,6 +18,7 @@ import {
   requestInstantPayout,
 } from "./managedJobs";
 import { fetchMyReferrals } from "./referralsApi";
+import StaleItemNotice from "./StaleItemNotice";
 
 function statusBadge(status: string) {
   const label =
@@ -157,6 +158,7 @@ export default function ContractorPayoutsPanel({
   onRefresh,
   initialSubTab = "earnings",
   stripeReturnMessage,
+  initialPayoutId = null,
 }: {
   payouts: ContractorPayout[];
   summary: PayoutSummary | null;
@@ -164,10 +166,19 @@ export default function ContractorPayoutsPanel({
   onRefresh: () => Promise<void>;
   initialSubTab?: "earnings" | "account";
   stripeReturnMessage?: string | null;
+  initialPayoutId?: number | null;
 }) {
   const [subTab, setSubTab] = useState<"earnings" | "account">(initialSubTab);
   const [instantPayout, setInstantPayout] = useState<ContractorPayout | null>(null);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(initialPayoutId);
+  const [dismissedStale, setDismissedStale] = useState(false);
+
+  useEffect(() => {
+    if (initialPayoutId) {
+      setSelectedId(initialPayoutId);
+      setDismissedStale(false);
+    }
+  }, [initialPayoutId]);
   const [referralBonusCents, setReferralBonusCents] = useState(0);
 
   useEffect(() => {
@@ -177,6 +188,11 @@ export default function ContractorPayoutsPanel({
   }, []);
 
   const selected = payouts.find((p) => p.id === selectedId) || null;
+  const requestedPayoutMissing =
+    !dismissedStale &&
+    Boolean(initialPayoutId) &&
+    payouts.length > 0 &&
+    !payouts.some((p) => p.id === initialPayoutId);
 
   const nextPayoutDate = useMemo(() => {
     const approved = payouts.find((p) => p.status === "approved" && p.estimatedPayoutAt);
@@ -202,6 +218,15 @@ export default function ContractorPayoutsPanel({
           </p>
         ) : null}
       </div>
+
+      {requestedPayoutMissing ? (
+        <StaleItemNotice
+          onBack={() => {
+            setDismissedStale(true);
+            setSelectedId(null);
+          }}
+        />
+      ) : null}
 
       <div className="flex flex-wrap gap-2">
         {[

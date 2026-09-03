@@ -35,7 +35,9 @@ import MessagesPanel from "./MessagesPanel";
 import NotificationBell from "./NotificationBell";
 import NotificationsPage from "./NotificationsPage";
 import { useInAppComms } from "./useInAppComms";
-import { formatBadgeCount } from "./notificationsApi";
+import { formatBadgeCount, type InAppNotification } from "./notificationsApi";
+import { resolveNotificationTarget, STALE_CONTENT_MESSAGE } from "./navigateFromNotification";
+import StaleItemNotice from "./StaleItemNotice";
 import AdminSubscriptionPlansPanel from "./AdminSubscriptionPlansPanel";
 import AdminHomeCareProPanel from "./AdminHomeCareProPanel";
 import AdminVisitFeePanel from "./AdminVisitFeePanel";
@@ -394,6 +396,9 @@ export default function AdminPanel({
     subject?: string;
   } | null>(null);
   const [selectedDisputeId, setSelectedDisputeId] = useState<number | null>(null);
+  const [commsConversationId, setCommsConversationId] = useState<number | null>(null);
+  const [financePayoutId, setFinancePayoutId] = useState<number | null>(null);
+  const [staleNotice, setStaleNotice] = useState<string | null>(null);
   const [bids, setBids] = useState<Bid[]>([]);
   const [pricingRules, setPricingRules] = useState<PricingRules | null>(null);
   const [subStats, setSubStats] = useState<{
@@ -857,6 +862,43 @@ export default function AdminPanel({
     setDrawerOpen(true);
   };
 
+  function handleNotificationNavigate(n: InAppNotification) {
+    setStaleNotice(null);
+    const target = resolveNotificationTarget(n, "admin");
+    if (target.kind === "admin_comms") {
+      setCommsConversationId(target.conversationId || null);
+      setTab("communications");
+      return;
+    }
+    if (target.kind === "admin_dispute") {
+      setSelectedDisputeId(target.disputeId);
+      setTab("disputes");
+      return;
+    }
+    if (target.kind === "admin_payout") {
+      setFinancePayoutId(target.payoutId || null);
+      setTab("finance");
+      if (!target.payoutId && target.jobId) openJobDrawer(target.jobId);
+      return;
+    }
+    if (target.kind === "admin_compliance") {
+      if (target.contractorId) setExpandedContractorId(target.contractorId);
+      setTab("contractors");
+      return;
+    }
+    if (target.kind === "admin_job" && target.jobId) {
+      if (jobs.length > 0 && !jobs.some((j) => j.id === target.jobId)) {
+        setStaleNotice(STALE_CONTENT_MESSAGE);
+        setTab("work-queue");
+        return;
+      }
+      openJobDrawer(target.jobId);
+      setTab("work-queue");
+      return;
+    }
+    setTab("communications");
+  }
+
   const openAttention = (kind: AttentionKind) => {
     setQueueFilter(kind);
     setTab("work-queue");
@@ -1196,7 +1238,7 @@ export default function AdminPanel({
               <NotificationBell
                 unreadCount={unreadNotifications}
                 onRefreshCounts={refreshComms}
-                onNavigate={() => setTab("communications")}
+                onNavigate={handleNotificationNavigate}
               />
             </div>
           </div>
@@ -1229,6 +1271,16 @@ export default function AdminPanel({
             </motion.div>
           )}
         </AnimatePresence>
+        {staleNotice ? (
+          <StaleItemNotice
+            message={staleNotice}
+            onBack={() => {
+              setStaleNotice(null);
+              setSelectedJobId(null);
+              setDrawerOpen(false);
+            }}
+          />
+        ) : null}
 
         <TabFade tabKey={tab}>
         {tab === "overview" && (
@@ -1889,7 +1941,7 @@ export default function AdminPanel({
           />
         )}
 
-        {tab === "finance" && <AdminFinancePanel onMessage={setMessage} />}
+        {tab === "finance" && <AdminFinancePanel onMessage={setMessage} initialPayoutId={financePayoutId} />}
 
         {false && tab === "payments_legacy" && (
           <section className="space-y-4">
@@ -3325,19 +3377,13 @@ export default function AdminPanel({
 
         {tab === "communications" && (
           <div className="space-y-6">
-            <MessagesPanel role="admin" startWith={commsStartWith || undefined} onUnreadChange={refreshComms} />
-            <NotificationsPage
-              onNavigate={(n) => {
-                if (n.entityType === "conversation" && n.entityId) {
-                  setTab("communications");
-                } else if (n.entityType === "dispute" && n.entityId) {
-                  setSelectedDisputeId(Number(n.entityId));
-                  setTab("disputes");
-                } else if (n.jobId) {
-                  openJobDrawer(n.jobId);
-                }
-              }}
+            <MessagesPanel
+              role="admin"
+              startWith={commsStartWith || undefined}
+              initialConversationId={commsConversationId}
+              onUnreadChange={refreshComms}
             />
+            <NotificationsPage onNavigate={handleNotificationNavigate} />
           </div>
         )}
 
