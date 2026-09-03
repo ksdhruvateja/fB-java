@@ -27,7 +27,11 @@ export async function login(role, email, password) {
 }
 
 export async function loginAdminWithMfa() {
+  const envEmail = process.env.SMOKE_ADMIN_EMAIL || process.env.PRIMARY_ADMIN_EMAIL || 'admin@fixbridge.com';
+  const envPass = process.env.SMOKE_ADMIN_PASSWORD || process.env.PRIMARY_ADMIN_PASSWORD || '';
   const candidates = [
+    ...(envPass ? [[envEmail, envPass]] : []),
+    ['admin@fixbridge.com', envPass || 'Fixbridge@9/26'],
     ['ksdt2702@gmail.com', 'admin123'],
     ['admin@fixbridge.local', 'admin123'],
   ];

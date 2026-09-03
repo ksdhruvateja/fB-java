@@ -111,8 +111,15 @@ export async function processComplianceExpirationAlerts(pool) {
       if (doc.contractor_email) {
         await sendEmailSafe({
           to: doc.contractor_email,
-          subject,
-          html: `<p>Hi ${doc.contractor_name || 'Contractor'},</p>${body}<p>— FixBridge Compliance</p>`,
+          template:
+            threshold.type === 'expired'
+              ? 'contractor_compliance_expiring'
+              : 'contractor_compliance_expiring',
+          data: {
+            firstName: doc.contractor_name,
+            documentName: meta.label,
+            expiresAt: expStr,
+          },
         });
       }
 

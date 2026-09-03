@@ -3,6 +3,8 @@
  * Extends proposals + homeowner_invoices without changing unrelated job logic.
  */
 import { brand } from './brand.js';
+import { renderEmailLayout } from './email/layout.js';
+import { formatCurrency } from './email/formatters.js';
 import {
   computeQuoteTotals,
   displayQuoteStatus,
@@ -20,6 +22,7 @@ import { recordPendingTip } from './tips.js';
 import { processSuccessfulPayment } from './payment-settlement.js';
 import { isAdminRole, isHomeownerOwner } from './auth-helpers.js';
 import { formatAddressLines, normalizeBillToAddress } from './address-format.js';
+import { convertProposalToInvoice } from './quote-invoice-service.js';
 
 async function audit(pool, actorUserId, action, entityType, entityId, detail) {
   try {
@@ -220,6 +223,14 @@ function serializeQuoteDocument(row) {
           paymentLink: row.linked_payment_link || null,
         }
       : null,
+    versionNumber: Number(row.version_number || 1),
+    changeReason: row.change_reason || null,
+    contractorFindings: row.contractor_findings || null,
+    quoteOptionLabel: row.quote_option_label || null,
+    optionGroup: row.option_group || null,
+    optionSelectionStatus: row.option_selection_status || 'pending',
+    assignedEmployeeId: row.assigned_employee_id != null ? Number(row.assigned_employee_id) : null,
+    supersededAt: row.superseded_at || null,
     brand: {
       name: brand.productName,
       legalName: brand.legalName,
@@ -227,6 +238,96 @@ function serializeQuoteDocument(row) {
       primaryColor: brand.primaryColor,
     },
   };
+}
+
+async function loadQuoteRevisionHistory(pool, proposalId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM quote_revision_snapshots
+     WHERE proposal_id=$1
+     ORDER BY version_number ASC`,
+    [proposalId]
+  );
+  return rows.map((r) => ({
+    versionNumber: Number(r.version_number),
+    changeReason: r.change_reason || null,
+    customerTotal: r.customer_total != null ? Number(r.customer_total) : null,
+    contractorAmount: r.contractor_amount != null ? Number(r.contractor_amount) : null,
+    snapshot: parseJson(r.document_snapshot, {}),
+    createdAt: r.created_at,
+    createdBy: r.created_by,
+  }));
+}
+
+async function snapshotQuoteRevision(pool, row, actorUserId, changeReason) {
+  const versionNumber = Number(row.version_number || 1);
+  const quote = serializeQuoteDocument(row);
+  await pool.query(
+    `INSERT INTO quote_revision_snapshots
+       (proposal_id, version_number, change_reason, document_snapshot, customer_total, contractor_amount, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (proposal_id, version_number) DO NOTHING`,
+    [
+      row.id,
+      versionNumber,
+      changeReason || row.change_reason || null,
+      JSON.stringify(quote),
+      quote.total,
+      quote.contractorQuoteAmount ?? quote.contractorNet ?? null,
+      actorUserId || null,
+    ]
+  );
+}
+
+async function supersedeSiblingQuotes(pool, proposalId, jobId, actorUserId) {
+  const { rows: cur } = await pool.query(
+    `SELECT option_group, version_number, quote_option_label FROM proposals WHERE id=$1`,
+    [proposalId],
+  );
+  const curRow = cur[0] || {};
+  const optionGroup = curRow.option_group || null;
+  const versionNumber = Number(curRow.version_number || 1);
+
+  if (optionGroup) {
+    // Revisions only: supersede lower versions within the same option group
+    await pool.query(
+      `UPDATE proposals SET
+         status='superseded',
+         superseded_at=NOW(),
+         superseded_by_proposal_id=$1
+       WHERE job_id=$2
+         AND id != $1
+         AND option_group=$3
+         AND COALESCE(version_number,1) < $4
+         AND status IN ('sent','viewed','draft')
+         AND COALESCE(status,'') != 'superseded'`,
+      [proposalId, jobId, optionGroup, versionNumber],
+    );
+  } else {
+    await pool.query(
+      `UPDATE proposals SET
+         status='superseded',
+         superseded_at=NOW(),
+         superseded_by_proposal_id=$1
+       WHERE job_id=$2
+         AND id != $1
+         AND status IN ('sent','viewed','draft')
+         AND COALESCE(status,'') != 'superseded'`,
+      [proposalId, jobId],
+    );
+  }
+  const { rows } = await pool.query(
+    `SELECT id FROM proposals WHERE job_id=$1 AND status='superseded' AND superseded_by_proposal_id=$2`,
+    [jobId, proposalId]
+  );
+  for (const r of rows) {
+    await logQuoteActivity(pool, {
+      proposalId: r.id,
+      jobId,
+      actorUserId,
+      action: 'quote_superseded',
+      detail: { supersededBy: proposalId },
+    });
+  }
 }
 
 function serializeInvoiceRow(row) {
@@ -373,11 +474,7 @@ function renderQuoteEmailHtml(quote, { message, acceptUrl } = {}) {
     )
     .join('');
 
-  return `<!DOCTYPE html><html><body style="font-family:system-ui,sans-serif;color:#111;max-width:640px;margin:0 auto;padding:24px;">
-  <div style="border-bottom:3px solid ${brand.primaryColor};padding-bottom:16px;margin-bottom:20px;">
-    <h1 style="margin:0;color:${brand.primaryColor};font-size:22px;">${escapeHtml(brand.productName)}</h1>
-    <p style="margin:4px 0 0;color:#666;font-size:13px;">Professional Service Quotation</p>
-  </div>
+  const quoteBodyHtml = `
   <p style="font-size:14px;"><strong>QUOTE #${escapeHtml(quote.quoteNumber)}</strong></p>
   <p style="font-size:13px;color:#666;">Status: ${escapeHtml(String(quote.status).toUpperCase())}
   ${quote.quoteValidUntil ? ` · Valid until ${new Date(quote.quoteValidUntil).toLocaleDateString()}` : ''}</p>
@@ -400,10 +497,27 @@ function renderQuoteEmailHtml(quote, { message, acceptUrl } = {}) {
     <tr><td style="padding:12px 0;font-size:18px;font-weight:700;">Total</td><td style="text-align:right;font-size:18px;font-weight:700;color:${brand.primaryColor};">${money(quote.total)}</td></tr>
   </table>
   ${quote.customerNotes ? `<p style="margin-top:20px;font-size:13px;white-space:pre-wrap;">${escapeHtml(quote.customerNotes)}</p>` : ''}
-  ${quote.termsConditions ? `<p style="margin-top:12px;font-size:12px;color:#666;white-space:pre-wrap;"><strong>Terms:</strong> ${escapeHtml(quote.termsConditions)}</p>` : ''}
-  ${acceptUrl ? `<p style="margin-top:24px;"><a href="${escapeHtml(acceptUrl)}" style="display:inline-block;background:${brand.primaryColor};color:#fff;padding:12px 18px;border-radius:10px;text-decoration:none;font-weight:600;">View & respond to quote</a></p>` : ''}
-  <p style="margin-top:28px;font-size:12px;color:#888;">Questions? Contact ${escapeHtml(brand.supportEmail)}.</p>
-  </body></html>`;
+  ${quote.termsConditions ? `<p style="margin-top:12px;font-size:12px;color:#666;white-space:pre-wrap;"><strong>Terms:</strong> ${escapeHtml(quote.termsConditions)}</p>` : ''}`;
+
+  return renderEmailLayout({
+    category: 'Quote',
+    headline: 'Your quote is ready',
+    firstName: quote.billTo?.name,
+    paragraphs: [
+      'Your service quote is ready.',
+      'Please review the scope of work and customer total before approving.',
+      'No additional work should be performed outside the approved scope without an approved change order.',
+    ],
+    bodyHtml: quoteBodyHtml,
+    detailsCard: {
+      title: 'Quote',
+      rows: [
+        { label: 'Quote', value: quote.quoteNumber },
+        { label: 'Total', value: formatCurrency(quote.total) },
+      ],
+    },
+    cta: acceptUrl ? { label: 'REVIEW QUOTE', href: acceptUrl } : undefined,
+  });
 }
 
 function escapeHtml(s) {
@@ -483,10 +597,33 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
         const { rows: invRows } = await pool.query(`SELECT * FROM homeowner_invoices WHERE id=$1`, [quote.invoice.id]);
         if (invRows[0]) invoice = serializeInvoiceRow(invRows[0]);
       }
+      const revisionHistory = await loadQuoteRevisionHistory(pool, quote.id);
+      const { rows: jobQuotes } = await pool.query(
+        `SELECT id, quote_number, status, version_number, retail_amount, document_totals, created_at, published_at, superseded_at
+         FROM proposals WHERE job_id=$1 ORDER BY created_at ASC`,
+        [quote.jobId]
+      );
+      const previousRevision =
+        revisionHistory.length > 0 ? revisionHistory[revisionHistory.length - 1] : null;
       res.json({
         ok: true,
         quote,
         invoice,
+        revisionHistory,
+        previousRevision,
+        jobQuoteHistory: jobQuotes.map((q) => ({
+          id: Number(q.id),
+          quoteNumber: q.quote_number,
+          status: displayQuoteStatus(q.status),
+          versionNumber: Number(q.version_number || 1),
+          total:
+            parseJson(q.document_totals, {})?.total != null
+              ? Number(parseJson(q.document_totals, {}).total)
+              : Number(q.retail_amount) || 0,
+          createdAt: q.created_at,
+          publishedAt: q.published_at,
+          supersededAt: q.superseded_at,
+        })),
         activity: activity.map((a) => ({
           id: Number(a.id),
           action: a.action,
@@ -523,6 +660,7 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
             message: 'Sent quotes cannot be silently overwritten. Provide changeReason to create a revision.',
           });
         }
+        await snapshotQuoteRevision(pool, rows[0], req.authUser.id, changeReason);
         const prevVersion = Number(rows[0].version_number || 1);
         await pool.query(
           `UPDATE proposals SET
@@ -532,6 +670,13 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
            WHERE id=$3`,
           [prevVersion + 1, changeReason, id]
         );
+        await logQuoteActivity(pool, {
+          proposalId: id,
+          jobId: rows[0].job_id,
+          actorUserId: req.authUser.id,
+          action: 'quote_revision_created',
+          detail: { fromVersion: prevVersion, toVersion: prevVersion + 1, changeReason },
+        });
       }
       const doc = documentBodyFromRequest(req.body || {}, rows[0]);
       const status = req.body?.status ? String(req.body.status) : rows[0].status;
@@ -568,8 +713,11 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
            retail_amount=$24,
            document_totals=$25,
            status=$26,
-           coupon_code=$27
-         WHERE id=$28`,
+           coupon_code=$27,
+           contractor_findings=$28,
+           assigned_employee_id=$29,
+           quote_option_label=$30
+         WHERE id=$31`,
         [
           JSON.stringify(doc.lineItems),
           doc.discountType,
@@ -598,6 +746,11 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
           JSON.stringify(doc.totals),
           status,
           doc.couponCode || null,
+          String(req.body?.contractorFindings ?? rows[0].contractor_findings ?? '').trim() || null,
+          req.body?.assignedEmployeeId != null
+            ? Number(req.body.assignedEmployeeId) || null
+            : rows[0].assigned_employee_id,
+          String(req.body?.quoteOptionLabel ?? rows[0].quote_option_label ?? '').trim() || null,
           id,
         ]
       );
@@ -707,6 +860,24 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
         `UPDATE proposals SET status='sent', published_at=COALESCE(published_at, NOW()) WHERE id=$1`,
         [id]
       );
+      const { rows: ogRows } = await pool.query(
+        `SELECT job_id, quote_option_label, option_group FROM proposals WHERE id=$1`,
+        [id],
+      );
+      if (ogRows[0]?.quote_option_label && !ogRows[0].option_group) {
+        const groupId = `job-${ogRows[0].job_id}-options`;
+        await pool.query(`UPDATE proposals SET option_group=$1 WHERE id=$2`, [groupId, id]);
+        await pool.query(
+          `UPDATE proposals SET option_group=$1
+           WHERE job_id=$2 AND quote_option_label IS NOT NULL AND quote_option_label <> '' AND option_group IS NULL`,
+          [groupId, ogRows[0].job_id],
+        );
+      }
+      await pool.query(
+        `UPDATE managed_jobs SET active_proposal_id=$1, updated_at=NOW() WHERE id=$2`,
+        [id, quote.jobId]
+      );
+      await supersedeSiblingQuotes(pool, id, quote.jobId, req.authUser.id);
       await audit(pool, req.authUser.id, 'quote_sent', 'proposal', id, { sendEmail, sendSms, emailTo, phoneTo });
 
       const { rows: refreshed } = await pool.query(quoteSelectSql(`WHERE p.id=$1`), [id]);
@@ -832,155 +1003,41 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
         await client.query('ROLLBACK');
         return res.status(404).json({ ok: false, message: 'Quote not found.' });
       }
-      if (rows[0].converted_invoice_id) {
-        const { rows: existing } = await client.query(`SELECT * FROM homeowner_invoices WHERE id=$1`, [
-          rows[0].converted_invoice_id,
-        ]);
-        await client.query('COMMIT');
-        const full = await pool.query(quoteSelectSql(`WHERE p.id=$1`), [id]);
-        return res.json({
-          ok: true,
-          alreadyConverted: true,
-          quote: serializeQuoteDocument(full.rows[0] || rows[0]),
-          invoice: existing[0] ? serializeInvoiceRow(existing[0]) : null,
-        });
-      }
 
-      const qStatus = String(rows[0].status || '').toLowerCase();
-      const accepted = qStatus === 'accepted' || qStatus === 'approved';
       const forceConvert = req.body?.forceConvert === true;
       const forceReason = String(req.body?.forceReason || req.body?.reason || '').trim();
-      if (!accepted) {
-        if (!forceConvert) {
-          return res.status(409).json({
-            ok: false,
-            code: 'acceptance_required',
-            message: 'Quote must be accepted by the homeowner before converting to an invoice.',
-          });
-        }
-        if (!forceReason) {
-          return res.status(400).json({
-            ok: false,
-            message: 'Force convert requires a reason for the audit log.',
-          });
-        }
+      if (!['accepted', 'approved'].includes(String(rows[0].status || '').toLowerCase()) && forceConvert) {
         await audit(pool, req.authUser.id, 'quote_force_convert', 'proposal', id, {
           reason: forceReason,
-          statusBefore: qStatus,
+          statusBefore: rows[0].status,
         });
       }
 
-      const quote = serializeQuoteDocument(rows[0]);
-      const { rows: approvedCos } = await client.query(
-        `SELECT id, description, retail_amount, approved_snapshot, reason
-         FROM change_orders
-         WHERE job_id=$1 AND status='approved'
-         ORDER BY COALESCE(approved_at, created_at) ASC`,
-        [quote.jobId]
-      );
-      let invoiceLineItems = [...(quote.lineItems || [])];
-      const changeOrderLines = [];
-      for (const co of approvedCos) {
-        const snap = parseJson(co.approved_snapshot, null) || {};
-        const amount = Number(snap.retail_amount ?? co.retail_amount ?? 0);
-        if (!(amount > 0)) continue;
-        const label = String(snap.description || co.description || co.reason || 'Approved additional work').slice(0, 500);
-        changeOrderLines.push({
-          id: `change-order-${co.id}`,
-          description: label,
-          quantity: 1,
-          unitPrice: amount,
-          total: amount,
-          kind: 'change_order',
-        });
-      }
-      if (changeOrderLines.length) {
-        invoiceLineItems = [...invoiceLineItems, ...changeOrderLines];
-      }
-      const invoiceTotals = computeQuoteTotals({
-        lineItems: invoiceLineItems,
-        discountType: quote.discountType,
-        discountValue: quote.discountValue,
-        shippingAmount: quote.shippingAmount,
-        additionalCharges: quote.additionalCharges,
-        taxMode: quote.taxMode,
-        taxValue: quote.taxValue,
-      });
-      const invoiceSubtotal = invoiceTotals.subtotal;
-      const invoiceTotal = invoiceTotals.total;
-
-      const invoiceNumber = ensureFbiNumber(quote.id);
-      const versionKey = rows[0].version_number || 1;
-      const { rows: inv } = await client.query(
-        `INSERT INTO homeowner_invoices
-          (invoice_number, job_id, homeowner_user_id, proposal_id, amount_due, subtotal, paid, total,
-           line_items, additional_charges, discount_type, discount_value, discount_amount,
-           shipping_amount, shipping_label, tax_mode, tax_value, tax_amount,
-           customer_notes, terms_conditions, bill_to, status, custom_note, document_snapshot, due_date)
-         VALUES
-          ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'due',$21,$22,$23)
-         RETURNING *`,
-        [
-          invoiceNumber,
-          quote.jobId,
-          quote.homeownerUserId,
-          quote.id,
-          invoiceTotal,
-          invoiceSubtotal,
-          invoiceTotal,
-          JSON.stringify(invoiceLineItems),
-          JSON.stringify(quote.additionalCharges),
-          quote.discountType,
-          quote.discountValue,
-          quote.discountAmount,
-          quote.shippingAmount,
-          quote.shippingLabel,
-          quote.taxMode,
-          quote.taxValue,
-          quote.taxAmount,
-          quote.customerNotes,
-          quote.termsConditions,
-          JSON.stringify(quote.billTo),
-          quote.customerNotes,
-          JSON.stringify({
-            quoteNumber: quote.quoteNumber,
-            convertedAt: new Date().toISOString(),
-            versionNumber: versionKey,
-            approvedChangeOrders: changeOrderLines.map((l) => ({
-              id: l.id,
-              description: l.description,
-              amount: l.total,
-            })),
-          }),
-          quote.quoteValidUntil,
-        ]
-      );
-
-      await client.query(
-        `UPDATE proposals SET status='converted', converted_invoice_id=$1, locked_at=COALESCE(locked_at, NOW()) WHERE id=$2`,
-        [inv[0].id, id]
-      );
-      await client.query('COMMIT');
-
-      await logQuoteActivity(pool, {
-        proposalId: id,
-        invoiceId: inv[0].id,
-        jobId: quote.jobId,
+      const result = await convertProposalToInvoice(client, {
+        proposalRow: rows[0],
         actorUserId: req.authUser.id,
-        action: 'converted_to_invoice',
-        detail: { invoiceNumber, versionNumber: versionKey },
+        forceConvert,
+        forceReason,
       });
-      await audit(pool, req.authUser.id, 'quote_converted_invoice', 'proposal', id, {
-        invoiceNumber,
-        idempotencyKey: `convert-${id}-v${versionKey}`,
-      });
+      if (!result.ok) {
+        await client.query('ROLLBACK');
+        return res.status(result.status || 500).json({
+          ok: false,
+          code: result.code,
+          message: result.message,
+        });
+      }
+      await client.query('COMMIT');
 
       const { rows: refreshed } = await pool.query(quoteSelectSql(`WHERE p.id=$1`), [id]);
       res.json({
         ok: true,
-        quote: serializeQuoteDocument(refreshed[0]),
-        invoice: serializeInvoiceRow(inv[0]),
-        message: `Invoice ${invoiceNumber} created from ${quote.quoteNumber}.`,
+        alreadyConverted: result.alreadyConverted === true,
+        quote: serializeQuoteDocument(refreshed[0] || rows[0]),
+        invoice: result.invoice,
+        message: result.alreadyConverted
+          ? `Invoice already exists for this quote.`
+          : `Invoice ${result.invoice?.invoiceNumber} created from ${refreshed[0]?.quote_number || id}.`,
       });
     } catch (e) {
       try {

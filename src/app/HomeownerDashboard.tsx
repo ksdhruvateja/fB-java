@@ -48,6 +48,8 @@ import {
  type HomeownerService,
 } from "./homeownerCategories";
 import HomeownerServiceIntake, { type IntakePhase, normalizeIntakePhase } from "./HomeownerServiceIntake";
+import AiAssessmentAckModal from "./AiAssessmentAckModal";
+import type { ConsentMap } from "./legalDocuments";
 import { clearIntakeDraft, loadIntakeDraft, saveIntakeDraft } from "./intakeDraft";
 import {
  tradeToCategory,
@@ -99,6 +101,9 @@ import HomeownerPropertyPage, { DEFAULT_HOME_SYSTEMS } from "./HomeownerProperty
 import HomeownerBottomNav from "./HomeownerBottomNav";
 import HomeownerMoreMenu from "./HomeownerMoreMenu";
 import HomeownerInboxPanel from "./HomeownerInboxPanel";
+import NotificationBell from "./NotificationBell";
+import { useInAppComms } from "./useInAppComms";
+import { formatBadgeCount } from "./notificationsApi";
 import HomeownerPropertySheet from "./HomeownerPropertySheet";
 import HomeownerJobDetailPanel from "./HomeownerJobDetailPanel";
 import HomeownerPaymentsPanel from "./HomeownerPaymentsPanel";
@@ -382,6 +387,7 @@ export default function HomeownerDashboard({
  const [loading, setLoading] = useState(true);
  const [error, setError] = useState<string | null>(null);
  const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
+ const { unreadNotifications, unreadMessages, refresh: refreshComms } = useInAppComms(true);
  const [proposal, setProposal] = useState<Proposal | null>(null);
  const [busy, setBusy] = useState(false);
  const [step, setStep] = useState<ReportStep>("intake");
@@ -500,6 +506,14 @@ export default function HomeownerDashboard({
  const videoRef = useRef<HTMLInputElement>(null);
  const assessInFlightRef = useRef<number | null>(null);
  const assessmentRecoveryRef = useRef<number | null>(null);
+ const aiAssessmentConsentRef = useRef<{
+  assessmentInvocationId: string;
+  consents: ConsentMap;
+ } | null>(null);
+ const pendingAiRunRef = useRef<(() => Promise<void>) | null>(null);
+ const [aiAckOpen, setAiAckOpen] = useState(false);
+ const [aiAckChecked, setAiAckChecked] = useState(false);
+ const [aiAckBusy, setAiAckBusy] = useState(false);
 
  // Guided DIY interactive states
  const [diyIsGuided, setDiyIsGuided] = useState(false);
@@ -1017,7 +1031,11 @@ export default function HomeownerDashboard({
  }
 
  if (action) {
+ if (action === "ai") {
+ requestAiAssessment();
+ } else {
  await submitIssue(action);
+ }
  }
  } catch (e: any) {
  alert(e.message || "Failed to save ZIP code.");
@@ -1152,7 +1170,7 @@ export default function HomeownerDashboard({
  closeAddAddressModal();
  if (action) {
  if (action === "ai") {
- await submitIssue("ai");
+ requestAiAssessment();
  } else if (action === "experts") {
  setError(null);
  setStep("experts");
@@ -1257,6 +1275,7 @@ export default function HomeownerDashboard({
  scrollReportToTop();
  if (!r.job.aiAssessment && !isAssessmentProcessing(r.job)) {
  const zip = r.job.zip || r.job.cityStateZip?.match(/\b\d{5}\b/)?.[0] || null;
+ requestAiAssessment(async () => {
  const assessed = await runAssessWithProgress(id, zip);
  if (assessed.ok && assessed.job) {
  setActiveJob(assessed.job);
@@ -1264,6 +1283,7 @@ export default function HomeownerDashboard({
  } else {
  setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
  }
+ });
  } else if (isAssessmentProcessing(r.job) && !hasRenderableAssessment(r.job)) {
  const zip = r.job.zip || r.job.cityStateZip?.match(/\b\d{5}\b/)?.[0] || null;
  const assessed = await runAssessWithProgress(id, zip);
@@ -1660,7 +1680,10 @@ export default function HomeownerDashboard({
  setAssessLoadingStep((s) => (s == null ? 0 : Math.min(3, s + 1)));
  }, 900);
  try {
- return await assessManagedJob(jobId, { force });
+ return await assessManagedJob(jobId, {
+ force,
+ aiAssessmentConsent: aiAssessmentConsentRef.current ?? undefined,
+ });
  } finally {
  window.clearInterval(timer);
  setAssessLoadingStep(3);
@@ -1669,6 +1692,37 @@ export default function HomeownerDashboard({
  setAssessLoadingZip(null);
  }, 350);
  if (assessInFlightRef.current === jobId) assessInFlightRef.current = null;
+ aiAssessmentConsentRef.current = null;
+ }
+ }
+
+ function cancelAiAssessmentAck() {
+ if (aiAckBusy) return;
+ setAiAckOpen(false);
+ setAiAckChecked(false);
+ pendingAiRunRef.current = null;
+ }
+
+ function requestAiAssessment(run?: () => Promise<void>) {
+ setAiAckChecked(false);
+ pendingAiRunRef.current = run ?? (() => submitIssue("ai"));
+ setAiAckOpen(true);
+ }
+
+ async function confirmAiAssessmentAck() {
+ if (!aiAckChecked || aiAckBusy) return;
+ setAiAckBusy(true);
+ aiAssessmentConsentRef.current = {
+ assessmentInvocationId: crypto.randomUUID(),
+ consents: { AI_ASSESSMENT_ACK: true },
+ };
+ try {
+ await pendingAiRunRef.current?.();
+ setAiAckOpen(false);
+ setAiAckChecked(false);
+ pendingAiRunRef.current = null;
+ } finally {
+ setAiAckBusy(false);
  }
  }
 
@@ -2131,6 +2185,14 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  HomeCare
  </button>
  )}
+ <NotificationBell
+ unreadCount={unreadNotifications}
+ onRefreshCounts={refreshComms}
+ onNavigate={(n) => {
+ if (n.jobId) openJobsSegment("active", n.jobId);
+ else navigateTab("inbox");
+ }}
+ />
  </div>
  </header>
 
@@ -2262,15 +2324,10 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  {tab === "inbox" && (
  <HomeownerInboxPanel
  jobs={jobs}
- homeUpdates={buildHomeUpdatesSnapshot({
- property: primaryProperty,
- health: healthProfile,
- jobs: primaryPropertyJobs,
- prefs: healthProfile.homeUpdateState || null,
- }).items}
- onOpenJob={(id, segment) => openJobsSegment(segment ?? "active", id)}
- onRequestService={() => openRequestService()}
- onOpenHomeUpdates={() => openPropertyCare("recommendations")}
+ onOpenJob={(id) => openJobsSegment("active", id)}
+ onRefreshCounts={refreshComms}
+ unreadMessages={unreadMessages}
+ unreadNotifications={unreadNotifications}
  />
  )}
 
@@ -2304,8 +2361,15 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  }}
  />
  )}
- {tab === "messages" &&
- comingSoon("Messages", "Chat with FixBridge and your assigned contractors will land here.")}
+ {tab === "messages" && (
+ <HomeownerInboxPanel
+ jobs={jobs}
+ onOpenJob={(id) => openJobsSegment("active", id)}
+ onRefreshCounts={refreshComms}
+ unreadMessages={unreadMessages}
+ unreadNotifications={unreadNotifications}
+ />
+ )}
 {tab === "assistant" && (
  <HomeAssistantPanel
  properties={properties}
@@ -2448,7 +2512,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  error={error}
  setError={setError}
  onBack={goBackOneReportStep}
- onSubmitAi={() => void submitIssue("ai")}
+ onSubmitAi={() => requestAiAssessment()}
  onHirePro={goToExperts}
  onClearMedia={() => {
  setMediaDataUrl(null);
@@ -2906,9 +2970,9 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <div className="flex flex-wrap gap-2">
  <button
  type="button"
- disabled={busy}
+ disabled={busy || aiAckOpen}
  onClick={() => {
- void (async () => {
+ requestAiAssessment(async () => {
  setBusy(true);
  setAssessmentMsg(null);
  try {
@@ -2925,7 +2989,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  } finally {
  setBusy(false);
  }
- })();
+ });
  }}
  className="inline-flex items-center gap-2 rounded-md bg-[#FF4D1C] px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60"
  >
@@ -4316,6 +4380,16 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  onRequest={openRequestService}
  onInbox={() => navigateTab("inbox")}
  onMore={() => navigateTab("more")}
+ inboxBadge={formatBadgeCount(unreadMessages + unreadNotifications)}
+ />
+
+ <AiAssessmentAckModal
+ open={aiAckOpen}
+ busy={aiAckBusy}
+ checked={aiAckChecked}
+ onCheckedChange={setAiAckChecked}
+ onClose={cancelAiAssessmentAck}
+ onContinue={() => void confirmAiAssessmentAck()}
  />
  </div>
  </ProFeatureProvider>

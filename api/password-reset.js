@@ -7,7 +7,8 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { brand } from './brand.js';
 import { writeAudit } from './audit.js';
-import { sendMail } from './mail.js';
+import { sendFixBridgeEmail } from './email/send-fixbridge-email.js';
+import { renderEmailTemplate } from './email/templates.js';
 
 export const RESET_ROLES = ['homeowner', 'contractor', 'admin', 'partner'];
 export const RESET_TOKEN_TTL_MS = 60 * 60 * 1000;
@@ -62,35 +63,12 @@ export function buildResetUrl(rawToken, role) {
 }
 
 export function buildResetEmailHtml({ userName, resetUrl, role }) {
-  const product = brand.productName || 'FixBridge';
-  const primary = brand.primaryColor || '#FF4D1C';
-  const portal = portalLabelForRole(role);
-  const safeName = String(userName || 'there')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-  return `
-    <div style="font-family:'DM Sans',Arial,sans-serif;max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:16px;overflow:hidden;">
-      <div style="padding:28px 32px 24px;">
-        <p style="font-weight:800;font-size:20px;letter-spacing:0.04em;color:#111;margin:0 0 20px;">
-          ${product}<span style="color:${primary};"></span>
-        </p>
-        <h1 style="font-size:22px;font-weight:700;color:#111;margin:0 0 12px;">Reset your password</h1>
-        <p style="color:#4b5563;font-size:15px;line-height:1.55;margin:0 0 8px;">Hi ${safeName},</p>
-        <p style="color:#4b5563;font-size:15px;line-height:1.55;margin:0 0 24px;">
-          We received a request to reset the password for your ${product} ${portal.toLowerCase()} account.
-        </p>
-        <a href="${resetUrl}" style="display:inline-block;background:${primary};color:#fff;padding:14px 28px;text-decoration:none;font-weight:700;font-size:14px;border-radius:12px;">
-          Reset Password
-        </a>
-        <p style="color:#6b7280;font-size:13px;line-height:1.5;margin:28px 0 0;">
-          This link will expire in <strong>60 minutes</strong> and can only be used once.
-        </p>
-        <p style="color:#9ca3af;font-size:12px;line-height:1.5;margin:20px 0 0;border-top:1px solid #e5e7eb;padding-top:16px;">
-          If you didn&apos;t request this, you can ignore this email. Your password will not change.
-        </p>
-      </div>
-    </div>
-  `;
+  const rendered = renderEmailTemplate('password_reset', {
+    firstName: userName,
+    resetUrl,
+    portalLabel: portalLabelForRole(role),
+  });
+  return rendered.html;
 }
 
 /** @returns account object or null */
@@ -149,18 +127,15 @@ export async function issuePasswordReset(pool, account, { triggeredByUserId = nu
   );
 
   const resetUrl = buildResetUrl(rawToken, role);
-  const subject = `Reset your ${brand.productName} password`;
-  const html = buildResetEmailHtml({
-    userName: account.name,
-    resetUrl,
-    role,
-  });
 
-  const mailed = await sendMail({
+  const mailed = await sendFixBridgeEmail({
     to: account.email,
-    subject,
-    html,
-    text: `Reset your password: ${resetUrl}\nThis link expires in 60 minutes.`,
+    template: 'password_reset',
+    data: {
+      firstName: account.name,
+      resetUrl,
+      portalLabel: portalLabelForRole(role),
+    },
   });
   if (!mailed.ok) {
     console.log(`\n[${brand.productName}] Password reset link for ${account.email} (${role}):\n${resetUrl}\n`);

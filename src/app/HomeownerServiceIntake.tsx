@@ -22,6 +22,47 @@ import {
   type ServiceLocation,
 } from "./serviceRequestFlow";
 import type { Property } from "./managedJobs";
+import { AI_ASSESSMENT_DESCRIBE_FIRST } from "./aiAssessmentCopy";
+
+function IntakeActionButtons({
+  busy,
+  description,
+  onSubmitAi,
+  onHirePro,
+}: {
+  busy: boolean;
+  description: string;
+  onSubmitAi: () => void;
+  onHirePro: () => void;
+}) {
+  const canAssess = Boolean(description.trim());
+  return (
+    <div className="space-y-2 border-t border-border/70 pt-5">
+      <p className="text-sm font-semibold">What would you like to do next?</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <button
+          type="button"
+          disabled={busy || !canAssess}
+          onClick={onSubmitAi}
+          className="inline-flex items-center justify-center gap-2 rounded-md bg-[#FF4D1C] px-4 py-3.5 text-sm font-medium text-white disabled:opacity-60"
+        >
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+          Get AI assessment
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onHirePro}
+          className="inline-flex items-center justify-center gap-2 rounded-md border-2 border-[#FF4D1C] px-4 py-3.5 text-sm font-medium text-[#FF4D1C] disabled:opacity-60"
+        >
+          <HardHat className="h-4 w-4" />
+          Hire a Professional
+        </button>
+      </div>
+      {!canAssess ? <p className="text-xs text-muted-foreground">{AI_ASSESSMENT_DESCRIBE_FIRST}</p> : null}
+    </div>
+  );
+}
 
 export type IntakePhase = "location" | "describe" | "details";
 
@@ -349,11 +390,17 @@ export default function HomeownerServiceIntake(props: Props) {
               ) : null}
             </div>
           ) : null}
+          <IntakeActionButtons
+            busy={busy}
+            description={description}
+            onSubmitAi={onSubmitAi}
+            onHirePro={onHirePro}
+          />
           <div className="hidden justify-end sm:flex">
             <button
               type="button"
               onClick={goNextFromDescribe}
-              className="inline-flex items-center gap-2 rounded-2xl bg-primary px-5 py-3 text-sm font-semibold text-white"
+              className="inline-flex items-center gap-2 rounded-2xl border border-border px-5 py-3 text-sm font-semibold text-foreground"
             >
               Continue <ArrowRight size={16} />
             </button>
@@ -390,11 +437,17 @@ export default function HomeownerServiceIntake(props: Props) {
               );
             })}
           </div>
+          <IntakeActionButtons
+            busy={busy}
+            description={description}
+            onSubmitAi={onSubmitAi}
+            onHirePro={onHirePro}
+          />
           <div className="hidden justify-end sm:flex">
             <button
               type="button"
               onClick={goNextFromLocation}
-              className="inline-flex items-center gap-2 rounded-2xl bg-primary px-5 py-3 text-sm font-semibold text-white"
+              className="inline-flex items-center gap-2 rounded-2xl border border-border px-5 py-3 text-sm font-semibold text-foreground"
             >
               Continue <ArrowRight size={16} />
             </button>
@@ -469,26 +522,12 @@ export default function HomeownerServiceIntake(props: Props) {
             )}
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={onSubmitAi}
-              className="inline-flex items-center justify-center gap-2 rounded-md bg-[#FF4D1C] px-4 py-3.5 text-sm font-medium text-white disabled:opacity-60"
-            >
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              Get AI assessment
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={onHirePro}
-              className="inline-flex items-center justify-center gap-2 rounded-md border-2 border-[#FF4D1C] px-4 py-3.5 text-sm font-medium text-[#FF4D1C] disabled:opacity-60"
-            >
-              <HardHat className="h-4 w-4" />
-              Hire a Professional
-            </button>
-          </div>
+          <IntakeActionButtons
+            busy={busy}
+            description={description}
+            onSubmitAi={onSubmitAi}
+            onHirePro={onHirePro}
+          />
         </div>
       )}
 

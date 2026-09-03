@@ -1,53 +1,109 @@
-import { useState } from "react";
-import { Plus, Users, X } from "lucide-react";
-import { uid, type ContractorWorkspace, type TeamMember } from "./contractorWorkspaceStore";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ImagePlus, Loader2, Plus, Users, X } from "lucide-react";
+import {
+  fetchContractorEmployees,
+  saveContractorEmployee,
+  type ContractorEmployee,
+} from "./managedJobs";
 
-const ROLES: TeamMember["role"][] = ["Field Technician", "Technician", "Dispatcher", "Manager", "Owner"];
-const STATUSES: TeamMember["status"][] = ["available", "on_job", "online", "offline"];
-
-function statusMeta(s: TeamMember["status"]) {
-  if (s === "available") return { label: "Available", className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" };
-  if (s === "on_job") return { label: "On Job", className: "bg-amber-500/15 text-amber-800 dark:text-amber-200" };
-  if (s === "online") return { label: "Online", className: "bg-sky-500/15 text-sky-700 dark:text-sky-300" };
-  return { label: "Offline", className: "bg-muted text-muted-foreground" };
-}
+const ROLES = ["Field Technician", "Technician", "Dispatcher", "Manager", "Owner"];
 
 export default function ContractorTeamPanel({
   companyName,
-  workspace,
-  onChange,
 }: {
   companyName: string;
-  workspace: ContractorWorkspace;
-  onChange: (next: ContractorWorkspace) => void;
+  workspace?: unknown;
+  onChange?: (next: unknown) => void;
 }) {
+  const [employees, setEmployees] = useState<ContractorEmployee[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [editing, setEditing] = useState<ContractorEmployee | null>(null);
   const [name, setName] = useState("");
-  const [role, setRole] = useState<TeamMember["role"]>("Field Technician");
-  const [trades, setTrades] = useState("");
+  const [role, setRole] = useState("Field Technician");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [trade, setTrade] = useState("");
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const photoRef = useRef<HTMLInputElement>(null);
 
-  const fieldCount = workspace.team.filter((t) =>
-    ["Field Technician", "Technician"].includes(t.role)
-  ).length;
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const r = await fetchContractorEmployees();
+    if (!r.ok) setError(r.message || "Could not load team.");
+    else setEmployees(r.employees || []);
+    setLoading(false);
+  }, []);
 
-  const addMember = () => {
-    if (!name.trim()) return;
-    const member: TeamMember = {
-      id: uid("tm"),
-      name: name.trim(),
-      role,
-      trades: trades
-        .split(/[,/]/)
-        .map((t) => t.trim())
-        .filter(Boolean),
-      status: role === "Dispatcher" ? "online" : "available",
-      jobsToday: 0,
-    };
-    onChange({ ...workspace, team: [...workspace.team, member] });
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const openCreate = () => {
+    setEditing(null);
     setName("");
-    setTrades("");
-    setShowAdd(false);
+    setRole("Field Technician");
+    setPhone("");
+    setEmail("");
+    setTrade("");
+    setPhotoPreview(null);
+    setShowAdd(true);
   };
+
+  const openEdit = (member: ContractorEmployee) => {
+    setEditing(member);
+    setName(member.fullName);
+    setRole(member.jobTitle || "Field Technician");
+    setPhone(member.primaryPhone || member.phones[0]?.value || "");
+    setEmail(member.primaryEmail || member.emails[0]?.value || "");
+    setTrade(member.trade || "");
+    setPhotoPreview(member.photoUrl || null);
+    setShowAdd(true);
+  };
+
+  const saveMember = async () => {
+    if (!name.trim()) return;
+    setSaving(true);
+    setError(null);
+    const body: Record<string, unknown> = {
+      fullName: name.trim(),
+      jobTitle: role,
+      trade: trade.trim() || null,
+      phones: phone.trim() ? [{ value: phone.trim(), isPrimary: true, customerVisible: true }] : [],
+      emails: email.trim() ? [{ value: email.trim(), isPrimary: true, customerVisible: false }] : [],
+      active: editing ? editing.active : true,
+    };
+    if (photoPreview?.startsWith("data:image/")) {
+      const [, mime, data] = photoPreview.match(/^data:(image\/[a-z+]+);base64,(.+)$/i) || [];
+      if (mime && data) {
+        body.photoData = data;
+        body.photoMime = mime;
+      }
+    } else if (photoPreview === null && editing?.hasPhoto) {
+      body.photoData = null;
+      body.photoMime = null;
+    }
+    const r = await saveContractorEmployee(body, editing?.id);
+    setSaving(false);
+    if (!r.ok) {
+      setError(r.message || "Could not save team member.");
+      return;
+    }
+    setShowAdd(false);
+    await refresh();
+  };
+
+  const toggleActive = async (member: ContractorEmployee) => {
+    setSaving(true);
+    await saveContractorEmployee({ ...member, active: !member.active, fullName: member.fullName }, member.id);
+    setSaving(false);
+    await refresh();
+  };
+
+  const fieldCount = employees.filter((t) => t.active && ["Field Technician", "Technician"].includes(t.jobTitle || "")).length;
 
   return (
     <section className="mx-auto max-w-3xl space-y-5">
@@ -57,93 +113,82 @@ export default function ContractorTeamPanel({
           <p className="mt-1 text-lg font-semibold">{companyName}</p>
           <p className="mt-1 text-sm text-muted-foreground flex items-center gap-2">
             <Users className="h-4 w-4" />
-            {workspace.team.length} Team Members · {fieldCount} Field Technicians
-            {workspace.companySize ? ` · Company size ${workspace.companySize}` : ""}
+            {employees.length} team member{employees.length === 1 ? "" : "s"} · {fieldCount} field technician
+            {fieldCount === 1 ? "" : "s"}
           </p>
         </div>
         <button
           type="button"
-          onClick={() => setShowAdd(true)}
+          onClick={openCreate}
           className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-sm font-semibold text-white"
         >
-          <Plus className="h-4 w-4" /> Add member
+          <Plus className="h-4 w-4" /> Add employee
         </button>
       </div>
 
-      <label className="grid max-w-xs gap-1.5 text-sm">
-        <span className="text-xs text-muted-foreground">Company size (field technicians)</span>
-        <select
-          className="rounded-xl border border-border bg-card px-3 py-2.5"
-          value={workspace.companySize}
-          onChange={(e) => onChange({ ...workspace, companySize: e.target.value })}
-        >
-          {["1", "2–5", "6–10", "11–25", "26–50", "50+"].map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <ul className="space-y-3">
-        {workspace.team.map((m) => {
-          const st = statusMeta(m.status);
-          return (
+      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {loading ? (
+        <p className="text-sm text-muted-foreground inline-flex items-center gap-2">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading team…
+        </p>
+      ) : (
+        <ul className="space-y-3">
+          {employees.map((m) => (
             <li key={m.id} className="rounded-[1.25rem] border border-border bg-card p-4 sm:p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-base font-semibold">{m.name}</p>
-                  <p className="text-sm text-muted-foreground">{m.role}</p>
-                  {m.trades.length > 0 && (
-                    <p className="mt-1 text-xs text-muted-foreground">{m.trades.join(" · ")}</p>
+                <div className="flex items-start gap-3">
+                  {m.photoUrl ? (
+                    <img src={m.photoUrl} alt="" className="h-12 w-12 rounded-xl border border-border object-cover" />
+                  ) : (
+                    <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-border bg-muted text-sm font-semibold">
+                      {m.fullName.slice(0, 1)}
+                    </div>
                   )}
+                  <div>
+                    <p className="text-base font-semibold">{m.fullName}</p>
+                    <p className="text-sm text-muted-foreground">{m.jobTitle || "Team member"}</p>
+                    {m.trade && <p className="mt-1 text-xs text-muted-foreground">{m.trade}</p>}
+                    {(m.primaryPhone || m.primaryEmail) && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {[m.primaryPhone, m.primaryEmail].filter(Boolean).join(" · ")}
+                      </p>
+                    )}
+                  </div>
                 </div>
-                <div className="text-right space-y-2">
-                  <select
-                    className={`rounded-full border-0 px-2.5 py-1 text-[11px] font-semibold ${st.className}`}
-                    value={m.status}
-                    onChange={(e) =>
-                      onChange({
-                        ...workspace,
-                        team: workspace.team.map((t) =>
-                          t.id === m.id ? { ...t, status: e.target.value as TeamMember["status"] } : t
-                        ),
-                      })
-                    }
-                  >
-                    {STATUSES.map((s) => (
-                      <option key={s} value={s}>
-                        {statusMeta(s).label}
-                      </option>
-                    ))}
-                  </select>
-                  {["Field Technician", "Technician"].includes(m.role) && (
-                    <p className="text-xs text-muted-foreground">Jobs Today: {m.jobsToday}</p>
-                  )}
-                </div>
+                <span
+                  className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                    m.active
+                      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                      : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {m.active ? "Active" : "Inactive"}
+                </span>
               </div>
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="mt-3 flex flex-wrap gap-3 text-xs font-semibold">
+                <button type="button" className="text-primary hover:underline" onClick={() => openEdit(m)}>
+                  Edit
+                </button>
                 <button
                   type="button"
-                  className="text-xs font-semibold text-red-600 hover:underline"
-                  onClick={() =>
-                    onChange({ ...workspace, team: workspace.team.filter((t) => t.id !== m.id) })
-                  }
+                  className="text-muted-foreground hover:underline"
+                  disabled={saving}
+                  onClick={() => void toggleActive(m)}
                 >
-                  Remove
+                  {m.active ? "Deactivate" : "Activate"}
                 </button>
               </div>
             </li>
-          );
-        })}
-      </ul>
+          ))}
+        </ul>
+      )}
 
       {showAdd && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <button type="button" className="absolute inset-0 bg-black/40" aria-label="Close" onClick={() => setShowAdd(false)} />
           <div className="relative z-10 w-full max-w-md space-y-3 rounded-2xl border border-border bg-card p-5 shadow-xl">
             <div className="flex items-center justify-between">
-              <p className="font-semibold">Add team member</p>
+              <p className="font-semibold">{editing ? "Edit employee" : "Add employee"}</p>
               <button type="button" onClick={() => setShowAdd(false)} className="rounded-lg p-1.5 hover:bg-muted">
                 <X className="h-4 w-4" />
               </button>
@@ -157,7 +202,7 @@ export default function ContractorTeamPanel({
             <select
               className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
               value={role}
-              onChange={(e) => setRole(e.target.value as TeamMember["role"])}
+              onChange={(e) => setRole(e.target.value)}
             >
               {ROLES.map((r) => (
                 <option key={r} value={r}>
@@ -167,12 +212,59 @@ export default function ContractorTeamPanel({
             </select>
             <input
               className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-              placeholder="Trades (e.g. HVAC, Plumbing)"
-              value={trades}
-              onChange={(e) => setTrades(e.target.value)}
+              placeholder="Primary phone (customer-visible)"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
             />
-            <button type="button" onClick={addMember} className="w-full rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white">
-              Save member
+            <input
+              className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
+              placeholder="Email (internal by default)"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+            <input
+              className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
+              placeholder="Trade / specialty"
+              value={trade}
+              onChange={(e) => setTrade(e.target.value)}
+            />
+            <div>
+              <input
+                ref={photoRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  if (file.size > 1_500_000) {
+                    setError("Photo must be under 1.5 MB.");
+                    return;
+                  }
+                  const reader = new FileReader();
+                  reader.onload = () => setPhotoPreview(String(reader.result));
+                  reader.readAsDataURL(file);
+                }}
+              />
+              <button
+                type="button"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border px-3 py-3 text-sm"
+                onClick={() => photoRef.current?.click()}
+              >
+                <ImagePlus className="h-4 w-4" />
+                {photoPreview ? "Replace profile photo" : "Upload profile photo"}
+              </button>
+              {photoPreview ? (
+                <img src={photoPreview} alt="" className="mt-2 h-24 w-24 rounded-xl border border-border object-cover" />
+              ) : null}
+            </div>
+            <button
+              type="button"
+              disabled={saving || !name.trim()}
+              onClick={() => void saveMember()}
+              className="w-full rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+            >
+              {saving ? "Saving…" : "Save employee"}
             </button>
           </div>
         </div>

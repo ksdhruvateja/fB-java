@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, useEffect } from "react";
 import AppBackButton from "./AppBackButton";
 import { useIsMobile } from "./components/ui/use-mobile";
 import {
@@ -16,13 +16,19 @@ import {
 } from "lucide-react";
 import {
   STATUS_LABELS,
+  assignJobTechnician,
   completeJob,
-  updateJobStatus,
+  contractorMarkArrived,
+  contractorMarkStarted,
+  contractorMarkTravel,
+  fetchContractorEmployees,
+  type ContractorEmployee,
   type ManagedJob,
   type ContractorPayout,
   type PayoutAccount,
 } from "./managedJobs";
 import ChangeOrderPanel from "./ChangeOrderPanel";
+import JobTimelinePanel from "./JobTimelinePanel";
 import { JobEarningsCard } from "./ContractorPayoutsPanel";
 import {
   buildStructuredEquipmentPayload,
@@ -78,6 +84,14 @@ export default function ContractorJobsPanel({
   onViewPayouts?: () => void;
 }) {
   const [filter, setFilter] = useState<JobFilter>("all");
+  const [employees, setEmployees] = useState<ContractorEmployee[]>([]);
+  const [assignTechId, setAssignTechId] = useState<number | "">("");
+
+  useEffect(() => {
+    void fetchContractorEmployees().then((r) => {
+      if (r.ok) setEmployees((r.employees || []).filter((e) => e.active));
+    });
+  }, []);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [completeSummary, setCompleteSummary] = useState("");
@@ -269,29 +283,76 @@ export default function ContractorJobsPanel({
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2 pt-1">
-                  {selected.status !== "canceled" && selected.status === "scheduled" && (
+                  {employees.length > 0 && selected.assignedContractorUserId ? (
+                    <div className="flex w-full flex-wrap items-center gap-2 pb-2">
+                      <label className="text-xs font-semibold text-muted-foreground">Assign technician</label>
+                      <select
+                        className="rounded-xl border border-border bg-background px-3 py-2 text-sm"
+                        value={assignTechId || selected.assignedEmployeeId || ""}
+                        onChange={(e) => setAssignTechId(e.target.value ? Number(e.target.value) : "")}
+                      >
+                        <option value="">Select technician</option>
+                        {employees.map((e) => (
+                          <option key={e.id} value={e.id}>
+                            {e.fullName}
+                            {e.jobTitle ? ` · ${e.jobTitle}` : ""}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="rounded-xl border border-border px-3 py-2 text-sm font-semibold"
+                        disabled={!assignTechId && !selected.assignedEmployeeId}
+                        onClick={async () => {
+                          const id = Number(assignTechId || selected.assignedEmployeeId);
+                          if (!id) return;
+                          const r = await assignJobTechnician(selected.id, id);
+                          if (!r.ok) onError(r.message || "Could not assign technician.");
+                          else await onRefresh();
+                        }}
+                      >
+                        Save technician
+                      </button>
+                    </div>
+                  ) : null}
+                  {selected.status !== "canceled" && ["scheduled", "approved"].includes(selected.status) && (
                     <button
                       type="button"
                       className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold"
                       onClick={async () => {
-                        await updateJobStatus(selected.id, "contractor_en_route");
-                        await onRefresh();
+                        const r = await contractorMarkTravel(selected.id);
+                        if (!r.ok) onError(r.message || "Could not start travel.");
+                        else await onRefresh();
                       }}
                     >
                       <Truck className="h-4 w-4" /> Start Travel
                     </button>
                   )}
                   {selected.status !== "canceled" && selected.status === "contractor_en_route" && (
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold"
-                      onClick={async () => {
-                        await updateJobStatus(selected.id, "work_started");
-                        await onRefresh();
-                      }}
-                    >
-                      <Navigation className="h-4 w-4" /> Start work
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold"
+                        onClick={async () => {
+                          const r = await contractorMarkArrived(selected.id);
+                          if (!r.ok) onError(r.message || "Could not mark arrived.");
+                          else await onRefresh();
+                        }}
+                      >
+                        <MapPin className="h-4 w-4" /> Arrived
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold"
+                        onClick={async () => {
+                          const r = await contractorMarkStarted(selected.id);
+                          if (!r.ok) onError(r.message || "Could not start job.");
+                          else await onRefresh();
+                        }}
+                      >
+                        <Navigation className="h-4 w-4" /> Start Job
+                      </button>
+                    </>
                   )}
                   {selected.status !== "canceled" && ["awaiting_bid", "contractor_accepted"].includes(selected.status) && (
                     <button
@@ -309,6 +370,13 @@ export default function ContractorJobsPanel({
               ["work_started", "change_order_pending", "contractor_en_route"].includes(selected.status) ? (
                 <ChangeOrderPanel jobId={selected.id} role="contractor" onChanged={onRefresh} />
               ) : null}
+
+              <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Job timeline</p>
+                <div className="mt-3">
+                  <JobTimelinePanel jobId={selected.id} />
+                </div>
+              </div>
 
               {selected.status !== "canceled" ? (
               <div>

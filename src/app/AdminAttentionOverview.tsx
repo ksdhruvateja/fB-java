@@ -5,6 +5,8 @@ import {
   Clock,
   FileText,
   Send,
+  UserX,
+  Users,
   Wallet,
 } from "lucide-react";
 import { formatMoney, type ManagedJob } from "./managedJobs";
@@ -23,11 +25,14 @@ const ATTENTION_CARDS: {
   border: string;
 }[] = [
   { kind: "emergency", label: "Emergency requests", icon: AlertTriangle, dot: "bg-red-500", border: "hover:border-red-400/50" },
+  { kind: "unassigned", label: "Unassigned jobs", icon: UserX, dot: "bg-rose-500", border: "hover:border-rose-400/50" },
+  { kind: "no_technician", label: "Missing technician", icon: Users, dot: "bg-fuchsia-500", border: "hover:border-fuchsia-400/50" },
   { kind: "quotes_waiting", label: "Contractor quotes waiting", icon: Clock, dot: "bg-orange-500", border: "hover:border-orange-400/50" },
   { kind: "quotes_ready", label: "Quotes ready to send", icon: FileText, dot: "bg-amber-400", border: "hover:border-amber-400/50" },
   { kind: "accepted", label: "Homeowners accepted", icon: CheckCircle2, dot: "bg-emerald-500", border: "hover:border-emerald-400/50" },
   { kind: "payments", label: "Payments / completion", icon: Wallet, dot: "bg-sky-500", border: "hover:border-sky-400/50" },
   { kind: "payouts", label: "Contractor payouts ready", icon: Banknote, dot: "bg-violet-500", border: "hover:border-violet-400/50" },
+  { kind: "disputes", label: "Open disputes", icon: AlertTriangle, dot: "bg-red-600", border: "hover:border-red-500/50" },
 ];
 
 export default function AdminAttentionOverview({
@@ -35,11 +40,17 @@ export default function AdminAttentionOverview({
   reportPayments,
   onOpenAttention,
   onOpenWorkQueue,
+  unreadHomeownerMessages = 0,
+  unreadContractorMessages = 0,
+  onOpenCommunications,
 }: {
   jobs: ManagedJob[];
   reportPayments?: number;
   onOpenAttention: (kind: AttentionKind) => void;
   onOpenWorkQueue: () => void;
+  unreadHomeownerMessages?: number;
+  unreadContractorMessages?: number;
+  onOpenCommunications?: () => void;
 }) {
   const attention = computeAttention(jobs);
   const today = todayStats(jobs);
@@ -70,6 +81,24 @@ export default function AdminAttentionOverview({
         <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
           Needs your attention
         </p>
+        {(unreadHomeownerMessages > 0 || unreadContractorMessages > 0) && onOpenCommunications ? (
+          <button
+            type="button"
+            onClick={onOpenCommunications}
+            className="mb-3 flex flex-wrap gap-4 rounded-xl border border-border bg-card px-4 py-3 text-sm hover:bg-muted/30"
+          >
+            {unreadHomeownerMessages > 0 ? (
+              <span>
+                Unread homeowner messages <strong className="tabular-nums">{unreadHomeownerMessages}</strong>
+              </span>
+            ) : null}
+            {unreadContractorMessages > 0 ? (
+              <span>
+                Unread contractor messages <strong className="tabular-nums">{unreadContractorMessages}</strong>
+              </span>
+            ) : null}
+          </button>
+        ) : null}
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {ATTENTION_CARDS.map((card) => {
             const count = attention[card.kind].length;

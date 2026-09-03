@@ -90,6 +90,11 @@ export const ACKNOWLEDGMENT_DEFINITIONS: Record<AcceptanceType, AcknowledgmentDe
     documentKey: "MARKETING_CONSENT",
     documentLabel: "Marketing Communications",
   },
+  AI_ASSESSMENT_ACK: {
+    acceptanceType: "AI_ASSESSMENT_ACK",
+    label:
+      "I understand that the FixBridge AI assessment is informational, may not identify every condition, and is not a substitute for an on-site evaluation by a qualified professional when one is needed.",
+  },
 };
 
 export function definitionForType(type: AcceptanceType): AcknowledgmentDefinition {

@@ -115,6 +115,7 @@ import {
 import { sendEmailSafe, sendSmsSafe, notifyOps } from './notify.js';
 import { lookupZipPlace, formatLocationContext } from './zip-market.js';
 import { isAdminRole } from './auth-helpers.js';
+import { registerDisputeRoutes } from './disputes.js';
 import {
   CANCELLATION_REASON_LABELS,
   HOMEOWNER_CANCELABLE_STATUSES,
@@ -141,6 +142,13 @@ import { registerDiySafetyRoutes } from './diy-safety-routes.js';
 import { registerLegalAdminRoutes } from './legal-admin-routes.js';
 import { recordJobDispatchEvidence } from './job-evidence.js';
 import { loadCurrentComplianceDocuments } from './contractor-compliance.js';
+import {
+  homeownerStatusLabel,
+  loadJobTimeline,
+  recordJobOperationalEvent,
+} from './job-operational-events.js';
+import { convertProposalToInvoice } from './quote-invoice-service.js';
+import { assertEmployeeAssignable, serializeEmployee } from './contractor-employees.js';
 
 async function ensureUserReferralCodeInline(pool, r) {
   if (r.referral_code) return r.referral_code;
@@ -272,17 +280,29 @@ const JOB_WITH_TECH_SELECT = `
     u.name AS tech_name,
     u.company_name AS tech_company,
     u.phone AS tech_phone,
+    u.name AS contractor_name,
+    u.phone AS contractor_phone,
     u.compliance_status,
     u.insurance_document_name,
     u.insurance_document_data,
     u.insurance_details,
     u.trade AS tech_trade,
+    emp.full_name AS employee_full_name,
+    emp.job_title AS employee_job_title,
+    emp.trade AS employee_trade,
+    emp.bio AS employee_bio,
+    emp.customer_description AS employee_customer_description,
+    emp.photo_data AS employee_photo_data,
+    emp.phones AS employee_phones,
+    emp.emails AS employee_emails,
+    u.company_name AS employee_company_name,
     inv.id AS linked_invoice_id,
     inv.invoice_number AS linked_invoice_number,
     inv.status AS linked_invoice_status,
     inv.amount_due AS linked_invoice_amount_due
   FROM managed_jobs j
   LEFT JOIN users u ON u.id = j.assigned_contractor_user_id
+  LEFT JOIN contractor_employees emp ON emp.id = j.assigned_employee_id
   LEFT JOIN LATERAL (
     SELECT id, invoice_number, status, amount_due
     FROM homeowner_invoices
@@ -313,10 +333,14 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
-async function sendNotificationEmail({ to, subject, html }) {
+async function sendNotificationEmail({ to, subject, html, template, data, firstName }) {
   if (!to) return;
   try {
-    await sendEmailSafe({ to, subject, html });
+    if (template) {
+      await sendEmailSafe({ to, template, data });
+      return;
+    }
+    await sendEmailSafe({ to, subject, html, firstName });
   } catch (e) {
     console.error('[email notification]', e.message);
   }
@@ -453,6 +477,7 @@ function serializeJob(row, viewer) {
     propertyPurpose: row.property_purpose,
     transactionStage: row.transaction_stage,
     completionReport: parseJson(row.completion_report),
+    customerConfirmedAt: row.customer_confirmed_at || null,
     discountCode: managedPricingFirewall ? undefined : row.discount_code || null,
     discountLabel: managedPricingFirewall ? undefined : row.discount_label || null,
     discountType: managedPricingFirewall ? undefined : row.discount_type || null,
@@ -494,7 +519,35 @@ function serializeJob(row, viewer) {
 
   if ((isOwner || isAdmin) && row.assigned_contractor_user_id) {
     const ratingRaw = row.tech_rating != null ? Number(row.tech_rating) : null;
-    base.technician = {
+    const employeePhones = parseJson(row.employee_phones, []) || [];
+    const employeeEmails = parseJson(row.employee_emails, []) || [];
+    const visiblePhones = employeePhones.filter((p) => p?.customerVisible !== false);
+    const visibleEmails = employeeEmails.filter((e) => e?.customerVisible !== false);
+    const primaryPhone =
+      visiblePhones.find((p) => p?.isPrimary)?.value ||
+      visiblePhones[0]?.value ||
+      null;
+    const primaryEmail =
+      visibleEmails.find((e) => e?.isPrimary)?.value ||
+      visibleEmails[0]?.value ||
+      null;
+    const employee =
+      row.assigned_employee_id && row.employee_full_name
+        ? {
+            id: Number(row.assigned_employee_id),
+            name: row.employee_full_name,
+            jobTitle: row.employee_job_title || null,
+            company: row.tech_company || row.company_name || row.employee_company_name || null,
+            phone: primaryPhone || row.tech_phone || row.contractor_phone || null,
+            email: primaryEmail || null,
+            trade: row.employee_trade || row.tech_trade || row.trade || null,
+            photoUrl: row.employee_photo_data
+              ? `/api/contractor/employees/${row.assigned_employee_id}/photo`
+              : null,
+            bio: row.employee_customer_description || row.employee_bio || null,
+          }
+        : null;
+    base.technician = employee || {
       id: Number(row.assigned_contractor_user_id),
       name: row.tech_name || row.contractor_name || null,
       company: row.tech_company || row.company_name || null,
@@ -509,8 +562,11 @@ function serializeJob(row, viewer) {
       ),
       trade: row.tech_trade || row.trade || null,
     };
+    base.assignedEmployeeId = row.assigned_employee_id != null ? Number(row.assigned_employee_id) : null;
+    base.homeownerStatusLabel = homeownerStatusLabel(row.status, Boolean(row.assigned_employee_id || base.technician?.name));
   } else if (isOwner || isAdmin) {
     base.technician = null;
+    base.homeownerStatusLabel = homeownerStatusLabel(row.status, false);
   }
 
   // Customer retail visibility — homeowners only see final FixBridge amounts
@@ -700,8 +756,14 @@ async function notifyAdminsNewJobForQuote(pool, { job, homeowner }) {
     for (const admin of admins) {
       await sendEmailSafe({
         to: admin.email,
-        subject: `${brand.productName} — New job for contractor quote ${bookingId}`,
-        html: `<p>${msg}</p><p>Open <strong>Admin → Dispatch</strong> to invite a contractor and share the AI assessment.</p>`,
+        template: 'admin_notification',
+        data: {
+          firstName: admin.name,
+          subject: `${brand.productName} — New job for contractor quote ${bookingId}`,
+          headline: 'New job for contractor quote',
+          message: msg,
+          viewUrl: `${(process.env.APP_URL || '').replace(/\/$/, '')}/admin`,
+        },
       });
     }
   } catch (e) {
@@ -726,8 +788,14 @@ async function notifyAdminsHomeownerApprovedQuote(pool, { job, homeowner, propos
     for (const admin of admins) {
       await sendEmailSafe({
         to: admin.email,
-        subject: `${brand.productName} — Homeowner approved quote ${bookingId}`,
-        html: `<p>${msg}</p><p>Open <strong>Admin → Dispatch</strong> to request contractor dispatch.</p>`,
+        template: 'admin_notification',
+        data: {
+          firstName: admin.name,
+          subject: `${brand.productName} — Homeowner approved quote ${bookingId}`,
+          headline: 'Homeowner approved quote',
+          message: msg,
+          viewUrl: `${(process.env.APP_URL || '').replace(/\/$/, '')}/admin`,
+        },
       });
     }
   } catch (e) {
@@ -755,13 +823,16 @@ async function notifyAdminsDispatchServiceRequest(pool, { job, homeowner, amount
     for (const admin of admins) {
       await sendEmailSafe({
         to: admin.email,
-        subject: `${brand.productName} — New Paid Service Request ${bookingId}`,
-        html:
-          `<p><strong>New Paid Service Request</strong></p>` +
-          `<p>${bookingId}<br/>${escapeHtml(String(category))} • ${escapeHtml(String(area))}<br/>` +
-          `Customer paid: <strong>$${paid}</strong>${discountCode ? `<br/>Coupon: ${escapeHtml(String(discountCode))}` : ''}</p>` +
-          `<p>Status: ${statusLabel}</p>` +
-          `<p>Open <strong>Admin → Dispatch</strong> to review and assign a contractor.</p>`,
+        template: 'admin_notification',
+        data: {
+          firstName: admin.name,
+          subject: `${brand.productName} — New Paid Service Request ${bookingId}`,
+          headline: 'New paid service request',
+          message:
+            `${bookingId} — ${category} • ${area}. Customer paid: $${paid}.` +
+            `${discountCode ? ` Coupon: ${discountCode}.` : ''} Status: ${statusLabel}.`,
+          viewUrl: `${(process.env.APP_URL || '').replace(/\/$/, '')}/admin`,
+        },
       });
     }
   } catch (e) {
@@ -1131,6 +1202,8 @@ function serializeProposal(row, viewer) {
     base.customerLineItems = row.customer_line_items;
     base.quoteValidUntil = row.quote_valid_until;
     base.couponCode = row.coupon_code;
+    base.quoteOptionLabel = row.quote_option_label || null;
+    base.optionGroup = row.option_group || null;
   }
   if (!isAdmin && !isCustomer) {
     // Contractors must not see retail
@@ -2649,6 +2722,31 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         });
       }
 
+      const invocationId = String(req.body?.assessmentInvocationId || req.body?.invocationId || '').trim();
+      if (!invocationId) {
+        return res.status(400).json({
+          ok: false,
+          code: 'AI_ASSESSMENT_ACK_REQUIRED',
+          message: 'AI assessment acknowledgment is required before continuing.',
+        });
+      }
+      const consentCheck = checkActionConsentsFromBody(req.body, 'AI_ASSESSMENT');
+      if (!consentCheck.ok) {
+        return res.status(400).json({
+          ok: false,
+          code: consentCheck.code,
+          message: 'You must acknowledge the AI assessment disclaimer before continuing.',
+          missingAcceptanceTypes: consentCheck.missing,
+        });
+      }
+      const consentResult = await requireActionConsents(pool, req, res, {
+        actionKey: 'AI_ASSESSMENT',
+        userId: req.authUser.id,
+        jobId,
+        idempotencyPrefix: `AI_ASSESSMENT:${req.authUser.id}:${jobId}:${invocationId}`,
+      });
+      if (!consentResult) return;
+
       const claimed = await claimAssessmentProcessing(pool, jobId, job.homeowner_user_id, { force });
       if (!claimed) {
         return res.status(202).json({
@@ -3750,6 +3848,25 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         [contractorUserId, jobId]
       );
 
+      const employeeId = req.body?.employeeId != null ? Number(req.body.employeeId) : null;
+      if (employeeId) {
+        const empCheck = await assertEmployeeAssignable(pool, employeeId, contractorUserId);
+        if (!empCheck.ok) {
+          return res.status(empCheck.status || 400).json({ ok: false, message: empCheck.message });
+        }
+        await pool.query(`UPDATE managed_jobs SET assigned_employee_id=$1 WHERE id=$2`, [employeeId, jobId]);
+        await recordJobOperationalEvent(pool, {
+          jobId,
+          eventType: 'technician_assigned',
+          contractorUserId,
+          employeeId,
+          actorUserId: req.authUser.id,
+          detail: { employeeName: empCheck.employee?.full_name || null },
+        });
+      } else if (req.body?.clearEmployee === true) {
+        await pool.query(`UPDATE managed_jobs SET assigned_employee_id=NULL WHERE id=$1`, [jobId]);
+      }
+
       const current = rows[0].status;
       if (!['awaiting_bid', 'bid_received', 'proposal_sent', 'awaiting_customer_approval', 'approved', 'scheduled', 'work_started', 'work_completed', 'payout_pending', 'paid_out', 'closed'].includes(current)) {
         await pushStatus(pool, jobId, current, 'contractor_accepted', req.authUser.id, 'Contractor assigned');
@@ -3759,6 +3876,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
 
       await audit(pool, req.authUser.id, 'contractor_assigned', 'managed_job', jobId, { contractorUserId });
+      await recordJobOperationalEvent(pool, {
+        jobId,
+        eventType: 'contractor_assigned',
+        contractorUserId,
+        employeeId: employeeId || null,
+        actorUserId: req.authUser.id,
+        detail: { companyName: contractors[0].company_name || contractors[0].name || null },
+      });
 
       const complianceDocs = await loadCurrentComplianceDocuments(pool, contractorUserId);
       const { rows: dispatchSnaps } = await pool.query(
@@ -4354,8 +4479,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         if (hw[0]) {
           await sendNotificationEmail({
             to: hw[0].email,
-            subject: `Your ${brand.productName} repair proposal is ready`,
-            html: `<p>Hi ${hw[0].name || 'there'},</p><p>Your repair proposal for <strong>${jobs[0].title}</strong> is ready to review. Log in to ${brand.productName} to see the details and approve.</p>`,
+            template: 'repair_proposal_ready',
+            data: {
+              firstName: hw[0].name,
+              jobTitle: jobs[0].title,
+              jobId: jobs[0].id,
+              viewUrl: `${(process.env.APP_URL || '').replace(/\/$/, '')}/homeowner?job=${jobs[0].id}`,
+            },
           });
         }
       } catch (_e) { /* non-fatal */ }
@@ -4390,36 +4520,100 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
-  app.post('/api/managed/jobs/:id/approve-proposal', requireAuth, async (req, res) => {
+  app.get('/api/managed/jobs/:id/quote-options', requireAuth, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
-      const { rows: jobs } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      const { rows: jobs } = await pool.query(`SELECT homeowner_user_id FROM managed_jobs WHERE id=$1`, [jobId]);
+      if (!jobs[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
+      const allowed =
+        req.authUser.role === 'admin' ||
+        Number(jobs[0].homeowner_user_id) === Number(req.authUser.id);
+      if (!allowed) return res.status(403).json({ ok: false, message: 'Not allowed.' });
+
+      const { rows } = await pool.query(
+        `SELECT * FROM proposals
+         WHERE job_id=$1
+           AND status IN ('sent','viewed','accepted','approved')
+           AND COALESCE(status,'') != 'superseded'
+         ORDER BY quote_option_label NULLS LAST, published_at DESC NULLS LAST`,
+        [jobId],
+      );
+      const options = rows.map((r) => serializeProposal(r, req.authUser));
+      const hasAlternatives = options.filter((o) => o.optionGroup).length > 1;
+      return res.json({ ok: true, options, hasAlternatives });
+    } catch (e) {
+      return res.status(500).json({ ok: false, message: 'Server error' });
+    }
+  });
+
+  app.post('/api/managed/jobs/:id/approve-proposal', requireAuth, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const jobId = Number(req.params.id);
+      const { rows: jobs } = await client.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       if (!jobs[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
       if (Number(jobs[0].homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
-      const { rows: props } = await pool.query(
-        `SELECT * FROM proposals WHERE job_id=$1 ORDER BY created_at DESC LIMIT 1`,
-        [jobId]
-      );
-      if (!props[0]) return res.status(400).json({ ok: false, message: 'No proposal.' });
+
+      const proposalId = Number(req.body?.proposalId || jobs[0].active_proposal_id || 0);
+      let prop = null;
+      if (proposalId > 0) {
+        const { rows: byId } = await client.query(
+          `SELECT * FROM proposals WHERE id=$1 AND job_id=$2`,
+          [proposalId, jobId]
+        );
+        prop = byId[0] || null;
+      }
+      if (!prop) {
+        const { rows: props } = await client.query(
+          `SELECT * FROM proposals
+           WHERE job_id=$1
+             AND status IN ('sent','viewed')
+           ORDER BY published_at DESC NULLS LAST, created_at DESC
+           LIMIT 1`,
+          [jobId]
+        );
+        prop = props[0] || null;
+      }
+      if (!prop) {
+        return res.status(400).json({ ok: false, message: 'No active quote available for approval.' });
+      }
+
+      const propStatus = String(prop.status || '').toLowerCase();
+      if (['superseded', 'converted', 'canceled', 'cancelled', 'declined', 'expired'].includes(propStatus)) {
+        return res.status(409).json({
+          ok: false,
+          code: 'quote_not_active',
+          message:
+            propStatus === 'superseded'
+              ? 'This quote has been superseded by a newer version. Please review the latest quote.'
+              : 'This quote is no longer available for approval.',
+        });
+      }
+      if (!['sent', 'viewed', 'accepted', 'approved'].includes(propStatus)) {
+        return res.status(409).json({
+          ok: false,
+          code: 'quote_not_sent',
+          message: 'This quote has not been sent for your review yet.',
+        });
+      }
 
       if (req.authUser.role !== 'admin') {
         const ackOk = await requireHomeownerAcknowledgment(pool, req, res, {
           jobId,
-          quoteId: props[0].id,
+          quoteId: prop.id,
           actionKey: 'QUOTE_APPROVAL',
           message: 'You must agree to the service agreement and approve the quote scope and total.',
         });
         if (!ackOk) return;
       }
 
-      const prop = props[0];
       const versionNumber = Number(prop.version_number || 1);
 
       const validUntil = prop.quote_valid_until ? new Date(prop.quote_valid_until) : null;
       if (validUntil && validUntil.getTime() < Date.now()) {
-        await pool.query(`UPDATE proposals SET status='expired' WHERE id=$1 AND status NOT IN ('accepted','converted','paid')`, [
+        await client.query(`UPDATE proposals SET status='expired' WHERE id=$1 AND status NOT IN ('accepted','converted','paid')`, [
           prop.id,
         ]);
         return res.status(409).json({
@@ -4429,12 +4623,39 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         });
       }
 
+      await client.query('BEGIN');
+      const { rows: lockedProps } = await client.query(`SELECT * FROM proposals WHERE id=$1 FOR UPDATE`, [prop.id]);
+      prop = lockedProps[0];
+      if (!prop) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ ok: false, message: 'Quote not found.' });
+      }
+      if (prop.converted_invoice_id) {
+        const { rows: existingInv } = await client.query(`SELECT * FROM homeowner_invoices WHERE id=$1`, [
+          prop.converted_invoice_id,
+        ]);
+        await client.query('COMMIT');
+        return res.json({
+          ok: true,
+          alreadyAccepted: true,
+          proposal: serializeProposal(prop, req.authUser),
+          invoice: existingInv[0]
+            ? {
+                id: Number(existingInv[0].id),
+                invoiceNumber: existingInv[0].invoice_number,
+                total: Number(existingInv[0].total || existingInv[0].amount_due) || 0,
+                status: existingInv[0].status,
+              }
+            : null,
+        });
+      }
+
       const totals =
         typeof prop.document_totals === 'string'
           ? JSON.parse(prop.document_totals || '{}')
           : prop.document_totals || {};
       const lineItems = prop.customer_line_items || prop.line_items || [];
-      const { rows: snapRows } = await pool.query(
+      const { rows: snapRows } = await client.query(
         `INSERT INTO quote_acceptance_snapshots (
            proposal_id, quote_number, version_number, homeowner_user_id, job_id, contractor_user_id,
            line_items, subtotal, discount_amount, shipping_amount, additional_charges, tax_amount, total,
@@ -4464,16 +4685,28 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           req.authUser.id,
         ]
       );
-      await pool.query(
+      await client.query(
         `UPDATE proposals SET
            status='accepted',
            approved_at=NOW(),
            locked_at=COALESCE(locked_at, NOW()),
-           accepted_snapshot_id=$1
+           accepted_snapshot_id=$1,
+           option_selection_status='accepted'
          WHERE id=$2`,
         [snapRows[0].id, prop.id]
       );
-      await pool.query(
+      if (prop.option_group) {
+        await client.query(
+          `UPDATE proposals SET
+             status='declined',
+             option_selection_status='not_selected'
+           WHERE job_id=$1 AND option_group=$2 AND id != $3
+             AND status IN ('sent','viewed')`,
+          [jobId, prop.option_group, prop.id],
+        );
+      }
+      prop = { ...prop, status: 'accepted', accepted_snapshot_id: snapRows[0].id };
+      await client.query(
         `UPDATE homeowner_acceptances
          SET snapshot_id=$1,
              snapshot_data=COALESCE(snapshot_data, $2::jsonb)
@@ -4490,6 +4723,20 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       );
       await pushStatus(pool, jobId, jobs[0].status, 'approved', req.authUser.id, 'Customer approved proposal');
 
+      const convertResult = await convertProposalToInvoice(client, {
+        proposalRow: prop,
+        actorUserId: req.authUser.id,
+      });
+      if (!convertResult.ok) {
+        await client.query('ROLLBACK');
+        return res.status(convertResult.status || 500).json({
+          ok: false,
+          code: convertResult.code,
+          message: convertResult.message || 'Quote accepted but invoice could not be created.',
+        });
+      }
+      await client.query('COMMIT');
+
       await notifyAdminsHomeownerApprovedQuote(pool, {
         job: jobs[0],
         homeowner: req.authUser,
@@ -4499,13 +4746,28 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       res.json({
         ok: true,
         proposal: serializeProposal(
-          { ...prop, status: 'accepted', locked_at: new Date().toISOString(), accepted_snapshot_id: snapRows[0].id },
+          {
+            ...prop,
+            status: 'accepted',
+            locked_at: new Date().toISOString(),
+            accepted_snapshot_id: snapRows[0].id,
+            converted_invoice_id: convertResult.invoiceRow?.id || prop.converted_invoice_id,
+          },
           req.authUser
         ),
+        invoice: convertResult.invoice || null,
+        alreadyAccepted: convertResult.alreadyConverted === true,
       });
     } catch (e) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* ignore */
+      }
       console.error('approve-proposal:', e);
       res.status(500).json({ ok: false, message: 'Server error' });
+    } finally {
+      client.release();
     }
   });
 
@@ -4534,8 +4796,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         if (contractors[0]?.email) {
           await sendNotificationEmail({
             to: contractors[0].email,
-            subject: `${brand.productName} — Dispatch approved for ${job.booking_id || `Job #${jobId}`}`,
-            html: `<p>Hi ${contractors[0].name || 'there'},</p><p>The homeowner approved the quote for <strong>${job.title || job.category}</strong>. FixBridge has requested dispatch — please proceed to the job site when scheduled.</p>`,
+            template: 'dispatch_approved',
+            data: {
+              firstName: contractors[0].name,
+              jobNumber: job.booking_id || `Job #${jobId}`,
+              service: job.title || job.category,
+              viewUrl: `${(process.env.APP_URL || '').replace(/\/$/, '')}/?job=${jobId}`,
+            },
           });
         }
       } catch (_e) {
@@ -4665,6 +4932,126 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
   });
 
   // ── Job progress / completion ──────────────────────────────────────────────
+  app.get('/api/managed/jobs/:id/timeline', requireAuth, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      const { rows: jobs } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      if (!jobs[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
+      const job = jobs[0];
+      const isAdmin = req.authUser.role === 'admin';
+      const isOwner = Number(job.homeowner_user_id) === Number(req.authUser.id);
+      const isContractor = Number(job.assigned_contractor_user_id) === Number(req.authUser.id);
+      if (!isAdmin && !isOwner && !isContractor) {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      const timeline = await loadJobTimeline(pool, jobId);
+      res.json({ ok: true, timeline });
+    } catch (e) {
+      console.error('job timeline:', e);
+      res.status(500).json({ ok: false, message: 'Could not load timeline.' });
+    }
+  });
+
+  async function markOperationalMilestone(req, res, { toStatus, eventType, note }) {
+    try {
+      const jobId = Number(req.params.id);
+      const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
+      const job = rows[0];
+      const isAdmin = req.authUser.role === 'admin';
+      const isContractor = Number(job.assigned_contractor_user_id) === Number(req.authUser.id);
+      if (!isAdmin && !isContractor) {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      const employeeId =
+        req.body?.employeeId != null
+          ? Number(req.body.employeeId)
+          : job.assigned_employee_id != null
+            ? Number(job.assigned_employee_id)
+            : null;
+      if (employeeId && isContractor) {
+        const empCheck = await assertEmployeeAssignable(pool, employeeId, req.authUser.id);
+        if (!empCheck.ok) {
+          return res.status(empCheck.status || 400).json({ ok: false, message: empCheck.message });
+        }
+        await pool.query(`UPDATE managed_jobs SET assigned_employee_id=$1 WHERE id=$2`, [employeeId, jobId]);
+      }
+      await pushStatus(pool, jobId, job.status, toStatus, req.authUser.id, note || null);
+      await recordJobOperationalEvent(pool, {
+        jobId,
+        eventType,
+        contractorUserId: job.assigned_contractor_user_id,
+        employeeId,
+        actorUserId: req.authUser.id,
+        detail: req.body?.detail || {},
+      });
+      const fresh = await fetchJobWithTech(pool, jobId);
+      res.json({ ok: true, job: serializeJob(fresh, req.authUser) });
+    } catch (e) {
+      console.error(`${eventType}:`, e);
+      res.status(500).json({ ok: false, message: 'Could not update job.' });
+    }
+  }
+
+  app.post('/api/admin/managed/jobs/:id/mark-dispatched', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    await markOperationalMilestone(req, res, {
+      toStatus: 'contractor_en_route',
+      eventType: 'contractor_dispatched',
+      note: 'Contractor dispatched',
+    });
+  });
+
+  app.post('/api/admin/managed/jobs/:id/mark-started', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    await markOperationalMilestone(req, res, {
+      toStatus: 'work_started',
+      eventType: 'job_started',
+      note: 'Job started',
+    });
+  });
+
+  app.post('/api/admin/managed/jobs/:id/mark-completed', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    await markOperationalMilestone(req, res, {
+      toStatus: 'work_completed',
+      eventType: 'job_completed',
+      note: 'Job completed',
+    });
+  });
+
+  app.post('/api/contractor/managed/jobs/:id/assign-technician', requireAuth, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      const employeeId = Number(req.body?.employeeId);
+      const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
+      if (Number(rows[0].assigned_contractor_user_id) !== Number(req.authUser.id)) {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      if (!Number.isFinite(employeeId) || employeeId <= 0) {
+        return res.status(400).json({ ok: false, message: 'Select a technician.' });
+      }
+      const empCheck = await assertEmployeeAssignable(pool, employeeId, req.authUser.id);
+      if (!empCheck.ok) {
+        return res.status(empCheck.status || 400).json({ ok: false, message: empCheck.message });
+      }
+      await pool.query(`UPDATE managed_jobs SET assigned_employee_id=$1, updated_at=NOW() WHERE id=$2`, [
+        employeeId,
+        jobId,
+      ]);
+      await recordJobOperationalEvent(pool, {
+        jobId,
+        eventType: 'technician_assigned',
+        contractorUserId: req.authUser.id,
+        employeeId,
+        actorUserId: req.authUser.id,
+        detail: { employeeName: empCheck.employee?.full_name || null },
+      });
+      const fresh = await fetchJobWithTech(pool, jobId);
+      res.json({ ok: true, job: serializeJob(fresh, req.authUser) });
+    } catch (e) {
+      res.status(500).json({ ok: false, message: 'Could not assign technician.' });
+    }
+  });
+
   const CONTRACTOR_STATUS_TRANSITIONS = {
     awaiting_bid: ['diagnosing'],
     contractor_accepted: ['diagnosing'],
@@ -4675,6 +5062,66 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     work_started: ['change_order_pending'],
     change_order_pending: ['work_started'],
   };
+
+  async function recordContractorMilestone(req, res, { eventType, toStatus = null, note = null }) {
+    try {
+      const jobId = Number(req.params.id);
+      const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
+      const job = rows[0];
+      if (Number(job.assigned_contractor_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      const employeeId = job.assigned_employee_id != null ? Number(job.assigned_employee_id) : null;
+      if (toStatus) {
+        const allowedNext = CONTRACTOR_STATUS_TRANSITIONS[job.status] || [];
+        const isAdmin = req.authUser.role === 'admin';
+        if (!isAdmin && !allowedNext.includes(toStatus)) {
+          return res.status(400).json({
+            ok: false,
+            message: `Cannot move job from "${job.status}" to "${toStatus}".`,
+          });
+        }
+        await pushStatus(pool, jobId, job.status, toStatus, req.authUser.id, note || null);
+      }
+      await recordJobOperationalEvent(pool, {
+        jobId,
+        eventType,
+        contractorUserId: job.assigned_contractor_user_id,
+        employeeId,
+        actorUserId: req.authUser.id,
+        detail: req.body?.detail || {},
+      });
+      const fresh = await fetchJobWithTech(pool, jobId);
+      res.json({ ok: true, job: serializeJob(fresh, req.authUser) });
+    } catch (e) {
+      console.error(eventType, e);
+      res.status(500).json({ ok: false, message: 'Could not update job.' });
+    }
+  }
+
+  app.post('/api/contractor/managed/jobs/:id/mark-travel', requireAuth, async (req, res) => {
+    await recordContractorMilestone(req, res, {
+      eventType: 'contractor_dispatched',
+      toStatus: 'contractor_en_route',
+      note: 'Technician en route',
+    });
+  });
+
+  app.post('/api/contractor/managed/jobs/:id/mark-arrived', requireAuth, async (req, res) => {
+    await recordContractorMilestone(req, res, {
+      eventType: 'technician_arrived',
+      note: 'Technician arrived on site',
+    });
+  });
+
+  app.post('/api/contractor/managed/jobs/:id/mark-started', requireAuth, async (req, res) => {
+    await recordContractorMilestone(req, res, {
+      eventType: 'job_started',
+      toStatus: 'work_started',
+      note: 'Job started',
+    });
+  });
 
   app.post('/api/managed/jobs/:id/status', requireAuth, async (req, res) => {
     try {
@@ -4866,12 +5313,15 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         if (hw[0]) {
           await sendNotificationEmail({
             to: hw[0].email,
-            subject: isRecurring
-              ? `Your ${serviceLabel} is complete — ${brand.productName}`
-              : `Work complete — please confirm your ${brand.productName} job`,
-            html: isRecurring
-              ? `<p>Hi ${hw[0].name || 'there'},</p><p>Your <strong>${serviceLabel}</strong> has been marked complete${report.summary ? ': ' + report.summary : ''}.</p>${photoNote}<p><a href="${jobLink}">View service details</a></p>`
-              : `<p>Hi ${hw[0].name || 'there'},</p><p>Your contractor has marked <strong>${job.title}</strong> as complete${report.summary ? ': ' + report.summary : ''}.</p>${photoNote}<p><a href="${jobLink}">Review and confirm your job</a></p>`,
+            template: 'job_completed',
+            data: {
+              firstName: hw[0].name,
+              service: serviceLabel,
+              property: job.city_state_zip || job.full_address,
+              contractorName: null,
+              completedAt: new Date().toISOString(),
+              viewUrl: jobLink,
+            },
           });
         }
         await pool.query(
@@ -5225,21 +5675,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         ? `<ul>${items.map((i) => `<li>${escapeHtml(i)}</li>`).join('')}</ul>`
         : `<p>Please review your contractor application and upload any missing documents.</p>`;
 
-      const subject = `${brand.productName}: Please update your contractor information`;
-      const html = `
-        <div style="font-family:system-ui,sans-serif;line-height:1.5;color:#111">
-          <p>Hi ${escapeHtml(contractor.name || 'there')},</p>
-          <p>Our team needs updated information on your ${escapeHtml(brand.productName)} contractor profile so we can keep you eligible for jobs.</p>
-          <p><strong>Please update the following:</strong></p>
-          ${listHtml}
-          ${note ? `<p><strong>Note from staff:</strong> ${escapeHtml(note)}</p>` : ''}
-          <p>Sign in to your contractor dashboard, open <strong>Compliance</strong> (or Settings → Update profile), and save your changes.</p>
-          ${loginUrl ? `<p><a href="${loginUrl}">Open contractor portal →</a></p>` : ''}
-          <p style="color:#666;font-size:13px">If you have questions, reply to this email or contact support.</p>
-        </div>
-      `;
-
-      const delivery = await sendEmailSafe({ to, subject, html });
+      const delivery = await sendEmailSafe({
+        to,
+        template: 'contractor_info_request',
+        data: {
+          firstName: contractor.name,
+          message: `Our team needs updated information on your ${brand.productName} contractor profile.\n\nPlease update the following:\n${items.join('\n')}${note ? `\n\nNote from staff: ${note}` : ''}`,
+        },
+      });
       if (!delivery.ok) {
         return res.status(502).json({ ok: false, message: delivery.message || 'Email failed to send.' });
       }
@@ -6897,4 +7340,6 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     requirePermission,
     audit,
   });
+
+  registerDisputeRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, pushStatus });
 }

@@ -9,6 +9,11 @@ import crypto from 'crypto';
 import { analyzeRepairStructured, chatWithCustomer, getAiStatus } from './ai.js';
 import { initManagedSchema } from './schema-managed.js';
 import { initSupportTicketSchema, registerSupportTicketRoutes } from './support-tickets.js';
+import { initInAppNotificationSchema, registerInAppNotificationRoutes } from './in-app-notifications.js';
+import { initMessagingSchema, registerMessagingRoutes } from './messaging.js';
+import { initDisputeSchema } from './disputes.js';
+import { initAvailabilitySchema, registerAvailabilityRoutes } from './availability-routes.js';
+import { registerAdminSearchRoutes } from './admin-search.js';
 import { initHomeownerAdminSchema, registerHomeownerAdminRoutes } from './homeowner-admin-routes.js';
 import { registerFinanceRoutes } from './finance-routes.js';
 import {
@@ -27,6 +32,7 @@ import { registerPayoutRoutes } from './payout-routes.js';
 import { registerReferralRoutes } from './referral-routes.js';
 import { applyReferralCode, ensureReferralCode } from './referrals.js';
 import { registerQuoteWorkspaceRoutes } from './quote-workspace-routes.js';
+import { registerContractorEmployeeRoutes } from './contractor-employees-routes.js';
 import { registerAddressRoutes } from './address-routes.js';
 import { registerServiceAreaRoutes } from './service-area.js';
 import { ensureComplianceDocuments, recalculateDispatchEligible } from './contractor-compliance.js';
@@ -115,8 +121,8 @@ if (isProduction && !stripeConfigured()) {
   );
 }
 if (isProduction && !String(process.env.STRIPE_WEBHOOK_SECRET || '').trim()) {
-  console.warn(
-    '[FixBridge API] STRIPE_WEBHOOK_SECRET not set — Stripe webhooks will fail until configured in Netlify env vars.'
+  throw new Error(
+    '[FATAL] STRIPE_WEBHOOK_SECRET is required in production. Refusing to start without webhook secrets.'
   );
 }
 
@@ -423,6 +429,10 @@ export async function initDb() {
       await initPropertyMemorySchema(pool);
       await initServiceReminderSchema(pool);
       await initSupportTicketSchema(pool);
+      await initInAppNotificationSchema(pool);
+      await initMessagingSchema(pool);
+      await initDisputeSchema(pool);
+      await initAvailabilitySchema(pool);
       await initHomeownerAdminSchema(pool);
       await initSubscriptionPlansSchema(pool);
       await initMarketingConsent(pool);
@@ -631,6 +641,10 @@ export async function initDb() {
   await initPropertyMemorySchema(pool);
   await initServiceReminderSchema(pool);
   await initSupportTicketSchema(pool);
+  await initInAppNotificationSchema(pool);
+  await initMessagingSchema(pool);
+  await initDisputeSchema(pool);
+  await initAvailabilitySchema(pool);
   await initHomeownerAdminSchema(pool);
   await initSubscriptionPlansSchema(pool);
   await initMarketingConsent(pool);
@@ -2369,48 +2383,11 @@ app.post('/api/jobs', requireAuth, async (req, res) => {
   }
 });
 
-// ── Notifications ─────────────────────────────────────────────────────────────
-
-app.get('/api/notifications', requireAuth, async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      'SELECT * FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50',
-      [req.authUser.id]
-    );
-    return res.json(rows.map(rowToNotification));
-  } catch (e) {
-    console.error('list notifications:', e);
-    return res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.post('/api/notifications/read', requireAuth, async (req, res) => {
-  try {
-    const { ids } = req.body || {};
-    if (Array.isArray(ids) && ids.length > 0) {
-      const normalizedIds = ids.map(Number).filter((n) => Number.isFinite(n));
-      for (const id of normalizedIds) {
-        await pool.query(
-          'UPDATE notifications SET read=true WHERE user_id=$1 AND id=$2',
-          [req.authUser.id, id]
-        );
-      }
-    } else {
-      await pool.query(
-        'UPDATE notifications SET read=true WHERE user_id=$1 AND read=false',
-        [req.authUser.id]
-      );
-    }
-    const { rows } = await pool.query(
-      'SELECT * FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50',
-      [req.authUser.id]
-    );
-    return res.json(rows.map(rowToNotification));
-  } catch (e) {
-    console.error('mark notifications read:', e);
-    return res.status(500).json({ error: 'Server error' });
-  }
-});
+// ── Notifications (in-app) ───────────────────────────────────────────────────
+registerInAppNotificationRoutes(app, { pool, requireAuth });
+registerMessagingRoutes(app, { pool, requireAuth, requireAdmin });
+registerAvailabilityRoutes(app, { pool, requireAuth, requireAdmin });
+registerAdminSearchRoutes(app, { pool, requireAuth, requireAdmin });
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
@@ -2855,6 +2832,38 @@ app.get('/api/ai/status', requireAuth, (_req, res) => {
 
 app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
   try {
+    const invocationId = String(req.body?.assessmentInvocationId || req.body?.invocationId || '').trim();
+    if (!invocationId) {
+      return res.status(400).json({
+        ok: false,
+        code: 'AI_ASSESSMENT_ACK_REQUIRED',
+        message: 'AI assessment acknowledgment is required before continuing.',
+      });
+    }
+    const consentCheck = checkActionConsentsFromBody(req.body, 'AI_ASSESSMENT');
+    if (!consentCheck.ok) {
+      return res.status(400).json({
+        ok: false,
+        code: consentCheck.code,
+        message: 'You must acknowledge the AI assessment disclaimer before continuing.',
+        missingAcceptanceTypes: consentCheck.missing,
+      });
+    }
+    const consentResult = await validateAndRecordActionConsents(pool, req, {
+      actionKey: 'AI_ASSESSMENT',
+      userId: req.authUser.id,
+      jobId: req.body?.jobId || null,
+      idempotencyPrefix: `AI_ASSESSMENT:${req.authUser.id}:${req.body?.jobId || 'direct'}:${invocationId}`,
+    });
+    if (!consentResult.ok) {
+      return res.status(400).json({
+        ok: false,
+        code: consentResult.code,
+        message: consentResult.message || 'You must acknowledge the AI assessment disclaimer before continuing.',
+        missingAcceptanceTypes: consentResult.missingAcceptanceTypes || consentResult.missing,
+      });
+    }
+
     const { category, description, imageDataUrl, mode } = req.body || {};
     const desc = clampString(description, 4000);
     const cat = clampString(category, 80);
@@ -2927,6 +2936,7 @@ app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
   registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdmin });
   registerHomeAssistantRoutes(app, { pool, requireAuth });
   registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
+  registerContractorEmployeeRoutes(app, { pool, requireAuth, requireAdmin });
 registerSupportTicketRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerHomeownerAdminRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerFinanceRoutes(app, { pool, requireAuth, requireAdmin });

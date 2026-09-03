@@ -6,10 +6,13 @@
  *   GMAIL_USER=you@gmail.com
  *   GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx   (16-char Google App Password)
  * Optional:
- *   FROM_EMAIL=FixBridge <you@gmail.com>     (defaults to GMAIL_USER)
+ *   FIXBRIDGE_FROM_EMAIL=support@fixbridge.us
+ *   FIXBRIDGE_REPLY_TO_EMAIL=support@fixbridge.us
+ *   FIXBRIDGE_FROM_NAME=FixBridge Support
+ *   FROM_EMAIL=FixBridge Support <support@fixbridge.us>  (legacy override)
  */
 import nodemailer from 'nodemailer';
-import { brand } from './brand.js';
+import { emailFromHeader, EMAIL_REPLY_TO } from './email/email-config.js';
 
 let transporterPromise = null;
 
@@ -26,11 +29,7 @@ function gmailConfigured() {
 }
 
 function fromAddress() {
-  const configured = (process.env.FROM_EMAIL || '').trim();
-  if (configured) return configured;
-  const user = gmailUser();
-  const name = brand.productName || 'FixBridge';
-  return user ? `${name} <${user}>` : `${name} <noreply@localhost>`;
+  return emailFromHeader();
 }
 
 async function getTransporter() {
@@ -53,7 +52,7 @@ async function getTransporter() {
  * Send an email via Gmail SMTP.
  * @returns {{ ok: boolean, simulated?: boolean, messageId?: string, message?: string }}
  */
-export async function sendMail({ to, subject, html, text, headers = {} }) {
+export async function sendMail({ to, subject, html, text, headers = {}, replyTo }) {
   const recipient = String(to || '').trim();
   if (!recipient) return { ok: false, message: 'Missing recipient.' };
 
@@ -74,8 +73,9 @@ export async function sendMail({ to, subject, html, text, headers = {} }) {
   try {
     const info = await transporter.sendMail({
       from: fromAddress(),
+      replyTo: replyTo || EMAIL_REPLY_TO,
       to: recipient,
-      subject: subject || `(no subject) ${brand.productName || 'FixBridge'}`,
+      subject: subject || `(no subject) FixBridge`,
       html: html || undefined,
       text: text || undefined,
       headers: headers && typeof headers === 'object' ? headers : undefined,
@@ -93,7 +93,8 @@ export function mailStatus() {
   return {
     provider: 'gmail',
     configured: gmailConfigured(),
-    from: gmailConfigured() ? fromAddress() : null,
+    from: gmailConfigured() ? fromAddress() : emailFromHeader(),
+    replyTo: EMAIL_REPLY_TO,
     userSet,
     passSet,
   };

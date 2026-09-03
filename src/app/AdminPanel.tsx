@@ -4,6 +4,7 @@ import {
   Settings2, Link2, BarChart3, Sparkles, Menu, X, LayoutDashboard,
   Search, Check, Copy, MapPin, ChevronRight, Ban, BadgeCheck,
   Sun, Moon, ChevronDown, Bell, ListTodo, ScrollText, Mail, Receipt, Gift,
+  MessageSquare, AlertTriangle,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { loadAllUsers, type AuthUser } from "./auth";
@@ -28,6 +29,13 @@ import AdminAuditLogsPanel from "./AdminAuditLogsPanel";
 import AdminLegalSystemPanel from "./AdminLegalSystemPanel";
 import AdminFinancePanel from "./AdminFinancePanel";
 import AdminSupportTicketsPanel from "./AdminSupportTicketsPanel";
+import AdminDisputesPanel from "./AdminDisputesPanel";
+import { adminUniversalSearch, type AdminSearchResults } from "./adminSearchApi";
+import MessagesPanel from "./MessagesPanel";
+import NotificationBell from "./NotificationBell";
+import NotificationsPage from "./NotificationsPage";
+import { useInAppComms } from "./useInAppComms";
+import { formatBadgeCount } from "./notificationsApi";
 import AdminSubscriptionPlansPanel from "./AdminSubscriptionPlansPanel";
 import AdminHomeCareProPanel from "./AdminHomeCareProPanel";
 import AdminVisitFeePanel from "./AdminVisitFeePanel";
@@ -83,6 +91,9 @@ import {
   adminCreatePartner,
   adminCreateDiscount,
   adminDiscounts,
+  adminMarkJobCompleted,
+  adminMarkJobDispatched,
+  adminMarkJobStarted,
   adminUpdateDiscount,
   adminHomeownerJobs,
   adminInvite,
@@ -95,12 +106,14 @@ import {
   adminReporting,
   adminSavePricingRules,
   adminSetCompliance,
+  fetchAdminContractorEmployees,
   formatMoney,
   listBids,
   retailRangeLabel,
   requestAdminDispatch,
   type AdminDiscount,
   type Bid,
+  type ContractorEmployee,
   type ManagedJob,
 } from "./managedJobs";
 import {
@@ -127,6 +140,8 @@ type Tab =
   | "access"
   | "audit-logs"
   | "support-tickets"
+  | "communications"
+  | "disputes"
   | "pro-plans"
   | "homecare-pro"
   | "visit-fee"
@@ -141,6 +156,7 @@ const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React
     items: [
       { id: "work-queue", label: "Work Queue", icon: ListTodo },
       { id: "dispatch", label: "Dispatch", icon: Briefcase },
+      { id: "disputes", label: "Disputes", icon: AlertTriangle },
     ],
   },
   {
@@ -158,7 +174,10 @@ const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React
   },
   {
     label: "Support",
-    items: [{ id: "support-tickets", label: "Tickets", icon: Mail }],
+    items: [
+      { id: "communications", label: "Messages", icon: MessageSquare },
+      { id: "support-tickets", label: "Tickets", icon: Mail },
+    ],
   },
   {
     label: "Administration",
@@ -352,6 +371,7 @@ export default function AdminPanel({
   onToggleDark?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("overview");
+  const { unreadNotifications, unreadMessages, refresh: refreshComms } = useInAppComms(true);
   const isReadOnly = user?.adminAccessLevel === "read";
   const adminPermissions = useMemo(
     () => permissionsForAccessLevel(user?.adminAccessLevel, (user as { adminRolePreset?: string })?.adminRolePreset),
@@ -366,6 +386,14 @@ export default function AdminPanel({
   const [cmdOpen, setCmdOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState("");
+  const [serverSearch, setServerSearch] = useState<AdminSearchResults | null>(null);
+  const [commsStartWith, setCommsStartWith] = useState<{
+    homeownerUserId?: number;
+    contractorUserId?: number;
+    jobId?: number;
+    subject?: string;
+  } | null>(null);
+  const [selectedDisputeId, setSelectedDisputeId] = useState<number | null>(null);
   const [bids, setBids] = useState<Bid[]>([]);
   const [pricingRules, setPricingRules] = useState<PricingRules | null>(null);
   const [subStats, setSubStats] = useState<{
@@ -415,6 +443,8 @@ export default function AdminPanel({
   const [mobileNav, setMobileNav] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [inviteContractorId, setInviteContractorId] = useState<number | "">("");
+  const [inviteTechnicianId, setInviteTechnicianId] = useState<number | "">("");
+  const [contractorEmployees, setContractorEmployees] = useState<ContractorEmployee[]>([]);
   const [inviteRequestType, setInviteRequestType] = useState<"remote_quote" | "site_visit">("remote_quote");
   const [payoutAmount, setPayoutAmount] = useState<number | "">("");
   const [payoutBonus, setPayoutBonus] = useState<number | "">("");
@@ -623,6 +653,18 @@ export default function AdminPanel({
       if (r.ok) setBids(r.bids || []);
     });
   }, [selectedJobId, jobs]);
+
+  useEffect(() => {
+    const contractorId = Number(inviteContractorId || selectedJob?.assignedContractorUserId || 0);
+    if (!contractorId) {
+      setContractorEmployees([]);
+      setInviteTechnicianId("");
+      return;
+    }
+    void fetchAdminContractorEmployees(contractorId).then((r) => {
+      if (r.ok) setContractorEmployees((r.employees || []).filter((e) => e.active));
+    });
+  }, [inviteContractorId, selectedJob?.assignedContractorUserId]);
 
   useEffect(() => {
     if (tab === "pricing" || tab === "subscriptions" || tab === "partners" || tab === "visit-fee") {
@@ -944,6 +986,30 @@ export default function AdminPanel({
       .slice(0, 8);
   }, [jobs, globalSearch]);
 
+  useEffect(() => {
+    const q = globalSearch.trim();
+    if (q.length < 2) {
+      setServerSearch(null);
+      return;
+    }
+    const t = window.setTimeout(() => {
+      void adminUniversalSearch(q)
+        .then((r) => setServerSearch(r.results))
+        .catch(() => setServerSearch(null));
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [globalSearch]);
+
+  function openAdminComms(opts: {
+    homeownerUserId?: number;
+    contractorUserId?: number;
+    jobId?: number;
+    subject?: string;
+  }) {
+    setCommsStartWith(opts);
+    setTab("communications");
+  }
+
   async function handleInviteAndAssign() {
     if (!selectedJob || !inviteContractorId) return;
     setBusy(true);
@@ -956,7 +1022,9 @@ export default function AdminPanel({
         setMessage(invite.message || "Invite failed.");
         return;
       }
-      const assign = await adminAssign(selectedJob.id, Number(inviteContractorId));
+      const assign = await adminAssign(selectedJob.id, Number(inviteContractorId), {
+        employeeId: inviteTechnicianId ? Number(inviteTechnicianId) : undefined,
+      });
       if (!assign.ok) {
         setMessage(assign.message || "Invite saved, but assign failed.");
         await refreshJobs();
@@ -1125,69 +1193,11 @@ export default function AdminPanel({
               <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px]">K</kbd>
             </button>
             <div className="relative">
-              <button
-                type="button"
-                onClick={() => setNotifOpen((v) => !v)}
-                className="relative rounded-xl border border-border bg-card p-2.5 hover:bg-muted"
-                aria-label="Notifications"
-              >
-                <Bell className="h-4 w-4" />
-                {notifications.length > 0 && (
-                  <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#FF4D1C] px-1 text-[10px] font-bold text-white">
-                    {notifications.length}
-                  </span>
-                )}
-              </button>
-              {notifOpen && (
-                <div className="absolute right-0 z-40 mt-2 w-80 overflow-hidden rounded-2xl border border-border bg-card shadow-xl">
-                  <div className="flex items-center justify-between border-b border-border px-3 py-2">
-                    <p className="text-sm font-semibold">Notifications</p>
-                    <button type="button" className="text-xs text-muted-foreground" onClick={() => setNotifOpen(false)}>
-                      Close
-                    </button>
-                  </div>
-                  <ul className="max-h-80 overflow-y-auto">
-                    {notifications.length === 0 ? (
-                      <li className="px-3 py-8 text-center text-sm text-muted-foreground">You're caught up</li>
-                    ) : (
-                      notifications.map((n) => (
-                        <li key={n.id}>
-                          <button
-                            type="button"
-                            className="flex w-full flex-col gap-0.5 px-3 py-2.5 text-left hover:bg-muted"
-                            onClick={() => {
-                              if (n.contractorId) {
-                                setTab("contractors");
-                                const c = contractors.find((x) => Number(x.id) === n.contractorId);
-                                if (c) void openContractorDetail(c);
-                                else setExpandedContractorId(n.contractorId);
-                              } else if (n.jobId) {
-                                setTab("work-queue");
-                                openJobDrawer(n.jobId);
-                              }
-                              setNotifOpen(false);
-                            }}
-                          >
-                            <span
-                              className={`text-sm font-medium ${
-                                n.tone === "danger"
-                                  ? "text-red-700 dark:text-red-300"
-                                  : n.tone === "warn"
-                                    ? "text-amber-800 dark:text-amber-300"
-                                    : ""
-                              }`}
-                            >
-                              {n.title}
-                            </span>
-                            <span className="text-xs text-muted-foreground">{n.body}</span>
-                            {n.when && <span className="text-[10px] text-muted-foreground">{n.when}</span>}
-                          </button>
-                        </li>
-                      ))
-                    )}
-                  </ul>
-                </div>
-              )}
+              <NotificationBell
+                unreadCount={unreadNotifications}
+                onRefreshCounts={refreshComms}
+                onNavigate={() => setTab("communications")}
+              />
             </div>
           </div>
 
@@ -1233,6 +1243,9 @@ export default function AdminPanel({
                 reportPayments={report?.revenueCollected}
                 onOpenAttention={openAttention}
                 onOpenWorkQueue={() => setTab("work-queue")}
+                unreadHomeownerMessages={unreadMessages}
+                unreadContractorMessages={0}
+                onOpenCommunications={() => setTab("communications")}
               />
               {report && (
                 <div className="mt-8">
@@ -1551,6 +1564,20 @@ export default function AdminPanel({
                           );
                         })}
                       </select>
+                      <select
+                        className={`${fieldClass} max-w-full sm:max-w-xs`}
+                        value={inviteTechnicianId}
+                        onChange={(e) => setInviteTechnicianId(e.target.value ? Number(e.target.value) : "")}
+                        disabled={!inviteContractorId && !selectedJob.assignedContractorUserId}
+                      >
+                        <option value="">Technician (optional)</option>
+                        {contractorEmployees.map((e) => (
+                          <option key={e.id} value={e.id}>
+                            {e.fullName}
+                            {e.jobTitle ? ` · ${e.jobTitle}` : ""}
+                          </option>
+                        ))}
+                      </select>
                       <button
                         type="button"
                         disabled={busy || !inviteContractorId}
@@ -1567,7 +1594,9 @@ export default function AdminPanel({
                               setMessage(invite.message || "Invite failed.");
                               return;
                             }
-                            const assign = await adminAssign(selectedJob.id, Number(inviteContractorId));
+                            const assign = await adminAssign(selectedJob.id, Number(inviteContractorId), {
+                              employeeId: inviteTechnicianId ? Number(inviteTechnicianId) : undefined,
+                            });
                             if (!assign.ok) {
                               setMessage(assign.message || "Invite saved, but assign failed.");
                               await refreshJobs();
@@ -1621,6 +1650,60 @@ export default function AdminPanel({
                         }}
                       >
                         Request contractor dispatch
+                      </button>
+                      <button
+                        type="button"
+                        className={btnSecondary}
+                        disabled={busy || !selectedJob.assignedContractorUserId}
+                        onClick={async () => {
+                          setBusy(true);
+                          try {
+                            const r = await adminMarkJobDispatched(
+                              selectedJob.id,
+                              inviteTechnicianId ? Number(inviteTechnicianId) : selectedJob.assignedEmployeeId || undefined
+                            );
+                            setMessage(r.ok ? "Marked contractor dispatched." : r.message || "Failed.");
+                            if (r.ok) await refreshJobs();
+                          } finally {
+                            setBusy(false);
+                          }
+                        }}
+                      >
+                        Mark dispatched
+                      </button>
+                      <button
+                        type="button"
+                        className={btnSecondary}
+                        disabled={busy || !selectedJob.assignedContractorUserId}
+                        onClick={async () => {
+                          setBusy(true);
+                          try {
+                            const r = await adminMarkJobStarted(selectedJob.id);
+                            setMessage(r.ok ? "Marked job started." : r.message || "Failed.");
+                            if (r.ok) await refreshJobs();
+                          } finally {
+                            setBusy(false);
+                          }
+                        }}
+                      >
+                        Mark started
+                      </button>
+                      <button
+                        type="button"
+                        className={btnSecondary}
+                        disabled={busy || !selectedJob.assignedContractorUserId}
+                        onClick={async () => {
+                          setBusy(true);
+                          try {
+                            const r = await adminMarkJobCompleted(selectedJob.id);
+                            setMessage(r.ok ? "Marked job completed." : r.message || "Failed.");
+                            if (r.ok) await refreshJobs();
+                          } finally {
+                            setBusy(false);
+                          }
+                        }}
+                      >
+                        Mark completed
                       </button>
                       <button
                         type="button"
@@ -2250,6 +2333,9 @@ export default function AdminPanel({
                               await refreshContractors();
                               setComplianceBusyId(null);
                             }}
+                            onMessageContractor={(contractorUserId) =>
+                              openAdminComms({ contractorUserId })
+                            }
                           />
                         </div>
                       )}
@@ -3097,6 +3183,7 @@ export default function AdminPanel({
                   setHomeownerRecordFocus({ type: "payment", paymentId: Number(paymentId) });
                 }}
                 onOpenTab={(t) => setTab(t as Tab)}
+                onMessageHomeowner={(uid) => openAdminComms({ homeownerUserId: uid })}
                 onOpenTicket={(ticketNumber) => {
                   setSelectedSupportTicket(ticketNumber);
                   setTab("support-tickets");
@@ -3235,6 +3322,32 @@ export default function AdminPanel({
         {tab === "audit-logs" && <AdminAuditLogsPanel />}
 
         {tab === "support-tickets" && <AdminSupportTicketsPanel initialTicket={selectedSupportTicket} />}
+
+        {tab === "communications" && (
+          <div className="space-y-6">
+            <MessagesPanel role="admin" startWith={commsStartWith || undefined} onUnreadChange={refreshComms} />
+            <NotificationsPage
+              onNavigate={(n) => {
+                if (n.entityType === "conversation" && n.entityId) {
+                  setTab("communications");
+                } else if (n.entityType === "dispute" && n.entityId) {
+                  setSelectedDisputeId(Number(n.entityId));
+                  setTab("disputes");
+                } else if (n.jobId) {
+                  openJobDrawer(n.jobId);
+                }
+              }}
+            />
+          </div>
+        )}
+
+        {tab === "disputes" && (
+          <AdminDisputesPanel
+            initialDisputeId={selectedDisputeId}
+            onOpenJob={(jobId) => openJobDrawer(jobId)}
+            onMessage={setMessage}
+          />
+        )}
 
         {tab === "pro-plans" && <AdminSubscriptionPlansPanel readOnly={isReadOnly} />}
 
@@ -3678,6 +3791,7 @@ export default function AdminPanel({
           }
         }}
         onMessage={setMessage}
+        onOpenComms={openAdminComms}
         onRefresh={refreshJobs}
       />
 

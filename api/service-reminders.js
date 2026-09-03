@@ -305,10 +305,13 @@ async function processOneReminder(pool, row) {
     try {
       await sendEmailSafe({
         to: row.email,
-        subject: `${brand.productName} reminder — ${serviceLabel}`,
-        html: `<p>Hi ${row.homeowner_name || 'there'},</p>
-<p>This is a reminder that your <strong>${serviceLabel}</strong> is scheduled for <strong>${whenLabel}</strong>.</p>
-<p><a href="${appBaseUrl()}/?job=${row.job_id}">View your service in FixBridge</a></p>`,
+        template: 'service_reminder',
+        data: {
+          firstName: row.homeowner_name,
+          service: serviceLabel,
+          message: `This is a reminder that your ${serviceLabel} is scheduled for ${whenLabel}.`,
+          viewUrl: `${appBaseUrl()}/?job=${row.job_id}`,
+        },
       });
       await pool.query(
         `UPDATE service_reminder_eligibility SET email_sent_at=NOW(), email_attempts=email_attempts+1, last_error=NULL, updated_at=NOW() WHERE id=$1`,

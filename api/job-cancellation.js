@@ -200,12 +200,13 @@ export async function notifyJobCancelled(pool, {
       if (admin.email) {
         await sendEmailSafe({
           to: admin.email,
-          subject: `${brand.productName} — Service cancelled ${bookingId}`,
-          html:
-            `<p><strong>${adminTitle}</strong></p>` +
-            `<p>${bookingId} · ${serviceTitle}<br/>Property area: ${area}<br/>` +
-            `Cancelled by: ${homeownerName}<br/>Reason: ${reason || '—'}</p>` +
-            `<p>Open <strong>Admin → Work Queue</strong> to review.</p>`,
+          template: 'job_cancelled_admin',
+          data: {
+            firstName: admin.name,
+            jobNumber: bookingId,
+            message: `${adminTitle}\n${bookingId} · ${serviceTitle}\nProperty area: ${area}\nCancelled by: ${homeownerName}\nReason: ${reason || '—'}`,
+            viewUrl: `${appBaseUrl()}/admin`,
+          },
         });
       }
     }
@@ -254,14 +255,14 @@ export async function notifyJobCancelled(pool, {
       if (contractors[0]?.email) {
         await sendEmailSafe({
           to: contractors[0].email,
-          subject: `${brand.productName} Service Cancelled — ${bookingId}`,
-          html:
-            `<p>Hi ${contractors[0].name || 'there'},</p>` +
-            `<p>The homeowner cancelled <strong>${serviceTitle}</strong> (${bookingId}).</p>` +
-            (visitLabel ? `<p>Scheduled date: ${visitLabel}</p>` : '') +
-            (area ? `<p>Area: ${area}</p>` : '') +
-            (contractorSecondary ? `<p>${contractorSecondary}</p>` : '') +
-            `<p><a href="${appBaseUrl()}/?job=${jobId}">View job</a></p>`,
+          template: 'job_cancelled_contractor',
+          data: {
+            firstName: contractors[0].name,
+            jobNumber: bookingId,
+            service: serviceTitle,
+            message: `The homeowner cancelled ${serviceTitle}.${visitLabel ? ` Scheduled date: ${visitLabel}.` : ''}${contractorSecondary ? ` ${contractorSecondary}` : ''}`,
+            viewUrl: `${appBaseUrl()}/?job=${jobId}`,
+          },
         });
       }
     } catch (e) {

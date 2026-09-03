@@ -1077,28 +1077,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
     }
   });
 
-  app.post('/api/admin/disputes', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
-    try {
-      const { rows } = await pool.query(
-        `INSERT INTO disputes (payment_id, job_id, amount, reason, status, meta)
-         VALUES ($1,$2,$3,$4,'open',$5) RETURNING *`,
-        [
-          req.body?.paymentId || null,
-          req.body?.jobId || null,
-          Number(req.body?.amount || 0),
-          String(req.body?.reason || '').slice(0, 500),
-          JSON.stringify(req.body?.meta || {}),
-        ]
-      );
-      if (req.body?.jobId && typeof statusPush === 'function') {
-        const { rows: jobs } = await pool.query(`SELECT status FROM managed_jobs WHERE id=$1`, [req.body.jobId]);
-        await statusPush(pool, req.body.jobId, jobs[0]?.status, 'disputed', req.authUser.id, 'Dispute opened');
-      }
-      res.json({ ok: true, dispute: rows[0] });
-    } catch (e) {
-      res.status(500).json({ ok: false, message: 'Could not open dispute.' });
-    }
-  });
+  // POST /api/admin/disputes — registered in disputes.js (payout hold + audit trail)
 
   app.post('/api/admin/transfers/:id/hold', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
@@ -1781,8 +1760,13 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
     try {
       const email = await sendEmailSafe({
         to: req.body?.email || req.authUser.email,
-        subject: `${brand.productName} notification test`,
-        html: `<p>Test email from ${brand.productName}.</p>`,
+        template: 'generic_notification',
+        data: {
+          firstName: req.authUser.name,
+          subject: `${brand.productName} notification test`,
+          headline: 'Notification test',
+          message: `This is a test email from ${brand.productName}.`,
+        },
       });
       const sms = await sendSmsSafe({
         to: req.body?.phone || '',
@@ -1827,8 +1811,11 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       // Email is best-effort — never block admin login if Gmail is missing/misconfigured.
       await sendEmailSafe({
         to: req.authUser.email,
-        subject: `${brand.productName} admin verification code`,
-        html: `<p>Your verification code is <strong>${code}</strong>. It expires in 10 minutes.</p>`,
+        template: 'admin_mfa_otp',
+        data: {
+          firstName: req.authUser.name,
+          code,
+        },
       });
 
       try {
@@ -2057,11 +2044,19 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
   app.get('/api/comms/status', requireAuth, async (_req, res) => {
     const { mailStatus } = await import('./mail.js');
     const { smsConfigured } = await import('./notify.js');
+    const { emailSystemStatus } = await import('./email/send-fixbridge-email.js');
+    const { emailLogoUrl } = await import('./email/email-config.js');
+    const { listEmailTemplates } = await import('./email/templates.js');
     const email = mailStatus();
     res.json({
       ok: true,
       emailConfigured: Boolean(email.configured),
       smsConfigured: smsConfigured(),
+      emailBranding: {
+        ...emailSystemStatus(),
+        logoUrl: emailLogoUrl(),
+        templateCount: listEmailTemplates().length,
+      },
     });
   });
 }

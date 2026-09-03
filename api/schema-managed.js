@@ -1821,6 +1821,78 @@ export async function initManagedSchema(pool) {
     ON job_authorizations (job_id, accepted_at DESC)
   `);
 
+  // Contractor field team / employees (belong to contractor company account)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS contractor_employees (
+      id                   SERIAL PRIMARY KEY,
+      contractor_user_id   INT NOT NULL,
+      full_name            TEXT NOT NULL,
+      job_title            TEXT,
+      bio                  TEXT,
+      trade                TEXT,
+      years_experience     INT,
+      employee_ref         TEXT,
+      photo_data           TEXT,
+      photo_mime           TEXT,
+      customer_description TEXT,
+      internal_notes       TEXT,
+      phones               JSONB NOT NULL DEFAULT '[]',
+      emails               JSONB NOT NULL DEFAULT '[]',
+      active               BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at           TIMESTAMPTZ DEFAULT NOW(),
+      updated_at           TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_contractor_employees_company
+    ON contractor_employees (contractor_user_id, active, created_at DESC)
+  `);
+
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS assigned_employee_id INT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS assigned_employee_id INT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS contractor_findings TEXT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS quote_option_label TEXT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS option_group TEXT`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS option_selection_status TEXT DEFAULT 'pending'`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS superseded_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS superseded_by_proposal_id INT`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS quote_revision_snapshots (
+      id                   BIGSERIAL PRIMARY KEY,
+      proposal_id          BIGINT NOT NULL,
+      version_number       INT NOT NULL,
+      change_reason        TEXT,
+      document_snapshot    JSONB NOT NULL,
+      customer_total       NUMERIC,
+      contractor_amount    NUMERIC,
+      created_by           INT,
+      created_at           TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (proposal_id, version_number)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_quote_revision_snapshots_proposal
+    ON quote_revision_snapshots (proposal_id, version_number DESC)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_operational_events (
+      id                   BIGSERIAL PRIMARY KEY,
+      job_id               BIGINT NOT NULL,
+      event_type           TEXT NOT NULL,
+      contractor_user_id   INT,
+      employee_id          INT,
+      actor_user_id        INT,
+      detail               JSONB,
+      created_at           TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_job_operational_events_job
+    ON job_operational_events (job_id, created_at DESC)
+  `);
+
   try {
     const { seedLegalDocumentVersions } = await import('./legal-document-store.js');
     await seedLegalDocumentVersions(pool);

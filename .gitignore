@@ -12,3 +12,14 @@ Thumbs.db
 *.key
 credentials.json
 .secrets/
+
+# Local probe / scratch artifacts
+_*.txt
+_*.png
+scripts/_p0-*
+scripts/_stripe-*
+scripts/_email-preview/
+scripts/apply-p0-managed-patch.mjs
+scripts/p0-apply-remaining.mjs
+scripts/p0-patch-webhook.mjs
+scripts/p0-remaining-fixes.mjs

@@ -22,6 +22,9 @@ import { HomeownerTipCheckout } from "./HomeownerTipCheckout";
 import ChangeOrderPanel from "./ChangeOrderPanel";
 import HomeownerAccordion from "./HomeownerAccordion";
 import JobReviewForm from "./JobReviewForm";
+import HomeownerJobCompletionPanel from "./HomeownerJobCompletionPanel";
+import HomeownerQuoteOptionsPanel from "./HomeownerQuoteOptionsPanel";
+import { fetchJobDispute } from "./disputesApi";
 import HomeownerCancelServiceModal from "./HomeownerCancelServiceModal";
 import { canHomeownerCancelJob, cancelServiceLabel, homeownerCancelledLabel } from "./jobCancellation";
 import { useProFeature } from "./ProFeatureProvider";
@@ -171,6 +174,7 @@ export default function HomeownerJobDetailPanel({
     PAYMENT_AUTHORIZATION: false,
     PAYMENT_VISIT_POLICY: false,
   });
+  const [hasOpenDispute, setHasOpenDispute] = useState(false);
 
   const quoteConsentKeys: AcceptanceType[] = [
     "HOMEOWNER_SERVICE_AGREEMENT",
@@ -179,6 +183,30 @@ export default function HomeownerJobDetailPanel({
   ];
   const paymentConsentKeys: AcceptanceType[] = ["PAYMENT_AUTHORIZATION", "PAYMENT_VISIT_POLICY"];
   const ackGate = useAcknowledgmentGate();
+
+  useEffect(() => {
+    let cancelled = false;
+    if (
+      ["work_completed", "customer_review_pending", "admin_review_pending", "payout_pending", "paid_out", "closed", "disputed"].includes(
+        String(job.status),
+      )
+    ) {
+      void fetchJobDispute(job.id)
+        .then((r) => {
+          if (!cancelled) {
+            setHasOpenDispute(
+              Boolean(r.dispute && !["resolved", "closed"].includes(String(r.dispute.status))),
+            );
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setHasOpenDispute(false);
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [job.id, job.status, job.updatedAt]);
 
   useEffect(() => {
     setServiceTiming(job.serviceTiming || "weekday");
@@ -766,6 +794,9 @@ export default function HomeownerJobDetailPanel({
 
       {showQuote && proposal ? (
         <div id={`job-quote-section-${job.id}`}>
+        <DetailSection mobile={isMobile} title="Quote options" defaultOpen badge={quoteBadge}>
+          <HomeownerQuoteOptionsPanel job={job} onRefresh={onRefresh} onError={onError} onBusy={onBusy} />
+        </DetailSection>
         <DetailSection mobile={isMobile} title="Quote" defaultOpen badge={quoteBadge}>
           {proposal.quoteNumber ? (
             <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -1118,6 +1149,18 @@ export default function HomeownerJobDetailPanel({
       ) : null}
 
       {showReviewForm ? (
+        <DetailSection mobile={isMobile} title="Confirm your service" defaultOpen>
+          <HomeownerJobCompletionPanel
+            job={job}
+            onRefresh={onRefresh}
+            onError={onError}
+            onBusy={onBusy}
+            existingDispute={hasOpenDispute || job.status === "disputed"}
+          />
+        </DetailSection>
+      ) : null}
+
+      {showReviewForm ? (
         <DetailSection mobile={isMobile} title="Rate your service" defaultOpen>
           <JobReviewForm
             job={job}
@@ -1128,6 +1171,18 @@ export default function HomeownerJobDetailPanel({
             onRebook={() => void onRefresh()}
             onMakeRecurring={() => void onRefresh()}
             onSubmitted={() => void onRefresh()}
+          />
+        </DetailSection>
+      ) : null}
+
+      {["work_completed", "payout_pending", "closed", "paid_out"].includes(String(job.status)) && !showReviewForm ? (
+        <DetailSection mobile={isMobile} title="Confirm your service" defaultOpen>
+          <HomeownerJobCompletionPanel
+            job={job}
+            onRefresh={onRefresh}
+            onError={onError}
+            onBusy={onBusy}
+            existingDispute={hasOpenDispute || job.status === "disputed"}
           />
         </DetailSection>
       ) : null}

@@ -73,6 +73,7 @@ export default function AdminHomeownerProfile({
   onOpenPayment,
   onOpenTicket,
   onOpenTab,
+  onMessageHomeowner,
 }: {
   userId: number;
   onBack: () => void;
@@ -83,6 +84,7 @@ export default function AdminHomeownerProfile({
   onOpenPayment?: (paymentId: number) => void;
   onOpenTicket?: (ticketNumber: string) => void;
   onOpenTab?: (tab: string) => void;
+  onMessageHomeowner?: (userId: number) => void;
 }) {
   const [tab, setTab] = useState<TabId>("overview");
   const [jobFilter, setJobFilter] = useState<(typeof JOB_FILTERS)[number]>("all");
@@ -197,7 +199,7 @@ export default function AdminHomeownerProfile({
           </div>
           <div className="flex flex-wrap gap-2">
             {[
-              ["Message", () => onOpenTab?.("support-tickets")],
+              ["Message homeowner", () => onMessageHomeowner?.(userId)],
               ["View Jobs", () => setTab("jobs")],
               ["Create Service Request", () => onOpenTab?.("dispatch")],
               ["View Payments", () => setTab("payments")],

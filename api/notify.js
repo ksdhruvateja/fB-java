@@ -1,9 +1,19 @@
 import { brand } from './brand.js';
-import { sendMail, mailStatus } from './mail.js';
+import { sendFixBridgeEmail } from './email/send-fixbridge-email.js';
+import { mailStatus } from './mail.js';
 
-/** Send email via direct Gmail SMTP (see api/mail.js). */
-export async function sendEmailSafe({ to, subject, html, text }) {
-  return sendMail({ to, subject, html, text });
+/** Send branded FixBridge email (template or legacy HTML auto-wrapped). */
+export async function sendEmailSafe({ to, subject, html, text, template, data, firstName, headers }) {
+  return sendFixBridgeEmail({
+    to,
+    subject,
+    html,
+    text,
+    template,
+    data,
+    firstName,
+    headers,
+  });
 }
 
 /** True only when a real SMS provider is configured (Twilio). */

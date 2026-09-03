@@ -32,6 +32,9 @@ const managed = read('api/managed-routes.js');
 const settlement = read('api/payment-settlement.js');
 const payoutDb = read('api/payout-db.js');
 const quotes = read('api/quote-workspace-routes.js');
+const quoteInvoice = fs.existsSync(path.join(root, 'api/quote-invoice-service.js'))
+  ? read('api/quote-invoice-service.js')
+  : '';
 const platform = read('api/platform-routes.js');
 const password = read('api/password-reset.js');
 const schema = read('api/schema-managed.js');
@@ -72,7 +75,7 @@ check('P0-5 Acceptance snapshot', () => {
 });
 
 check('P0-6 Convert requires acceptance (or force)', () => {
-  must(quotes.includes('acceptance_required'), 'acceptance gate missing');
+  must(quotes.includes('acceptance_required') || quoteInvoice.includes('acceptance_required'), 'acceptance gate missing');
   must(quotes.includes('forceConvert'), 'force convert missing');
 });
 

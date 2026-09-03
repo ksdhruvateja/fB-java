@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
-import { BadgeCheck, Ban, Briefcase, FileText, Shield, Star, Wallet } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { BadgeCheck, Ban, Briefcase, FileText, Shield, Star, Users, Wallet } from "lucide-react";
 import type { AuthUser } from "./auth";
 import { ContractorApplicationAdminView } from "./ContractorAdminDetail";
 import AdminContractorCompliancePanel from "./AdminContractorCompliancePanel";
 import { applicationFromUser } from "./contractorApplication";
-import { formatMoney, STATUS_LABELS, type ManagedJob } from "./managedJobs";
+import { fetchAdminContractorEmployees, formatMoney, STATUS_LABELS, type ContractorEmployee, type ManagedJob } from "./managedJobs";
 import { relativeTime } from "./adminOpsHelpers";
 
 type ProfileTab =
@@ -12,6 +12,7 @@ type ProfileTab =
   | "trades"
   | "verification"
   | "stripe"
+  | "team"
   | "jobs"
   | "performance"
   | "financials"
@@ -23,6 +24,7 @@ const TABS: { id: ProfileTab; label: string }[] = [
   { id: "trades", label: "Trades" },
   { id: "verification", label: "Verification" },
   { id: "stripe", label: "Stripe" },
+  { id: "team", label: "Team" },
   { id: "jobs", label: "Jobs" },
   { id: "performance", label: "Performance" },
   { id: "financials", label: "Financials" },
@@ -57,6 +59,7 @@ export default function Contractor360Profile({
   onApprove,
   onSuspend,
   onViewDocument,
+  onMessageContractor,
   busy,
 }: {
   contractor: AuthUser;
@@ -65,11 +68,23 @@ export default function Contractor360Profile({
   onApprove: () => void;
   onSuspend: () => void;
   onViewDocument: (name: string, data?: string) => void;
+  onMessageContractor?: (contractorUserId: number) => void;
   busy?: boolean;
 }) {
   const [tab, setTab] = useState<ProfileTab>("profile");
+  const [team, setTeam] = useState<ContractorEmployee[]>([]);
+  const [teamLoading, setTeamLoading] = useState(false);
   const app = applicationFromUser(contractor);
   const contractorId = Number(contractor.id);
+
+  useEffect(() => {
+    if (tab !== "team") return;
+    setTeamLoading(true);
+    void fetchAdminContractorEmployees(contractorId).then((r) => {
+      if (r.ok) setTeam(r.employees || []);
+      setTeamLoading(false);
+    });
+  }, [tab, contractorId]);
 
   const contractorJobs = useMemo(
     () => jobs.filter((j) => Number(j.assignedContractorUserId) === contractorId),
@@ -127,6 +142,13 @@ export default function Contractor360Profile({
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => onMessageContractor?.(contractorId)}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold hover:bg-muted/40"
+          >
+            Message contractor
+          </button>
           {contractor.complianceStatus !== "approved" && (
             <button
               type="button"
@@ -237,6 +259,43 @@ export default function Contractor360Profile({
               Bank account numbers are never stored in FixBridge. Use Stripe Dashboard for account requirements,
               charges/payouts enabled, and instant payout eligibility.
             </p>
+          </div>
+        )}
+
+        {tab === "team" && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <Users className="h-4 w-4 text-[#FF4D1C]" /> Field team
+            </div>
+            {teamLoading ? (
+              <p className="text-sm text-muted-foreground">Loading team…</p>
+            ) : team.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">No employees on file yet.</p>
+            ) : (
+              team.map((e) => (
+                <div key={e.id} className="flex items-start gap-3 rounded-xl border border-border/70 px-3 py-3">
+                  {e.photoUrl ? (
+                    <img src={e.photoUrl} alt="" className="h-11 w-11 rounded-lg border border-border object-cover" />
+                  ) : (
+                    <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-border bg-muted text-sm font-semibold">
+                      {e.fullName.slice(0, 1)}
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium">{e.fullName}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {[e.jobTitle, e.trade].filter(Boolean).join(" · ") || "Team member"}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {[e.primaryPhone, e.primaryEmail].filter(Boolean).join(" · ") || "No contact on file"}
+                    </p>
+                    <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {e.active ? "Active" : "Inactive"}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         )}
 

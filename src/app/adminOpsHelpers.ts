@@ -2,11 +2,14 @@ import type { ManagedJob } from "./managedJobs";
 
 export type AttentionKind =
   | "emergency"
+  | "unassigned"
+  | "no_technician"
   | "quotes_waiting"
   | "quotes_ready"
   | "accepted"
   | "payments"
-  | "payouts";
+  | "payouts"
+  | "disputes";
 
 export type WorkQueueSectionId =
   | "new_requests"
@@ -127,26 +130,42 @@ export function jobQueueHeadline(job: ManagedJob): string {
 }
 
 export function computeAttention(jobs: ManagedJob[]) {
-  const emergency = jobs.filter(
-    (j) => isEmergencyJob(j) && !["closed", "canceled", "refunded", "paid_out"].includes(j.status),
+  const terminal = new Set(["closed", "canceled", "refunded", "paid_out"]);
+  const active = jobs.filter((j) => !terminal.has(j.status));
+
+  const emergency = active.filter((j) => isEmergencyJob(j));
+  const unassigned = active.filter(
+    (j) =>
+      !j.assignedContractorUserId &&
+      ["paid_for_dispatch", "awaiting_contractor", "ai_review_complete", "awaiting_service_payment"].includes(j.status),
   );
-  const quotesWaiting = jobs.filter((j) =>
+  const noTechnician = active.filter(
+    (j) =>
+      Boolean(j.assignedContractorUserId) &&
+      !j.assignedEmployeeId &&
+      ["approved", "scheduled", "contractor_en_route"].includes(j.status),
+  );
+  const quotesWaiting = active.filter((j) =>
     ["contractor_invited", "awaiting_bid", "contractor_accepted"].includes(j.status),
   );
-  const quotesReady = jobs.filter((j) => j.status === "bid_received");
-  const accepted = jobs.filter((j) => ["approved", "scheduled"].includes(j.status));
-  const payments = jobs.filter((j) =>
+  const quotesReady = active.filter((j) => j.status === "bid_received");
+  const accepted = active.filter((j) => ["approved", "scheduled"].includes(j.status));
+  const payments = active.filter((j) =>
     ["work_completed", "customer_review_pending", "admin_review_pending"].includes(j.status),
   );
-  const payouts = jobs.filter((j) => j.status === "payout_pending");
+  const payouts = active.filter((j) => j.status === "payout_pending");
+  const disputes = active.filter((j) => j.status === "disputed");
 
   return {
     emergency,
+    unassigned,
+    no_technician: noTechnician,
     quotes_waiting: quotesWaiting,
     quotes_ready: quotesReady,
     accepted,
     payments,
     payouts,
+    disputes,
   } as Record<AttentionKind, ManagedJob[]>;
 }
 

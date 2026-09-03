@@ -1,4 +1,6 @@
 import { brand } from './brand.js';
+import { renderEmailLayout } from './email/layout.js';
+import { formatCurrency, formatDate } from './email/formatters.js';
 import { applyDiscountToAmount } from './discounts.js';
 import {
   formatAddressLines,
@@ -172,14 +174,8 @@ export function renderInvoiceHtml(invoice) {
     )
     .join('');
 
-  return `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Invoice ${escapeHtml(invoice.invoiceNumber)}</title></head>
-<body style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;max-width:640px;margin:0 auto;padding:24px;">
-  <div style="border-bottom:3px solid ${brand.primaryColor};padding-bottom:16px;margin-bottom:24px;">
-    <h1 style="margin:0;font-size:22px;color:${brand.primaryColor};">${escapeHtml(invoice.company.name)}</h1>
-    <p style="margin:4px 0 0;color:#666;font-size:13px;">${escapeHtml(invoice.company.tagline)}</p>
-  </div>
-  <table style="width:100%;margin-bottom:24px;font-size:14px;">
+  const bodyHtml = `
+  <table style="width:100%;margin-bottom:16px;font-size:14px;">
     <tr><td><strong>Invoice</strong> ${escapeHtml(invoice.invoiceNumber)}</td>
     <td style="text-align:right;">${new Date(invoice.issuedAt).toLocaleDateString()}</td></tr>
     <tr><td colspan="2" style="padding-top:8px;color:#666;">Booking ${escapeHtml(invoice.bookingId)} · ${escapeHtml(invoice.jobTitle || '')}</td></tr>
@@ -208,10 +204,28 @@ export function renderInvoiceHtml(invoice) {
     ${invoice.paid > 0 ? `<tr><td style="padding:6px 0;color:#666;">Payments received</td><td style="text-align:right;color:#0d9488;">−${money(invoice.paid)}</td></tr>` : ''}
     <tr><td style="padding:12px 0;font-size:18px;font-weight:700;">Amount due</td><td style="text-align:right;font-size:18px;font-weight:700;color:${brand.primaryColor};">${money(invoice.amountDue)}</td></tr>
   </table>
-  ${invoice.customNote ? `<p style="margin-top:24px;padding:12px;background:#fff7ed;border-radius:8px;font-size:13px;"><strong>Note:</strong> ${escapeHtml(invoice.customNote)}</p>` : ''}
-  <p style="margin-top:32px;font-size:12px;color:#888;">Questions? Reply to this email or contact ${escapeHtml(invoice.company.email)}.</p>
-  <p style="font-size:11px;color:#aaa;">Thank you for choosing ${escapeHtml(invoice.company.name)}.</p>
-</body></html>`;
+  ${invoice.customNote ? `<p style="margin-top:24px;padding:12px;background:#fff7ed;border-radius:8px;font-size:13px;"><strong>Note:</strong> ${escapeHtml(invoice.customNote)}</p>` : ''}`;
+
+  return renderEmailLayout({
+    category: 'Invoice',
+    headline: 'Your invoice is ready',
+    firstName: invoice.billTo?.name,
+    paragraphs: ['Your FixBridge invoice is ready to review.'],
+    bodyHtml,
+    detailsCard: {
+      title: 'Invoice Summary',
+      rows: [
+        { label: 'Invoice', value: invoice.invoiceNumber },
+        { label: 'Job', value: invoice.bookingId },
+        { label: 'Service', value: invoice.jobTitle || invoice.jobCategory },
+        { label: 'Invoice total', value: formatCurrency(invoice.subtotal) },
+        { label: 'Amount paid', value: formatCurrency(invoice.paid) },
+        { label: 'Balance due', value: formatCurrency(invoice.amountDue) },
+        { label: 'Due date', value: formatDate(invoice.dueDate) },
+      ],
+    },
+    cta: invoice.amountDue > 0 ? { label: 'VIEW INVOICE', href: `${(process.env.APP_URL || '').replace(/\/$/, '')}/homeowner?job=${invoice.jobId}` } : undefined,
+  });
 }
 
 export function renderInvoiceSms(invoice) {

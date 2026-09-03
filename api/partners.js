@@ -1,5 +1,5 @@
 import { brand } from './brand.js';
-import { sendMail } from './mail.js';
+import { sendFixBridgeEmail } from './email/send-fixbridge-email.js';
 import { isPartnerSelfReferral, logSelfReferralBlocked } from './referral-self-guard.js';
 import { auditReferral } from './referrals.js';
 
@@ -180,14 +180,16 @@ async function emailPartnerStatusUpdate(pool, job, partnerStatus) {
     .join('\n');
 
   try {
-    const mailed = await sendMail({
+    const mailed = await sendFixBridgeEmail({
       to: partner.email,
-      subject,
-      text: bodyText,
-      html: `<pre style="font-family:sans-serif;white-space:pre-wrap;">${bodyText
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')}</pre>`,
+      template: 'partner_referral_update',
+      data: {
+        firstName: partner.name,
+        status: label,
+        message: `A referral update is available for partner code ${partner.code}. Pricing, contractor bids, payment details and personal financial information are not shared.`,
+        customerName: booking,
+        jobNumber: booking,
+      },
     });
     if (!mailed.ok) {
       console.log(`[Partner referral email — logged]\nTo: ${partner.email}\nSubject: ${subject}\n${bodyText}`);

@@ -67,7 +67,10 @@ async function main() {
   const start = await fetch(`${API}/api/managed/jobs/${jobId}/assess`, {
     method: 'POST',
     headers: { ...homeH, 'Content-Type': 'application/json' },
-    body: '{}',
+    body: JSON.stringify({
+      assessmentInvocationId: `async-${stamp}`,
+      consents: { AI_ASSESSMENT_ACK: true },
+    }),
   }).then(parseJsonResponse);
 
   ok('assess returns quickly', start.ok, `status=${start.status || start.assessmentStatus}`);

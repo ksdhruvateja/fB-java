@@ -116,6 +116,11 @@ export const STANDALONE_ACCEPTANCE_TYPES = {
     title: 'DIY ability and comfort acknowledgment',
     version: '1.1',
   },
+  AI_ASSESSMENT_ACK: {
+    acceptanceType: 'AI_ASSESSMENT_ACK',
+    title: 'AI Assessment Disclaimer',
+    version: 'ai_assessment_v1',
+  },
 };
 
 export const CONSENT_ACTIONS = {
@@ -167,6 +172,10 @@ export const CONSENT_ACTIONS = {
       { acceptanceType: 'PAYMENT_VISIT_POLICY', documentKey: 'PAYMENT_VISIT_POLICY' },
     ],
     code: 'PAYMENT_CONSENT_REQUIRED',
+  },
+  AI_ASSESSMENT: {
+    required: [{ acceptanceType: 'AI_ASSESSMENT_ACK' }],
+    code: 'AI_ASSESSMENT_ACK_REQUIRED',
   },
 };
 

@@ -96,7 +96,8 @@ export type AcceptanceType =
   | "CHANGE_ORDER_APPROVAL"
   | "PAYMENT_AUTHORIZATION"
   | "PAYMENT_VISIT_POLICY"
-  | "MARKETING_SMS_EMAIL";
+  | "MARKETING_SMS_EMAIL"
+  | "AI_ASSESSMENT_ACK";
 
 export type ConsentMap = Partial<Record<AcceptanceType, boolean>>;
 

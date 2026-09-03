@@ -138,13 +138,20 @@ export type ManagedJob = {
     name?: string | null;
     company?: string | null;
     phone?: string | null;
+    email?: string | null;
     rating?: number | null;
     verified?: boolean;
     insured?: boolean;
     trade?: string | null;
+    jobTitle?: string | null;
+    photoUrl?: string | null;
+    bio?: string | null;
   } | null;
+  assignedEmployeeId?: number | null;
+  homeownerStatusLabel?: string | null;
   activeProposalId?: number | null;
   completionReport?: Record<string, unknown> | null;
+  customerConfirmedAt?: string | null;
   partnerCode?: string | null;
   discountCode?: string | null;
   discountLabel?: string | null;
@@ -318,6 +325,8 @@ export type Proposal = {
   aiEstimateHigh?: number | null;
   createdAt?: string | null;
   publishedAt?: string | null;
+  quoteOptionLabel?: string | null;
+  optionGroup?: string | null;
   createdByName?: string | null;
   createdById?: number | null;
   pricingAdjustments?: Array<Record<string, unknown>>;
@@ -559,7 +568,25 @@ export async function getManagedJobAssessmentStatus(jobId: number) {
   }>(`/api/managed/jobs/${jobId}/assessment-status`);
 }
 
-export async function startManagedJobAssessment(jobId: number, { force = false } = {}) {
+export async function startManagedJobAssessment(
+  jobId: number,
+  {
+    force = false,
+    aiAssessmentConsent,
+  }: {
+    force?: boolean;
+    aiAssessmentConsent?: {
+      assessmentInvocationId: string;
+      consents: { AI_ASSESSMENT_ACK: true };
+    };
+  } = {}
+) {
+  const body: Record<string, unknown> = {};
+  if (force) body.force = true;
+  if (aiAssessmentConsent) {
+    body.assessmentInvocationId = aiAssessmentConsent.assessmentInvocationId;
+    body.consents = aiAssessmentConsent.consents;
+  }
   return api<{
     ok: boolean;
     status?: "processing" | "ready";
@@ -570,12 +597,24 @@ export async function startManagedJobAssessment(jobId: number, { force = false }
     message?: string;
   }>(`/api/managed/jobs/${jobId}/assess`, {
     method: "POST",
-    body: JSON.stringify(force ? { force: true } : {}),
+    body: JSON.stringify(body),
   });
 }
 
-export async function assessManagedJob(jobId: number, { force = false } = {}) {
-  const started = await startManagedJobAssessment(jobId, { force });
+export async function assessManagedJob(
+  jobId: number,
+  {
+    force = false,
+    aiAssessmentConsent,
+  }: {
+    force?: boolean;
+    aiAssessmentConsent?: {
+      assessmentInvocationId: string;
+      consents: { AI_ASSESSMENT_ACK: true };
+    };
+  } = {}
+) {
+  const started = await startManagedJobAssessment(jobId, { force, aiAssessmentConsent });
   if (!started.ok) {
     return {
       ok: false as const,
@@ -754,10 +793,10 @@ export async function getProposal(jobId: number) {
   return api<{ ok: boolean; proposal: Proposal | null }>(`/api/managed/jobs/${jobId}/proposal`);
 }
 
-export async function approveProposal(jobId: number, consents?: Record<string, boolean>) {
+export async function approveProposal(jobId: number, consents?: Record<string, boolean>, proposalId?: number) {
   return api<{ ok: boolean; proposal?: Proposal; message?: string }>(
     `/api/managed/jobs/${jobId}/approve-proposal`,
-    { method: "POST", body: JSON.stringify({ consents, acknowledged: true }) }
+    { method: "POST", body: JSON.stringify({ consents, acknowledged: true, proposalId }) }
   );
 }
 
@@ -924,11 +963,114 @@ export async function adminQuoteBuilderPreview(
   }>(`/api/admin/managed/jobs/${jobId}/quote-builder?bidId=${bidId}`);
 }
 
-export async function adminAssign(jobId: number, contractorUserId: number) {
+export async function adminAssign(
+  jobId: number,
+  contractorUserId: number,
+  options?: { employeeId?: number | null; clearEmployee?: boolean }
+) {
   return api<{ ok: boolean; job?: ManagedJob; message?: string }>(`/api/admin/managed/jobs/${jobId}/assign`, {
     method: "POST",
-    body: JSON.stringify({ contractorUserId }),
+    body: JSON.stringify({
+      contractorUserId,
+      employeeId: options?.employeeId,
+      clearEmployee: options?.clearEmployee,
+    }),
   });
+}
+
+export type ContractorEmployee = {
+  id: number;
+  contractorUserId: number;
+  fullName: string;
+  jobTitle?: string | null;
+  bio?: string | null;
+  trade?: string | null;
+  yearsExperience?: number | null;
+  employeeRef?: string | null;
+  customerDescription?: string | null;
+  internalNotes?: string | null;
+  active: boolean;
+  phones: { value: string; label?: string | null; customerVisible?: boolean; isPrimary?: boolean }[];
+  emails: { value: string; label?: string | null; customerVisible?: boolean; isPrimary?: boolean }[];
+  primaryPhone?: string | null;
+  primaryEmail?: string | null;
+  hasPhoto?: boolean;
+  photoUrl?: string | null;
+};
+
+export async function fetchContractorEmployees() {
+  return api<{ ok: boolean; employees?: ContractorEmployee[]; message?: string }>("/api/contractor/employees");
+}
+
+export async function saveContractorEmployee(body: Record<string, unknown>, id?: number) {
+  const path = id ? `/api/contractor/employees/${id}` : "/api/contractor/employees";
+  return api<{ ok: boolean; employee?: ContractorEmployee; message?: string }>(path, {
+    method: id ? "PUT" : "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function fetchAdminContractorEmployees(contractorId: number) {
+  return api<{ ok: boolean; employees?: ContractorEmployee[]; message?: string }>(
+    `/api/admin/contractors/${contractorId}/employees`
+  );
+}
+
+export async function assignJobTechnician(jobId: number, employeeId: number) {
+  return api<{ ok: boolean; job?: ManagedJob; message?: string }>(
+    `/api/contractor/managed/jobs/${jobId}/assign-technician`,
+    { method: "POST", body: JSON.stringify({ employeeId }) }
+  );
+}
+
+export async function contractorMarkTravel(jobId: number) {
+  return api<{ ok: boolean; job?: ManagedJob; message?: string }>(
+    `/api/contractor/managed/jobs/${jobId}/mark-travel`,
+    { method: "POST", body: "{}" }
+  );
+}
+
+export async function contractorMarkArrived(jobId: number) {
+  return api<{ ok: boolean; job?: ManagedJob; message?: string }>(
+    `/api/contractor/managed/jobs/${jobId}/mark-arrived`,
+    { method: "POST", body: "{}" }
+  );
+}
+
+export async function contractorMarkStarted(jobId: number) {
+  return api<{ ok: boolean; job?: ManagedJob; message?: string }>(
+    `/api/contractor/managed/jobs/${jobId}/mark-started`,
+    { method: "POST", body: "{}" }
+  );
+}
+
+export async function adminMarkJobDispatched(jobId: number, employeeId?: number) {
+  return api<{ ok: boolean; job?: ManagedJob; message?: string }>(
+    `/api/admin/managed/jobs/${jobId}/mark-dispatched`,
+    { method: "POST", body: JSON.stringify({ employeeId }) }
+  );
+}
+
+export async function adminMarkJobStarted(jobId: number, employeeId?: number) {
+  return api<{ ok: boolean; job?: ManagedJob; message?: string }>(
+    `/api/admin/managed/jobs/${jobId}/mark-started`,
+    { method: "POST", body: JSON.stringify({ employeeId }) }
+  );
+}
+
+export async function adminMarkJobCompleted(jobId: number, employeeId?: number) {
+  return api<{ ok: boolean; job?: ManagedJob; message?: string }>(
+    `/api/admin/managed/jobs/${jobId}/mark-completed`,
+    { method: "POST", body: JSON.stringify({ employeeId }) }
+  );
+}
+
+export async function fetchJobTimeline(jobId: number) {
+  return api<{
+    ok: boolean;
+    timeline?: { kind: string; at: string; label: string; eventType?: string }[];
+    message?: string;
+  }>(`/api/managed/jobs/${jobId}/timeline`);
 }
 
 export async function adminCreateProposal(jobId: number, bidId: number, extras?: Record<string, unknown>) {
@@ -944,6 +1086,30 @@ export async function adminQuoteWorkspace(id: number | string) {
     quote?: import("./quoteDocument").QuoteDocument;
     invoice?: import("./quoteDocument").QuoteInvoice | null;
     activity?: import("./quoteDocument").QuoteActivity[];
+    revisionHistory?: {
+      versionNumber: number;
+      changeReason?: string | null;
+      customerTotal?: number | null;
+      contractorAmount?: number | null;
+      createdAt?: string;
+    }[];
+    previousRevision?: {
+      versionNumber: number;
+      changeReason?: string | null;
+      customerTotal?: number | null;
+      contractorAmount?: number | null;
+      snapshot?: Record<string, unknown>;
+    } | null;
+    jobQuoteHistory?: {
+      id: number;
+      quoteNumber?: string;
+      status: string;
+      versionNumber: number;
+      total: number;
+      createdAt?: string;
+      publishedAt?: string;
+      supersededAt?: string | null;
+    }[];
     message?: string;
   }>(`/api/admin/quotes/${id}/workspace`);
 }

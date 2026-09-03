@@ -1,4 +1,5 @@
 import { useState } from "react";
+import JobTimelinePanel from "./JobTimelinePanel";
 import {
   CalendarDays,
   Check,
@@ -18,10 +19,14 @@ export type AssignedTechnician = {
   name?: string | null;
   company?: string | null;
   phone?: string | null;
+  email?: string | null;
   rating?: number | null;
   verified?: boolean;
   insured?: boolean;
   trade?: string | null;
+  jobTitle?: string | null;
+  photoUrl?: string | null;
+  bio?: string | null;
 };
 
 const TRACK_STEPS = [
@@ -142,7 +147,10 @@ export default function ServiceTrackingCard({
   const company = tech?.company || tech?.trade || null;
   const rating = tech?.rating ?? null;
   const editable = canEditHomeownerJob(job.status);
-  const statusLabel = STATUS_LABELS[job.status] || job.status;
+  const statusLabel =
+    (job as ManagedJob & { homeownerStatusLabel?: string }).homeownerStatusLabel ||
+    STATUS_LABELS[job.status] ||
+    job.status;
   const timingLabel = job.serviceTiming ? SERVICE_TIMING_LABELS[job.serviceTiming] || job.serviceTiming : null;
   const [hoveredStep, setHoveredStep] = useState<number | null>(null);
 
@@ -294,12 +302,29 @@ export default function ServiceTrackingCard({
           <div className="my-5 border-t border-border" />
           <div className="space-y-4">
             {hasTech && (
-              <div>
+              <div className="rounded-2xl border border-border/80 bg-muted/20 p-4">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                  Provider
+                  Who to expect
                 </p>
-                <p className="mt-2 text-base font-semibold">{displayName}</p>
-                {company && <p className="text-sm text-muted-foreground">{company}</p>}
+                <div className="mt-3 flex items-start gap-3">
+                  {tech?.photoUrl ? (
+                    <img
+                      src={tech.photoUrl}
+                      alt=""
+                      className="h-14 w-14 rounded-2xl border border-border object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-border bg-background text-lg font-semibold text-muted-foreground">
+                      {(displayName || "?").slice(0, 1)}
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-base font-semibold">{displayName}</p>
+                    {company && <p className="text-sm text-muted-foreground">{company}</p>}
+                    {tech?.jobTitle && <p className="text-sm text-muted-foreground">{tech.jobTitle}</p>}
+                    {tech?.bio && <p className="mt-1 text-xs text-muted-foreground">{tech.bio}</p>}
+                  </div>
+                </div>
                 <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
                   {rating != null && (
                     <span className="inline-flex items-center gap-1 font-medium">
@@ -351,6 +376,15 @@ export default function ServiceTrackingCard({
             )}
           </div>
         </>
+      )}
+
+      {current >= 1 && (
+        <div className="mt-5 rounded-2xl border border-border/80 bg-muted/20 p-4">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Recent updates</p>
+          <div className="mt-3">
+            <JobTimelinePanel jobId={job.id} compact />
+          </div>
+        </div>
       )}
 
       {!hasTech && current < 2 && (

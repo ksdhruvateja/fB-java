@@ -49,6 +49,10 @@ import ContractorPayoutsPanel from "./ContractorPayoutsPanel";
 import ContractorReferEarn from "./ContractorReferEarn";
 import ContractorPerformancePanel from "./ContractorPerformancePanel";
 import ContractorSupportPanel from "./ContractorSupportPanel";
+import MessagesPanel from "./MessagesPanel";
+import NotificationBell from "./NotificationBell";
+import { useInAppComms } from "./useInAppComms";
+import { formatBadgeCount } from "./notificationsApi";
 import ContractorStripeConnectCard from "./ContractorStripeConnectCard";
 import ContractorExpiryAlert from "./ContractorExpiryAlert";
 import {
@@ -137,6 +141,7 @@ export default function ContractorDashboard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [focusInviteId, setFocusInviteId] = useState<number | null>(null);
+  const { unreadNotifications, unreadMessages, refresh: refreshComms } = useInAppComms(true);
 
   const [application, setApplication] = useState<ContractorApplication>(() => applicationFromUser(user));
   const [appDocs, setAppDocs] = useState<ContractorApplicationDocs>(emptyContractorApplicationDocs);
@@ -503,7 +508,12 @@ export default function ContractorDashboard({
                 }`}
               >
                 <item.icon className="h-4 w-4 shrink-0" />
-                <span>{item.label}</span>
+                <span className="flex-1">{item.label}</span>
+                {item.id === "messages" && unreadMessages > 0 ? (
+                  <span className="rounded-full bg-[#FF4D1C] px-1.5 py-0.5 text-[10px] font-bold text-white">
+                    {formatBadgeCount(unreadMessages)}
+                  </span>
+                ) : null}
               </button>
             ))}
           </div>
@@ -533,6 +543,11 @@ export default function ContractorDashboard({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <NotificationBell
+            unreadCount={unreadNotifications}
+            onRefreshCounts={refreshComms}
+            onNavigate={() => go("messages")}
+          />
           <button type="button" onClick={onToggleDark} className="rounded-md p-2 hover:bg-muted" aria-label="Theme">
             {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </button>
@@ -813,7 +828,7 @@ export default function ContractorDashboard({
           )}
 
           {tab === "messages" && (
-            <Stub title="Messages" body="Job threads with homeowners and FixBridge dispatch will appear here. Messaging goes live with assigned jobs." />
+            <MessagesPanel role="contractor" onUnreadChange={refreshComms} />
           )}
           {tab === "settings" && (
             <section className="mx-auto max-w-3xl space-y-4">

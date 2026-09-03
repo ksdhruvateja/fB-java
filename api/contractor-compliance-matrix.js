@@ -12,6 +12,7 @@ import {
   parseContractorApplication,
   serializeComplianceDocument,
 } from './contractor-compliance-shared.js';
+import { requireFixbridgeAdditionalInsured } from './compliance-settings.js';
 
 export const COMPLIANCE_TIER = {
   LEVEL_1: 'level_1',
@@ -44,8 +45,11 @@ export const MATRIX_REQUIREMENTS = [
     key: 'AI_ONGOING_OPS',
     documentType: 'AI_ONGOING_OPS',
     label: 'FixBridge Additional Insured',
-    dispatchRule: 'Verify ACTUAL endorsement naming FixBridge',
+    dispatchRule: requireFixbridgeAdditionalInsured()
+      ? 'Verify ACTUAL endorsement naming FixBridge'
+      : 'Optional but recommended — verify ACTUAL endorsement naming FixBridge',
     verifyNote: `Must name: ${COI_CERTIFICATE_HOLDER}`,
+    recommended: !requireFixbridgeAdditionalInsured(),
     tiers: [COMPLIANCE_TIER.LEVEL_1, COMPLIANCE_TIER.LEVEL_2],
   },
   {
@@ -147,7 +151,9 @@ function computeApplicabilityForTier(user, tier) {
     if (String(app.generalLiability || '').toLowerCase() === 'yes') {
       base.PRIMARY_NON_CONTRIBUTORY = APPLICABILITY.REQUIRED;
       base.GL_WAIVER_SUBROGATION = APPLICABILITY.REQUIRED;
-      base.AI_ONGOING_OPS = APPLICABILITY.REQUIRED;
+      base.AI_ONGOING_OPS = requireFixbridgeAdditionalInsured()
+        ? APPLICABILITY.REQUIRED
+        : APPLICABILITY.OPTIONAL;
       base.AI_COMPLETED_OPS = APPLICABILITY.REQUIRED;
     }
     base.UMBRELLA_EXCESS = APPLICABILITY.REQUIRED;
@@ -176,7 +182,10 @@ function matrixDisplayStatus(doc, row, documentsByType, applicability, user, tie
   }
 
   if (applicability === APPLICABILITY.NOT_APPLICABLE) return 'NOT_APPLICABLE';
-  if (!doc) return 'MISSING';
+  if (!doc) {
+    if (applicability === APPLICABILITY.OPTIONAL) return 'RECOMMENDED';
+    return 'MISSING';
+  }
   if (doc.status === DOC_STATUS.VERIFIED) return 'VERIFIED';
   if (doc.status === DOC_STATUS.EXPIRED) return 'EXPIRED';
   if (doc.status === DOC_STATUS.REJECTED) return 'REJECTED';
@@ -207,6 +216,7 @@ function evaluateTierStatus(user, documentRows, tier) {
       label: row.label,
       dispatchRule: row.dispatchRule,
       verifyNote: row.verifyNote || null,
+      recommended: row.recommended === true || app === APPLICABILITY.OPTIONAL,
       applicability: app,
       matrixStatus,
       status: doc?.status || DOC_STATUS.MISSING,

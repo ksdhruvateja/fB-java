@@ -1,13 +1,7 @@
 /**
- * JobChatPanel — reusable chat component used by Homeowner, Contractor, and Admin.
- *
- * Features:
- * - Collapsed preview showing last 3 messages
- * - "Open Conversation" modal with full history
- * - Image attachment (upload + preview inline)
- * - System message styling (status updates, auto-messages)
- * - Read-only mode for Admin
- * - Real-time updates via localStorage events
+ * @deprecated Legacy localStorage job chat — not wired in current UI.
+ * Use centralized Admin Communications (Homeowner↔Admin, Contractor↔Admin) instead.
+ * Historical messages in localStorage are preserved; do not delete.
  */
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";

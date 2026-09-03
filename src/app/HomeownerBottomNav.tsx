@@ -22,6 +22,7 @@ export default function HomeownerBottomNav({
   onRequest,
   onInbox,
   onMore,
+  inboxBadge = null,
 }: {
   tab: DashTab;
   onHome: () => void;
@@ -29,6 +30,7 @@ export default function HomeownerBottomNav({
   onRequest: () => void;
   onInbox: () => void;
   onMore: () => void;
+  inboxBadge?: string | null;
 }) {
   const active = bottomNavHighlight(tab);
 
@@ -68,17 +70,25 @@ export default function HomeownerBottomNav({
           }
 
           const Icon = item.icon;
+          const showBadge = item.id === "inbox" && inboxBadge;
           return (
             <li key={item.id}>
               <button
                 type="button"
                 onClick={handlers[item.id]}
                 aria-current={isActive ? "page" : undefined}
-                className={`flex w-full flex-col items-center gap-0.5 px-1 py-2 text-[10px] font-semibold transition ${
+                className={`relative flex w-full flex-col items-center gap-0.5 px-1 py-2 text-[10px] font-semibold transition ${
                   isActive ? "text-primary" : "text-muted-foreground"
                 }`}
               >
-                <Icon size={20} strokeWidth={isActive ? 2.25 : 2} />
+                <span className="relative">
+                  <Icon size={20} strokeWidth={isActive ? 2.25 : 2} />
+                  {showBadge ? (
+                    <span className="absolute -right-2 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-[#FF4D1C] px-0.5 text-[8px] font-bold text-white">
+                      {inboxBadge}
+                    </span>
+                  ) : null}
+                </span>
                 {item.label}
               </button>
             </li>

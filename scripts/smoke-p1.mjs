@@ -4,6 +4,7 @@
  */
 import { spawnSync } from 'child_process';
 import pg from 'pg';
+import { loginAdminWithMfa as loginAdminShared } from './smoke-auth.mjs';
 
 const API = process.env.API_BASE || 'http://127.0.0.1:3001';
 const DATABASE_URL = process.env.DATABASE_URL || process.env.NEON_DATABASE_URL;
@@ -37,29 +38,8 @@ async function json(res) {
 }
 
 async function loginAdminWithMfa() {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const signin = await fetch(`${API}/api/auth/signin`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'admin', email: 'ksdt2702@gmail.com', password: 'admin123' }),
-    }).then(json);
-    if (!signin.ok || !signin.token) throw new Error(signin.message || 'admin signin failed');
-    const mfaStart = await fetch(`${API}/api/auth/mfa/start`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${signin.token}` },
-      body: JSON.stringify({}),
-    }).then(json);
-    if (!mfaStart.ok || !mfaStart.demoCode) throw new Error('MFA start failed');
-    const mfaVerify = await fetch(`${API}/api/auth/mfa/verify`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${signin.token}` },
-      body: JSON.stringify({ code: mfaStart.demoCode }),
-    }).then(json);
-    if (mfaVerify.ok && mfaVerify.token) return mfaVerify.token;
-    if (attempt < 2) await new Promise((r) => setTimeout(r, 400));
-    else throw new Error(mfaVerify.message || 'MFA verify failed');
-  }
-  throw new Error('MFA verify failed');
+  const a = await loginAdminShared();
+  return a.token;
 }
 
 async function main() {

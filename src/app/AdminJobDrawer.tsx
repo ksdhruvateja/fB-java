@@ -13,6 +13,7 @@ import AdminHomeownerInvoicePanel from "./AdminHomeownerInvoicePanel";
 import ChangeOrderPanel from "./ChangeOrderPanel";
 import AdminHomeownerAcceptancesPanel from "./AdminHomeownerAcceptancesPanel";
 import AdminJobEvidencePanel from "./AdminJobEvidencePanel";
+import JobTimelinePanel from "./JobTimelinePanel";
 import {
   STATUS_LABELS,
   formatMoney,
@@ -51,6 +52,7 @@ export default function AdminJobDrawer({
   onOpenPayouts,
   onOpenAiEstimate,
   onMessage,
+  onOpenComms,
   onRefresh,
   dispatchCouponCode = "",
   onDispatchCouponCodeChange,
@@ -75,6 +77,12 @@ export default function AdminJobDrawer({
   onOpenPayouts?: () => void;
   onOpenAiEstimate?: () => void;
   onMessage: (msg: string) => void;
+  onOpenComms?: (opts: {
+    homeownerUserId?: number;
+    contractorUserId?: number;
+    jobId?: number;
+    subject?: string;
+  }) => void;
   onRefresh: () => void | Promise<void>;
   dispatchCouponCode?: string;
   onDispatchCouponCodeChange?: (code: string) => void;
@@ -271,6 +279,38 @@ export default function AdminJobDrawer({
                         </button>
                       ))}
                   </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {job.homeownerUserId ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onOpenComms?.({
+                            homeownerUserId: Number(job.homeownerUserId),
+                            jobId: job.id,
+                            subject: `Job ${job.bookingId || `FB-${job.id}`}`,
+                          })
+                        }
+                        className="rounded-lg bg-[#FF4D1C] px-3 py-1.5 text-xs font-semibold text-white"
+                      >
+                        Message homeowner
+                      </button>
+                    ) : null}
+                    {job.assignedContractorUserId ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onOpenComms?.({
+                            contractorUserId: Number(job.assignedContractorUserId),
+                            jobId: job.id,
+                            subject: `Job ${job.bookingId || `FB-${job.id}`}`,
+                          })
+                        }
+                        className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted/40"
+                      >
+                        Message contractor
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
 
                 {job.description && (
@@ -285,6 +325,13 @@ export default function AdminJobDrawer({
                     Homeowner consent history
                   </p>
                   <AdminHomeownerAcceptancesPanel jobId={job.id} userId={job.homeownerUserId} />
+                </div>
+
+                <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Job timeline</p>
+                  <div className="mt-3">
+                    <JobTimelinePanel jobId={job.id} />
+                  </div>
                 </div>
 
                 <div className="grid gap-2 pt-2">

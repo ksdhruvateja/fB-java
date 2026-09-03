@@ -1,6 +1,7 @@
 /**
  * Shared contractor compliance constants and pure evaluation helpers (no matrix import).
  */
+import { requireFixbridgeAdditionalInsured } from './compliance-settings.js';
 
 export const COI_CERTIFICATE_HOLDER = 'Liora Creations, Corp. d/b/a FixBridge';
 export const COI_LEGAL_NOTICE_ADDRESS = '131 Continental Dr, Suite 305, Newark, DE 19713';
@@ -179,7 +180,11 @@ export function computeApplicability(user, options = {}) {
     ? APPLICABILITY.REQUIRED
     : APPLICABILITY.OPTIONAL;
   map.GENERAL_LIABILITY_COI = gl ? APPLICABILITY.REQUIRED : APPLICABILITY.NOT_APPLICABLE;
-  map.AI_ONGOING_OPS = gl ? APPLICABILITY.REQUIRED : APPLICABILITY.NOT_APPLICABLE;
+  map.AI_ONGOING_OPS = gl
+    ? requireFixbridgeAdditionalInsured()
+      ? APPLICABILITY.REQUIRED
+      : APPLICABILITY.OPTIONAL
+    : APPLICABILITY.NOT_APPLICABLE;
   map.AI_COMPLETED_OPS = gl ? APPLICABILITY.REQUIRED : APPLICABILITY.NOT_APPLICABLE;
   map.PRIMARY_NON_CONTRIBUTORY = gl ? APPLICABILITY.REQUIRED : APPLICABILITY.NOT_APPLICABLE;
   map.GL_WAIVER_SUBROGATION = gl ? APPLICABILITY.REQUIRED : APPLICABILITY.NOT_APPLICABLE;

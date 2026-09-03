@@ -33,6 +33,7 @@ export type OverallComplianceStatus = "GREEN" | "YELLOW" | "RED";
 export type MatrixDisplayStatus =
   | "VERIFIED"
   | "MISSING"
+  | "RECOMMENDED"
   | "EXPIRED"
   | "NOT_APPLICABLE"
   | "SOLO_OWNER"
@@ -156,6 +157,8 @@ export function complianceStatusLabel(status: ComplianceDocStatus | MatrixDispla
   switch (status) {
     case "VERIFIED":
       return "Verified";
+    case "RECOMMENDED":
+      return "Recommended — not provided";
     case "SOLO_OWNER":
       return "Solo Owner";
     case "UNDER_REVIEW":
@@ -175,9 +178,18 @@ export function complianceStatusLabel(status: ComplianceDocStatus | MatrixDispla
 
 export function complianceStatusIcon(status: ComplianceDocStatus | MatrixDisplayStatus): string {
   if (status === "VERIFIED" || status === "SOLO_OWNER") return "✓";
+  if (status === "RECOMMENDED") return "○";
   if (status === "UNDER_REVIEW" || status === "UPLOADED") return "⚠";
   if (status === "NOT_APPLICABLE") return "—";
   return "✕";
+}
+
+export function matrixStatusTone(status: MatrixDisplayStatus): string {
+  if (status === "VERIFIED" || status === "SOLO_OWNER") return "text-emerald-700";
+  if (status === "RECOMMENDED") return "text-sky-700 dark:text-sky-300";
+  if (status === "UNDER_REVIEW") return "text-amber-800";
+  if (status === "NOT_APPLICABLE") return "text-muted-foreground";
+  return "text-red-700";
 }
 
 export function overallStatusLabel(status: OverallComplianceStatus): string {
@@ -200,13 +212,6 @@ export function overallStatusTone(status: OverallComplianceStatus): string {
     default:
       return "border-red-500/40 bg-red-500/10 text-red-900 dark:text-red-100";
   }
-}
-
-export function matrixStatusTone(status: MatrixDisplayStatus): string {
-  if (status === "VERIFIED" || status === "SOLO_OWNER") return "text-emerald-700";
-  if (status === "UNDER_REVIEW") return "text-amber-800";
-  if (status === "NOT_APPLICABLE") return "text-muted-foreground";
-  return "text-red-700";
 }
 
 export async function acceptContractorAgreementV4() {

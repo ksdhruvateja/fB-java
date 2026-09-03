@@ -169,6 +169,16 @@ function QuoteDocumentEditor({
   const [quote, setQuote] = useState<QuoteDocument | null>(null);
   const [invoice, setInvoice] = useState<QuoteInvoice | null>(null);
   const [activity, setActivity] = useState<QuoteActivity[]>([]);
+  const [previousRevision, setPreviousRevision] = useState<{
+    versionNumber: number;
+    changeReason?: string | null;
+    customerTotal?: number | null;
+    contractorAmount?: number | null;
+    snapshot?: Record<string, unknown>;
+  } | null>(null);
+  const [jobQuoteHistory, setJobQuoteHistory] = useState<
+    { id: number; quoteNumber?: string; status: string; versionNumber: number; total: number }[]
+  >([]);
   const [modal, setModal] = useState<ModalKind>(null);
 
   // Editable document state
@@ -342,6 +352,8 @@ function QuoteDocumentEditor({
       return;
     }
     hydrate(r.quote, r.invoice, r.activity);
+    setPreviousRevision(r.previousRevision || null);
+    setJobQuoteHistory(r.jobQuoteHistory || []);
   };
 
   useEffect(() => {
@@ -704,6 +716,60 @@ function QuoteDocumentEditor({
                     ) : null}
                   </div>
                 </div>
+
+                {previousRevision ? (
+                  <div className="grid gap-4 rounded-2xl border border-border bg-muted/20 p-4 lg:grid-cols-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        Previous (v{previousRevision.versionNumber})
+                      </p>
+                      <p className="mt-2 text-lg font-bold tabular-nums">{formatMoney(previousRevision.customerTotal || 0)}</p>
+                      <p className="text-xs text-muted-foreground">
+                        Contractor {formatMoney(previousRevision.contractorAmount || 0)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Current</p>
+                      <p className="mt-2 text-lg font-bold tabular-nums">{formatMoney(totals.total)}</p>
+                      <p className="text-xs text-muted-foreground">Contractor {formatMoney(contractorQuoteAmount)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Difference</p>
+                      <p
+                        className={`mt-2 text-lg font-bold tabular-nums ${
+                          totals.total - (previousRevision.customerTotal || 0) >= 0 ? "text-amber-800" : "text-emerald-700"
+                        }`}
+                      >
+                        {totals.total - (previousRevision.customerTotal || 0) >= 0 ? "+" : ""}
+                        {formatMoney(totals.total - (previousRevision.customerTotal || 0))}
+                      </p>
+                      {previousRevision.changeReason ? (
+                        <p className="mt-1 text-xs text-muted-foreground">Reason: {previousRevision.changeReason}</p>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+
+                {jobQuoteHistory.length > 1 ? (
+                  <div className="rounded-2xl border border-border p-4">
+                    <p className="text-sm font-semibold">Quote history</p>
+                    <ul className="mt-2 space-y-1 text-sm">
+                      {jobQuoteHistory.map((h) => (
+                        <li key={h.id} className="flex flex-wrap items-center justify-between gap-2">
+                          <button
+                            type="button"
+                            className="font-mono text-primary hover:underline"
+                            onClick={() => void openQuote(h.id)}
+                          >
+                            {h.quoteNumber || `FBQ-${h.id}`} v{h.versionNumber}
+                          </button>
+                          <span>{formatMoney(h.total)}</span>
+                          <span className="text-xs text-muted-foreground">{formatStatusLabel(h.status)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
 
                 {/* Bill to + job meta */}
                 <div className="grid gap-4 lg:grid-cols-2">

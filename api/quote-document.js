@@ -22,6 +22,7 @@ export const QUOTE_STATUSES = [
   'accepted',
   'approved', // legacy alias of accepted
   'declined',
+  'superseded',
   'converted',
   'paid',
   'canceled',

@@ -489,18 +489,22 @@ export async function qualifyReferralOnPaidService(pool, { jobId, homeownerUserI
       if (updated.reward_type === 'payout_bonus') {
         await sendEmailSafe({
           to: referrer.email,
-          subject: `Referral bonus earned — $${dollars}`,
-          html: `<p>Hi ${referrer.name || 'there'},</p>
-            <p>Your referred homeowner completed their qualifying service.</p>
-            <p><strong>$${dollars}</strong> has been added to your ${brand.productName} payout balance as a referral bonus.</p>`,
+          template: 'referral_bonus',
+          data: {
+            firstName: referrer.name,
+            amount: Number(updated.referrer_reward_cents) / 100,
+            message: `Your referred homeowner completed their qualifying service. $${dollars} has been added to your ${brand.productName} payout balance as a referral bonus.`,
+          },
         });
       } else {
         await sendEmailSafe({
           to: referrer.email,
-          subject: `Referral update — you've earned $${dollars} credit`,
-          html: `<p>Hi ${referrer.name || 'there'},</p>
-            <p>${maskName(referred?.name)} completed their first qualifying service.</p>
-            <p>You've earned <strong>$${dollars}</strong> in ${brand.productName} credit.</p>`,
+          template: 'referral_credit',
+          data: {
+            firstName: referrer.name,
+            amount: Number(updated.referrer_reward_cents) / 100,
+            message: `${maskName(referred?.name)} completed their first qualifying service. You've earned $${dollars} in ${brand.productName} credit.`,
+          },
         });
       }
     }
@@ -508,9 +512,12 @@ export async function qualifyReferralOnPaidService(pool, { jobId, homeownerUserI
       const welcome = (Number(updated.referred_reward_cents) / 100).toFixed(0);
       await sendEmailSafe({
         to: referred.email,
-        subject: `You've earned $${welcome} FixBridge credit`,
-        html: `<p>Hi ${referred.name || 'there'},</p>
-          <p>You've received <strong>$${welcome}</strong> in ${brand.productName} referral credit for your next eligible service.</p>`,
+        template: 'referral_welcome_credit',
+        data: {
+          firstName: referred.name,
+          amount: Number(updated.referred_reward_cents) / 100,
+          message: `You've received $${welcome} in ${brand.productName} referral credit for your next eligible service.`,
+        },
       });
     }
   } catch {

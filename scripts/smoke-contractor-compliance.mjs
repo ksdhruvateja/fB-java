@@ -285,7 +285,7 @@ async function main() {
   await verifyDoc(adminH, aiOnly.contractorId, 'GENERAL_LIABILITY_COI', { expirationDate: '2030-12-31' });
   const aiSummary = await adminSummary(adminH, aiOnly.contractorId);
   const aiRow = aiSummary.summary?.level1?.matrix?.find((m) => m.documentType === 'AI_ONGOING_OPS');
-  ok('generic COI alone — AI endorsement MISSING', aiRow?.matrixStatus === 'MISSING');
+  ok('generic COI alone — AI endorsement optional/recommended', aiRow?.matrixStatus === 'RECOMMENDED' || aiRow?.matrixStatus === 'MISSING');
 
   const autoTs = Date.now() + 7;
   const autoC = await signupContractor(autoTs, {

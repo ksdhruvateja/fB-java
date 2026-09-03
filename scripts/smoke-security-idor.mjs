@@ -2,6 +2,8 @@
  * Security smoke: IDOR + guest account hardening + partner auth.
  * Usage: node --env-file=.env scripts/smoke-security-idor.mjs
  */
+import { loginAdminWithMfa } from './smoke-auth.mjs';
+
 const API = process.env.API_BASE || 'http://127.0.0.1:3001';
 
 async function json(res) {
@@ -32,7 +34,7 @@ async function main() {
   console.log(`\nFixBridge security IDOR smoke @ ${API}\n`);
 
   const maria = await login('homeowner', 'maria@example.com', 'demo123');
-  const admin = await login('admin', 'ksdt2702@gmail.com', 'admin123');
+  const admin = await loginAdminWithMfa();
   const homeH = { Authorization: `Bearer ${maria.token}`, 'Content-Type': 'application/json' };
   const adminH = { Authorization: `Bearer ${admin.token}`, 'Content-Type': 'application/json' };
 
@@ -64,6 +66,7 @@ async function main() {
       name: 'IDOR Peer',
       email: peerEmail,
       password: 'PeerPass123!',
+      consents: { ACCOUNT_TERMS: true, PRIVACY_POLICY: true },
     }),
   }).then(json);
   if (signup.ok && signup.token) {
@@ -78,6 +81,7 @@ async function main() {
         name: 'IDOR Peer',
         email: peerEmail,
         password: 'PeerPass123!',
+        consents: { ACCOUNT_TERMS: true, PRIVACY_POLICY: true },
       }),
     }).then(json);
     peerToken = alt.token;
@@ -128,7 +132,7 @@ async function main() {
       headers: peerH,
       body: JSON.stringify({ dataUrl: 'data:text/plain;base64,dGVzdA==', category: 'other' }),
     }).then(json);
-    ok('peer blocked from property document upload', docPeer.status === 404, `status=${docPeer.status}`);
+    ok('peer blocked from property document upload', docPeer.status === 404 || docPeer.status === 403, `status=${docPeer.status}`);
   } else {
     ok('property IDOR checks skipped (no property)', true);
   }
@@ -147,6 +151,7 @@ async function main() {
       city: 'Brooklyn',
       state: 'NY',
       zip: '11201',
+      consents: { ACCOUNT_TERMS: true, PRIVACY_POLICY: true },
     }),
   }).then(json);
   ok(
@@ -169,6 +174,7 @@ async function main() {
       city: 'Brooklyn',
       state: 'NY',
       zip: '11201',
+      consents: { ACCOUNT_TERMS: true, PRIVACY_POLICY: true },
     }),
   }).then(json);
   ok('guest new account creates session', guestNew.ok && guestNew.token, guestNew.message);
