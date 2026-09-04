@@ -92,13 +92,31 @@ export async function autocompleteAddress({ text, limit = DEFAULT_LIMIT, signal 
 
   let res;
   try {
+    const timeoutMs = Number(process.env.GEOAPIFY_TIMEOUT_MS || 8000);
+    const timeoutSignal =
+      typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+        ? AbortSignal.timeout(timeoutMs)
+        : null;
+    const combined =
+      signal && timeoutSignal && typeof AbortSignal.any === 'function'
+        ? AbortSignal.any([signal, timeoutSignal])
+        : signal || timeoutSignal || undefined;
     res = await fetch(`${GEOAPIFY_AUTOCOMPLETE_URL}?${params.toString()}`, {
       method: 'GET',
       headers: { Accept: 'application/json' },
-      signal,
+      signal: combined,
     });
   } catch (e) {
-    if (e?.name === 'AbortError') throw e;
+    if (e?.name === 'AbortError') {
+      if (signal?.aborted) throw e;
+      return {
+        ok: false,
+        configured: true,
+        code: 'GEOAPIFY_TIMEOUT',
+        message: 'Address suggestions are temporarily unavailable. You can continue entering the address manually.',
+        suggestions: [],
+      };
+    }
     return {
       ok: false,
       configured: true,

@@ -109,6 +109,16 @@ async function main() {
   const unauth = await jsonFetch('/api/address/autocomplete?q=131%20Continental');
   record('Autocomplete requires auth', unauth.status === 401 || unauth.status === 403, `status=${unauth.status}`);
 
+  const pub = await jsonFetch('/api/public/address/autocomplete?q=131%20Continental&limit=5');
+  record(
+    'Public autocomplete available',
+    pub.status === 200 && Array.isArray(pub.data?.suggestions),
+    `status=${pub.status} n=${(pub.data?.suggestions || []).length}`
+  );
+  record(
+    'Public response does not expose API key',
+    !JSON.stringify(pub.data || {}).includes('apiKey') && !/GEOAPIFY_API_KEY/.test(JSON.stringify(pub.data || {}))
+  );
   const token = await getToken();
   if (!token) {
     record('Authenticated autocomplete', false, 'no smoke credentials');

@@ -53,6 +53,7 @@ export function AddressAutocomplete({
     const q = value.trim();
     if (disabled || q.length < MIN_CHARS) {
       abortRef.current?.abort();
+      abortRef.current = null;
       setSuggestions([]);
       setLoading(false);
       setHint(null);
@@ -93,7 +94,11 @@ export function AddressAutocomplete({
           setActiveIndex(-1);
         })
         .catch((err) => {
-          if (err?.name === "AbortError" || seq !== reqSeq.current) return;
+          if (seq !== reqSeq.current) return;
+          if (err?.name === "AbortError") {
+            // A newer request owns loading state.
+            return;
+          }
           setLoading(false);
           setSearched(true);
           setSuggestions([]);
@@ -112,6 +117,7 @@ export function AddressAutocomplete({
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      abortRef.current = null;
     };
   }, []);
 
@@ -181,7 +187,7 @@ export function AddressAutocomplete({
         <div
           id={listId}
           role="listbox"
-          className="absolute z-50 mt-1 max-h-64 w-full overflow-hidden rounded-lg border border-border bg-popover shadow-lg"
+          className="absolute z-[80] mt-1 max-h-64 w-full overflow-hidden rounded-lg border border-border bg-popover shadow-lg"
         >
           {loading ? (
             <p className="px-3 py-2 text-xs text-muted-foreground">Searching addresses…</p>

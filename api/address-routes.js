@@ -44,7 +44,7 @@ export function registerAddressRoutes(app, { requireAuth }) {
    * Geoapify autocomplete proxy — US filter by default.
    * Never returns the API key. Soft-fails so clients can keep typing manually.
    */
-  app.get('/api/address/autocomplete', requireAuth, addressLimiter, async (req, res) => {
+  async function handleAutocomplete(req, res) {
     try {
       const q = String(req.query?.q || req.query?.text || '').trim();
       const limit = Number(req.query?.limit) || 6;
@@ -72,7 +72,11 @@ export function registerAddressRoutes(app, { requireAuth }) {
         message: 'Address suggestions are temporarily unavailable. You can continue entering the address manually.',
       });
     }
-  });
+  }
+
+  app.get('/api/address/autocomplete', requireAuth, addressLimiter, handleAutocomplete);
+  // Guest / pre-auth flows (report signup) — same proxy, stricter rate limit window applies.
+  app.get('/api/public/address/autocomplete', addressLimiter, handleAutocomplete);
 
   // Former verification / USPS-style endpoints — gone.
   app.post('/api/address/verify', requireAuth, (_req, res) => {

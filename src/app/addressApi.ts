@@ -77,10 +77,13 @@ export async function fetchAddressAutocomplete(
     q: q.trim(),
     limit: String(opts?.limit ?? 6),
   });
+  const path = token
+    ? `/api/address/autocomplete?${params}`
+    : `/api/public/address/autocomplete?${params}`;
   try {
     const headers: Record<string, string> = { Accept: "application/json" };
     if (token) headers.Authorization = `Bearer ${token}`;
-    const res = await fetch(`/api/address/autocomplete?${params}`, {
+    const res = await fetch(path, {
       method: "GET",
       headers,
       signal: opts?.signal,

@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 import path from 'path'
 import { execSync } from 'child_process'
 import tailwindcss from '@tailwindcss/vite'
@@ -60,27 +60,39 @@ function figmaAssetsResolver(): Plugin {
   }
 }
 
-export default defineConfig({
-  plugins: [react(), tailwindcss(), figmaAssetsResolver(), removeVersionSpecifiers(), injectSiteMeta()],
-  define: {
-    __FIXBRIDGE_BUILD__: JSON.stringify(BUILD_STAMP),
-  },
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
+function resolveApiProxyTarget(env: Record<string, string>): string {
+  const fromUrl = String(env.API_BASE_URL || env.API_BASE || '').trim().replace(/\/$/, '')
+  if (fromUrl) return fromUrl
+  const port = String(env.API_PORT || '3001').trim() || '3001'
+  return `http://127.0.0.1:${port}`
+}
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+  const apiProxyTarget = resolveApiProxyTarget(env)
+
+  return {
+    plugins: [react(), tailwindcss(), figmaAssetsResolver(), removeVersionSpecifiers(), injectSiteMeta()],
+    define: {
+      __FIXBRIDGE_BUILD__: JSON.stringify(BUILD_STAMP),
     },
-  },
-  assetsInclude: ['**/*.svg', '**/*.csv'],
-  server: {
-    host: '0.0.0.0',
-    port: 5000,
-    strictPort: true,
-    allowedHosts: true,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:3001',
-        changeOrigin: true,
+    resolve: {
+      alias: {
+        '@': path.resolve(__dirname, './src'),
       },
     },
-  },
+    assetsInclude: ['**/*.svg', '**/*.csv'],
+    server: {
+      host: '0.0.0.0',
+      port: 5000,
+      strictPort: true,
+      allowedHosts: true,
+      proxy: {
+        '/api': {
+          target: apiProxyTarget,
+          changeOrigin: true,
+        },
+      },
+    },
+  }
 })

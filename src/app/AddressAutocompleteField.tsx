@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, MapPin, Pencil } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { checkServiceAreaCoverage } from "./addressApi";
-import { placesAutocomplete, reverseGeocode } from "./platformApi";
+import { VerifiedAddressFields } from "./VerifiedAddressInput";
 import { isValidUsZip, normalizeZip } from "./zipCode";
 import { useAuthSurfaceStyles } from "./authSurfaceStyles";
 
 type Props = {
   idPrefix?: string;
+  /** Kept for call-site compatibility; Geoapify proxy uses auth when a token is present. */
   requireAuth?: boolean;
   streetAddress: string;
   unit: string;
@@ -22,9 +22,12 @@ type Props = {
   onCoverageChange?: (covered: boolean | null, message?: string) => void;
 };
 
+/**
+ * Legacy wrapper around Geoapify-backed VerifiedAddressFields.
+ * Kept so guest/login/report call sites get the same autocomplete as Add New Address.
+ */
 export default function AddressAutocompleteField({
   idPrefix = "addr",
-  requireAuth = true,
   streetAddress,
   unit,
   city,
@@ -38,20 +41,9 @@ export default function AddressAutocompleteField({
   onGeoChange,
   onCoverageChange,
 }: Props) {
-  const [query, setQuery] = useState(streetAddress);
-  const [suggestions, setSuggestions] = useState<Array<{ description: string; place_id?: string }>>([]);
-  const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [manualMode, setManualMode] = useState(false);
+  const s = useAuthSurfaceStyles();
   const [coverageMsg, setCoverageMsg] = useState<string | null>(null);
   const [coverageOk, setCoverageOk] = useState<boolean | null>(null);
-  const debounceRef = useRef<number | null>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const s = useAuthSurfaceStyles();
-
-  useEffect(() => {
-    setQuery(streetAddress);
-  }, [streetAddress]);
 
   const runCoverageCheck = useCallback(
     async (zipCode: string) => {
@@ -73,149 +65,32 @@ export default function AddressAutocompleteField({
     if (zip && isValidUsZip(zip)) void runCoverageCheck(zip);
   }, [zip, runCoverageCheck]);
 
-  useEffect(() => {
-    function onDocClick(e: MouseEvent) {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, []);
-
-  async function pickSuggestion(description: string) {
-    setOpen(false);
-    setQuery(description);
-    setLoading(true);
-    try {
-      const geo = await reverseGeocode(description, undefined, undefined, { public: !requireAuth });
-      if (!geo.ok) {
-        onStreetAddressChange(description);
-        setManualMode(true);
-        return;
-      }
-      const street = geo.streetAddress || description.split(",")[0]?.trim() || description;
-      onStreetAddressChange(street);
-      if (geo.city) onCityChange(geo.city);
-      if (geo.state) onStateChange(geo.state);
-      if (geo.zip) onZipChange(normalizeZip(geo.zip));
-      onGeoChange?.({ lat: geo.lat ?? null, lng: geo.lng ?? null, county: geo.county || "" });
-      if (geo.zip) await runCoverageCheck(geo.zip);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function onQueryChange(value: string) {
-    setQuery(value);
-    onStreetAddressChange(value);
-    if (manualMode) return;
-    if (debounceRef.current) window.clearTimeout(debounceRef.current);
-    if (value.trim().length < 3) {
-      setSuggestions([]);
-      return;
-    }
-    debounceRef.current = window.setTimeout(async () => {
-      const r = await placesAutocomplete(value.trim(), { public: !requireAuth });
-      if (r.ok && r.predictions?.length) {
-        setSuggestions(r.predictions);
-        setOpen(true);
-      } else {
-        setSuggestions([]);
-      }
-    }, 280);
-  }
-
   return (
-    <div className="space-y-3" ref={wrapRef}>
-      <div>
-        <label htmlFor={`${idPrefix}-street`} className={`text-xs font-semibold ${s.muted}`}>
-          Start typing your address
-        </label>
-        <div className="relative mt-1">
-          <MapPin className={`pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 ${s.muted}`} />
-          <input
-            id={`${idPrefix}-street`}
-            type="text"
-            autoComplete="street-address"
-            placeholder="123 Main St, Austin"
-            value={query}
-            onChange={(e) => onQueryChange(e.target.value)}
-            onFocus={() => suggestions.length > 0 && setOpen(true)}
-            className={`${s.fieldControl} py-2.5 pl-9 pr-10`}
-          />
-          {loading ? (
-            <Loader2 className={`absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin ${s.muted}`} />
-          ) : null}
-          {open && suggestions.length > 0 ? (
-            <ul
-              className={`absolute z-20 mt-1 max-h-48 w-full overflow-auto rounded-xl border py-1 shadow-lg ${
-                s.dark ? "border-white/20 bg-[#132a52] text-white" : "border-border bg-card"
-              }`}
-            >
-              {suggestions.map((suggestion) => (
-                <li key={suggestion.place_id || suggestion.description}>
-                  <button
-                    type="button"
-                    className={`w-full px-3 py-2 text-left text-sm ${s.dark ? "hover:bg-white/10" : "hover:bg-muted"}`}
-                    onClick={() => void pickSuggestion(suggestion.description)}
-                  >
-                    {suggestion.description}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-        <button
-          type="button"
-          onClick={() => setManualMode((m) => !m)}
-          className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
-        >
-          <Pencil className="h-3 w-3" />
-          {manualMode ? "Use address suggestions" : "Enter address manually"}
-        </button>
-      </div>
-
-      <label className="grid gap-1 text-sm">
-        <span className={`text-xs font-semibold ${s.muted}`}>Unit / Apartment</span>
-        <input
-          type="text"
-          autoComplete="address-line2"
-          placeholder="Apt 4B, Suite 200…"
-          value={unit}
-          onChange={(e) => onUnitChange(e.target.value)}
-          className={s.fieldControl}
-        />
-      </label>
-
-      {manualMode ? (
-        <div className="grid gap-3 sm:grid-cols-3">
-          <label className="grid gap-1 text-sm sm:col-span-1">
-            <span className={`text-xs font-semibold ${s.muted}`}>City</span>
-            <input value={city} onChange={(e) => onCityChange(e.target.value)} className={s.fieldControl} />
-          </label>
-          <label className="grid gap-1 text-sm">
-            <span className={`text-xs font-semibold ${s.muted}`}>State</span>
-            <input
-              value={state}
-              onChange={(e) => onStateChange(e.target.value.toUpperCase().slice(0, 2))}
-              maxLength={2}
-              className={`${s.fieldControl} uppercase`}
-            />
-          </label>
-          <label className="grid gap-1 text-sm">
-            <span className={`text-xs font-semibold ${s.muted}`}>ZIP</span>
-            <input
-              value={zip}
-              onChange={(e) => {
-                const v = normalizeZip(e.target.value);
-                onZipChange(v);
-                if (isValidUsZip(v)) void runCoverageCheck(v);
-              }}
-              className={s.fieldControl}
-            />
-          </label>
-        </div>
-      ) : null}
+    <div className="space-y-3">
+      <VerifiedAddressFields
+        idPrefix={idPrefix}
+        addressLine1={streetAddress}
+        addressLine2={unit}
+        city={city}
+        state={state}
+        zip={zip}
+        onAddressLine1Change={onStreetAddressChange}
+        onAddressLine2Change={onUnitChange}
+        onCityChange={onCityChange}
+        onStateChange={onStateChange}
+        onZipChange={(v) => {
+          const next = normalizeZip(v);
+          onZipChange(next);
+          if (isValidUsZip(next)) void runCoverageCheck(next);
+        }}
+        onVerificationChange={(meta) => {
+          onGeoChange?.({
+            lat: meta.latitude ?? null,
+            lng: meta.longitude ?? null,
+            county: "",
+          });
+        }}
+      />
 
       {coverageOk === true ? (
         <p className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-800 dark:text-emerald-300">
@@ -223,9 +98,8 @@ export default function AddressAutocompleteField({
         </p>
       ) : null}
       {coverageOk === false ? (
-        <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
-          {coverageMsg ||
-            "We'll confirm service availability for your ZIP before dispatch."}
+        <p className={`rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs ${s.dark ? "text-amber-200" : "text-amber-900"}`}>
+          {coverageMsg || "We'll confirm service availability for your ZIP before dispatch."}
         </p>
       ) : null}
     </div>

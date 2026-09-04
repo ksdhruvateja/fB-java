@@ -130,7 +130,6 @@ import { useAcknowledgmentGate } from "./useAcknowledgmentGate";
 import HomeownerLocalEstimate, { EstimateLoadingSteps } from "./HomeownerLocalEstimate";
 import HireProfessionalWizard from "./HireProfessionalWizard";
 import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
-import AddressAutocompleteField from "./AddressAutocompleteField";
 import { VerifiedAddressFields, type AddressVerificationMeta } from "./VerifiedAddressInput";
 import { normalizeUsStateCode } from "./UsLocationFields";
 import { isAddressComplete } from "./addressFormat";
@@ -1106,6 +1105,12 @@ export default function HomeownerDashboard({
  setModalCity("");
  setModalState("");
  setModalZip("");
+ setModalAddressVerification({
+ status: "unverified",
+ addressVerified: false,
+ provider: null,
+ postalCodePlus4: null,
+ });
  }
 
  async function handleSaveAddressAndProceed() {
@@ -4363,7 +4368,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  initial={{ opacity: 0, scale: 0.95 }}
  animate={{ opacity: 1, scale: 1 }}
  exit={{ opacity: 0, scale: 0.95 }}
- className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl space-y-4 text-sm"
+ className="relative z-[60] w-full max-w-md overflow-visible rounded-xl border border-border bg-card p-6 shadow-2xl space-y-4 text-sm"
  >
  <div className="flex items-center justify-between border-b border-border/60 pb-3">
  <h3 className="text-lg font-bold tracking-wide text-foreground">Add New Address</h3>
@@ -4380,20 +4385,20 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  Add your property address details and ZIP code to retrieve exact regional info and matching providers.
  </p>
 
- <div className="space-y-3">
- <AddressAutocompleteField
+ <div className="relative z-[60] space-y-3 overflow-visible">
+ <VerifiedAddressFields
  idPrefix="add-address"
- requireAuth
- streetAddress={modalAddressLine1}
- unit={modalAddressLine2}
+ addressLine1={modalAddressLine1}
+ addressLine2={modalAddressLine2}
  city={modalCity}
  state={modalState}
  zip={modalZip}
- onStreetAddressChange={setModalAddressLine1}
- onUnitChange={setModalAddressLine2}
+ onAddressLine1Change={setModalAddressLine1}
+ onAddressLine2Change={setModalAddressLine2}
  onCityChange={setModalCity}
  onStateChange={setModalState}
  onZipChange={setModalZip}
+ onVerificationChange={setModalAddressVerification}
  />
  </div>
 
