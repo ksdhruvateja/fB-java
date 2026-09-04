@@ -2,7 +2,7 @@
  * Security smoke: IDOR + guest account hardening + partner auth.
  * Usage: node --env-file=.env scripts/smoke-security-idor.mjs
  */
-import { loginAdminWithMfa } from './smoke-auth.mjs';
+import { loginAdminWithMfa, loginHomeowner } from './smoke-auth.mjs';
 import { resolveSmokeApiBase } from './smoke-api-base.mjs';
 
 const API = resolveSmokeApiBase();
@@ -34,12 +34,17 @@ async function login(role, email, password) {
 async function main() {
   console.log(`\nFixBridge security IDOR smoke @ ${API}\n`);
 
-  const maria = await login('homeowner', 'maria@example.com', 'demo123');
+  const maria = await loginHomeowner();
+  const homeownerEmail =
+    process.env.SMOKE_HOMEOWNER_EMAIL ||
+    process.env.TEST_HOMEOWNER_EMAIL ||
+    maria.user?.email ||
+    maria.email;
   const admin = await loginAdminWithMfa();
   const homeH = { Authorization: `Bearer ${maria.token}`, 'Content-Type': 'application/json' };
   const adminH = { Authorization: `Bearer ${admin.token}`, 'Content-Type': 'application/json' };
 
-  // Create a job as Maria so we have a known id, then probe as unauthorized peer.
+  // Create a job as the keep homeowner so we have a known id, then probe as unauthorized peer.
   const created = await fetch(`${API}/api/managed/jobs`, {
     method: 'POST',
     headers: homeH,
@@ -47,7 +52,7 @@ async function main() {
       category: 'Plumbing',
       title: 'IDOR probe job',
       description: 'Security smoke job for ownership checks.',
-      contactName: 'Maria Santos',
+      contactName: 'Test Homeowner',
       contactPhone: '555-0100',
       fullAddress: '12 Oak St',
       cityStateZip: 'Brooklyn, NY 11201',
@@ -143,8 +148,8 @@ async function main() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      email: 'maria@example.com',
-      contactName: 'Maria',
+      email: homeownerEmail,
+      contactName: 'Test Homeowner',
       contactPhone: '555-0100',
       category: 'Plumbing',
       description: 'Should require sign-in for existing account',

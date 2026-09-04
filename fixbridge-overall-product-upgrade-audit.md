@@ -134,7 +134,7 @@ No open P0 blockers identified in code review and targeted smoke runs.
 | Dependency | Impact |
 |------------|--------|
 | Stripe Connect onboarding | Contractors need live Connect accounts for real payouts |
-| USPS OAuth credentials | Address verify in non-dev environments |
+| Address entry | Manual fields + basic format/ZIP validation (external USPS verification intentionally removed) |
 | Twilio / SMS provider | SMS notifications remain stubbed |
 | Production Neon + Netlify env | Standard deployment configuration |
 
@@ -209,7 +209,7 @@ All via `api/schema-managed.js` on startup — no Neon reset:
 
 **Go** for controlled beta when:
 
-- Stripe Connect and USPS are configured in target environment
+- Stripe Connect is configured in target environment (USPS verification intentionally removed — not required)
 - Ops team uses admin work queue + manual dispatch (no auto-dispatch)
 - Additional Insured remains optional (`REQUIRE_FIXBRIDGE_ADDITIONAL_INSURED=false`)
 - Disputes handled via admin/support until homeowner dispute UI ships

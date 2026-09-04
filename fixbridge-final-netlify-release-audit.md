@@ -151,8 +151,9 @@ None for technical deployment.
 
 ## P2 / OPTIONAL
 1. Playwright `smoke:mobile` not run (browser install).
-2. USPS live OAuth not verified in this session.
-3. Vite chunk size warning (>500 kB) — performance only.
+2. Vite chunk size warning (>500 kB) — performance only.
+
+Note: USPS address verification was intentionally removed from the product and is no longer a dependency or launch item.
 
 ---
 

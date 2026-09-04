@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, Search } from "lucide-react";
 import { US_STATES } from "./contractorApplication";
+import { AddressAutocomplete } from "./AddressAutocomplete";
 
 export { US_STATES };
 
@@ -105,18 +106,7 @@ export function citiesForState(stateCode: string, query = "") {
 export async function lookupZipUs(zip: string): Promise<{ city: string; state: string } | null> {
   const key = zip.replace(/\D/g, "").slice(0, 5);
   if (key.length !== 5) return null;
-  try {
-    const { lookupCityStateFromApi } = await import("./addressApi");
-    const { getStoredToken } = await import("./auth");
-    if (getStoredToken()) {
-      const usps = await lookupCityStateFromApi(key);
-      if (usps.ok && usps.city && usps.state) {
-        return { city: usps.city, state: usps.state };
-      }
-    }
-  } catch {
-    /* fall through to public fallback */
-  }
+  // Public ZIP→city/state hint only (not address verification).
   try {
     const res = await fetch(`https://api.zippopotam.us/us/${key}`);
     if (!res.ok) return null;
@@ -250,7 +240,14 @@ export function SearchableSelect({
   );
 }
 
-/** Full structured US address: Line 1 *, Line 2, City *, State *, ZIP *. */
+export type StructuredAddressSuggestionMeta = {
+  postalCodePlus4?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  placeId?: string | null;
+};
+
+/** Full structured US address: Line 1 (autocomplete) *, Line 2, City *, State *, ZIP *. */
 export function StructuredAddressFields({
   addressLine1,
   addressLine2 = "",
@@ -262,6 +259,7 @@ export function StructuredAddressFields({
   onCityChange,
   onStateChange,
   onZipChange,
+  onSuggestionMeta,
   disabled,
   zipRequired = true,
   idPrefix = "addr",
@@ -276,6 +274,8 @@ export function StructuredAddressFields({
   onCityChange: (v: string) => void;
   onStateChange: (v: string) => void;
   onZipChange: (v: string) => void;
+  /** Optional coords / plus4 from autocomplete selection (never a save gate). */
+  onSuggestionMeta?: (meta: StructuredAddressSuggestionMeta) => void;
   disabled?: boolean;
   zipRequired?: boolean;
   idPrefix?: string;
@@ -286,21 +286,31 @@ export function StructuredAddressFields({
         <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Address Line 1 <span className="text-red-500">*</span>
         </span>
-        <input
+        <AddressAutocomplete
           id={`${idPrefix}-line1`}
-          type="text"
           required
           disabled={disabled}
-          placeholder="e.g. 123 Main Street"
-          className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#FF4D1C] text-foreground"
+          placeholder="Start typing your address…"
           value={addressLine1}
-          onChange={(e) => onAddressLine1Change(e.target.value)}
-          autoComplete="address-line1"
+          onChange={onAddressLine1Change}
+          onSelect={(s) => {
+            onAddressLine1Change(s.addressLine1 || s.primary || "");
+            if (s.city) onCityChange(s.city);
+            if (s.state) onStateChange(normalizeUsStateCode(s.state));
+            if (s.zip) onZipChange(s.zip);
+            // Leave Address Line 2 for apartment/suite — do not fill from Geoapify address_line2.
+            onSuggestionMeta?.({
+              postalCodePlus4: s.postalCodePlus4 ?? null,
+              latitude: s.latitude ?? null,
+              longitude: s.longitude ?? null,
+              placeId: s.placeId ?? null,
+            });
+          }}
         />
       </label>
       <label className="grid gap-1.5" htmlFor={`${idPrefix}-line2`}>
         <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Address Line 2
+          Apartment / Suite / Unit
         </span>
         <input
           id={`${idPrefix}-line2`}

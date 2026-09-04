@@ -337,9 +337,6 @@ export default function AdminHomeownerProfile({
                 <div>
                   <p className="text-xs font-semibold uppercase text-muted-foreground">{a.isPrimary ? "Primary Property" : a.label}</p>
                   {formatAddressLines(a).map((line) => <p key={line} className="text-sm">{line}</p>)}
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {a.addressVerified ? "USPS verified ✓" : "Address not verified"}
-                  </p>
                   <p className="text-xs text-muted-foreground mt-2">Active jobs: {active} · Previous: {prev}</p>
                 </div>
                 {onOpenProperty ? (

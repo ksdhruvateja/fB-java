@@ -1,5 +1,13 @@
 # FIXBRIDGE USPS ADDRESS INTEGRATION
 
+> **STATUS (current product):** USPS address verification has been **intentionally removed** from FixBridge.
+> There is no active USPS API/OAuth dependency, no `smoke:usps-address` suite, and no USPS health/env requirement.
+> Address entry is manual fields + basic format/ZIP validation only. Historic DB columns (`address_verified*`) are left unused.
+>
+> The sections below are **historical** documentation of the former integration.
+
+---
+
 ## Specification
 
 **USPS YAML inspected:** YES  

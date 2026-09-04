@@ -59,8 +59,15 @@ async function createJob(h) {
 }
 
 async function countAiAcks(h, jobId) {
-  const adminEmail = process.env.PRIMARY_ADMIN_EMAIL || 'admin@fixbridge.com';
-  const adminPass = process.env.PRIMARY_ADMIN_PASSWORD || process.env.SMOKE_ADMIN_PASSWORD;
+  const adminEmail =
+    process.env.SMOKE_ADMIN_EMAIL ||
+    process.env.TEST_ADMIN_EMAIL ||
+    process.env.PRIMARY_ADMIN_EMAIL ||
+    'admin@fixbridge.us';
+  const adminPass =
+    process.env.SMOKE_ADMIN_PASSWORD ||
+    process.env.TEST_ADMIN_PASSWORD ||
+    process.env.PRIMARY_ADMIN_PASSWORD;
   if (!adminPass) return null;
   const admin = await fetch(`${API}/api/auth/signin`, {
     method: 'POST',
@@ -80,8 +87,12 @@ async function countAiAcks(h, jobId) {
 async function main() {
   console.log(`\nFixBridge AI assessment acknowledgment @ ${API}\n`);
 
-  const homeEmail = process.env.SMOKE_HOMEOWNER_EMAIL || 'maria@example.com';
-  const homePass = process.env.SMOKE_HOMEOWNER_PASSWORD || 'demo123';
+  const homeEmail = process.env.SMOKE_HOMEOWNER_EMAIL || process.env.TEST_HOMEOWNER_EMAIL;
+  const homePass = process.env.SMOKE_HOMEOWNER_PASSWORD || process.env.TEST_HOMEOWNER_PASSWORD;
+  if (!homeEmail || !homePass) {
+    console.error('Set SMOKE_HOMEOWNER_EMAIL/PASSWORD or TEST_HOMEOWNER_* in .env');
+    process.exit(1);
+  }
   const h = await login(homeEmail, homePass);
   if (!h) {
     console.error('Login failed');

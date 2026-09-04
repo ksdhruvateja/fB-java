@@ -22,12 +22,19 @@ function ok(label, cond, detail = '') {
 }
 
 async function login(role, email, password) {
-  const res = await fetch(`${API}/api/auth/signin`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role, email, password }),
-  }).then(parseJsonResponse);
-  return res.token ? { Authorization: `Bearer ${res.token}`, 'Content-Type': 'application/json' } : null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const res = await fetch(`${API}/api/auth/signin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role, email, password }),
+    }).then(parseJsonResponse);
+    if (res.status === 429) {
+      await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+      continue;
+    }
+    return res.token ? { Authorization: `Bearer ${res.token}`, 'Content-Type': 'application/json' } : null;
+  }
+  return null;
 }
 
 const TINY_PNG =
@@ -68,21 +75,28 @@ async function signupContractor(ts) {
 async function main() {
   console.log(`\nFixBridge in-app communications @ ${API}\n`);
 
-  const adminEmail = process.env.PRIMARY_ADMIN_EMAIL || 'admin@fixbridge.com';
-  const adminPass = process.env.PRIMARY_ADMIN_PASSWORD || process.env.SMOKE_ADMIN_PASSWORD;
-  const hoEmail = process.env.SMOKE_HOMEOWNER_EMAIL || 'maria@example.com';
-  const hoPass = process.env.SMOKE_HOMEOWNER_PASSWORD || 'demo123';
+  const adminEmail =
+    process.env.SMOKE_ADMIN_EMAIL ||
+    process.env.TEST_ADMIN_EMAIL ||
+    process.env.PRIMARY_ADMIN_EMAIL ||
+    'admin@fixbridge.us';
+  const adminPass =
+    process.env.SMOKE_ADMIN_PASSWORD ||
+    process.env.TEST_ADMIN_PASSWORD ||
+    process.env.PRIMARY_ADMIN_PASSWORD;
+  const hoEmail = process.env.SMOKE_HOMEOWNER_EMAIL || process.env.TEST_HOMEOWNER_EMAIL;
+  const hoPass = process.env.SMOKE_HOMEOWNER_PASSWORD || process.env.TEST_HOMEOWNER_PASSWORD;
 
-  const ho = await login('homeowner', hoEmail, hoPass);
+  const ho = hoEmail && hoPass ? await login('homeowner', hoEmail, hoPass) : null;
   const ctSignup = await signupContractor(stamp);
   const ct = ctSignup.signup?.token
     ? { Authorization: `Bearer ${ctSignup.signup.token}`, 'Content-Type': 'application/json' }
     : await login('contractor', ctSignup.email, ctSignup.password);
   const admin = adminPass ? await login('admin', adminEmail, adminPass) : null;
 
-  ok('homeowner login', Boolean(ho));
+  ok('homeowner login', Boolean(ho), hoEmail ? '' : 'set SMOKE_HOMEOWNER_EMAIL/PASSWORD');
   ok('contractor login', Boolean(ct));
-  ok('admin login', Boolean(admin), admin ? '' : 'set PRIMARY_ADMIN_PASSWORD');
+  ok('admin login', Boolean(admin), admin ? '' : 'set SMOKE_ADMIN_PASSWORD or TEST_ADMIN_PASSWORD');
 
   if (!ho || !ct || !admin) {
     console.log(`\n${passed} passed, ${failed} failed\n`);

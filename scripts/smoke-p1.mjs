@@ -78,10 +78,17 @@ async function main() {
     record('ZIP service-area matching', eligible.length === 1 && eligible[0].id === 1, `eligible=${eligible.map((c) => c.id).join(',')}`);
 
     // Quote expiry — isolated job with only expired proposal
+    const homeEmail = process.env.SMOKE_HOMEOWNER_EMAIL || process.env.TEST_HOMEOWNER_EMAIL;
+    const homePass = process.env.SMOKE_HOMEOWNER_PASSWORD || process.env.TEST_HOMEOWNER_PASSWORD;
+    if (!homeEmail || !homePass) {
+      record('Quote expiry login', false, 'set SMOKE_HOMEOWNER_EMAIL/PASSWORD');
+      printSummary();
+      return;
+    }
     const mariaLogin = await fetch(`${API}/api/auth/signin`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'homeowner', email: 'maria@example.com', password: 'demo123' }),
+      body: JSON.stringify({ role: 'homeowner', email: homeEmail, password: homePass }),
     }).then(json);
     const expJob = await fetch(`${API}/api/managed/jobs`, {
       method: 'POST',

@@ -31,31 +31,37 @@ function classifyFailure(res, label) {
 }
 
 async function login(role, email, password) {
-  const r = await fetch(`${API}/api/auth/signin`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role, email, password }),
-  }).then(json);
-  if (r.status === 429) {
-    throw new Error(`login 429 TEST_HARNESS_RATE_LIMIT_COLLISION: ${r.message || 'Too many requests'}`);
-  }
-  if (!r.ok || !r.token) throw new Error(`login failed: ${r.message}`);
-  if (role === 'admin') {
-    const mfaStart = await fetch(`${API}/api/auth/mfa/start`, {
+  let last = null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const r = await fetch(`${API}/api/auth/signin`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${r.token}`, 'Content-Type': 'application/json' },
-      body: '{}',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role, email, password }),
     }).then(json);
-    if (mfaStart.ok && mfaStart.demoCode) {
-      const mfaVerify = await fetch(`${API}/api/auth/mfa/verify`, {
+    last = r;
+    if (r.status === 429) {
+      await new Promise((res) => setTimeout(res, 1500 * (attempt + 1)));
+      continue;
+    }
+    if (!r.ok || !r.token) throw new Error(`login failed: ${r.message}`);
+    if (role === 'admin') {
+      const mfaStart = await fetch(`${API}/api/auth/mfa/start`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${r.token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: String(mfaStart.demoCode) }),
+        body: '{}',
       }).then(json);
-      if (mfaVerify.ok && mfaVerify.token) return { ...r, token: mfaVerify.token };
+      if (mfaStart.ok && mfaStart.demoCode) {
+        const mfaVerify = await fetch(`${API}/api/auth/mfa/verify`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${r.token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: String(mfaStart.demoCode) }),
+        }).then(json);
+        if (mfaVerify.ok && mfaVerify.token) return { ...r, token: mfaVerify.token };
+      }
     }
+    return r;
   }
-  return r;
+  throw new Error(`login 429 TEST_HARNESS_RATE_LIMIT_COLLISION: ${last?.message || 'Too many requests'}`);
 }
 
 function assertHitShape(hit, category) {
@@ -72,14 +78,30 @@ function assertHitShape(hit, category) {
 async function main() {
   console.log(`\nFixBridge universal search smoke @ ${API}\n`);
 
-  const admin = await login(
-    'admin',
-    process.env.SMOKE_ADMIN_EMAIL || 'admin@fixbridge.com',
-    process.env.SMOKE_ADMIN_PASSWORD || 'Fixbridge@9/26',
-  );
+  const adminEmail =
+    process.env.SMOKE_ADMIN_EMAIL || process.env.TEST_ADMIN_EMAIL || 'admin@fixbridge.us';
+  const adminPass =
+    process.env.SMOKE_ADMIN_PASSWORD ||
+    process.env.TEST_ADMIN_PASSWORD ||
+    process.env.PRIMARY_ADMIN_PASSWORD;
+  if (!adminPass) throw new Error('Set SMOKE_ADMIN_PASSWORD or TEST_ADMIN_PASSWORD in .env');
+  const admin = await login('admin', adminEmail, adminPass);
   const h = { Authorization: `Bearer ${admin.token}` };
 
-  const anon = await fetch(`${API}/api/admin/search?q=maria`).then(json);
+  const homeownerEmail =
+    process.env.SMOKE_HOMEOWNER_EMAIL || process.env.TEST_HOMEOWNER_EMAIL || '';
+  const homeownerPass =
+    process.env.SMOKE_HOMEOWNER_PASSWORD || process.env.TEST_HOMEOWNER_PASSWORD || '';
+  const contractorEmail =
+    process.env.SMOKE_CONTRACTOR_EMAIL || process.env.TEST_CONTRACTOR_EMAIL || '';
+  const homeownerQuery = homeownerEmail.includes('@')
+    ? homeownerEmail.split('@')[0]
+    : 'bossdhruva1';
+  const contractorQuery = contractorEmail.includes('@')
+    ? contractorEmail.split('@')[0]
+    : 'ksdt2702';
+
+  const anon = await fetch(`${API}/api/admin/search?q=${encodeURIComponent(homeownerQuery)}`).then(json);
   ok('anonymous request blocked', anon.status === 401 || anon.status === 403, `status=${anon.status}`);
 
   const short = await fetch(`${API}/api/admin/search?q=a`, { headers: h }).then(json);
@@ -98,8 +120,8 @@ async function main() {
 
   // One login each — reuse tokens. Small high-value deterministic queries only.
   const queries = [
-    { q: 'maria', category: 'homeowners', label: 'known homeowner' },
-    { q: 'james', category: 'contractors', label: 'known contractor' },
+    { q: homeownerQuery, category: 'homeowners', label: 'known homeowner' },
+    { q: contractorQuery, category: 'contractors', label: 'known contractor' },
   ];
 
   let sampleJobId = null;
@@ -146,11 +168,10 @@ async function main() {
     }
   }
 
-  const homeownerLogin = await login(
-    'homeowner',
-    process.env.SMOKE_HOMEOWNER_EMAIL || 'maria@example.com',
-    process.env.SMOKE_HOMEOWNER_PASSWORD || 'demo123',
-  );
+  if (!homeownerEmail || !homeownerPass) {
+    throw new Error('Set SMOKE_HOMEOWNER_EMAIL/PASSWORD or TEST_HOMEOWNER_* in .env');
+  }
+  const homeownerLogin = await login('homeowner', homeownerEmail, homeownerPass);
   const idor = await fetch(`${API}/api/admin/search?q=test`, {
     headers: { Authorization: `Bearer ${homeownerLogin.token}` },
   }).then(json);

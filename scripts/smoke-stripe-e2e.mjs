@@ -2,10 +2,12 @@
  * Stripe test-mode E2E: $500 service + $50 tip = $550 via webhook settlement.
  * Usage: node --env-file=.env scripts/smoke-stripe-e2e.mjs
  */
+import { resolveSmokeApiBase } from './smoke-api-base.mjs';
+import { loginHomeowner, loginAdminWithMfa } from './smoke-auth.mjs';
 import pg from 'pg';
 import Stripe from 'stripe';
 
-const API = process.env.API_BASE || 'http://127.0.0.1:3001';
+const API = resolveSmokeApiBase();
 const DATABASE_URL = process.env.DATABASE_URL || process.env.NEON_DATABASE_URL;
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY?.trim();
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET?.trim();
@@ -40,23 +42,6 @@ async function login(role, email, password) {
   return r;
 }
 
-async function loginAdminWithMfa() {
-  const admin = await login('admin', 'ksdt2702@gmail.com', 'admin123');
-  const mfaStart = await fetch(`${API}/api/auth/mfa/start`, {
-    method: 'POST',
-    headers: authH(admin.token),
-    body: JSON.stringify({}),
-  }).then(json);
-  if (!mfaStart.ok || !mfaStart.demoCode) return admin;
-  await new Promise((r) => setTimeout(r, 200));
-  const mfaVerify = await fetch(`${API}/api/auth/mfa/verify`, {
-    method: 'POST',
-    headers: authH(admin.token),
-    body: JSON.stringify({ code: String(mfaStart.demoCode) }),
-  }).then(json);
-  if (mfaVerify.ok && mfaVerify.token) return { ...admin, token: mfaVerify.token };
-  return admin;
-}
 
 function buildCheckoutCompletedEvent(session) {
   return {
@@ -100,15 +85,19 @@ async function main() {
     });
   }
 
-  const maria = await login('homeowner', 'maria@example.com', 'demo123').catch((e) => {
+  const homeownerEmail =
+    process.env.SMOKE_HOMEOWNER_EMAIL || process.env.TEST_HOMEOWNER_EMAIL || '';
+  const contractorEmail =
+    process.env.SMOKE_CONTRACTOR_EMAIL || process.env.TEST_CONTRACTOR_EMAIL || '';
+  const homeowner = await loginHomeowner().catch((e) => {
     record('Homeowner login', false, e.message);
     return null;
   });
-  if (!maria) return printSummary();
+  if (!homeowner) return printSummary();
 
   record('Homeowner login', true);
 
-  const homeH = authH(maria.token);
+  const homeH = authH(homeowner.token);
 
   // Create job + invoice $500
   const jobRes = await fetch(`${API}/api/managed/jobs`, {
@@ -118,7 +107,7 @@ async function main() {
       category: 'Plumbing',
       title: 'P1 Stripe E2E',
       description: 'Invoice tip test',
-      contactName: 'Maria Santos',
+      contactName: 'Smoke Homeowner',
       contactPhone: '555-0100',
       fullAddress: '12 Oak St',
       cityStateZip: 'Brooklyn, NY 11201',
@@ -127,9 +116,11 @@ async function main() {
   }).then(json);
   record('Create job', jobRes.ok && jobRes.job?.id, jobRes.message);
   const jobId = jobRes.job?.id;
-  let homeownerId = Number(maria.user?.id);
-  if (!homeownerId && pool) {
-    const { rows: urows } = await pool.query(`SELECT id FROM users WHERE email='maria@example.com' LIMIT 1`);
+  let homeownerId = Number(homeowner.user?.id);
+  if (!homeownerId && pool && homeownerEmail) {
+    const { rows: urows } = await pool.query(`SELECT id FROM users WHERE email=$1 LIMIT 1`, [
+      homeownerEmail,
+    ]);
     homeownerId = Number(urows[0]?.id);
   }
   record('Resolve homeowner id', Boolean(homeownerId), String(homeownerId));
@@ -138,19 +129,30 @@ async function main() {
     return;
   }
 
-  await pool.query(
-    `UPDATE managed_jobs SET assigned_contractor_user_id=(SELECT id FROM users WHERE email='james@yourcompany.com' LIMIT 1), status='payout_pending', zip='11201', homeowner_user_id=$2 WHERE id=$1`,
-    [jobId, homeownerId]
-  );
+  if (contractorEmail) {
+    await pool.query(
+      `UPDATE managed_jobs SET assigned_contractor_user_id=(SELECT id FROM users WHERE email=$3 LIMIT 1), status='payout_pending', zip='11201', homeowner_user_id=$2 WHERE id=$1`,
+      [jobId, homeownerId, contractorEmail]
+    );
+  } else {
+    await pool.query(
+      `UPDATE managed_jobs SET status='payout_pending', zip='11201', homeowner_user_id=$2 WHERE id=$1`,
+      [jobId, homeownerId]
+    );
+  }
 
   const invNum = `FBI-E2E-${jobId}`;
+  const billTo = JSON.stringify({
+    email: homeownerEmail || 'homeowner@example.com',
+    name: 'Smoke Homeowner',
+  });
   await pool.query(`DELETE FROM homeowner_invoices WHERE job_id=$1`, [jobId]);
   await pool.query(
     `INSERT INTO homeowner_invoices (
        job_id, homeowner_user_id, invoice_number, status, subtotal, total, amount_due, paid,
        line_items, bill_to
-     ) VALUES ($1,$2,$3,'due',500,500,500,0,'[]','{"email":"maria@example.com","name":"Maria Santos"}')`,
-    [jobId, homeownerId, invNum]
+     ) VALUES ($1,$2,$3,'due',500,500,500,0,'[]',$4::jsonb)`,
+    [jobId, homeownerId, invNum, billTo]
   ).catch(async () => {
     await pool.query(
       `UPDATE homeowner_invoices SET status='due', total=500, amount_due=500, paid=0 WHERE invoice_number=$1`,

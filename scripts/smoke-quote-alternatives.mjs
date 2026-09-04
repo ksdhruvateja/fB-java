@@ -33,47 +33,58 @@ function letterOf(o) {
 }
 
 async function login(role, email, password) {
-  const r = await fetch(`${API}/api/auth/signin`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role, email, password }),
-  }).then(json);
-  if (!r.ok || !r.token) throw new Error(`login failed (${role}): ${r.message || r.status}`);
-  if (role !== 'admin') return r;
-  const mfaStart = await fetch(`${API}/api/auth/mfa/start`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${r.token}`, 'Content-Type': 'application/json' },
-    body: '{}',
-  }).then(json);
-  if (!mfaStart.ok || !mfaStart.demoCode) return r;
-  const mfaVerify = await fetch(`${API}/api/auth/mfa/verify`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${r.token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code: String(mfaStart.demoCode) }),
-  }).then(json);
-  if (mfaVerify.ok && mfaVerify.token) return { ...r, token: mfaVerify.token };
-  return r;
+  let last = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const r = await fetch(`${API}/api/auth/signin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role, email, password }),
+    }).then(json);
+    last = r;
+    if (r.status === 429) {
+      await new Promise((res) => setTimeout(res, 2000 * (attempt + 1)));
+      continue;
+    }
+    if (!r.ok || !r.token) throw new Error(`login failed (${role}): ${r.message || r.status}`);
+    if (role !== 'admin') return r;
+    const mfaStart = await fetch(`${API}/api/auth/mfa/start`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${r.token}`, 'Content-Type': 'application/json' },
+      body: '{}',
+    }).then(json);
+    if (!mfaStart.ok || !mfaStart.demoCode) return r;
+    const mfaVerify = await fetch(`${API}/api/auth/mfa/verify`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${r.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: String(mfaStart.demoCode) }),
+    }).then(json);
+    if (mfaVerify.ok && mfaVerify.token) return { ...r, token: mfaVerify.token };
+    return r;
+  }
+  throw new Error(`login failed (${role}): ${last?.message || 'rate limited'}`);
 }
 
 async function main() {
   console.log(`\nFixBridge quote alternatives smoke @ ${API}`);
   console.log(`Fixture marker: ${MARKER}\n`);
 
-  const admin = await login(
-    'admin',
-    process.env.SMOKE_ADMIN_EMAIL || 'admin@fixbridge.com',
-    process.env.SMOKE_ADMIN_PASSWORD || 'Fixbridge@9/26',
-  );
-  const homeowner = await login(
-    'homeowner',
-    process.env.SMOKE_HOMEOWNER_EMAIL || 'maria@example.com',
-    process.env.SMOKE_HOMEOWNER_PASSWORD || 'demo123',
-  );
-  const contractor = await login(
-    'contractor',
-    process.env.SMOKE_CONTRACTOR_EMAIL || 'james@yourcompany.com',
-    process.env.SMOKE_CONTRACTOR_PASSWORD || 'demo123',
-  );
+  const adminEmail =
+    process.env.SMOKE_ADMIN_EMAIL || process.env.TEST_ADMIN_EMAIL || 'admin@fixbridge.us';
+  const adminPass =
+    process.env.SMOKE_ADMIN_PASSWORD ||
+    process.env.TEST_ADMIN_PASSWORD ||
+    process.env.PRIMARY_ADMIN_PASSWORD;
+  const homeEmail = process.env.SMOKE_HOMEOWNER_EMAIL || process.env.TEST_HOMEOWNER_EMAIL;
+  const homePass = process.env.SMOKE_HOMEOWNER_PASSWORD || process.env.TEST_HOMEOWNER_PASSWORD;
+  const contractorEmail = process.env.SMOKE_CONTRACTOR_EMAIL || process.env.TEST_CONTRACTOR_EMAIL;
+  const contractorPass =
+    process.env.SMOKE_CONTRACTOR_PASSWORD || process.env.TEST_CONTRACTOR_PASSWORD;
+  if (!adminPass || !homeEmail || !homePass || !contractorEmail || !contractorPass) {
+    throw new Error('Set SMOKE_/TEST_ admin, homeowner, and contractor credentials in .env');
+  }
+  const admin = await login('admin', adminEmail, adminPass);
+  const homeowner = await login('homeowner', homeEmail, homePass);
+  const contractor = await login('contractor', contractorEmail, contractorPass);
 
   const adminH = { Authorization: `Bearer ${admin.token}`, 'Content-Type': 'application/json' };
   const homeownerH = { Authorization: `Bearer ${homeowner.token}`, 'Content-Type': 'application/json' };

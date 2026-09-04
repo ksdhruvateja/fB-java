@@ -20,34 +20,58 @@ function ok(label, pass, detail = '') {
 }
 
 async function login(role, email, password) {
-  const r = await fetch(`${API}/api/auth/signin`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role, email, password }),
-  }).then(json);
-  if (!r.ok || !r.token) throw new Error(`login failed: ${r.message}`);
-  if (role === 'admin') {
-    const mfaStart = await fetch(`${API}/api/auth/mfa/start`, {
+  let last = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const r = await fetch(`${API}/api/auth/signin`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${r.token}`, 'Content-Type': 'application/json' },
-      body: '{}',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role, email, password }),
     }).then(json);
-    if (mfaStart.ok && mfaStart.demoCode) {
-      const mfaVerify = await fetch(`${API}/api/auth/mfa/verify`, {
+    last = r;
+    if (r.status === 429) {
+      await new Promise((res) => setTimeout(res, 2000 * (attempt + 1)));
+      continue;
+    }
+    if (!r.ok || !r.token) throw new Error(`login failed: ${r.message}`);
+    if (role === 'admin') {
+      const mfaStart = await fetch(`${API}/api/auth/mfa/start`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${r.token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: String(mfaStart.demoCode) }),
+        body: '{}',
       }).then(json);
-      if (mfaVerify.ok && mfaVerify.token) return { ...r, token: mfaVerify.token };
+      if (mfaStart.ok && mfaStart.demoCode) {
+        const mfaVerify = await fetch(`${API}/api/auth/mfa/verify`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${r.token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: String(mfaStart.demoCode) }),
+        }).then(json);
+        if (mfaVerify.ok && mfaVerify.token) return { ...r, token: mfaVerify.token };
+      }
     }
+    return r;
   }
-  return r;
+  throw new Error(`login failed: ${last?.message || 'rate limited'}`);
 }
 
 async function main() {
   console.log(`\nFixBridge availability smoke @ ${API}\n`);
-  const contractor = await login('contractor', process.env.SMOKE_CONTRACTOR_EMAIL || 'james@yourcompany.com', 'demo123');
-  const admin = await login('admin', process.env.SMOKE_ADMIN_EMAIL || 'admin@fixbridge.com', process.env.SMOKE_ADMIN_PASSWORD || 'Fixbridge@9/26');
+  const contractorEmail = process.env.SMOKE_CONTRACTOR_EMAIL || process.env.TEST_CONTRACTOR_EMAIL;
+  const contractorPass =
+    process.env.SMOKE_CONTRACTOR_PASSWORD || process.env.TEST_CONTRACTOR_PASSWORD;
+  const adminEmail =
+    process.env.SMOKE_ADMIN_EMAIL || process.env.TEST_ADMIN_EMAIL || 'admin@fixbridge.us';
+  const adminPass =
+    process.env.SMOKE_ADMIN_PASSWORD ||
+    process.env.TEST_ADMIN_PASSWORD ||
+    process.env.PRIMARY_ADMIN_PASSWORD;
+  if (!contractorEmail || !contractorPass) {
+    throw new Error('Set SMOKE_CONTRACTOR_EMAIL/PASSWORD or TEST_CONTRACTOR_* in .env');
+  }
+  if (!adminPass) {
+    throw new Error('Set SMOKE_ADMIN_PASSWORD or TEST_ADMIN_PASSWORD in .env');
+  }
+  const contractor = await login('contractor', contractorEmail, contractorPass);
+  const admin = await login('admin', adminEmail, adminPass);
   const cH = { Authorization: `Bearer ${contractor.token}`, 'Content-Type': 'application/json' };
   const aH = { Authorization: `Bearer ${admin.token}`, 'Content-Type': 'application/json' };
 

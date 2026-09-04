@@ -23,7 +23,7 @@ import {
   loadMarketData,
   saveMarketSnapshot,
 } from './market-intelligence.js';
-import { zip5 } from './usps-address.js';
+import { zip5 } from './address-utils.js';
 import { isPaidHomeCarePlan } from './subscription-catalog.js';
 import {
   activateSubscriptionFromCheckout,
@@ -1849,11 +1849,10 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const label = b.label || `My Home ${homeNumber}`;
       const defaultSystems = Array.isArray(b.homeSystems) ? b.homeSystems : [];
       const zipVal = zip5(b.zip || '');
-      const verified = b.addressVerified === true;
       const { rows } = await pool.query(
         `INSERT INTO properties
-          (owner_user_id, label, address_line1, address_line2, city, state, zip, property_type, access_notes, property_purpose, transaction_stage, country, street_address, year_built, beds, baths, sqft, home_systems, postal_code_plus4, address_verified, address_verified_at, address_verification_provider)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,CASE WHEN $20::boolean THEN NOW() ELSE NULL END,$21) RETURNING *`,
+          (owner_user_id, label, address_line1, address_line2, city, state, zip, property_type, access_notes, property_purpose, transaction_stage, country, street_address, year_built, beds, baths, sqft, home_systems, postal_code_plus4)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,
         [
           req.authUser.id,
           label,
@@ -1874,8 +1873,6 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           b.sqft != null ? Number(b.sqft) : null,
           JSON.stringify(defaultSystems),
           b.postalCodePlus4 || null,
-          verified,
-          verified ? 'usps' : null,
         ]
       );
       const propertyId = rows[0].id;
@@ -1950,20 +1947,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         b.city != null ||
         b.state != null ||
         b.zip != null;
-      let nextVerified = cur.address_verified;
-      let nextVerifiedAt = cur.address_verified_at;
-      let nextProvider = cur.address_verification_provider;
-      let nextPlus4 = cur.postal_code_plus4;
-      if (b.addressVerified !== undefined) {
-        nextVerified = b.addressVerified === true;
-        nextVerifiedAt = nextVerified ? new Date() : null;
-        nextProvider = nextVerified ? 'usps' : null;
-        nextPlus4 = b.postalCodePlus4 !== undefined ? b.postalCodePlus4 : nextPlus4;
-      } else if (addressFieldsTouched) {
-        nextVerified = false;
-        nextVerifiedAt = null;
-        nextProvider = null;
-      }
+      // Historic verification columns are left untouched (no longer written).
+      const nextPlus4 =
+        b.postalCodePlus4 !== undefined ? b.postalCodePlus4 : cur.postal_code_plus4;
       const zipVal = b.zip != null ? zip5(b.zip) : null;
 
       let nextTimezone = cur.timezone;
@@ -1990,11 +1976,8 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
            property_type=COALESCE($15, property_type),
            access_notes=$16,
            postal_code_plus4=$17,
-           address_verified=$18,
-           address_verified_at=$19,
-           address_verification_provider=$20,
-           timezone=$21
-         WHERE id=$22
+           timezone=$18
+         WHERE id=$19
          RETURNING *`,
         [
           b.label != null ? String(b.label).slice(0, 80) : null,
@@ -2021,10 +2004,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
               ? String(b.accessNotes).slice(0, 500)
               : null
             : cur.access_notes,
-          b.postalCodePlus4 !== undefined ? b.postalCodePlus4 : nextPlus4,
-          nextVerified,
-          nextVerifiedAt,
-          nextProvider,
+          nextPlus4,
           nextTimezone,
           propertyId,
         ]
@@ -2326,15 +2306,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (!addressLine1 || !city || !state || !zip) {
         return res.status(400).json({ ok: false, message: 'Street address, city, state, and ZIP code are required.' });
       }
-      const verified = b.addressVerified === true;
       const { rows } = await pool.query(
         `UPDATE properties 
          SET address_line1=$1, address_line2=$2, city=$3, state=$4, zip=$5,
-             postal_code_plus4=$6,
-             address_verified=$7,
-             address_verified_at=CASE WHEN $7::boolean THEN NOW() ELSE NULL END,
-             address_verification_provider=CASE WHEN $7::boolean THEN 'usps' ELSE NULL END
-         WHERE id=$8 AND owner_user_id=$9 RETURNING *`,
+             postal_code_plus4=$6
+         WHERE id=$7 AND owner_user_id=$8 RETURNING *`,
         [
           addressLine1.trim(),
           addressLine2 ? addressLine2.trim() : null,
@@ -2342,7 +2318,6 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           state.trim(),
           zip5(zip),
           b.postalCodePlus4 || null,
-          verified,
           id,
           req.authUser.id,
         ]

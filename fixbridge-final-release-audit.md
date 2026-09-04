@@ -23,7 +23,7 @@
 | LOGO → ROLE HOME | PASS | Homeowner / contractor / admin role homes verified |
 | BACK NAVIGATION | PASS | Stack frames + role home terminal; login uses replace |
 | PROPERTY | PASS | CRUD + address fields in managed routes |
-| USPS ADDRESS | PARTIAL | Server routes + UI wired; live OAuth SKIP (credentials not in env) |
+| ADDRESS ENTRY | PASS | Manual fields + format/ZIP validation; USPS verification intentionally removed |
 | JOBS | PASS | Lifecycle in P0/P1/change-order smokes |
 | JOB LIFECYCLE | PASS | Assignment, quotes, completion paths in RC |
 | DISPATCH | PASS | Trade + service-area matching via `smoke:service-catalog` 13/13 |
@@ -43,7 +43,7 @@
 | INPUT VALIDATION | PASS | Invalid ZIP, malformed auth, coupon concurrency |
 | XSS | PASS | Server sanitization + CSP in production headers |
 | CORS | PASS | `APP_URL` + Netlify `URL` / `DEPLOY_PRIME_URL` + `CORS_ORIGINS` |
-| SECRET MANAGEMENT | PASS | No secrets in diff; `.env` gitignored; USPS/Stripe server-only |
+| SECRET MANAGEMENT | PASS | No secrets in diff; `.env` gitignored; Stripe server-only |
 | MOBILE | PARTIAL | `smoke:mobile` blocked — Playwright browsers not installed locally |
 | NETLIFY SPA ROUTING | PASS | `netlify.toml` + `public/_redirects` `/* → /index.html 200` |
 | PRODUCTION API CONFIG | PASS | Frontend uses relative `/api/*`; Netlify redirects to Functions |
@@ -61,7 +61,6 @@
 | `smoke:service-catalog` | 13/13 PASS |
 | `smoke:rbac` | 10/10 PASS |
 | `smoke:idor` | PASS |
-| `smoke:usps-address` | 10/10 PASS (4 live USPS SKIP — no credentials) |
 | `smoke:rc` | 8/8 PASS |
 | `smoke:admin-features` | 11/11 PASS |
 | `smoke:hardening` | PASS |
@@ -74,9 +73,8 @@
 **None** — RC suite 8/8, build passes, RBAC/IDOR/auth verified.
 
 ## P1 ISSUES
-1. **USPS live verify** — Set `USPS_CLIENT_ID`, `USPS_CLIENT_SECRET` in Netlify for production address validation.
-2. **Playwright mobile QA** — Run `npx playwright install` in CI or locally for `smoke:mobile`.
-3. **P1-final browser/connect** — Stripe Connect transfer smoke may need live Stripe + Playwright; API-level stripe e2e passes.
+1. **Playwright mobile QA** — Run `npx playwright install` in CI or locally for `smoke:mobile`.
+2. **P1-final browser/connect** — Stripe Connect transfer smoke may need live Stripe + Playwright; API-level stripe e2e passes.
 
 ## P2 / OPTIONAL
 - Bundle size warning (>500 kB chunk) — non-blocking.
@@ -86,7 +84,7 @@
 ---
 
 ## FILES CHANGED
-Production readiness release: navigation system, USPS address integration, service catalog (snow/landscaping/cleaning), brand logo, admin finance/homeowner profiles, payment/settlement hardening, RBAC/MFA, smoke test suite, Netlify config.
+Production readiness release: navigation system, address entry (USPS verification later removed), service catalog (snow/landscaping/cleaning), brand logo, admin finance/homeowner profiles, payment/settlement hardening, RBAC/MFA, smoke test suite, Netlify config.
 
 **Excluded from commit:** local debug artifacts (`_p0_*.txt`, `_stripe_*.png`, probe scratch scripts).
 
@@ -135,9 +133,6 @@ Production readiness release: navigation system, USPS address integration, servi
 - `GEMINI_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` / `AI_API_KEY` + `AI_BASE_URL`
 - `VITE_GEMINI_API_KEY`
 - `VITE_GOOGLE_MAPS_API_KEY`
-- `USPS_CLIENT_ID`
-- `USPS_CLIENT_SECRET`
-- `USPS_API_BASE_URL`
 - `CORS_ORIGINS`
 
 **Backend hosting:** **Configured on Netlify** — Express app wrapped via `serverless-http` in `netlify/functions/api.js`. No separate API host required when deploying to Netlify with Functions.
@@ -155,4 +150,4 @@ Production readiness release: navigation system, USPS address integration, servi
 
 - Core flows, security, build, and Netlify architecture verified.
 - Configure production env vars in Netlify before go-live.
-- USPS live validation and optional maps/mobile QA can follow deploy.
+- Optional maps/mobile QA can follow deploy. USPS address verification was intentionally removed.

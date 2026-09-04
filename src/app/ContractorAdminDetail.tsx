@@ -108,10 +108,6 @@ export function ContractorApplicationAdminView({
               .filter(Boolean)
               .join(", ") || user.address}
           />
-          <Row
-            label="USPS address"
-            value={user.addressVerified ? "USPS verified ✓" : "Address not verified"}
-          />
         </div>
         <div className="space-y-1.5 rounded-lg border border-border/70 bg-muted/20 p-3">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Trades & area</p>

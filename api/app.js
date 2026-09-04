@@ -54,7 +54,6 @@ import {
   completePasswordReset,
 } from './password-reset.js';
 import { mailStatus } from './mail.js';
-import { uspsConfigured } from './usps-address.js';
 import { EMAIL_FROM_ADDRESS, EMAIL_REPLY_TO } from './email/email-config.js';
 import {
   loadJobForReview,
@@ -1825,15 +1824,10 @@ app.put('/api/auth/profile', requireAuth, async (req, res) => {
       if (freshUser[0]) {
         updated = freshUser[0];
       }
-      if (body.addressVerified !== undefined || body.postalCodePlus4 !== undefined) {
+      if (body.postalCodePlus4 !== undefined) {
         await pool.query(
-          `UPDATE users SET
-             address_verified = $1,
-             address_verified_at = CASE WHEN $1::boolean THEN NOW() ELSE NULL END,
-             address_verification_provider = CASE WHEN $1::boolean THEN 'usps' ELSE NULL END,
-             postal_code_plus4 = COALESCE($2, postal_code_plus4)
-           WHERE id = $3`,
-          [body.addressVerified === true, body.postalCodePlus4 || null, req.authUser.id]
+          `UPDATE users SET postal_code_plus4 = COALESCE($1, postal_code_plus4) WHERE id = $2`,
+          [body.postalCodePlus4 || null, req.authUser.id]
         );
         const { rows: refreshed } = await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id]);
         if (refreshed[0]) updated = refreshed[0];
@@ -3168,7 +3162,6 @@ app.get('/api/admin/production-config', requireAuth, requireAdmin, requirePermis
     { key: 'FIXBRIDGE_FROM_EMAIL', status: classify(Boolean(fromEmail), emailInvalid), required: false },
     { key: 'FIXBRIDGE_REPLY_TO_EMAIL', status: classify(Boolean(replyTo), replyInvalid), required: false },
     { key: 'EMAIL_CREDENTIALS', status: classify(mailStatus().configured), required: false },
-    { key: 'USPS', status: classify(uspsConfigured()), required: false },
     { key: 'GOOGLE_CLIENT_ID', status: classify(Boolean(googleId), googleIdInvalid), required: false },
     { key: 'ATTACHMENT_STORAGE_PROVIDER', status: classify(true), required: false },
     { key: 'demo_seed_disabled_in_prod', status: classify(production ? !allowDemoSeed() : true), required: true },

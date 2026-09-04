@@ -35,7 +35,7 @@ PASS (14/14)
 | Stripe production/test configuration | BLOCKED_EXTERNAL_CONFIG until live health (now `stripeConfigured: true`) |
 | Email sender configuration | BLOCKED_EXTERNAL_CONFIG until live health (now Gmail configured) |
 | Google OAuth configuration | BLOCKED_EXTERNAL_CONFIG — public config exists; value is not a valid GIS client ID |
-| USPS configuration | BLOCKED_EXTERNAL_CONFIG — deployed `uspsConfigured: false` |
+| Address entry | PASS — manual fields + format validation only (external USPS verification intentionally removed) |
 | APP_URL / frontend route configuration | BLOCKED_EXTERNAL_CONFIG — `/api/admin/production-config` is 401 without admin session |
 
 ---
@@ -56,8 +56,8 @@ PASS (password; local smokes)
 Google OAuth:
 BLOCKED (deployed `GOOGLE_CLIENT_ID` is not a valid GIS web client ID; live Google signup/login not proven)
 
-USPS:
-FAIL (deployed `uspsConfigured: false`; local smoke skipped OAuth)
+Address entry:
+PASS (manual address fields + Geoapify autocomplete suggestions when `GEOAPIFY_API_KEY` is set; never a verification gate; USPS intentionally removed)
 
 AI Assessment:
 PASS (local async/ack path)
@@ -266,8 +266,8 @@ PASS (`stripeConfigured: true`; test vs live key not printed)
 Email:
 PASS (Gmail configured; from/reply-to domain `support@fixbridge.us`)
 
-USPS:
-FAIL (`uspsConfigured: false`)
+Address verification (USPS):
+REMOVED — intentionally dropped from the product; not a health/readiness dependency
 
 OAuth:
 BLOCKED — public `/api/auth/google/config` was returning a **client-secret-shaped** value (prefix `GOCSPX-`), not a GIS client ID. Treat that Netlify env var as compromised: **rotate the Google client secret**, put the **web client ID** in `GOOGLE_CLIENT_ID` only, never the secret. This RC refuses to expose non-client-ID values.
@@ -312,7 +312,7 @@ Critical Issues:
 1 (Google client-secret-shaped value exposed on public config until this RC is deployed **and** the secret is rotated)
 
 High Issues:
-3 (USPS missing on Netlify; Google OAuth unusable until a real client ID is set; deployed browser/payment/mobile lifecycle not executed here)
+2 (Google OAuth unusable until a real client ID is set; deployed browser/payment/mobile lifecycle not executed here)
 
 Medium Issues:
 3 (email display name; 10k-user polling; Neon attachments before public scale)
@@ -322,7 +322,6 @@ Low Issues:
 
 External Blockers:
 - Rotate Google OAuth client secret; set a real GIS **client ID**
-- Configure USPS Addresses API on Netlify if verified ZIP/pricing is required for beta
 - Set `FIXBRIDGE_FROM_NAME=FixBridge Support` if the From header must match the spec exactly
 - Deploy this working tree; Netlify is still on the previous build until then
 
@@ -332,8 +331,8 @@ Production Readiness:
 Recommendation:
 CONDITIONAL BETA GO
 
-Controlled beta with **password** homeowners and contractors is reasonable after this RC is deployed, the Google secret is rotated, and one Stripe **test** checkout is confirmed on Netlify (webhook → paid invoice). Do not open Google signup, do not promise USPS-corrected addresses, and do not scale attachments or polling to public volume yet.
+Controlled beta with **password** homeowners and contractors is reasonable after this RC is deployed, the Google secret is rotated, and one Stripe **test** checkout is confirmed on Netlify (webhook → paid invoice). Do not open Google signup, and do not scale attachments or polling to public volume yet. Address entry is manual + format validation only (USPS verification was intentionally removed).
 
-Not **BETA GO**: deployed Google config currently leaks a secret-shaped env value, USPS is off, and the live Netlify click-path (mobile + checkout) was not run in this pass.
+Not **BETA GO**: deployed Google config currently leaks a secret-shaped env value, and the live Netlify click-path (mobile + checkout) was not run in this pass.
 
 Not **NO-GO**: auth, RBAC, IDOR, quote accept, invoice settlement, webhook claim, payout integrity, duplicate payout protection, AI ack gate, dispute payout hold, and cross-user messaging isolation all passed on the current codebase.

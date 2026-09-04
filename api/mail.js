@@ -28,6 +28,12 @@ function gmailConfigured() {
   return Boolean(gmailUser() && gmailPass());
 }
 
+/** Local/dev kill switch — smoke tests must not blast real SMTP. */
+function outboundEmailDisabled() {
+  const raw = String(process.env.DISABLE_OUTBOUND_EMAIL || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
 function fromAddress() {
   return emailFromHeader();
 }
@@ -55,6 +61,17 @@ async function getTransporter() {
 export async function sendMail({ to, subject, html, text, headers = {}, replyTo }) {
   const recipient = String(to || '').trim();
   if (!recipient) return { ok: false, message: 'Missing recipient.' };
+
+  if (outboundEmailDisabled()) {
+    console.log(
+      `[Gmail disabled] DISABLE_OUTBOUND_EMAIL=true — not sending to=${recipient} subject=${subject}`
+    );
+    return {
+      ok: true,
+      simulated: true,
+      message: 'Outbound email disabled (DISABLE_OUTBOUND_EMAIL).',
+    };
+  }
 
   const transporter = await getTransporter();
   if (!transporter) {
@@ -90,9 +107,11 @@ export async function sendMail({ to, subject, html, text, headers = {}, replyTo 
 export function mailStatus() {
   const userSet = Boolean(gmailUser());
   const passSet = Boolean(gmailPass());
+  const disabled = outboundEmailDisabled();
   return {
     provider: 'gmail',
-    configured: gmailConfigured(),
+    configured: gmailConfigured() && !disabled,
+    outboundDisabled: disabled,
     from: gmailConfigured() ? fromAddress() : emailFromHeader(),
     replyTo: EMAIL_REPLY_TO,
     userSet,

@@ -38,7 +38,7 @@
     "smoke:payment-return": "node --env-file=.env scripts/smoke-payment-return.mjs",
     "smoke:admin-features": "node --env-file=.env scripts/smoke-admin-features.mjs",
     "smoke:p1-final": "node --env-file=.env scripts/smoke-p1-final.mjs",
-    "smoke:usps-address": "node --env-file=.env scripts/smoke-usps-address.mjs",
+    "smoke:address-autocomplete": "node --env-file=.env scripts/smoke-address-autocomplete.mjs",
     "smoke:navigation": "node scripts/smoke-navigation.mjs",
     "smoke:job-cancel": "node --env-file=.env scripts/smoke-job-cancel.mjs http://127.0.0.1:3001",
     "smoke:contractor-compliance": "node --env-file=.env scripts/smoke-contractor-compliance.mjs http://127.0.0.1:3001",

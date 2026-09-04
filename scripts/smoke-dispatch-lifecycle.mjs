@@ -30,10 +30,15 @@ function run(script) {
 async function main() {
   console.log(`\nFixBridge dispatch lifecycle @ ${API}\n`);
   let passed = 0;
-  for (const s of scripts) {
+  for (let i = 0; i < scripts.length; i++) {
+    const s = scripts[i];
     const ok = await run(s);
     if (ok) passed += 1;
     else process.exitCode = 1;
+    // Cool down between suites to avoid auth rate-limit collisions.
+    if (i < scripts.length - 1) {
+      await new Promise((r) => setTimeout(r, 4000));
+    }
   }
   console.log(`\nLifecycle summary: ${passed}/${scripts.length} suites passed\n`);
 }
