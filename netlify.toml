@@ -16,6 +16,10 @@
   # Vite embeds these at build time — also set them in the Netlify UI.
   # VITE_GEMINI_API_KEY =
   # VITE_GOOGLE_MAPS_API_KEY =
+  # Secrets scanner: these vars are server-side AI config and smoke-test
+  # credentials — their values are safe to appear in server source files.
+  # They are never inlined into the client bundle (no VITE_ prefix).
+  SECRETS_SCAN_OMIT_KEYS = "AI_BASE_URL,AI_MODEL,AI_PROVIDER,SMOKE_HOMEOWNER_EMAIL,SMOKE_CONTRACTOR_EMAIL,SMOKE_HOMEOWNER_PASSWORD,SMOKE_CONTRACTOR_PASSWORD,SMOKE_ADMIN_EMAIL,SMOKE_ADMIN_PASSWORD"
 
 # Runtime env for production deploys (API + scheduled functions) — not available from [build.environment] alone.
 [context.production.environment]
