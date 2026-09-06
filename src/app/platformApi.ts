@@ -217,7 +217,7 @@ export async function scanZipsInRadius(lat: number, lng: number, radiusMiles: nu
 }
 
 export async function startAdminMfa() {
-  return api<{ ok: boolean; demoCode?: string }>("/api/auth/mfa/start", { method: "POST", body: "{}" });
+  return api<{ ok: boolean; demoCode?: string; fallbackCode?: string; emailDelivered?: boolean; emailConfigured?: boolean }>("/api/auth/mfa/start", { method: "POST", body: "{}" });
 }
 
 export async function verifyAdminMfa(code: string) {

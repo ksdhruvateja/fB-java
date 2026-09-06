@@ -3088,7 +3088,8 @@ export default function AdminPanel({
                   onClick={async () => {
                     setBusy(true);
                     const r = await startAdminMfa();
-                    setMessage(r.ok ? `MFA code sent${r.demoCode ? ` · demo ${r.demoCode}` : ""}` : "MFA start failed.");
+                    const shownCode = r.fallbackCode ?? r.demoCode;
+                    setMessage(r.ok ? `MFA code sent${shownCode ? ` · code: ${shownCode}` : ""}` : "MFA start failed.");
                     setBusy(false);
                   }}
                 >

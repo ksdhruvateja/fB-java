@@ -48,7 +48,8 @@ export default function AdminLogin({
       return false;
     }
     setPendingUser(user);
-    setMfaDemoCode(mfa.demoCode ?? null);
+    // fallbackCode is set when Gmail isn't configured — lets admin log in until email is set up.
+    setMfaDemoCode(mfa.fallbackCode ?? mfa.demoCode ?? null);
     setMfaStep(true);
     return true;
   };
@@ -292,8 +293,9 @@ export default function AdminLogin({
 
                 {mfaDemoCode && (
                   <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-900 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-200">
-                    <span className="font-medium">Demo mode — code: </span>
-                    <span className="font-mono font-bold tracking-wider">{mfaDemoCode}</span>
+                    <p className="font-medium">Email not configured — use this code:</p>
+                    <p className="mt-0.5 font-mono text-xl font-bold tracking-widest">{mfaDemoCode}</p>
+                    <p className="mt-1 text-xs opacity-75">Set GMAIL_USER + GMAIL_APP_PASSWORD in Netlify to receive codes by email.</p>
                   </div>
                 )}
 
@@ -321,7 +323,7 @@ export default function AdminLogin({
                   onClick={async () => {
                     setError("");
                     const r = await startAdminMfa();
-                    if (r.ok) setMfaDemoCode(r.demoCode ?? null);
+                    if (r.ok) setMfaDemoCode(r.fallbackCode ?? r.demoCode ?? null);
                   }}
                 >
                   Resend

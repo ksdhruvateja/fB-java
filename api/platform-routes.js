@@ -1809,7 +1809,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       );
 
       // Email is best-effort — never block admin login if Gmail is missing/misconfigured.
-      await sendEmailSafe({
+      const emailResult = await sendEmailSafe({
         to: req.authUser.email,
         template: 'admin_mfa_otp',
         data: {
@@ -1824,12 +1824,20 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
         console.warn('[MFA] mfa_enabled update skipped:', e.message);
       }
 
-      const isProd = process.env.NODE_ENV === 'production';
+      // emailResult.simulated=true means Gmail is not configured — surface the code
+      // in the API response so the admin is never locked out when email isn't set up.
+      // Once GMAIL_USER + GMAIL_APP_PASSWORD are set, the code is hidden from the response.
+      const emailDelivered = emailResult?.ok === true && !emailResult?.simulated;
       res.json({
         ok: true,
         sent: true,
-        // Always surface the code outside production so local/demo login works without email.
-        demoCode: isProd ? undefined : code,
+        emailDelivered,
+        emailConfigured: emailDelivered,
+        // Show code when email wasn't actually sent (no Gmail config) so admin can still log in.
+        // This disappears automatically once Gmail is configured.
+        fallbackCode: emailDelivered ? undefined : code,
+        // Legacy non-prod helper kept for local dev.
+        demoCode: process.env.NODE_ENV !== 'production' ? code : undefined,
       });
     } catch (e) {
       console.error('[MFA start]', e);
