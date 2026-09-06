@@ -8,8 +8,11 @@ export const EMAIL_FROM_ADDRESS = process.env.FIXBRIDGE_FROM_EMAIL?.trim() || 's
 export const EMAIL_REPLY_TO = process.env.FIXBRIDGE_REPLY_TO_EMAIL?.trim() || 'support@fixbridge.us';
 
 export function emailFromHeader() {
+  // Only honour FROM_EMAIL when it explicitly carries a fixbridge.us address.
+  // This prevents any legacy or accidentally set env var from sending mail
+  // under a different brand domain (e.g. omnipronetwork.com).
   const legacy = (process.env.FROM_EMAIL || '').trim();
-  if (legacy && legacy.includes('@') && !legacy.toLowerCase().includes('gmail.com')) {
+  if (legacy && legacy.toLowerCase().includes('fixbridge.us')) {
     return legacy;
   }
   return `${EMAIL_FROM_NAME} <${EMAIL_FROM_ADDRESS}>`;
