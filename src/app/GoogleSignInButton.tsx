@@ -57,14 +57,14 @@ export default function GoogleSignInButton({
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const cfg = await getGoogleAuthConfig();
-      if (cancelled) return;
-      if (!cfg.ok || !cfg.googleOAuthEnabled || !cfg.configured || !cfg.clientId) {
-        setConfigured(false);
-        return;
-      }
-      setConfigured(true);
       try {
+        const cfg = await getGoogleAuthConfig();
+        if (cancelled) return;
+        if (!cfg.ok || !cfg.googleOAuthEnabled || !cfg.configured || !cfg.clientId) {
+          setConfigured(false);
+          return;
+        }
+        setConfigured(true);
         await loadGoogleScript();
         if (cancelled || !containerRef.current) return;
         window.google!.accounts.id.initialize({
@@ -73,6 +73,7 @@ export default function GoogleSignInButton({
             if (response?.credential) onCredential(response.credential);
           },
           auto_select: false,
+          use_fedcm_for_prompt: false,
         });
         containerRef.current.innerHTML = "";
         window.google!.accounts.id.renderButton(containerRef.current, {
@@ -84,7 +85,7 @@ export default function GoogleSignInButton({
         });
         setReady(true);
       } catch {
-        setConfigured(false);
+        if (!cancelled) setConfigured(false);
       }
     })();
     return () => {

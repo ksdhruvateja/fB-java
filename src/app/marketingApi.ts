@@ -72,13 +72,22 @@ export async function signInWithGoogle(
   credential: string,
   body: Record<string, unknown> = {},
   role: "homeowner" | "contractor" | "admin" = "homeowner",
-) {
-  const res = await fetch("/api/auth/google", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ credential, role, ...body }),
-  });
-  return res.json();
+): Promise<Record<string, unknown> & { ok: boolean; message?: string; code?: string }> {
+  try {
+    const res = await fetch("/api/auth/google", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential, role, ...body }),
+    });
+    const text = await res.text();
+    try {
+      return JSON.parse(text) as Record<string, unknown> & { ok: boolean };
+    } catch {
+      return { ok: false, message: "Server returned an unexpected response. Please try again." };
+    }
+  } catch {
+    return { ok: false, message: "Network error. Please check your connection and try again." };
+  }
 }
 
 export type LinkedSignInMethods = {

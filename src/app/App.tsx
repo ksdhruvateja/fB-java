@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { motion } from "motion/react";
-import { Sun, Moon, Menu, X, MapPin, ArrowRight } from "lucide-react";
+import { Sun, Moon, Menu, X, MapPin, ArrowRight, Loader2 } from "lucide-react";
 import CustomerPage from "./CustomerPage";
 import ContractorPage from "./ContractorPage";
 import AboutPage from "./AboutPage";
@@ -104,6 +104,8 @@ function isValidPage(value: unknown): value is Page {
   );
 }
 
+const DASHBOARD_PAGE_KEYS: Page[] = ["homeowner-dashboard", "contractor-dashboard", "admin"];
+
 function loadInitialState(): {
   page: Page;
   marketingContext: "home" | "contractors";
@@ -123,12 +125,17 @@ function loadInitialState(): {
       ? (JSON.parse(raw) as { page?: unknown; marketingContext?: unknown })
       : {};
 
-    const page = isValidPage(parsed.page) ? parsed.page : fallback.page;
+    const rawPage = isValidPage(parsed.page) ? parsed.page : fallback.page;
     const marketingContext =
       parsed.marketingContext === "contractors" ? "contractors" : "home";
 
     // Restore session from the secure token cache (no password stored here)
     const currentUser = getStoredUser();
+
+    // Never restore a dashboard page without a cached user — prevents white screen
+    // flash on first load after logout (clearSession removes the user but not the page).
+    const page =
+      DASHBOARD_PAGE_KEYS.includes(rawPage) && !currentUser ? fallback.page : rawPage;
 
     return { page, marketingContext, currentUser };
   } catch {
@@ -551,6 +558,9 @@ export default function App() {
   const toggleDark = () => setIsDark((d) => !d);
   const [scrolled, setScrolled] = useState(false);
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(initialState.currentUser);
+  // True while the startup JWT check is in-flight; prevents white-screen flash on
+  // the first render when a cached user exists but the token hasn't been validated yet.
+  const [authLoading, setAuthLoading] = useState(() => Boolean(initialState.currentUser));
   const scrollRef = useRef<HTMLDivElement>(null);
   const [resetParams, setResetParams] = useState<{ token: string; role: ResetRole } | null>(null);
   const [subscriptionSuccessPlan, setSubscriptionSuccessPlan] = useState<string | null>(null);
@@ -819,6 +829,9 @@ export default function App() {
     clearSession();
     clearNavFrames();
     setCurrentUser(null);
+    // Clear stored page so the next cold load doesn't start on a dashboard page
+    // without a session (which would cause a white-screen flash).
+    try { window.localStorage.removeItem(APP_STATE_KEY); } catch { /* ignore */ }
     replaceAppHistory(nextPage as AppPage);
     setPage(nextPage);
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
@@ -890,6 +903,8 @@ export default function App() {
         setCurrentUser(null);
         setPage("home");
       }
+      // Always resolve the auth loading state so dashboards can render (or redirect)
+      setAuthLoading(false);
     });
     // Only run on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1117,7 +1132,14 @@ export default function App() {
             <PartnerPortal onBack={() => navigate("home")} />
           )}
 
-          {page === "homeowner-dashboard" && currentUser && (
+          {/* Auth loading: show spinner instead of white screen while startup JWT check runs */}
+          {authLoading && DASHBOARD_PAGE_KEYS.includes(page) && (
+            <div className="flex h-screen items-center justify-center">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          )}
+
+          {page === "homeowner-dashboard" && currentUser && !authLoading && (
             <AppErrorBoundary
               section="homeowner-dashboard"
               onGoHome={() => {
@@ -1149,7 +1171,7 @@ export default function App() {
             </AppErrorBoundary>
           )}
 
-          {page === "contractor-dashboard" && currentUser && currentUser.role === "contractor" && (
+          {page === "contractor-dashboard" && currentUser && currentUser.role === "contractor" && !authLoading && (
             <AppErrorBoundary section="contractor-dashboard">
               <ContractorDashboard
               onLogout={() => handleSignOut("contractors")}
@@ -1160,7 +1182,7 @@ export default function App() {
               />
             </AppErrorBoundary>
           )}
-          {page === "admin" && currentUser?.role === "admin" && (
+          {page === "admin" && currentUser?.role === "admin" && !authLoading && (
             <AppErrorBoundary section="admin-dashboard">
               <AdminPanel
                 onBack={() => navigate(marketingContext)}
