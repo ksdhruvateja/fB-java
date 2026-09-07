@@ -28,8 +28,10 @@ import {
   clearNavFrames,
   DASHBOARD_PAGES,
   LOGIN_PAGES,
+  noteHistoryPop,
   pushAppHistory,
   replaceAppHistory,
+  seedAppHistory,
   roleHomeFrame,
   roleHomePage,
 } from "./navigation";
@@ -801,11 +803,18 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    seedAppHistory(page as AppPage, currentUser ? roleHomeFrame(currentUser.role as UserRole) : undefined);
+    // Seed once so the landing entry is FixBridge and the external referrer stays behind it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     setScrolled(e.currentTarget.scrollTop > 48);
   };
 
   const navigate = (p: Page, options?: { replace?: boolean; user?: AuthUser | null }) => {
+    if (p === page && !options?.replace) return;
     if (p === "home" || p === "contractors") {
       setMarketingContext(p);
     }
@@ -814,15 +823,11 @@ export default function App() {
 
     const actor = options?.user !== undefined ? options.user : currentUser;
     const historyPage = p as AppPage;
-    if (options?.replace) {
-      if (DASHBOARD_PAGES.includes(historyPage) && actor) {
-        replaceAppHistory(historyPage, roleHomeFrame(actor.role as UserRole));
-      } else {
-        replaceAppHistory(historyPage);
-      }
-    } else if (DASHBOARD_PAGES.includes(historyPage) && actor) {
-      pushAppHistory(historyPage, roleHomeFrame(actor.role as UserRole));
-    }
+    const nav = DASHBOARD_PAGES.includes(historyPage) && actor
+      ? roleHomeFrame(actor.role as UserRole)
+      : undefined;
+    if (options?.replace) replaceAppHistory(historyPage, nav);
+    else pushAppHistory(historyPage, nav);
   };
 
   const handleSignOut = (nextPage: Page) => {
@@ -911,6 +916,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Wait until the stored session is checked. Treating "still loading" as signed-out
+    // replaces history and makes browser Back jump to the external referrer.
+    if (authLoading) return;
     // Guard against reloading into protected pages without a valid session.
     if (!currentUser && (page === "homeowner-dashboard" || page === "contractor-dashboard" || page === "admin")) {
       if (page === "admin") setPage("admin-login");
@@ -930,11 +938,12 @@ export default function App() {
       setPage(home);
       replaceAppHistory(home, roleHomeFrame(currentUser.role as UserRole));
     }
-  }, [currentUser, page]);
+  }, [authLoading, currentUser, page]);
 
   useEffect(() => {
     const onPopState = (event: PopStateEvent) => {
       const state = (event.state || {}) as AppHistoryState;
+      noteHistoryPop(state);
       if (!state.fixbridgePage) return;
 
       if (currentUser && LOGIN_PAGES.includes(state.fixbridgePage)) {
@@ -1094,38 +1103,56 @@ export default function App() {
           />
 
           {page === "homeowner-login" && (
-            <HomeownerLogin
-              onLogin={(user) => {
-                setCurrentUser(user);
-                loadAllUsers(); // populate contractor cache after sign-in
-                navigate("homeowner-dashboard", { replace: true, user });
-              }}
-              onBack={() => navigate("home")}
-              onGoContractor={() => navigate("contractor-login")}
-            />
+            <AppErrorBoundary
+              section="homeowner-login"
+              homeLabel="Back to home"
+              onGoHome={() => navigate("home")}
+            >
+              <HomeownerLogin
+                onLogin={(user) => {
+                  setCurrentUser(user);
+                  loadAllUsers(); // populate contractor cache after sign-in
+                  navigate("homeowner-dashboard", { replace: true, user });
+                }}
+                onBack={() => navigate("home")}
+                onGoContractor={() => navigate("contractor-login")}
+              />
+            </AppErrorBoundary>
           )}
 
           {page === "contractor-login" && (
-            <ContractorLogin
-              onLogin={(user) => {
-                setCurrentUser(user);
-                loadAllUsers(); // populate contractor cache after sign-in
-                navigate("contractor-dashboard", { replace: true, user });
-              }}
-              onBack={() => navigate("contractors")}
-              onGoHomeowner={() => navigate("homeowner-login")}
-              onGoStaff={() => navigate("admin-login")}
-            />
+            <AppErrorBoundary
+              section="contractor-login"
+              homeLabel="Back to contractors"
+              onGoHome={() => navigate("contractors")}
+            >
+              <ContractorLogin
+                onLogin={(user) => {
+                  setCurrentUser(user);
+                  loadAllUsers(); // populate contractor cache after sign-in
+                  navigate("contractor-dashboard", { replace: true, user });
+                }}
+                onBack={() => navigate("contractors")}
+                onGoHomeowner={() => navigate("homeowner-login")}
+                onGoStaff={() => navigate("admin-login")}
+              />
+            </AppErrorBoundary>
           )}
 
           {page === "admin-login" && (
-            <AdminLogin
-              onLogin={(user) => {
-                setCurrentUser(user);
-                navigate("admin", { replace: true, user });
-              }}
-              onBack={() => navigate("home")}
-            />
+            <AppErrorBoundary
+              section="admin-login"
+              homeLabel="Back to home"
+              onGoHome={() => navigate("home")}
+            >
+              <AdminLogin
+                onLogin={(user) => {
+                  setCurrentUser(user);
+                  navigate("admin", { replace: true, user });
+                }}
+                onBack={() => navigate("home")}
+              />
+            </AppErrorBoundary>
           )}
 
           {page === "partner" && (

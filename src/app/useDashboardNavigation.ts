@@ -4,6 +4,9 @@ import {
   type UserRole,
   canNavigateBack,
   loadNavFrame,
+  framesEqual,
+  hasInternalHistory,
+  noteHistoryPop,
   pushAppHistory,
   replaceAppHistory,
   resolveParentFrame,
@@ -42,9 +45,11 @@ export function useDashboardNavigation<T extends NavFrame>(
   useEffect(() => {
     const onPop = (event: PopStateEvent) => {
       const state = (event.state || {}) as AppHistoryState;
+      noteHistoryPop(state);
       if (state.fixbridgeNav && state.fixbridgeNav.role === role) {
-        applyFrame(sanitizeNavFrame(state.fixbridgeNav) as T);
-        return;
+        const next = sanitizeNavFrame(state.fixbridgeNav) as T;
+        frameRef.current = next;
+        applyFrame(next);
       }
     };
     window.addEventListener("popstate", onPop);
@@ -53,10 +58,12 @@ export function useDashboardNavigation<T extends NavFrame>(
 
   const navigateTo = useCallback(
     (next: T) => {
-      applyFrame(next);
-      frameRef.current = next;
-      saveNavFrame(role, next);
-      pushAppHistory(appPage, next);
+      const clean = sanitizeNavFrame(next) as T;
+      if (framesEqual(frameRef.current, clean)) return;
+      applyFrame(clean);
+      frameRef.current = clean;
+      saveNavFrame(role, clean);
+      pushAppHistory(appPage, clean);
     },
     [applyFrame, appPage, role]
   );
@@ -66,10 +73,18 @@ export function useDashboardNavigation<T extends NavFrame>(
   }, [navigateTo, role]);
 
   const goBack = useCallback(() => {
+    if (hasInternalHistory()) {
+      window.history.back();
+      return;
+    }
     const parent = resolveParentFrame(frameRef.current);
-    if (!parent) return;
-    navigateTo(parent as T);
-  }, [navigateTo]);
+    const fallback = (parent || roleHomeFrame(role)) as T;
+    if (framesEqual(frameRef.current, fallback)) return;
+    applyFrame(fallback);
+    frameRef.current = fallback;
+    saveNavFrame(role, fallback);
+    replaceAppHistory(appPage, fallback);
+  }, [applyFrame, appPage, role]);
 
   const canBack = canNavigateBack(frame);
 

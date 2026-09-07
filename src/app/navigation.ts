@@ -293,14 +293,81 @@ export type AppHistoryState = {
   fixbridgePage?: AppPage;
   fixbridgeNav?: NavFrame;
   fixbridgeAuth?: boolean;
+  fixbridgeDepth?: number;
 };
 
+let historyDepth = 1;
+
+export function readHistoryState(): AppHistoryState {
+  if (typeof window === "undefined") return {};
+  return (window.history.state || {}) as AppHistoryState;
+}
+
+export function currentHistoryDepth() {
+  const state = readHistoryState();
+  if (typeof state.fixbridgeDepth === "number" && state.fixbridgeDepth > 0) {
+    historyDepth = state.fixbridgeDepth;
+  }
+  return historyDepth;
+}
+
+export function hasInternalHistory() {
+  return currentHistoryDepth() > 1;
+}
+
+function historyUrl() {
+  return window.location.pathname + window.location.search;
+}
+
+function writeHistory(mode: "push" | "replace", page: AppPage, nav?: NavFrame) {
+  const prev = readHistoryState();
+  const depth =
+    mode === "push"
+      ? Math.max(1, Number(prev.fixbridgeDepth) || historyDepth || 1) + 1
+      : Math.max(1, Number(prev.fixbridgeDepth) || historyDepth || 1);
+  historyDepth = depth;
+  const state: AppHistoryState = {
+    fixbridgePage: page,
+    fixbridgeAuth: true,
+    fixbridgeNav: nav,
+    fixbridgeDepth: depth,
+  };
+  if (mode === "push") window.history.pushState(state, "", historyUrl());
+  else window.history.replaceState(state, "", historyUrl());
+}
+
+/** Tag the landing entry as FixBridge without adding a fake step. External referrer stays behind it. */
+export function seedAppHistory(page: AppPage, nav?: NavFrame) {
+  const prev = readHistoryState();
+  if (prev.fixbridgePage) {
+    historyDepth = Math.max(1, Number(prev.fixbridgeDepth) || 1);
+    return;
+  }
+  historyDepth = 1;
+  window.history.replaceState(
+    { fixbridgePage: page, fixbridgeAuth: true, fixbridgeNav: nav, fixbridgeDepth: 1 },
+    "",
+    historyUrl()
+  );
+}
+
+export function noteHistoryPop(state: AppHistoryState | null | undefined) {
+  if (typeof state?.fixbridgeDepth === "number" && state.fixbridgeDepth > 0) {
+    historyDepth = state.fixbridgeDepth;
+    return;
+  }
+  historyDepth = Math.max(1, historyDepth - 1);
+}
+
 export function pushAppHistory(page: AppPage, nav?: NavFrame) {
-  const state: AppHistoryState = { fixbridgePage: page, fixbridgeAuth: true, fixbridgeNav: nav };
-  window.history.pushState(state, "", window.location.pathname + window.location.search);
+  writeHistory("push", page, nav);
 }
 
 export function replaceAppHistory(page: AppPage, nav?: NavFrame) {
-  const state: AppHistoryState = { fixbridgePage: page, fixbridgeAuth: true, fixbridgeNav: nav };
-  window.history.replaceState(state, "", window.location.pathname + window.location.search);
+  writeHistory("replace", page, nav);
+}
+
+export function framesEqual(a: NavFrame | undefined, b: NavFrame | undefined) {
+  if (!a || !b || a.role !== b.role) return false;
+  return JSON.stringify(sanitizeNavFrame(a)) === JSON.stringify(sanitizeNavFrame(b));
 }

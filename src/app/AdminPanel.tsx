@@ -554,7 +554,23 @@ export default function AdminPanel({
     ]
   );
 
-  const { goHome, goBack, canBack } = useDashboardNavigation("admin", "admin", navFrame, applyNavFrame);
+  const { goHome, goBack, canBack, navigateTo } = useDashboardNavigation("admin", "admin", navFrame, applyNavFrame);
+
+  function openAdminTab(nextTab: Tab) {
+    navigateTo({
+      role: "admin",
+      tab: nextTab,
+      selectedJobId: null,
+      drawerOpen: false,
+      selectedHomeownerProfileId: null,
+      homeownerRecordFocus: null,
+      expandedContractorId: null,
+      selectedSupportTicket: null,
+      mobileNav: false,
+      cmdOpen: false,
+      notifOpen: false,
+    });
+  }
 
   async function refreshStaff() {
     const r = await loadStaffAdmins();
@@ -831,8 +847,7 @@ export default function AdminPanel({
                   key={item.id}
                   type="button"
                   onClick={() => {
-                    setTab(item.id);
-                    setMobileNav(false);
+                    openAdminTab(item.id);
                   }}
                   className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-all duration-200 ${
                     tab === item.id
