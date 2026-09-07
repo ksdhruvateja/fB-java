@@ -1782,7 +1782,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         title: d.title,
         fileName: d.file_name,
         mimeType: d.mime_type,
-        dataUrl: d.data_url,
+        // Omit bulky data URLs from list/save payloads. Clients fetch one file on demand.
+        dataUrl: d.data_url || null,
+        hasFile: Boolean(d.data_url) || d.has_file === true,
         notes: d.notes,
         systemKey: d.system_key,
         createdAt: d.created_at,
@@ -1794,9 +1796,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     };
   }
 
-  async function loadPropertyDocuments(propertyId, ownerUserId) {
+  async function loadPropertyDocuments(propertyId, ownerUserId, { includeDataUrl = false } = {}) {
+    const columns = includeDataUrl
+      ? '*'
+      : `id, property_id, owner_user_id, category, title, file_name, mime_type, notes, system_key, created_at,
+         (data_url IS NOT NULL AND length(data_url) > 0) AS has_file`;
     const { rows } = await pool.query(
-      `SELECT * FROM property_documents
+      `SELECT ${columns} FROM property_documents
        WHERE property_id=$1 AND owner_user_id=$2
        ORDER BY created_at DESC`,
       [propertyId, ownerUserId]
@@ -1804,14 +1810,10 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     return rows;
   }
 
-  async function serializeOwnedProperty(row, ownerUserId, planCode) {
-    const vault = await resolveFeatureEntitlement(pool, {
-      user: { planCode },
-      feature: 'document_vault',
-      planCode,
-    });
-    const includeVault = vault.allowed;
-    const docs = includeVault ? await loadPropertyDocuments(row.id, ownerUserId) : [];
+  async function serializeOwnedProperty(row, ownerUserId, _planCode, { includeDataUrl = false } = {}) {
+    // Maintenance passport files belong to the property owner. Do not hide them
+    // behind the Pro document-vault flag or uploads vanish after refresh.
+    const docs = await loadPropertyDocuments(row.id, ownerUserId, { includeDataUrl });
     return serializeProperty(row, docs);
   }
 
@@ -2035,7 +2037,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
-  app.post('/api/properties/:id/documents', requireAuth, requireHomeCareFeature('document_vault'), async (req, res) => {
+  app.post('/api/properties/:id/documents', requireAuth, async (req, res) => {
     try {
       const config = await getHomeCareConfig(pool);
       const propertyId = Number(req.params.id);
@@ -2063,7 +2065,22 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           message: `Document file is required (max ~${config.documents.maxFileSizeMb}MB).`,
         });
       }
-      const category = String(b.category || 'other').slice(0, 40);
+      const allowedCategories = new Set([
+        'receipt', 'warranty', 'manual', 'invoice', 'inspection', 'contractor',
+        'photo_before', 'photo_after', 'other',
+      ]);
+      const category = allowedCategories.has(String(b.category || ''))
+        ? String(b.category)
+        : 'other';
+      const mime = String(b.mimeType || '').slice(0, 80);
+      const allowedMime = /^(image\/(jpeg|png)|application\/pdf|application\/msword|application\/vnd.openxmlformats-officedocument.wordprocessingml.document)$/i;
+      if (mime && !allowedMime.test(mime)) {
+        return res.status(400).json({ ok: false, message: 'Unsupported file type.' });
+      }
+      const rawName = String(b.fileName || 'document').replace(/[/\\]/g, '').replace(/\.\./g, '').slice(0, 160);
+      const systemKey = b.systemKey && String(b.systemKey) !== 'undefined'
+        ? String(b.systemKey).slice(0, 60)
+        : null;
       const { rows } = await pool.query(
         `INSERT INTO property_documents
           (property_id, owner_user_id, category, title, file_name, mime_type, data_url, notes, system_key)
@@ -2072,15 +2089,47 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           propertyId,
           req.authUser.id,
           category,
-          b.title ? String(b.title).slice(0, 120) : null,
-          b.fileName ? String(b.fileName).slice(0, 160) : null,
-          b.mimeType ? String(b.mimeType).slice(0, 80) : null,
+          b.title ? String(b.title).slice(0, 120) : rawName,
+          rawName,
+          mime || null,
           dataUrl,
           b.notes ? String(b.notes).slice(0, 500) : null,
-          b.systemKey ? String(b.systemKey).slice(0, 60) : null,
+          systemKey,
         ]
       );
       const d = rows[0];
+      res.json({
+        ok: true,
+        document: {
+          id: Number(d.id),
+          category: d.category,
+          title: d.title,
+          fileName: d.file_name,
+          mimeType: d.mime_type,
+          hasFile: true,
+          notes: d.notes,
+          systemKey: d.system_key,
+          createdAt: d.created_at,
+        },
+      });
+    } catch (e) {
+      console.error('property document upload:', e?.message || e);
+      res.status(500).json({ ok: false, message: 'Could not save document. Please try again.' });
+    }
+  });
+
+  app.get('/api/properties/:id/documents/:docId', requireAuth, async (req, res) => {
+    try {
+      const propertyId = Number(req.params.id);
+      const docId = Number(req.params.docId);
+      const { rows } = await pool.query(
+        `SELECT d.* FROM property_documents d
+         JOIN properties p ON p.id = d.property_id
+         WHERE d.id=$1 AND d.property_id=$2 AND p.owner_user_id=$3`,
+        [docId, propertyId, req.authUser.id]
+      );
+      const d = rows[0];
+      if (!d) return res.status(404).json({ ok: false, message: 'Document not found.' });
       res.json({
         ok: true,
         document: {
@@ -2096,12 +2145,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         },
       });
     } catch (e) {
-      console.error(e);
-      res.status(500).json({ ok: false, message: 'Server error' });
+      console.error('property document get:', e?.message || e);
+      res.status(500).json({ ok: false, message: 'Could not load document.' });
     }
   });
 
-  app.delete('/api/properties/:id/documents/:docId', requireAuth, requireHomeCareFeature('document_vault'), async (req, res) => {
+  app.delete('/api/properties/:id/documents/:docId', requireAuth, async (req, res) => {
     try {
       const propertyId = Number(req.params.id);
       const docId = Number(req.params.docId);

@@ -18,6 +18,7 @@ import {
   analyzePropertyDocument,
   applyPropertyDocumentExtract,
   deletePropertyDocument,
+  getPropertyDocument,
   updateProperty,
   type HomeSystemRecord,
   type Property,
@@ -154,6 +155,12 @@ export default function HomeownerPropertyPage({
   const [extractDoc, setExtractDoc] = useState<PropertyDocument | null>(null);
   const [extractDraft, setExtractDraft] = useState<PropertyDocumentExtraction | null>(null);
   const [extractBusy, setExtractBusy] = useState(false);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [localDocs, setLocalDocs] = useState<PropertyDocument[]>([]);
+
+  const ALLOWED_DOC = /\.(pdf|jpe?g|png|doc|docx)$/i;
 
   useEffect(() => {
     if (!selected) return;
@@ -300,9 +307,30 @@ export default function HomeownerPropertyPage({
     }
   }
 
-  async function onUploadDoc(file: File | null) {
-    if (!selected || !file) return;
-    onBusy(true);
+  function chooseFile(file: File | null) {
+    setUploadError(null);
+    if (!file) {
+      setPendingFile(null);
+      return;
+    }
+    const okType = ALLOWED_DOC.test(file.name) || /^(image\/(jpeg|png)|application\/pdf|application\/msword|application\/vnd.openxmlformats-officedocument.wordprocessingml.document)$/i.test(file.type);
+    if (!okType) {
+      setPendingFile(null);
+      setUploadError("Unsupported file type. Use PDF, JPG, JPEG, PNG, DOC, or DOCX.");
+      return;
+    }
+    if (file.size > 4 * 1024 * 1024) {
+      setPendingFile(null);
+      setUploadError("This file is too large. Maximum size is 4 MB.");
+      return;
+    }
+    setPendingFile(file);
+  }
+
+  async function onUploadDoc(file: File | null = pendingFile) {
+    if (!selected || !file || uploadBusy) return;
+    setUploadBusy(true);
+    setUploadError(null);
     onError(null);
     try {
       const dataUrl = await fileToDataUrl(file);
@@ -314,19 +342,53 @@ export default function HomeownerPropertyPage({
         dataUrl,
         systemKey: docSystemKey || undefined,
       });
-      if (!r.ok) {
-        onError(r.message || "Could not upload document.");
+      if (!r.ok || !r.document) {
+        setUploadError(r.message || "Upload failed. Please try again.");
         return;
       }
+      setLocalDocs((prev) => [r.document!, ...prev.filter((d) => d.id !== r.document!.id)]);
       setDocTitle("");
-      if (onReloadProperty) await onReloadProperty(selected.id);
-      else await onRefresh();
+      setPendingFile(null);
     } catch (err) {
-      onError(err instanceof Error ? err.message : "Upload failed.");
+      const message = err instanceof Error && /abort/i.test(err.message)
+        ? "Upload failed. Please try again."
+        : err instanceof Error
+          ? err.message
+          : "Upload failed. Please try again.";
+      setUploadError(message);
     } finally {
-      onBusy(false);
+      setUploadBusy(false);
       if (fileRef.current) fileRef.current.value = "";
     }
+  }
+
+  async function loadDocumentUrl(doc: PropertyDocument) {
+    if (doc.dataUrl) return doc.dataUrl;
+    if (!selected) return null;
+    const r = await getPropertyDocument(selected.id, doc.id);
+    if (!r.ok || !r.document?.dataUrl) {
+      onError(r.message || "Could not open file.");
+      return null;
+    }
+    return r.document.dataUrl;
+  }
+
+  async function openDocument(doc: PropertyDocument) {
+    const dataUrl = await loadDocumentUrl(doc);
+    if (!dataUrl) return;
+    window.open(dataUrl, "_blank", "noopener,noreferrer");
+  }
+
+  async function downloadDocument(doc: PropertyDocument) {
+    const dataUrl = await loadDocumentUrl(doc);
+    if (!dataUrl) return;
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = doc.fileName || doc.title || "document";
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
 
   async function removeDoc(doc: PropertyDocument) {
@@ -387,7 +449,9 @@ export default function HomeownerPropertyPage({
   }
 
   const docsByCategory = useMemo(() => {
-    const list = selected?.documents || [];
+    const fromServer = selected?.documents || [];
+    const ids = new Set(fromServer.map((d) => d.id));
+    const list = [...localDocs.filter((d) => !ids.has(d.id)), ...fromServer];
     const map = new Map<string, PropertyDocument[]>();
     for (const d of list) {
       const key = d.category || "other";
@@ -395,7 +459,7 @@ export default function HomeownerPropertyPage({
       map.get(key)!.push(d);
     }
     return map;
-  }, [selected?.documents]);
+  }, [selected?.documents, localDocs]);
 
   return (
     <section className="mx-auto max-w-5xl space-y-5">
@@ -816,19 +880,53 @@ export default function HomeownerPropertyPage({
                   />
                   <button
                     type="button"
-                    disabled={busy}
                     onClick={() => fileRef.current?.click()}
-                    className="sm:col-span-2 inline-flex items-center justify-center gap-2 rounded-2xl border border-dashed border-border px-4 py-6 text-sm font-semibold hover:border-primary/40 hover:bg-primary/[0.04] disabled:opacity-60"
+                    className="sm:col-span-2 inline-flex items-center justify-center gap-2 rounded-2xl border border-dashed border-border px-4 py-6 text-sm font-semibold hover:border-primary/40 hover:bg-primary/[0.04]"
                   >
-                    {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
-                    Upload file
+                    <ImagePlus className="h-4 w-4" />
+                    Choose file
                   </button>
+                  {pendingFile ? (
+                    <div className="sm:col-span-2 rounded-xl border border-border/70 bg-muted/20 px-3 py-3 text-sm">
+                      <p className="break-all font-medium">{pendingFile.name}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {(pendingFile.type || "File").split("/").pop()?.toUpperCase()} • {(pendingFile.size / (1024 * 1024)).toFixed(1)} MB
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Category: {DOC_CATEGORIES.find((c) => c.id === docCategory)?.label || "Other"}
+                        {" · "}
+                        Linked to: {systems.find((s) => s.key === docSystemKey)?.name || "None"}
+                      </p>
+                      <button
+                        type="button"
+                        disabled={uploadBusy}
+                        onClick={() => void onUploadDoc(pendingFile)}
+                        className="mt-3 inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                      >
+                        {uploadBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                        {uploadBusy ? `Uploading ${pendingFile.name}…` : "Upload"}
+                      </button>
+                    </div>
+                  ) : null}
+                  {uploadError ? (
+                    <div className="sm:col-span-2 flex flex-wrap items-center gap-2 text-xs text-red-700">
+                      <span>{uploadError}</span>
+                      {pendingFile ? (
+                        <button type="button" className="font-semibold underline" onClick={() => void onUploadDoc(pendingFile)}>
+                          Retry
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <input
                     ref={fileRef}
                     type="file"
-                    accept="image/*,.pdf,application/pdf"
+                    accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,image/jpeg,image/png,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     className="hidden"
-                    onChange={(e) => void onUploadDoc(e.target.files?.[0] || null)}
+                    onChange={(e) => {
+                      chooseFile(e.target.files?.[0] || null);
+                      e.target.value = "";
+                    }}
                   />
                 </div>
 
@@ -848,7 +946,7 @@ export default function HomeownerPropertyPage({
                               className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-muted/20 px-3 py-2.5"
                             >
                               <div className="min-w-0 flex items-center gap-2.5">
-                                {doc.mimeType?.startsWith("image/") ? (
+                                {doc.mimeType?.startsWith("image/") && doc.dataUrl ? (
                                   <img
                                     src={doc.dataUrl}
                                     alt=""
@@ -860,20 +958,37 @@ export default function HomeownerPropertyPage({
                                   </span>
                                 )}
                                 <div className="min-w-0">
-                                  <a
-                                    href={doc.dataUrl}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="block truncate text-sm font-medium hover:text-primary"
+                                  <button
+                                    type="button"
+                                    onClick={() => void openDocument(doc)}
+                                    className="block max-w-full truncate text-left text-sm font-medium hover:text-primary"
                                   >
                                     {doc.title || doc.fileName || "Document"}
-                                  </a>
+                                  </button>
                                   <p className="text-[11px] text-muted-foreground">
-                                    {[formatDocDate(doc.createdAt), doc.systemKey].filter(Boolean).join(" · ")}
+                                    {[
+                                      DOC_CATEGORIES.find((c) => c.id === doc.category)?.label,
+                                      systems.find((s) => s.key === doc.systemKey)?.name,
+                                      formatDocDate(doc.createdAt),
+                                    ].filter(Boolean).join(" · ")}
                                   </p>
                                 </div>
                               </div>
                               <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => void openDocument(doc)}
+                                  className="rounded-lg px-2 py-1 text-xs font-semibold text-primary hover:bg-primary/10"
+                                >
+                                  View
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void downloadDocument(doc)}
+                                  className="rounded-lg px-2 py-1 text-xs font-semibold text-muted-foreground hover:bg-muted"
+                                >
+                                  Download
+                                </button>
                                 <button
                                   type="button"
                                   disabled={extractBusy || busy}
@@ -903,7 +1018,7 @@ export default function HomeownerPropertyPage({
                       </div>
                     );
                   })}
-                  {(selected.documents || []).length === 0 && (
+                  {(selected.documents || []).length === 0 && localDocs.length === 0 && !uploadBusy && (
                     <div className="rounded-2xl border border-dashed border-border px-4 py-8 text-center">
                       <Building2 className="mx-auto h-6 w-6 text-muted-foreground" />
                       <p className="mt-2 text-sm text-muted-foreground">No files yet — upload your first passport document.</p>
