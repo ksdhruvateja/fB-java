@@ -403,7 +403,7 @@ export default function CustomerTrustSection() {
             >
               Customers Review
             </h2>
-            <p className="text-muted-foreground text-sm sm:text-base max-w-md mx-auto">
+            <div className="text-muted-foreground text-sm sm:text-base max-w-md mx-auto">
               What homeowners say about {brand.productName}
               {stats.count > 0 ? (
                 <>
@@ -417,7 +417,7 @@ export default function CustomerTrustSection() {
                 </>
               ) : null}
               .
-            </p>
+            </div>
             <button
               type="button"
               onClick={() => {

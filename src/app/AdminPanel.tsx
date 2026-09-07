@@ -12,6 +12,7 @@ import { brand } from "../config/brand";
 import AppBackButton from "./AppBackButton";
 import { type AdminNavFrame } from "./navigation";
 import { sanitizeAdminTab } from "./adminNav";
+import { useDashboardNavigation } from "./useDashboardNavigation";
 import {
   contractorSearchBlob,
   fetchAdminUser,
