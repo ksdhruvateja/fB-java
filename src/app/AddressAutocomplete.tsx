@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { fetchAddressAutocomplete, type AddressSuggestion } from "./addressApi";
 
-const DEBOUNCE_MS = 300;
+const DEBOUNCE_MS = 320;
 const MIN_CHARS = 3;
 
 type Props = {
@@ -86,7 +86,7 @@ export function AddressAutocomplete({
           const list = res.suggestions || [];
           setSuggestions(list);
           if (list.length === 0) {
-            setHint("No matching addresses found. Continue entering the address manually.");
+            setHint("No suggestions found. You can continue entering the address manually.");
           } else {
             setHint(null);
           }

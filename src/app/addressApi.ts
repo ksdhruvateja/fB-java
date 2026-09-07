@@ -1,5 +1,4 @@
 import { api } from "./platformApi";
-import { getStoredToken } from "./auth";
 
 /** Service-area check by ZIP. */
 export async function checkServiceAreaCoverage(zip: string) {
@@ -67,47 +66,83 @@ export type AddressAutocompleteResponse = {
   code?: string;
 };
 
-/** Geoapify suggestions via FixBridge backend proxy (API key never in browser). */
+const UNAVAILABLE =
+  "Address suggestions are temporarily unavailable. You can continue entering the address manually.";
+
+const suggestionCache = new Map<string, { at: number; data: AddressAutocompleteResponse }>();
+const SUGGESTION_CACHE_MS = 8 * 60 * 1000;
+
+function cacheKey(q: string, limit: number) {
+  return `${limit}:${q.toLowerCase()}`;
+}
+
+function readSuggestionCache(key: string) {
+  const hit = suggestionCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > SUGGESTION_CACHE_MS) {
+    suggestionCache.delete(key);
+    return null;
+  }
+  return hit.data;
+}
+
+/**
+ * Geoapify suggestions via the public FixBridge proxy.
+ * The API key stays server-side. Do not send the session token: a stale JWT
+ * 401s `/api/address/autocomplete` and was shown as a provider outage.
+ */
 export async function fetchAddressAutocomplete(
   q: string,
   opts?: { signal?: AbortSignal; limit?: number }
 ): Promise<AddressAutocompleteResponse> {
-  const token = getStoredToken();
-  const params = new URLSearchParams({
-    q: q.trim(),
-    limit: String(opts?.limit ?? 6),
-  });
-  const path = token
-    ? `/api/address/autocomplete?${params}`
-    : `/api/public/address/autocomplete?${params}`;
+  const query = q.trim();
+  const limit = opts?.limit ?? 6;
+  if (query.length < 3) {
+    return { ok: true, suggestions: [], skipped: true };
+  }
+
+  const key = cacheKey(query, limit);
+  const cached = readSuggestionCache(key);
+  if (cached) return cached;
+
+  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  const path = `/api/public/address/autocomplete?${params}`;
   try {
-    const headers: Record<string, string> = { Accept: "application/json" };
-    if (token) headers.Authorization = `Bearer ${token}`;
     const res = await fetch(path, {
       method: "GET",
-      headers,
+      headers: { Accept: "application/json" },
       signal: opts?.signal,
     });
-    const data = (await res.json()) as AddressAutocompleteResponse;
-    if (!res.ok) {
+    const text = await res.text();
+    let data: AddressAutocompleteResponse | null = null;
+    try {
+      data = JSON.parse(text) as AddressAutocompleteResponse;
+    } catch {
+      data = null;
+    }
+    if (!res.ok || !data || typeof data !== "object") {
       return {
         ok: true,
         suggestions: [],
         unavailable: true,
-        message:
-          data.message ||
-          "Address suggestions are temporarily unavailable. You can continue entering the address manually.",
+        message: data?.message || UNAVAILABLE,
       };
     }
-    return data;
+    if (data.unavailable) {
+      return { ...data, suggestions: data.suggestions || [], message: data.message || UNAVAILABLE };
+    }
+    const normalized = { ...data, suggestions: data.suggestions || [] };
+    if ((normalized.suggestions || []).length > 0) {
+      suggestionCache.set(key, { at: Date.now(), data: normalized });
+    }
+    return normalized;
   } catch (e) {
     if ((e as Error)?.name === "AbortError") throw e;
     return {
       ok: true,
       suggestions: [],
       unavailable: true,
-      message:
-        "Address suggestions are temporarily unavailable. You can continue entering the address manually.",
+      message: UNAVAILABLE,
     };
   }
 }

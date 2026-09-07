@@ -2,11 +2,22 @@ import rateLimit from 'express-rate-limit';
 import { validateAddressFormat, zip5 } from './address-utils.js';
 import { autocompleteAddress, geoapifyConfigured, geoapifyCountryFilter } from './geoapify-address.js';
 
+function addressRateLimitKey(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  const fromHeader = Array.isArray(forwarded)
+    ? forwarded[0]
+    : String(forwarded || '').split(',')[0].trim();
+  const nfIp = String(req.headers['x-nf-client-connection-ip'] || '').trim();
+  return req.ip || fromHeader || nfIp || 'unknown';
+}
+
 const addressLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: Number(process.env.ADDRESS_RATE_LIMIT_MAX || 120),
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { ip: false, xForwardedForHeader: false },
+  keyGenerator: addressRateLimitKey,
   message: { ok: false, message: 'Too many address requests. Try again later.' },
 });
 

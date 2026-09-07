@@ -6,6 +6,22 @@
 const GEOAPIFY_AUTOCOMPLETE_URL = 'https://api.geoapify.com/v1/geocode/autocomplete';
 const DEFAULT_LIMIT = 6;
 const MAX_LIMIT = 8;
+const SUGGESTION_CACHE_MS = 8 * 60 * 1000;
+const suggestionCache = new Map();
+
+function cacheKey(text, limit, filter) {
+  return `${filter}|${limit}|${String(text || '').trim().toLowerCase()}`;
+}
+
+function readSuggestionCache(key) {
+  const hit = suggestionCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > SUGGESTION_CACHE_MS) {
+    suggestionCache.delete(key);
+    return null;
+  }
+  return hit.value;
+}
 
 export function geoapifyConfigured() {
   return Boolean(String(process.env.GEOAPIFY_API_KEY || '').trim());
@@ -15,14 +31,28 @@ export function geoapifyCountryFilter() {
   return String(process.env.GEOAPIFY_COUNTRY_FILTER || 'countrycode:us').trim() || 'countrycode:us';
 }
 
+function streetAddressLine(raw = {}) {
+  return [raw.housenumber, raw.street].filter(Boolean).join(' ').trim();
+}
+
 /**
  * Map a Geoapify result into FixBridge address fields.
  * Does NOT put city/state/ZIP into addressLine2 (that field is apartment/suite/unit).
+ * Prefer the street line over a POI/amenity name (e.g. "Google Building 41").
  */
 export function mapGeoapifyResult(raw = {}) {
-  const addressLine1 = String(raw.address_line1 || '').trim()
-    || [raw.housenumber, raw.street].filter(Boolean).join(' ').trim()
-    || String(raw.name || '').trim()
+  const streetAddress = streetAddressLine(raw);
+  const named = String(raw.name || '').trim();
+  const providerLine1 = String(raw.address_line1 || '').trim();
+  const houseNumber = String(raw.housenumber || '').trim();
+  const providerLineIsPlaceName =
+    !providerLine1
+    || (named && providerLine1 === named)
+    || (houseNumber && !providerLine1.includes(houseNumber));
+  const addressLine1 = (streetAddress && providerLineIsPlaceName ? streetAddress : '')
+    || providerLine1
+    || streetAddress
+    || named
     || String(raw.formatted || '').split(',')[0]?.trim()
     || '';
 
@@ -81,11 +111,16 @@ export async function autocompleteAddress({ text, limit = DEFAULT_LIMIT, signal 
   }
 
   const capped = Math.min(Math.max(Number(limit) || DEFAULT_LIMIT, 1), MAX_LIMIT);
+  const filter = geoapifyCountryFilter();
+  const key = cacheKey(q, capped, filter);
+  const cached = readSuggestionCache(key);
+  if (cached) return cached;
+
   const params = new URLSearchParams({
     text: q,
     format: 'json',
     limit: String(capped),
-    filter: geoapifyCountryFilter(),
+    filter,
     lang: 'en',
     apiKey: String(process.env.GEOAPIFY_API_KEY).trim(),
   });
@@ -171,9 +206,13 @@ export async function autocompleteAddress({ text, limit = DEFAULT_LIMIT, signal 
     .filter((s) => s.addressLine1)
     .slice(0, capped);
 
-  return {
+  const payload = {
     ok: true,
     configured: true,
     suggestions,
   };
+  if (suggestions.length > 0) {
+    suggestionCache.set(key, { at: Date.now(), value: payload });
+  }
+  return payload;
 }
