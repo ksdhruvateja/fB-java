@@ -41,6 +41,7 @@ import {
 import { isValidUsZip, normalizeZip } from "./zipCode";
 import { ConsentCheckbox, ConsentSection, consentsFromState } from "./ConsentCheckbox";
 import GoogleSignInButton from "./GoogleSignInButton";
+import AuthSigningOverlay from "./AuthSigningOverlay";
 import {
   completeGoogleMarketingPreferences,
   signInWithGoogle,
@@ -87,6 +88,17 @@ export default function HomeownerLogin({
  const [googlePendingUser, setGooglePendingUser] = useState<AuthUser | null>(null);
  const [googleConsentPending, setGoogleConsentPending] = useState(false);
  const [pendingGoogleCredential, setPendingGoogleCredential] = useState<string | null>(null);
+ const [pendingSignupToken, setPendingSignupToken] = useState<string | null>(null);
+ const [googleProfile, setGoogleProfile] = useState<{
+ email: string;
+ name: string;
+ givenName?: string | null;
+ familyName?: string | null;
+ } | null>(null);
+ const [googlePhone, setGooglePhone] = useState("");
+ const [googleSigning, setGoogleSigning] = useState(false);
+ const [googleOverlayError, setGoogleOverlayError] = useState<string | null>(null);
+ const [lastGoogleCredential, setLastGoogleCredential] = useState<string | null>(null);
 
  const [reportStep, setReportStep] = useState<ReportStep>(0);
  const [reportTradeId, setReportTradeId] = useState<ServiceTradeId | "">("");
@@ -264,37 +276,56 @@ export default function HomeownerLogin({
 
  const handleGoogleCredential = useCallback(async (credential: string, opts?: { forceConsents?: boolean }) => {
  setLoading(true);
+ setGoogleSigning(true);
+ setGoogleOverlayError(null);
+ setLastGoogleCredential(credential);
  setError("");
  try {
  const referredByCode = getPendingReferralCode() || undefined;
  const body: Record<string, unknown> = {
  role: "homeowner",
  consents: opts?.forceConsents || tab === "signup" ? consentsFromState(accountConsents) : undefined,
- marketingEmailOptIn: tab === "signup" ? marketingEmailOptIn : false,
- marketingSmsOptIn: tab === "signup" ? marketingSmsOptIn : false,
- phone: tab === "report" ? reportPhone : undefined,
+ marketingEmailOptIn: tab === "signup" || opts?.forceConsents ? marketingEmailOptIn : false,
+ marketingSmsOptIn: tab === "signup" || opts?.forceConsents ? marketingSmsOptIn : false,
+ phone: opts?.forceConsents ? googlePhone || undefined : tab === "report" ? reportPhone : undefined,
  referredByCode,
+ pendingSignupToken: opts?.forceConsents ? pendingSignupToken || undefined : undefined,
  };
- const data = await signInWithGoogle(credential, body, "homeowner");
+ const data = await signInWithGoogle(opts?.forceConsents && pendingSignupToken ? "" : credential, body, "homeowner");
  if (!data.ok) {
  if (data.code === "CONSENT_REQUIRED") {
+ const profile = (data.googleProfile || {}) as { email?: string; name?: string; givenName?: string; familyName?: string };
  setPendingGoogleCredential(credential);
+ setPendingSignupToken(typeof data.pendingSignupToken === "string" ? data.pendingSignupToken : null);
+ setGoogleProfile({
+ email: String(profile.email || ""),
+ name: String(profile.name || ""),
+ givenName: profile.givenName || null,
+ familyName: profile.familyName || null,
+ });
+ setGooglePhone("");
  setGoogleConsentPending(true);
+ setGoogleSigning(false);
  setLoading(false);
  return;
  }
- if (data.code === "ACCOUNT_SUSPENDED") {
- setError(data.message || "This account is not active.");
- } else {
- setError(data.message || "We couldn't sign you in with Google. Please try again.");
- }
+ const message =
+ data.code === "ROLE_PORTAL_MISMATCH" || data.code === "GOOGLE_ALREADY_LINKED"
+ ? data.message || "This Google account is associated with a different FixBridge account type."
+ : data.code === "ACCOUNT_SUSPENDED"
+ ? data.message || "This account is not active."
+ : data.message || "We couldn't sign you in with Google. Please try again.";
+ setError(message);
+ setGoogleOverlayError(message);
  setLoading(false);
  return;
  }
  const user = data.user as AuthUser;
  const token = data.token as string;
  if (!user?.id) {
- setError("Sign-in succeeded but no account was returned. Please try again.");
+ const message = "Sign-in succeeded but no account was returned. Please try again.";
+ setError(message);
+ setGoogleOverlayError(message);
  setLoading(false);
  return;
  }
@@ -303,26 +334,29 @@ export default function HomeownerLogin({
  if (data.needsMarketingOnboarding) {
  setGooglePendingUser(user);
  setGoogleOnboarding(true);
+ setGoogleSigning(false);
  setLoading(false);
  return;
  }
+ setGoogleSigning(false);
  onLogin(user);
  } catch {
- setError("We couldn't sign you in with Google. Please try again.");
+ const message = "We couldn't sign you in with Google. Please try again.";
+ setError(message);
+ setGoogleOverlayError(message);
  } finally {
  setLoading(false);
  }
- }, [tab, accountConsents, marketingEmailOptIn, marketingSmsOptIn, reportPhone, onLogin]);
+ }, [tab, accountConsents, marketingEmailOptIn, marketingSmsOptIn, reportPhone, googlePhone, pendingSignupToken, onLogin]);
 
  const completeGoogleConsentSignup = async () => {
- if (!pendingGoogleCredential) return;
+ if (!pendingGoogleCredential && !pendingSignupToken) return;
  if (!accountConsents.ACCOUNT_TERMS || !accountConsents.PRIVACY_POLICY) {
  setError("You must agree to the Terms of Service and Privacy Policy.");
  return;
  }
  setGoogleConsentPending(false);
- await handleGoogleCredential(pendingGoogleCredential, { forceConsents: true });
- setPendingGoogleCredential(null);
+ await handleGoogleCredential(pendingGoogleCredential || "", { forceConsents: true });
  };
 
  const completeGoogleOnboarding = async () => {
@@ -520,6 +554,11 @@ export default function HomeownerLogin({
  disabled={loading}
  text={tab === "signup" ? "signup_with" : "signin_with"}
  onCredential={(cred) => void handleGoogleCredential(cred)}
+ onError={(message) => {
+ setError(message);
+ setGoogleSigning(false);
+ setGoogleOverlayError(null);
+ }}
  />
  <div className="flex items-center gap-3 text-xs text-neutral-400">
  <span className="h-px flex-1 bg-neutral-200" />
@@ -668,11 +707,43 @@ export default function HomeownerLogin({
  {googleConsentPending && (
  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
  <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
- <h2 className="text-lg font-bold text-neutral-900">Complete your account</h2>
+ <h2 className="text-lg font-bold text-neutral-900">Complete your FixBridge registration</h2>
  <p className="mt-1 text-sm text-neutral-500">
- Google verified your identity. Accept the required policies to finish creating your FixBridge account.
+ Your Google account was verified. Finish the required details and agreements to create your homeowner account.
  </p>
  <div className="mt-4 space-y-3">
+ <div className="grid grid-cols-2 gap-2">
+ <div>
+ <AuthFieldLabel>First name</AuthFieldLabel>
+ <input
+ readOnly
+ value={googleProfile?.givenName || googleProfile?.name.split(" ")[0] || ""}
+ className={authStyles.input}
+ />
+ </div>
+ <div>
+ <AuthFieldLabel>Last name</AuthFieldLabel>
+ <input
+ readOnly
+ value={googleProfile?.familyName || googleProfile?.name.split(" ").slice(1).join(" ") || ""}
+ className={authStyles.input}
+ />
+ </div>
+ </div>
+ <div>
+ <AuthFieldLabel>Email</AuthFieldLabel>
+ <input readOnly type="email" value={googleProfile?.email || ""} className={authStyles.input} />
+ </div>
+ <div>
+ <AuthFieldLabel>Phone</AuthFieldLabel>
+ <input
+ type="tel"
+ placeholder="Phone number"
+ value={googlePhone}
+ onChange={(e) => setGooglePhone(e.target.value)}
+ className={authStyles.input}
+ />
+ </div>
  <ConsentCheckbox
  id="google-terms"
  checked={accountConsents.ACCOUNT_TERMS === true}
@@ -689,6 +760,20 @@ export default function HomeownerLogin({
  documentKey="PRIVACY_POLICY"
  documentLabel="Privacy Policy"
  />
+ <ConsentCheckbox
+ id="google-marketing-email-signup"
+ required={false}
+ checked={marketingEmailOptIn}
+ onChange={setMarketingEmailOptIn}
+ label="Email me FixBridge offers, home-care tips, and service updates. Optional."
+ />
+ <ConsentCheckbox
+ id="google-marketing-sms-signup"
+ required={false}
+ checked={marketingSmsOptIn}
+ onChange={setMarketingSmsOptIn}
+ label="Send me promotional text messages. Optional and separate from Terms."
+ />
  </div>
  <AuthError message={error} />
  <div className="mt-5 flex gap-2">
@@ -698,6 +783,8 @@ export default function HomeownerLogin({
  onClick={() => {
  setGoogleConsentPending(false);
  setPendingGoogleCredential(null);
+ setPendingSignupToken(null);
+ setGoogleProfile(null);
  setError("");
  }}
  >
@@ -709,7 +796,7 @@ export default function HomeownerLogin({
  onClick={() => void completeGoogleConsentSignup()}
  className="flex-1 rounded-full bg-primary py-3 text-sm font-bold text-white disabled:opacity-60"
  >
- {loading ? "Creating account…" : "Continue"}
+ {loading ? "Creating account…" : "Create account"}
  </button>
  </div>
  </div>
@@ -749,6 +836,25 @@ export default function HomeownerLogin({
  </div>
  </div>
  )}
+
+ <AuthSigningOverlay
+ open={googleSigning || Boolean(googleOverlayError)}
+ error={googleOverlayError}
+ onTryAgain={() => {
+ if (!lastGoogleCredential) {
+ setGoogleOverlayError(null);
+ setGoogleSigning(false);
+ return;
+ }
+ void handleGoogleCredential(lastGoogleCredential);
+ }}
+ onReturnToSignIn={() => {
+ setGoogleOverlayError(null);
+ setGoogleSigning(false);
+ setLastGoogleCredential(null);
+ setLoading(false);
+ }}
+ />
  </>
  );
 }

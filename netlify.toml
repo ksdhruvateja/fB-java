@@ -42,7 +42,14 @@
   status = 200
   force = true
 
-# SPA fallback for React Router
+# Canonical host: www → apex (only applies when www is served by this Netlify site)
+[[redirects]]
+  from = "https://www.fixbridge.us/*"
+  to = "https://fixbridge.us/:splat"
+  status = 301
+  force = true
+
+# SPA fallback for client-side navigation (login/dashboard state lives in history)
 [[redirects]]
   from = "/*"
   to = "/index.html"
@@ -56,4 +63,6 @@
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
     Permissions-Policy = "camera=(), microphone=(), geolocation=()"
-    Cross-Origin-Opener-Policy = "same-origin"
+    # same-origin breaks Google Identity Services popups (blank/white opener after auth).
+    # Google requires same-origin-allow-popups for Sign in with Google button / One Tap.
+    Cross-Origin-Opener-Policy = "same-origin-allow-popups"

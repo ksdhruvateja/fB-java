@@ -4,6 +4,7 @@ import { ArrowRight, Loader2 } from "lucide-react";
 import { signInUser, signUpUser, saveSession, updateUserProfile, type AuthUser } from "./auth";
 import ForgotPasswordModal from "./ForgotPasswordModal";
 import GoogleSignInButton from "./GoogleSignInButton";
+import AuthSigningOverlay from "./AuthSigningOverlay";
 import { signInWithGoogle } from "./marketingApi";
 import {
   AuthShell,
@@ -51,33 +52,64 @@ export default function ContractorLogin({
   const [application, setApplication] = useState<ContractorApplication>(() => emptyContractorApplication());
   const [docs, setDocs] = useState<ContractorApplicationDocs>(emptyDocs);
   const [googleShellAccount, setGoogleShellAccount] = useState(false);
+  const [pendingSignupToken, setPendingSignupToken] = useState<string | null>(null);
+  const [googleSigning, setGoogleSigning] = useState(false);
+  const [googleOverlayError, setGoogleOverlayError] = useState<string | null>(null);
+  const [lastGoogleCredential, setLastGoogleCredential] = useState<string | null>(null);
 
   const handleGoogleCredential = useCallback(async (credential: string) => {
     if (loading) return;
     setError("");
     setLoading(true);
+    setGoogleSigning(true);
+    setGoogleOverlayError(null);
+    setLastGoogleCredential(credential);
     try {
       const body: Record<string, unknown> = {
         role: "contractor",
         intent: tab,
         agreeContractorAgreementV4: application.agreeContractorAgreementV4 === true,
+        pendingSignupToken: pendingSignupToken || undefined,
       };
-      const data = await signInWithGoogle(credential, body, "contractor");
+      const data = await signInWithGoogle(pendingSignupToken && application.agreeContractorAgreementV4 ? "" : credential, body, "contractor");
       if (!data.ok) {
-        if (data.code === "CONTRACTOR_AGREEMENT_REQUIRED") {
-          setError("Accept the FixBridge Contractor Agreement before continuing with Google.");
-        } else if (data.code === "ACCOUNT_SUSPENDED") {
-          setError(data.message || "This account is not active.");
-        } else {
-          setError(data.message || "We couldn't sign you in with Google. Please try again.");
+        const profile = (data.googleProfile || {}) as { email?: string; name?: string };
+        if (data.code === "CONTRACTOR_SIGNUP_REQUIRED" || data.code === "CONTRACTOR_AGREEMENT_REQUIRED") {
+          const emailValue = String(profile.email || "");
+          const nameValue = String(profile.name || "");
+          setPendingSignupToken(typeof data.pendingSignupToken === "string" ? data.pendingSignupToken : pendingSignupToken);
+          setLastGoogleCredential(credential || lastGoogleCredential);
+          setEmail(emailValue);
+          setApplication((prev) => ({
+            ...prev,
+            contactName: nameValue || prev.contactName,
+            companyEmail: emailValue || prev.companyEmail,
+            contactEmail: emailValue || prev.contactEmail,
+          }));
+          setTab("signup");
+          setError(data.message || "Your Google account was verified. Please complete your contractor registration.");
+          setGoogleSigning(false);
+          setGoogleOverlayError(null);
+          setLoading(false);
+          return;
         }
+        let message = data.message || "We couldn't sign you in with Google. Please try again.";
+        if (data.code === "ROLE_PORTAL_MISMATCH" || data.code === "GOOGLE_ALREADY_LINKED") {
+          message = data.message || "This Google account is associated with a different FixBridge account type.";
+        } else if (data.code === "ACCOUNT_SUSPENDED") {
+          message = data.message || "This account is not active.";
+        }
+        setError(message);
+        setGoogleOverlayError(message);
         setLoading(false);
         return;
       }
       const user = data.user as AuthUser;
       const token = data.token as string;
       if (!user?.id) {
-        setError("Sign-in succeeded but no account was returned. Please try again.");
+        const message = "Sign-in succeeded but no account was returned. Please try again.";
+        setError(message);
+        setGoogleOverlayError(message);
         setLoading(false);
         return;
       }
@@ -94,16 +126,20 @@ export default function ContractorLogin({
         }));
         setGoogleShellAccount(true);
         setTab("signup");
+        setGoogleSigning(false);
         setLoading(false);
         return;
       }
+      setGoogleSigning(false);
       onLogin(user);
     } catch {
-      setError("We couldn't sign you in with Google. Please try again.");
+      const message = "We couldn't sign you in with Google. Please try again.";
+      setError(message);
+      setGoogleOverlayError(message);
     } finally {
       setLoading(false);
     }
-  }, [loading, tab, application.agreeContractorAgreementV4, onLogin]);
+  }, [loading, tab, application.agreeContractorAgreementV4, pendingSignupToken, lastGoogleCredential, onLogin]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -139,7 +175,30 @@ export default function ContractorLogin({
       }
 
       const profile = applicationToProfileFields(app);
-      if (googleShellAccount) {
+      if (pendingSignupToken && !googleShellAccount) {
+        const created = await signInWithGoogle("", {
+          role: "contractor",
+          intent: "signup",
+          agreeContractorAgreementV4: true,
+          pendingSignupToken,
+        }, "contractor");
+        if (!created.ok) {
+          setLoading(false);
+          setError(created.message || "We couldn't complete Google registration. Please try again.");
+          return;
+        }
+        const createdUser = created.user as AuthUser;
+        const token = created.token as string;
+        if (!createdUser?.id || !token) {
+          setLoading(false);
+          setError("Google registration did not return an account. Please try again.");
+          return;
+        }
+        saveSession(token, createdUser);
+        setGoogleShellAccount(true);
+      }
+
+      if (googleShellAccount || pendingSignupToken) {
         const result = await updateUserProfile({
           name: profile.name || app.contactName,
           trade: profile.trade,
@@ -279,9 +338,14 @@ export default function ContractorLogin({
             <form onSubmit={handleSubmit} className="mt-5 space-y-4">
               <div className="space-y-3">
                 <GoogleSignInButton
-                  disabled={loading || (tab === "signup" && !application.agreeContractorAgreementV4)}
+                  disabled={loading}
                   text={tab === "signup" ? "signup_with" : "signin_with"}
                   onCredential={(cred) => void handleGoogleCredential(cred)}
+                  onError={(message) => {
+                    setError(message);
+                    setGoogleSigning(false);
+                    setGoogleOverlayError(null);
+                  }}
                 />
                 <div className="flex items-center gap-3 text-xs text-neutral-400">
                   <span className="h-px flex-1 bg-neutral-200" />
@@ -381,6 +445,25 @@ export default function ContractorLogin({
           </AuthPanel>
         </motion.div>
       </AuthShell>
+
+      <AuthSigningOverlay
+        open={googleSigning || Boolean(googleOverlayError)}
+        error={googleOverlayError}
+        onTryAgain={() => {
+          if (!lastGoogleCredential) {
+            setGoogleOverlayError(null);
+            setGoogleSigning(false);
+            return;
+          }
+          void handleGoogleCredential(lastGoogleCredential);
+        }}
+        onReturnToSignIn={() => {
+          setGoogleOverlayError(null);
+          setGoogleSigning(false);
+          setLastGoogleCredential(null);
+          setLoading(false);
+        }}
+      />
     </>
   );
 }

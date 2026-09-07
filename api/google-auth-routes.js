@@ -1,12 +1,16 @@
 /**
  * Google Identity Services — server-verified sign-in for homeowners, contractors, and admins.
  * Uses GOOGLE_CLIENT_ID (never expose GOOGLE_CLIENT_SECRET to the frontend).
+ *
+ * Architecture: GIS ID-token (credential) posted to POST /api/auth/google — not auth-code redirect.
  */
 
 import { recordSignupMarketingConsents } from './marketing-consent-service.js';
 import { checkActionConsentsFromBody, validateAndRecordActionConsents } from './homeowner-consent.js';
 import { applyReferralCode, ensureReferralCode } from './referrals.js';
 import { syncUserHomeCareEntitlement, toPublicHomeCareSubscriptionDto } from './subscription-state.js';
+import { randomUUID } from 'crypto';
+import jwt from 'jsonwebtoken';
 
 function looksLikeGoogleWebClientId(value) {
   const v = String(value || '').trim();
@@ -27,6 +31,18 @@ function googleClientId() {
     return '';
   }
   return raw;
+}
+
+function oauthLog(event, fields = {}) {
+  // Never log tokens / secrets — only opaque correlation + safe metadata.
+  const safe = { ...fields };
+  delete safe.credential;
+  delete safe.idToken;
+  delete safe.token;
+  delete safe.accessToken;
+  delete safe.refreshToken;
+  delete safe.password;
+  console.info(JSON.stringify({ scope: 'oauth_google', event, ts: new Date().toISOString(), ...safe }));
 }
 
 export function isGoogleOAuthConfigured() {
@@ -57,38 +73,87 @@ export function getPublicGoogleOAuthStatus() {
   };
 }
 
-async function verifyGoogleIdToken(idToken) {
+/**
+ * Server-side Google ID token verification via Google's tokeninfo endpoint.
+ * Validates audience, issuer, expiration, and email_verified before trusting identity.
+ */
+async function verifyGoogleIdToken(idToken, { requestId } = {}) {
   const clientId = googleClientId();
-  if (!clientId || !idToken) return null;
+  if (!clientId || !idToken) return { ok: false, reason: 'missing' };
 
-  const res = await fetch(
-    `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`
-  );
-  if (!res.ok) return null;
-  const data = await res.json();
+  let res;
+  try {
+    res = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`
+    );
+  } catch (err) {
+    oauthLog('oauth_google_invalid_token', {
+      requestId,
+      reason: 'tokeninfo_network',
+      detail: err?.message || 'network',
+    });
+    return { ok: false, reason: 'network' };
+  }
+
+  if (!res.ok) {
+    oauthLog('oauth_google_invalid_token', { requestId, reason: 'tokeninfo_http', status: res.status });
+    return { ok: false, reason: 'invalid' };
+  }
+
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    oauthLog('oauth_google_invalid_token', { requestId, reason: 'tokeninfo_parse' });
+    return { ok: false, reason: 'invalid' };
+  }
 
   const aud = data.aud;
-  if (aud !== clientId) return null;
+  if (aud !== clientId) {
+    oauthLog('oauth_google_invalid_token', { requestId, reason: 'wrong_audience' });
+    return { ok: false, reason: 'wrong_audience' };
+  }
 
   const iss = String(data.iss || '');
-  if (iss !== 'accounts.google.com' && iss !== 'https://accounts.google.com') return null;
+  if (iss !== 'accounts.google.com' && iss !== 'https://accounts.google.com') {
+    oauthLog('oauth_google_invalid_token', { requestId, reason: 'wrong_issuer' });
+    return { ok: false, reason: 'wrong_issuer' };
+  }
 
   const exp = Number(data.exp);
-  if (Number.isFinite(exp) && exp * 1000 < Date.now()) return null;
+  if (!Number.isFinite(exp) || exp * 1000 < Date.now()) {
+    oauthLog('oauth_google_invalid_token', { requestId, reason: 'expired' });
+    return { ok: false, reason: 'expired' };
+  }
 
   const emailVerified = data.email_verified === true || data.email_verified === 'true';
-  if (!emailVerified) return null;
+  if (!emailVerified) {
+    oauthLog('oauth_google_invalid_token', { requestId, reason: 'email_unverified' });
+    return { ok: false, reason: 'email_unverified' };
+  }
 
   const email = String(data.email || '').trim().toLowerCase();
-  if (!email) return null;
+  if (!email) {
+    oauthLog('oauth_google_invalid_token', { requestId, reason: 'missing_email' });
+    return { ok: false, reason: 'missing_email' };
+  }
+
+  const sub = String(data.sub || '').trim();
+  if (!sub) {
+    oauthLog('oauth_google_invalid_token', { requestId, reason: 'missing_sub' });
+    return { ok: false, reason: 'missing_sub' };
+  }
 
   return {
-    sub: String(data.sub || ''),
-    email,
-    name: data.name || data.given_name || email.split('@')[0] || 'User',
-    givenName: data.given_name || null,
-    familyName: data.family_name || null,
-    picture: data.picture || null,
+    ok: true,
+    user: {
+      sub,
+      email,
+      name: data.name || data.given_name || email.split('@')[0] || 'User',
+      givenName: data.given_name || null,
+      familyName: data.family_name || null,
+      picture: data.picture || null,
+    },
   };
 }
 
@@ -117,6 +182,86 @@ function assertAccountActive(user, res) {
   return true;
 }
 
+function pendingSecret() {
+  return String(process.env.SESSION_SECRET || '').trim();
+}
+
+function googleProfileDto(googleUser) {
+  return {
+    email: googleUser.email,
+    name: googleUser.name,
+    givenName: googleUser.givenName,
+    familyName: googleUser.familyName,
+    picture: googleUser.picture || null,
+  };
+}
+
+/** Short-lived server-signed pending signup. Identity comes from the verified Google token, not the client. */
+function signPendingGoogleSignup(googleUser, targetRole) {
+  const secret = pendingSecret();
+  if (!secret) return null;
+  return jwt.sign(
+    {
+      typ: 'google_pending',
+      provider: 'google',
+      providerUserId: googleUser.sub,
+      email: googleUser.email,
+      firstName: googleUser.givenName,
+      lastName: googleUser.familyName,
+      name: googleUser.name,
+      picture: googleUser.picture || null,
+      targetRole,
+    },
+    secret,
+    { expiresIn: '15m', algorithm: 'HS256' }
+  );
+}
+
+function readPendingGoogleSignup(token, targetRole) {
+  const secret = pendingSecret();
+  const raw = String(token || '').trim();
+  if (!secret || !raw) return null;
+  try {
+    const data = jwt.verify(raw, secret, { algorithms: ['HS256'] });
+    if (data?.typ !== 'google_pending' || data.provider !== 'google') return null;
+    if (targetRole && data.targetRole !== targetRole) return null;
+    const email = String(data.email || '').trim().toLowerCase();
+    const sub = String(data.providerUserId || '').trim();
+    if (!email || !sub) return null;
+    return {
+      sub,
+      email,
+      name: data.name || [data.firstName, data.lastName].filter(Boolean).join(' ') || email.split('@')[0],
+      givenName: data.firstName || null,
+      familyName: data.lastName || null,
+      picture: data.picture || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function portalLabel(role) {
+  if (role === 'contractor') return 'Contractor portal';
+  if (role === 'admin') return 'Admin sign-in';
+  return 'Homeowner portal';
+}
+
+function rejectPortalMismatch(res, { requestId, role, existingRole }) {
+  oauthLog('oauth_google_role_rejected', {
+    requestId,
+    role,
+    code: 'ROLE_PORTAL_MISMATCH',
+    existingRole,
+  });
+  return res.status(409).json({
+    ok: false,
+    code: 'ROLE_PORTAL_MISMATCH',
+    existingRole,
+    message: `This Google account is associated with a FixBridge ${existingRole} account. Sign in on the ${portalLabel(existingRole)} instead.`,
+  });
+}
+
 async function findUserByGoogleIdentity(pool, { role, googleUser }) {
   const { rows: bySub } = await pool.query(
     `SELECT * FROM users WHERE oauth_google_sub=$1 LIMIT 1`,
@@ -135,10 +280,24 @@ async function findUserByGoogleIdentity(pool, { role, googleUser }) {
   );
   if (byEmail[0]) return { user: byEmail[0] };
 
+  // Same email on another portal is a different user row, but one Google `sub` can only
+  // belong to one FixBridge account. Do not create a second identity from the other portal.
+  const { rows: otherRole } = await pool.query(
+    `SELECT * FROM users WHERE role <> $1 AND LOWER(email)=LOWER($2) ORDER BY id ASC LIMIT 1`,
+    [role, googleUser.email]
+  );
+  if (otherRole[0]) {
+    return { conflict: 'ROLE_PORTAL_MISMATCH', user: otherRole[0] };
+  }
+
   return { user: null };
 }
 
 async function linkGoogleToUser(pool, user, googleUser) {
+  const existingSub = String(user.oauth_google_sub || '').trim();
+  if (existingSub && existingSub !== googleUser.sub) {
+    return { conflict: 'GOOGLE_SUB_MISMATCH', user };
+  }
   await pool.query(
     `UPDATE users SET
        oauth_google_sub=COALESCE(oauth_google_sub, $2),
@@ -149,7 +308,7 @@ async function linkGoogleToUser(pool, user, googleUser) {
     [user.id, googleUser.sub, googleUser.picture]
   );
   const { rows } = await pool.query(`SELECT * FROM users WHERE id=$1`, [user.id]);
-  return rows[0];
+  return { user: rows[0] };
 }
 
 async function recordGoogleLogin(pool, userId) {
@@ -168,13 +327,33 @@ async function finalizeHomeownerUser(pool, user, rowToUser) {
   return clientUser;
 }
 
-async function handleHomeownerGoogle(pool, req, res, { googleUser, makeToken, rowToUser, bcrypt }) {
-  const found = await findUserByGoogleIdentity(pool, { role: 'homeowner', googleUser });
-  if (found.conflict === 'PROVIDER_LINKED_OTHER_ROLE') {
-    return res.status(409).json({
+function contractorNeedsApplication(user) {
+  const status = String(user?.compliance_status || '').toLowerCase();
+  // Only shell / incomplete onboarding — do not force re-application for legacy null statuses.
+  return status === 'draft' || status === 'incomplete';
+}
+
+async function applyGoogleLink(pool, user, googleUser, res, { requestId, role }) {
+  const linked = await linkGoogleToUser(pool, user, googleUser);
+  if (linked.conflict === 'GOOGLE_SUB_MISMATCH') {
+    oauthLog('oauth_google_denied', { requestId, role, code: 'GOOGLE_SUB_MISMATCH' });
+    res.status(409).json({
       ok: false,
       code: 'GOOGLE_ALREADY_LINKED',
-      message: 'This Google account is already connected to another FixBridge account.',
+      message: 'This email is already linked to a different Google account. Sign in with email and password, or use the originally linked Google account.',
+    });
+    return null;
+  }
+  return linked.user;
+}
+
+async function handleHomeownerGoogle(pool, req, res, { googleUser, makeToken, rowToUser, bcrypt, requestId }) {
+  const found = await findUserByGoogleIdentity(pool, { role: 'homeowner', googleUser });
+  if (found.conflict === 'PROVIDER_LINKED_OTHER_ROLE' || found.conflict === 'ROLE_PORTAL_MISMATCH') {
+    return rejectPortalMismatch(res, {
+      requestId,
+      role: 'homeowner',
+      existingRole: found.user?.role,
     });
   }
 
@@ -184,17 +363,25 @@ async function handleHomeownerGoogle(pool, req, res, { googleUser, makeToken, ro
 
   if (user) {
     if (!assertAccountActive(user, res)) return;
-    user = await linkGoogleToUser(pool, user, googleUser);
+    const wasLinked = Boolean(user.oauth_google_sub);
+    user = await applyGoogleLink(pool, user, googleUser, res, { requestId, role: 'homeowner' });
+    if (!user) return;
     needsOnboarding = !user.marketing_preferences_collected_at;
+    oauthLog(wasLinked ? 'oauth_google_existing_user' : 'oauth_google_linked_existing_email', {
+      requestId,
+      role: 'homeowner',
+      userId: user.id,
+    });
   } else {
     const accountConsent = checkActionConsentsFromBody(req.body, 'ACCOUNT_SIGNUP');
     if (!accountConsent.ok) {
       return res.status(400).json({
         ok: false,
         code: 'CONSENT_REQUIRED',
-        message: 'You must agree to the FixBridge Terms of Service and Privacy Policy.',
+        message: 'Your Google account was verified. Please complete your FixBridge registration.',
         missingAcceptanceTypes: accountConsent.missing,
-        googleProfile: { email: googleUser.email, name: googleUser.name, picture: googleUser.picture },
+        pendingSignupToken: signPendingGoogleSignup(googleUser, 'homeowner'),
+        googleProfile: googleProfileDto(googleUser),
       });
     }
 
@@ -206,49 +393,81 @@ async function handleHomeownerGoogle(pool, req, res, { googleUser, makeToken, ro
         ? req.body.referredByCode.trim().toUpperCase()
         : null;
 
-    const { rows: inserted } = await pool.query(
-      `INSERT INTO users (
-         role, name, email, password, phone, oauth_google_sub, google_avatar_url, signup_method, referred_by_code
-       ) VALUES ('homeowner', $1, $2, $3, $4, $5, $6, 'google', $7)
-       RETURNING *`,
-      [googleUser.name, googleUser.email, hashed, phone, googleUser.sub, googleUser.picture, referredByCode]
-    );
-    user = inserted[0];
-    isNew = true;
-    needsOnboarding = true;
-
-    await validateAndRecordActionConsents(pool, req, {
-      actionKey: 'ACCOUNT_SIGNUP',
-      userId: user.id,
-      idempotencyPrefix: `google-signup:${user.id}`,
-    });
-
+    let createdNow = false;
     try {
-      if (referredByCode) {
-        await applyReferralCode(pool, user.id, referredByCode, { actorId: user.id });
+      const { rows: inserted } = await pool.query(
+        `INSERT INTO users (
+           role, name, email, password, phone, oauth_google_sub, google_avatar_url, signup_method, referred_by_code
+         ) VALUES ('homeowner', $1, $2, $3, $4, $5, $6, 'google', $7)
+         RETURNING *`,
+        [googleUser.name, googleUser.email, hashed, phone, googleUser.sub, googleUser.picture, referredByCode]
+      );
+      user = inserted[0];
+      createdNow = true;
+    } catch (insertErr) {
+      // Race: another request created the same email/role — link instead of duplicate.
+      if (insertErr?.code === '23505') {
+        const retry = await findUserByGoogleIdentity(pool, { role: 'homeowner', googleUser });
+        if (retry.user) {
+          user = await applyGoogleLink(pool, retry.user, googleUser, res, { requestId, role: 'homeowner' });
+          if (!user) return;
+          isNew = false;
+          needsOnboarding = !user.marketing_preferences_collected_at;
+          oauthLog('oauth_google_existing_user', { requestId, role: 'homeowner', userId: user.id, raced: true });
+        } else {
+          oauthLog('oauth_google_denied', { requestId, role: 'homeowner', reason: 'insert_conflict' });
+          return res.status(409).json({
+            ok: false,
+            code: 'ACCOUNT_CONFLICT',
+            message: 'An account with this email already exists. Please sign in instead.',
+          });
+        }
+      } else {
+        throw insertErr;
       }
-      await ensureReferralCode(pool, user);
-    } catch (refErr) {
-      console.error('google signup referral:', refErr?.message || refErr);
     }
 
-    const emailOptIn = req.body?.marketingEmailOptIn === true;
-    const smsOptIn = req.body?.marketingSmsOptIn === true;
-    if (emailOptIn || smsOptIn) {
-      await recordSignupMarketingConsents(pool, {
+    if (createdNow && user) {
+      isNew = true;
+      needsOnboarding = true;
+
+      await validateAndRecordActionConsents(pool, req, {
+        actionKey: 'ACCOUNT_SIGNUP',
         userId: user.id,
-        emailOptIn,
-        smsOptIn,
-        source: 'google_signup',
-        req,
+        idempotencyPrefix: `google-signup:${user.id}`,
       });
-      needsOnboarding = false;
+
+      try {
+        if (referredByCode) {
+          await applyReferralCode(pool, user.id, referredByCode, { actorId: user.id });
+        }
+        await ensureReferralCode(pool, user);
+      } catch (refErr) {
+        console.error('google signup referral:', refErr?.message || refErr);
+      }
+
+      const emailOptIn = req.body?.marketingEmailOptIn === true;
+      const smsOptIn = req.body?.marketingSmsOptIn === true;
+      if (emailOptIn || smsOptIn) {
+        await recordSignupMarketingConsents(pool, {
+          userId: user.id,
+          emailOptIn,
+          smsOptIn,
+          source: 'google_signup',
+          req,
+        });
+        needsOnboarding = false;
+      }
+
+      oauthLog('oauth_google_user_created', { requestId, role: 'homeowner', userId: user.id });
     }
   }
 
   await recordGoogleLogin(pool, user.id);
   const clientUser = await finalizeHomeownerUser(pool, user, rowToUser);
   const token = makeToken(clientUser, { authStage: 'complete' });
+  oauthLog('oauth_google_session_created', { requestId, role: 'homeowner', userId: user.id, isNew });
+  oauthLog('oauth_google_redirect', { requestId, role: 'homeowner', destination: 'homeowner-dashboard' });
 
   return res.json({
     ok: true,
@@ -256,19 +475,19 @@ async function handleHomeownerGoogle(pool, req, res, { googleUser, makeToken, ro
     user: clientUser,
     isNew,
     needsMarketingOnboarding: needsOnboarding,
-    googleProfile: { email: googleUser.email, name: googleUser.name },
+    googleProfile: googleProfileDto(googleUser),
   });
 }
 
-async function handleContractorGoogle(pool, req, res, { googleUser, makeToken, rowToUser, bcrypt }) {
+async function handleContractorGoogle(pool, req, res, { googleUser, makeToken, rowToUser, bcrypt, requestId }) {
   const intent = String(req.body?.intent || 'login').toLowerCase() === 'signup' ? 'signup' : 'login';
   const found = await findUserByGoogleIdentity(pool, { role: 'contractor', googleUser });
 
-  if (found.conflict === 'PROVIDER_LINKED_OTHER_ROLE') {
-    return res.status(409).json({
-      ok: false,
-      code: 'GOOGLE_ALREADY_LINKED',
-      message: 'This Google account is already connected to another FixBridge account.',
+  if (found.conflict === 'PROVIDER_LINKED_OTHER_ROLE' || found.conflict === 'ROLE_PORTAL_MISMATCH') {
+    return rejectPortalMismatch(res, {
+      requestId,
+      role: 'contractor',
+      existingRole: found.user?.role,
     });
   }
 
@@ -276,23 +495,40 @@ async function handleContractorGoogle(pool, req, res, { googleUser, makeToken, r
 
   if (user) {
     if (!assertAccountActive(user, res)) return;
-    user = await linkGoogleToUser(pool, user, googleUser);
+    user = await applyGoogleLink(pool, user, googleUser, res, { requestId, role: 'contractor' });
+    if (!user) return;
     await recordGoogleLogin(pool, user.id);
     const clientUser = rowToUser(user);
+    const needsApp = contractorNeedsApplication(user);
+    oauthLog('oauth_google_existing_user', {
+      requestId,
+      role: 'contractor',
+      userId: user.id,
+      needsContractorApplication: needsApp,
+    });
+    oauthLog('oauth_google_session_created', { requestId, role: 'contractor', userId: user.id, isNew: false });
+    oauthLog('oauth_google_redirect', {
+      requestId,
+      role: 'contractor',
+      destination: needsApp ? 'contractor-onboarding' : 'contractor-dashboard',
+    });
     return res.json({
       ok: true,
       token: makeToken(clientUser, { authStage: 'complete' }),
       user: clientUser,
       isNew: false,
-      needsContractorApplication: false,
+      needsContractorApplication: needsApp,
     });
   }
 
   if (intent === 'login') {
-    return res.status(404).json({
+    oauthLog('oauth_google_denied', { requestId, role: 'contractor', code: 'CONTRACTOR_SIGNUP_REQUIRED' });
+    return res.status(400).json({
       ok: false,
-      code: 'ACCOUNT_NOT_FOUND',
-      message: 'No contractor account found for this Google email. Apply to join FixBridge first.',
+      code: 'CONTRACTOR_SIGNUP_REQUIRED',
+      message: 'Your Google account was verified. Please complete your FixBridge contractor registration.',
+      pendingSignupToken: signPendingGoogleSignup(googleUser, 'contractor'),
+      googleProfile: googleProfileDto(googleUser),
     });
   }
 
@@ -300,20 +536,47 @@ async function handleContractorGoogle(pool, req, res, { googleUser, makeToken, r
     return res.status(400).json({
       ok: false,
       code: 'CONTRACTOR_AGREEMENT_REQUIRED',
-      message: 'You must accept the FixBridge Contractor Agreement before continuing with Google.',
+      message: 'Your Google account was verified. Accept the required contractor agreements to finish registration.',
+      pendingSignupToken: signPendingGoogleSignup(googleUser, 'contractor'),
+      googleProfile: googleProfileDto(googleUser),
     });
   }
 
   const randomPass = `GOOGLE_OAUTH_${googleUser.sub}`;
   const hashed = await bcrypt.hash(randomPass, 10);
-  const { rows: inserted } = await pool.query(
-    `INSERT INTO users (
-       role, name, email, password, oauth_google_sub, google_avatar_url, signup_method, compliance_status
-     ) VALUES ('contractor', $1, $2, $3, $4, $5, 'google', 'draft')
-     RETURNING *`,
-    [googleUser.name, googleUser.email, hashed, googleUser.sub, googleUser.picture]
-  );
-  user = inserted[0];
+  try {
+    const { rows: inserted } = await pool.query(
+      `INSERT INTO users (
+         role, name, email, password, oauth_google_sub, google_avatar_url, signup_method, compliance_status
+       ) VALUES ('contractor', $1, $2, $3, $4, $5, 'google', 'draft')
+       RETURNING *`,
+      [googleUser.name, googleUser.email, hashed, googleUser.sub, googleUser.picture]
+    );
+    user = inserted[0];
+  } catch (insertErr) {
+    if (insertErr?.code === '23505') {
+      const retry = await findUserByGoogleIdentity(pool, { role: 'contractor', googleUser });
+      if (retry.user) {
+        user = await applyGoogleLink(pool, retry.user, googleUser, res, { requestId, role: 'contractor' });
+        if (!user) return;
+        await recordGoogleLogin(pool, user.id);
+        const clientUser = rowToUser(user);
+        return res.json({
+          ok: true,
+          token: makeToken(clientUser, { authStage: 'complete' }),
+          user: clientUser,
+          isNew: false,
+          needsContractorApplication: contractorNeedsApplication(user),
+        });
+      }
+      return res.status(409).json({
+        ok: false,
+        code: 'ACCOUNT_CONFLICT',
+        message: 'An account with this email already exists. Please sign in instead.',
+      });
+    }
+    throw insertErr;
+  }
 
   try {
     const { recordContractorAgreementAcceptance } = await import('./contractor-agreement.js');
@@ -338,6 +601,9 @@ async function handleContractorGoogle(pool, req, res, { googleUser, makeToken, r
 
   await recordGoogleLogin(pool, user.id);
   const clientUser = rowToUser(user);
+  oauthLog('oauth_google_user_created', { requestId, role: 'contractor', userId: user.id });
+  oauthLog('oauth_google_session_created', { requestId, role: 'contractor', userId: user.id, isNew: true });
+  oauthLog('oauth_google_redirect', { requestId, role: 'contractor', destination: 'contractor-onboarding' });
   return res.json({
     ok: true,
     token: makeToken(clientUser, { authStage: 'complete' }),
@@ -353,31 +619,46 @@ async function handleContractorGoogle(pool, req, res, { googleUser, makeToken, r
   });
 }
 
-async function handleAdminGoogle(pool, req, res, { googleUser, makeToken, rowToUser }) {
+async function handleAdminGoogle(pool, req, res, { googleUser, makeToken, rowToUser, requestId }) {
   const found = await findUserByGoogleIdentity(pool, { role: 'admin', googleUser });
 
-  if (found.conflict === 'PROVIDER_LINKED_OTHER_ROLE') {
-    return res.status(409).json({
-      ok: false,
-      code: 'GOOGLE_ALREADY_LINKED',
-      message: 'This Google account is already connected to another FixBridge account.',
+  if (found.conflict === 'PROVIDER_LINKED_OTHER_ROLE' || found.conflict === 'ROLE_PORTAL_MISMATCH') {
+    return rejectPortalMismatch(res, {
+      requestId,
+      role: 'admin',
+      existingRole: found.user?.role,
     });
   }
 
   const user = found.user;
   if (!user) {
+    oauthLog('oauth_google_role_rejected', {
+      requestId,
+      role: 'admin',
+      code: 'ADMIN_NOT_AUTHORIZED',
+      emailDomain: googleUser.email.split('@')[1] || null,
+    });
     return res.status(403).json({
       ok: false,
       code: 'ADMIN_NOT_AUTHORIZED',
-      message: 'This Google account is not authorized for FixBridge Admin.',
+      message: 'This Google account is not authorized to access FixBridge Admin.',
     });
   }
 
   if (!assertAccountActive(user, res)) return;
 
-  const linked = await linkGoogleToUser(pool, user, googleUser);
+  const linked = await applyGoogleLink(pool, user, googleUser, res, { requestId, role: 'admin' });
+  if (!linked) return;
   await recordGoogleLogin(pool, linked.id);
   const clientUser = rowToUser(linked);
+  oauthLog('oauth_google_existing_user', { requestId, role: 'admin', userId: linked.id });
+  oauthLog('oauth_google_session_created', {
+    requestId,
+    role: 'admin',
+    userId: linked.id,
+    authStage: 'mfa_pending',
+  });
+  oauthLog('oauth_google_redirect', { requestId, role: 'admin', destination: 'admin-mfa' });
 
   return res.json({
     ok: true,
@@ -397,31 +678,58 @@ export function registerGoogleAuthRoutes(app, {
   requireAuth,
 }) {
   app.post('/api/auth/google', signupLimiter, async (req, res) => {
+    const requestId = String(req.headers['x-request-id'] || randomUUID()).slice(0, 64);
+    res.setHeader('X-Request-Id', requestId);
+
     try {
       if (!isGoogleOAuthConfigured()) {
+        oauthLog('oauth_google_denied', { requestId, reason: 'not_configured' });
         return res.status(503).json({ ok: false, message: 'Google sign-in is not configured.' });
       }
 
-      const idToken = String(req.body?.credential || req.body?.idToken || '').trim();
-      if (!idToken) {
-        return res.status(400).json({ ok: false, message: 'Google credential is required.' });
-      }
-
-      const googleUser = await verifyGoogleIdToken(idToken);
-      if (!googleUser?.sub) {
-        return res.status(401).json({ ok: false, message: 'We could not sign you in with Google. Please try again.' });
-      }
-
       const role = String(req.body?.role || 'homeowner').toLowerCase();
+      if (!['homeowner', 'contractor', 'admin'].includes(role)) {
+        oauthLog('oauth_google_role_rejected', { requestId, role, code: 'INVALID_ROLE' });
+        return res.status(400).json({ ok: false, code: 'INVALID_ROLE', message: 'Invalid sign-in portal.' });
+      }
+
+      oauthLog('oauth_google_started', { requestId, role, intent: req.body?.intent || null });
+
+      const pendingUser = readPendingGoogleSignup(req.body?.pendingSignupToken, role);
+      let googleUser = pendingUser;
+      if (!googleUser) {
+        const idToken = String(req.body?.credential || req.body?.idToken || '').trim();
+        if (!idToken) {
+          oauthLog('oauth_google_denied', { requestId, reason: 'missing_credential' });
+          return res.status(400).json({ ok: false, message: 'Google credential is required.' });
+        }
+        const verified = await verifyGoogleIdToken(idToken, { requestId });
+        if (!verified.ok || !verified.user?.sub) {
+          return res.status(401).json({
+            ok: false,
+            code: 'INVALID_GOOGLE_TOKEN',
+            message: 'We could not sign you in with Google. Please try again.',
+          });
+        }
+        googleUser = verified.user;
+      }
+      oauthLog('oauth_google_verified', {
+        requestId,
+        role,
+        subSuffix: googleUser.sub.slice(-6),
+        emailDomain: googleUser.email.split('@')[1] || null,
+      });
+
       if (role === 'contractor') {
-        return handleContractorGoogle(pool, req, res, { googleUser, makeToken, rowToUser, bcrypt });
+        return handleContractorGoogle(pool, req, res, { googleUser, makeToken, rowToUser, bcrypt, requestId });
       }
       if (role === 'admin') {
-        return handleAdminGoogle(pool, req, res, { googleUser, makeToken, rowToUser });
+        return handleAdminGoogle(pool, req, res, { googleUser, makeToken, rowToUser, requestId });
       }
-      return handleHomeownerGoogle(pool, req, res, { googleUser, makeToken, rowToUser, bcrypt });
+      return handleHomeownerGoogle(pool, req, res, { googleUser, makeToken, rowToUser, bcrypt, requestId });
     } catch (e) {
-      console.error('google auth:', e);
+      console.error('google auth:', e?.message || e);
+      oauthLog('oauth_google_denied', { requestId, reason: 'server_error' });
       res.status(500).json({ ok: false, message: 'We could not sign you in with Google. Please try again.' });
     }
   });
