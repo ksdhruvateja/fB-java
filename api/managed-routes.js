@@ -2058,11 +2058,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         });
       }
       const dataUrl = String(b.dataUrl || '');
-      const maxBytes = config.documents.maxFileSizeMb * 1024 * 1024 * 1.4;
-      if (!dataUrl.startsWith('data:') || dataUrl.length > maxBytes) {
+      // Netlify function payloads are ~6MB. A 3MB file is ~4MB as a data URL.
+      const maxFileBytes = Math.min(3 * 1024 * 1024, config.documents.maxFileSizeMb * 1024 * 1024);
+      const maxDataUrlChars = Math.floor(maxFileBytes * 1.4) + 128;
+      if (!dataUrl.startsWith('data:') || dataUrl.length > maxDataUrlChars) {
         return res.status(400).json({
           ok: false,
-          message: `Document file is required (max ~${config.documents.maxFileSizeMb}MB).`,
+          message: 'This file is too large. Maximum size is 3 MB.',
         });
       }
       const allowedCategories = new Set([

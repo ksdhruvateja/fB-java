@@ -65,6 +65,20 @@ function formatDocDate(iso?: string) {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+const MAX_PASSPORT_FILE_BYTES = 3 * 1024 * 1024;
+
+function inferMimeType(file: File): string {
+  const type = (file.type || "").toLowerCase();
+  if (type && type !== "application/octet-stream") return type;
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".pdf")) return "application/pdf";
+  if (name.endsWith(".png")) return "image/png";
+  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+  if (name.endsWith(".doc")) return "application/msword";
+  if (name.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  return type;
+}
+
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -72,6 +86,17 @@ function fileToDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(new Error("Could not read file"));
     reader.readAsDataURL(file);
   });
+}
+
+function dataUrlToObjectUrl(dataUrl: string) {
+  const comma = dataUrl.indexOf(",");
+  const meta = comma >= 0 ? dataUrl.slice(0, comma) : "";
+  const b64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+  const mime = /data:([^;]+)/i.exec(meta)?.[1] || "application/octet-stream";
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: mime }));
 }
 
 export default function HomeownerPropertyPage({
@@ -159,6 +184,7 @@ export default function HomeownerPropertyPage({
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [localDocs, setLocalDocs] = useState<PropertyDocument[]>([]);
+  const [removedDocIds, setRemovedDocIds] = useState<number[]>([]);
 
   const ALLOWED_DOC = /\.(pdf|jpe?g|png|doc|docx)$/i;
 
@@ -186,6 +212,9 @@ export default function HomeownerPropertyPage({
     );
     setEditingFacts(false);
     setEditingSystems(false);
+    setRemovedDocIds([]);
+    setPendingFile(null);
+    setUploadError(null);
   }, [selected?.id]);
 
   async function saveFacts() {
@@ -319,9 +348,9 @@ export default function HomeownerPropertyPage({
       setUploadError("Unsupported file type. Use PDF, JPG, JPEG, PNG, DOC, or DOCX.");
       return;
     }
-    if (file.size > 4 * 1024 * 1024) {
+    if (file.size > MAX_PASSPORT_FILE_BYTES) {
       setPendingFile(null);
-      setUploadError("This file is too large. Maximum size is 4 MB.");
+      setUploadError("This file is too large. Maximum size is 3 MB.");
       return;
     }
     setPendingFile(file);
@@ -338,12 +367,17 @@ export default function HomeownerPropertyPage({
         category: docCategory,
         title: docTitle.trim() || file.name,
         fileName: file.name,
-        mimeType: file.type,
+        mimeType: inferMimeType(file),
         dataUrl,
         systemKey: docSystemKey || undefined,
       });
       if (!r.ok || !r.document) {
-        setUploadError(r.message || "Upload failed. Please try again.");
+        const msg = r.message || "Upload failed. Please try again.";
+        setUploadError(
+          /expired|authentication required|sign in/i.test(msg)
+            ? "Your session expired. Please sign in again."
+            : msg
+        );
         return;
       }
       setLocalDocs((prev) => [r.document!, ...prev.filter((d) => d.id !== r.document!.id)]);
@@ -376,35 +410,46 @@ export default function HomeownerPropertyPage({
   async function openDocument(doc: PropertyDocument) {
     const dataUrl = await loadDocumentUrl(doc);
     if (!dataUrl) return;
-    window.open(dataUrl, "_blank", "noopener,noreferrer");
+    const objectUrl = dataUrlToObjectUrl(dataUrl);
+    const opened = window.open(objectUrl, "_blank", "noopener,noreferrer");
+    if (!opened) {
+      onError("Could not open the file preview. Use Download instead.");
+    }
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
   }
 
   async function downloadDocument(doc: PropertyDocument) {
     const dataUrl = await loadDocumentUrl(doc);
     if (!dataUrl) return;
+    const objectUrl = dataUrlToObjectUrl(dataUrl);
     const a = document.createElement("a");
-    a.href = dataUrl;
+    a.href = objectUrl;
     a.download = doc.fileName || doc.title || "document";
     a.rel = "noopener";
     document.body.appendChild(a);
     a.click();
     a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
   }
 
   async function removeDoc(doc: PropertyDocument) {
     if (!selected) return;
-    onBusy(true);
+    const label = doc.title || doc.fileName || "this document";
+    if (!window.confirm(`Remove ${label}? This cannot be undone.`)) return;
+    setRemovedDocIds((prev) => (prev.includes(doc.id) ? prev : [...prev, doc.id]));
     onError(null);
     try {
       const r = await deletePropertyDocument(selected.id, doc.id);
       if (!r.ok) {
+        setRemovedDocIds((prev) => prev.filter((id) => id !== doc.id));
         onError(r.message || "Could not delete document.");
         return;
       }
+      setLocalDocs((prev) => prev.filter((d) => d.id !== doc.id));
       if (onReloadProperty) await onReloadProperty(selected.id);
-      else await onRefresh();
-    } finally {
-      onBusy(false);
+    } catch (err) {
+      setRemovedDocIds((prev) => prev.filter((id) => id !== doc.id));
+      onError(err instanceof Error ? err.message : "Could not delete document.");
     }
   }
 
@@ -449,9 +494,10 @@ export default function HomeownerPropertyPage({
   }
 
   const docsByCategory = useMemo(() => {
-    const fromServer = selected?.documents || [];
+    const hidden = new Set(removedDocIds);
+    const fromServer = (selected?.documents || []).filter((d) => !hidden.has(d.id));
     const ids = new Set(fromServer.map((d) => d.id));
-    const list = [...localDocs.filter((d) => !ids.has(d.id)), ...fromServer];
+    const list = [...localDocs.filter((d) => !ids.has(d.id) && !hidden.has(d.id)), ...fromServer];
     const map = new Map<string, PropertyDocument[]>();
     for (const d of list) {
       const key = d.category || "other";
@@ -459,7 +505,7 @@ export default function HomeownerPropertyPage({
       map.get(key)!.push(d);
     }
     return map;
-  }, [selected?.documents, localDocs]);
+  }, [selected?.documents, localDocs, removedDocIds]);
 
   return (
     <section className="mx-auto max-w-5xl space-y-5">
@@ -1018,7 +1064,10 @@ export default function HomeownerPropertyPage({
                       </div>
                     );
                   })}
-                  {(selected.documents || []).length === 0 && localDocs.length === 0 && !uploadBusy && (
+                  {selected && !selected.documents && !uploadBusy && (
+                    <p className="text-sm text-muted-foreground">Loading documents...</p>
+                  )}
+                  {selected?.documents && (selected.documents || []).filter((d) => !removedDocIds.includes(d.id)).length === 0 && localDocs.length === 0 && !uploadBusy && (
                     <div className="rounded-2xl border border-dashed border-border px-4 py-8 text-center">
                       <Building2 className="mx-auto h-6 w-6 text-muted-foreground" />
                       <p className="mt-2 text-sm text-muted-foreground">No files yet — upload your first passport document.</p>
