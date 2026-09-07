@@ -1,12 +1,14 @@
+import { useEffect, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 import { ManagedJob, retailRangeLabel } from "./managedJobs";
 
 const STEPS = [
-  "Reviewing your problem…",
-  "Looking at your photos…",
-  "Checking your home details…",
-  "Preparing next steps…",
+  "Details received",
+  "Photos attached",
+  "Checking safety",
+  "Identifying possible causes",
+  "Preparing next steps",
 ] as const;
 
 export function EstimateLoadingSteps({
@@ -17,12 +19,22 @@ export function EstimateLoadingSteps({
   activeStep: number;
 }) {
   const zipLabel = zip ? String(zip).slice(0, 5) : "your area";
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSlow(true), 4000);
+    return () => window.clearTimeout(timer);
+  }, []);
   return (
     <div className="space-y-4 py-2">
       <div className="flex items-center gap-2">
         <Loader2 className="h-4 w-4 animate-spin text-[#FF4D1C]" />
-        <p className="text-sm font-semibold text-foreground">Analyzing your issue…</p>
+        <p className="text-sm font-semibold text-foreground">Analyzing your issue...</p>
       </div>
+      {slow ? (
+        <p className="text-xs text-muted-foreground">
+          Still analyzing — you can stay on this screen or continue browsing.
+        </p>
+      ) : null}
       <ul className="space-y-2 text-sm">
         {STEPS.map((label, idx) => {
           const done = idx < activeStep;

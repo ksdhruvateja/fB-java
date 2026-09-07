@@ -14,6 +14,7 @@ export default function AiAssessmentAckModal({
   open,
   busy,
   checked,
+  error,
   onCheckedChange,
   onClose,
   onContinue,
@@ -21,6 +22,7 @@ export default function AiAssessmentAckModal({
   open: boolean;
   busy?: boolean;
   checked: boolean;
+  error?: string | null;
   onCheckedChange: (v: boolean) => void;
   onClose: () => void;
   onContinue: () => void;
@@ -84,25 +86,32 @@ export default function AiAssessmentAckModal({
             />
           </div>
         </div>
-        <div className="flex flex-col-reverse gap-2 border-t border-border p-4 sm:flex-row sm:justify-end">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onClose}
-            className="rounded-full border border-border px-4 py-2.5 text-sm font-semibold text-foreground disabled:opacity-60"
-          >
-            Cancel
-          </button>
-          <button
-            ref={continueRef}
-            type="button"
-            disabled={!checked || busy}
-            onClick={onContinue}
-            className="inline-flex items-center justify-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
-          >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Continue to AI assessment
-          </button>
+        <div className="space-y-2 border-t border-border p-4">
+          {error ? (
+            <p className="text-sm text-red-700 dark:text-red-200" role="alert">
+              {error}
+            </p>
+          ) : null}
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onClose}
+              className="w-full rounded-full border border-border px-4 py-2.5 text-sm font-semibold text-foreground disabled:opacity-60 sm:w-auto"
+            >
+              Cancel
+            </button>
+            <button
+              ref={continueRef}
+              type="button"
+              disabled={!checked || busy}
+              onClick={onContinue}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60 sm:w-auto"
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {busy ? "Continuing..." : "Continue to AI assessment"}
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -30,5 +30,5 @@ export function sanitizeApiErrorMessage(
 export const ASSESSMENT_UNAVAILABLE_CODE = "AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE";
 
 export function assessmentUnavailableMessage() {
-  return "We couldn't finish the assessment right now. Please try again in a moment.";
+  return "We couldn't complete the assessment right now.";
 }

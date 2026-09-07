@@ -534,6 +534,8 @@ export default function HomeownerDashboard({
  const [aiAckOpen, setAiAckOpen] = useState(false);
  const [aiAckChecked, setAiAckChecked] = useState(false);
  const [aiAckBusy, setAiAckBusy] = useState(false);
+ const [aiAckError, setAiAckError] = useState<string | null>(null);
+ const aiAckSaveRef = useRef(false);
 
  // Guided DIY interactive states
  const [diyIsGuided, setDiyIsGuided] = useState(false);
@@ -1833,7 +1835,7 @@ export default function HomeownerDashboard({
  setAssessLoadingStep(0);
  setAssessLoadingZip(zip ? String(zip).slice(0, 5) : null);
  const timer = window.setInterval(() => {
- setAssessLoadingStep((s) => (s == null ? 0 : Math.min(3, s + 1)));
+ setAssessLoadingStep((s) => (s == null ? 0 : Math.min(4, s + 1)));
  }, 900);
  try {
  return await assessManagedJob(jobId, {
@@ -1842,7 +1844,7 @@ export default function HomeownerDashboard({
  });
  } finally {
  window.clearInterval(timer);
- setAssessLoadingStep(3);
+ setAssessLoadingStep(4);
  window.setTimeout(() => {
  setAssessLoadingStep(null);
  setAssessLoadingZip(null);
@@ -1856,29 +1858,116 @@ export default function HomeownerDashboard({
  if (aiAckBusy) return;
  setAiAckOpen(false);
  setAiAckChecked(false);
+ setAiAckError(null);
  pendingAiRunRef.current = null;
  }
 
- function requestAiAssessment(run?: () => Promise<void>) {
- setAiAckChecked(false);
- pendingAiRunRef.current = run ?? (() => submitIssue("ai"));
- setAiAckOpen(true);
+ function aiAckStorageKey() {
+ return `fixbridge-ai-ack:${user.id}`;
  }
 
- async function confirmAiAssessmentAck() {
- if (!aiAckChecked || aiAckBusy) return;
- setAiAckBusy(true);
+ function hasStoredAiAck() {
+ try {
+ return sessionStorage.getItem(aiAckStorageKey()) === "1";
+ } catch {
+ return false;
+ }
+ }
+
+ function markStoredAiAck() {
+ try {
+ sessionStorage.setItem(aiAckStorageKey(), "1");
+ } catch {
+ // ignore
+ }
+ }
+
+ function prepareAiConsent() {
+ if (!aiAssessmentConsentRef.current) {
  aiAssessmentConsentRef.current = {
  assessmentInvocationId: crypto.randomUUID(),
  consents: { AI_ASSESSMENT_ACK: true },
  };
+ }
+ return aiAssessmentConsentRef.current;
+ }
+
+ function scrollToAiAssessment() {
+ if (typeof window === "undefined") return;
+ const run = () => {
+ document.getElementById("ai-assessment-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+ };
+ window.requestAnimationFrame(run);
+ window.setTimeout(run, 80);
+ }
+
+ function showAiAssessmentScreen() {
+ setAssessmentMsg(null);
+ setAssessLoadingStep(0);
+ setAssessmentMode("diy");
+ const propZip = properties.find((p) => p.id === propertyId)?.zip || activeJob?.zip || null;
+ setAssessLoadingZip(propZip ? String(propZip).slice(0, 5) : null);
+ if (step !== "assessment" || reportPath !== "ai") {
+ navigateTo({
+ role: "homeowner",
+ tab: "report",
+ reportStep: "assessment",
+ reportPath: "ai",
+ jobId: activeJob?.id ?? null,
+ });
+ }
+ scrollToAiAssessment();
+ }
+
+ function requestAiAssessment(run?: () => Promise<void>) {
+ const next = run ?? (() => submitIssue("ai"));
+ if (hasStoredAiAck()) {
+ prepareAiConsent();
+ const prop = properties.find((p) => p.id === propertyId);
+ if (activeJob || (description.trim() && prop?.zip?.trim())) {
+ showAiAssessmentScreen();
+ }
+ void next();
+ return;
+ }
+ setAiAckChecked(false);
+ setAiAckError(null);
+ pendingAiRunRef.current = next;
+ setAiAckOpen(true);
+ }
+
+ async function confirmAiAssessmentAck() {
+ if (!aiAckChecked || aiAckBusy || aiAckSaveRef.current) return;
+ aiAckSaveRef.current = true;
+ setAiAckBusy(true);
+ setAiAckError(null);
+ const invocationId = crypto.randomUUID();
+ const consents = { AI_ASSESSMENT_ACK: true as const };
  try {
- await pendingAiRunRef.current?.();
+ const saved = await recordConsentAction({
+ actionKey: "AI_ASSESSMENT",
+ consents,
+ jobId: activeJob?.id,
+ });
+ if (!saved.ok) {
+ setAiAckError("We couldn't save your acknowledgment. Please try again.");
+ return;
+ }
+ aiAssessmentConsentRef.current = { assessmentInvocationId: invocationId, consents };
+ markStoredAiAck();
+ const run = pendingAiRunRef.current;
+ pendingAiRunRef.current = null;
  setAiAckOpen(false);
  setAiAckChecked(false);
- pendingAiRunRef.current = null;
+ const prop = properties.find((p) => p.id === propertyId);
+ const canShowAssessment = Boolean(activeJob || (description.trim() && prop?.zip?.trim()));
+ if (canShowAssessment) showAiAssessmentScreen();
+ void run?.();
+ } catch {
+ setAiAckError("We couldn't save your acknowledgment. Please try again.");
  } finally {
  setAiAckBusy(false);
+ aiAckSaveRef.current = false;
  }
  }
 
@@ -3092,7 +3181,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  )}
 
  {step === "assessment" && (activeJob || assessLoadingStep != null || hireScreenOpen) && (
- <div className="space-y-5 rounded-lg border border-border bg-card p-4">
+ <div id="ai-assessment-panel" className="space-y-5 rounded-lg border border-border bg-card p-4">
  <div className="flex flex-wrap items-center justify-between gap-2">
  <button
  type="button"
@@ -3118,7 +3207,9 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <div className="flex items-start gap-2">
  <ShieldAlert className="mt-0.5 h-5 w-5 text-[#FF4D1C]" />
  <div>
- <h2 className="text-lg font-semibold">Assessment</h2>
+ <h2 className="text-lg font-semibold">
+ {assessmentMode === "expert" || reportPath === "experts" ? "Assessment" : "AI Assessment"}
+ </h2>
  <p className="text-sm text-muted-foreground">
  {activeJob?.aiAssessment
  ? activeJob.aiAssessment.disclaimer ||
@@ -3208,7 +3299,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <EstimateLoadingSteps zip={assessLoadingZip} activeStep={assessLoadingStep ?? 0} />
  ) : !hasRenderableAssessment(activeJob) ? (
  <div className="space-y-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
- <p className="text-sm font-semibold">We couldn&apos;t finish the assessment right now</p>
+ <p className="text-sm font-semibold">We couldn&apos;t complete the assessment right now.</p>
  <p className="text-sm leading-relaxed">
  {normalizeAssessmentMessage(assessmentMsg)}
  </p>
@@ -3240,7 +3331,14 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  className="inline-flex items-center gap-2 rounded-md bg-[#FF4D1C] px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60"
  >
  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
- Try assessment again
+ Try Again
+ </button>
+ <button
+ type="button"
+ onClick={returnToIntakeDetails}
+ className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium"
+ >
+ Continue without AI
  </button>
  {assessmentMode === "expert" || reportPath === "experts" ? (
  <button
@@ -4322,6 +4420,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  open={aiAckOpen}
  busy={aiAckBusy}
  checked={aiAckChecked}
+ error={aiAckError}
  onCheckedChange={setAiAckChecked}
  onClose={cancelAiAssessmentAck}
  onContinue={() => void confirmAiAssessmentAck()}
