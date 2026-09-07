@@ -317,10 +317,18 @@ async function recordGoogleLogin(_pool, _userId) {
 }
 
 async function finalizeHomeownerUser(pool, user, rowToUser) {
-  await ensureReferralCode(pool, user);
+  try {
+    await ensureReferralCode(pool, user);
+  } catch (err) {
+    console.error('google signup referral code:', err?.message || err);
+  }
   let homeCareSubscription = null;
-  const subState = await syncUserHomeCareEntitlement(pool, user.id);
-  homeCareSubscription = toPublicHomeCareSubscriptionDto(subState);
+  try {
+    const subState = await syncUserHomeCareEntitlement(pool, user.id);
+    homeCareSubscription = toPublicHomeCareSubscriptionDto(subState);
+  } catch (err) {
+    console.error('google signup entitlement:', err?.message || err);
+  }
   const clientUser = rowToUser(user, { homeCareSubscription });
   if (homeCareSubscription) {
     clientUser.planCode = homeCareSubscription.isPro ? homeCareSubscription.planCode : null;

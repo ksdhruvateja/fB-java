@@ -37,7 +37,10 @@ function loadGoogleScript() {
     script.async = true;
     script.defer = true;
     script.onload = () => resolve();
-    script.onerror = () => reject(new Error("Could not load Google Sign-In."));
+    script.onerror = () => {
+      scriptPromise = null;
+      reject(new Error("Could not load Google Sign-In."));
+    };
     document.head.appendChild(script);
   });
   return scriptPromise;
@@ -70,14 +73,23 @@ export default function GoogleSignInButton({
     let cancelled = false;
     let credentialSeen = false;
     let watchingPopup = false;
+    let cancelTimer = 0;
+    const clearCancelWatch = () => {
+      watchingPopup = false;
+      if (cancelTimer) window.clearTimeout(cancelTimer);
+      cancelTimer = 0;
+    };
+    // GIS closes its button iframe and returns window focus when the account
+    // chooser opens. That is not a user cancel. Only report cancel if the
+    // opener is focused again and no credential arrives after a long quiet period.
     const onWindowFocus = () => {
-      if (!watchingPopup) return;
-      window.setTimeout(() => {
-        if (!credentialSeen && !cancelled) {
-          watchingPopup = false;
-          onErrorRef.current?.("Google sign-in was cancelled. You can try again.");
+      if (!watchingPopup || credentialSeen || cancelled) return;
+      if (cancelTimer) window.clearTimeout(cancelTimer);
+      cancelTimer = window.setTimeout(() => {
+        if (!credentialSeen && !cancelled && document.hasFocus()) {
+          clearCancelWatch();
         }
-      }, 1500);
+      }, 12000);
     };
     window.addEventListener("focus", onWindowFocus);
 
@@ -104,7 +116,7 @@ export default function GoogleSignInButton({
           ux_mode: "popup",
           callback: (response: { credential?: string; error?: string; select_by?: string }) => {
             credentialSeen = true;
-            watchingPopup = false;
+            clearCancelWatch();
             if (response?.credential) {
               onCredentialRef.current(response.credential);
               return;
@@ -119,12 +131,8 @@ export default function GoogleSignInButton({
             onErrorRef.current?.(msg);
           },
           intermediate_iframe_close_callback: () => {
-            window.setTimeout(() => {
-              if (!credentialSeen) {
-                watchingPopup = false;
-                onErrorRef.current?.("Google sign-in was cancelled. You can try again.");
-              }
-            }, 400);
+            // The button iframe closes when the Google account chooser opens.
+            // Do not treat that as a failed sign-in.
           },
           auto_select: false,
           cancel_on_tap_outside: true,
@@ -160,7 +168,7 @@ export default function GoogleSignInButton({
     })();
     return () => {
       cancelled = true;
-      watchingPopup = false;
+      clearCancelWatch();
       window.removeEventListener("focus", onWindowFocus);
     };
   }, [text]); // GIS re-initializes only when button text changes, not on every parent re-render

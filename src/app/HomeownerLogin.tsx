@@ -555,6 +555,7 @@ export default function HomeownerLogin({
  text={tab === "signup" ? "signup_with" : "signin_with"}
  onCredential={(cred) => void handleGoogleCredential(cred)}
  onError={(message) => {
+ if (googleSigning) return;
  setError(message);
  setGoogleSigning(false);
  setGoogleOverlayError(null);
