@@ -944,7 +944,20 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_method TEXT DEFAULT 'email'`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS oauth_google_sub TEXT`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_avatar_url TEXT`);
+  // Production users were created without this column. Google linking wrote updated_at and failed with 42703.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_oauth_google_sub ON users (oauth_google_sub) WHERE oauth_google_sub IS NOT NULL`);
+  // Prevent duplicate accounts per role+email (case-insensitive). Cross-role same email is allowed.
+  try {
+    await pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_role_email_lower ON users (role, LOWER(email)) WHERE email IS NOT NULL`
+    );
+  } catch (idxErr) {
+    console.warn(
+      '[schema] idx_users_role_email_lower not created (resolve duplicate role+email rows first):',
+      idxErr?.message || idxErr
+    );
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS marketing_consent_events (

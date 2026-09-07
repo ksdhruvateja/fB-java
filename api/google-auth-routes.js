@@ -302,8 +302,7 @@ async function linkGoogleToUser(pool, user, googleUser) {
     `UPDATE users SET
        oauth_google_sub=COALESCE(oauth_google_sub, $2),
        google_avatar_url=COALESCE(google_avatar_url, $3),
-       signup_method=COALESCE(signup_method, 'google'),
-       updated_at=NOW()
+       signup_method=COALESCE(signup_method, 'google')
      WHERE id=$1`,
     [user.id, googleUser.sub, googleUser.picture]
   );
@@ -311,8 +310,10 @@ async function linkGoogleToUser(pool, user, googleUser) {
   return { user: rows[0] };
 }
 
-async function recordGoogleLogin(pool, userId) {
-  await pool.query(`UPDATE users SET updated_at=NOW() WHERE id=$1`, [userId]);
+async function recordGoogleLogin(_pool, _userId) {
+  // Intentionally empty. A previous UPDATE users.updated_at failed in production
+  // because that column does not exist (Postgres 42703) and aborted signup after
+  // Google identity was already verified.
 }
 
 async function finalizeHomeownerUser(pool, user, rowToUser) {
@@ -693,7 +694,13 @@ export function registerGoogleAuthRoutes(app, {
         return res.status(400).json({ ok: false, code: 'INVALID_ROLE', message: 'Invalid sign-in portal.' });
       }
 
-      oauthLog('oauth_google_started', { requestId, role, intent: req.body?.intent || null });
+      oauthLog('oauth_google_started', {
+        requestId,
+        role,
+        intent: req.body?.intent || null,
+        bodyKeys: Object.keys(req.body || {}).filter((k) => !/credential|token|password|cookie/i.test(k)),
+        pendingTokenPresent: Boolean(String(req.body?.pendingSignupToken || '').trim()),
+      });
 
       const pendingUser = readPendingGoogleSignup(req.body?.pendingSignupToken, role);
       let googleUser = pendingUser;
@@ -716,6 +723,7 @@ export function registerGoogleAuthRoutes(app, {
       oauthLog('oauth_google_verified', {
         requestId,
         role,
+        stage: pendingUser ? 'PENDING_TOKEN_VERIFIED' : 'GOOGLE_TOKEN_VERIFIED',
         subSuffix: googleUser.sub.slice(-6),
         emailDomain: googleUser.email.split('@')[1] || null,
       });
@@ -728,9 +736,19 @@ export function registerGoogleAuthRoutes(app, {
       }
       return handleHomeownerGoogle(pool, req, res, { googleUser, makeToken, rowToUser, bcrypt, requestId });
     } catch (e) {
-      console.error('google auth:', e?.message || e);
-      oauthLog('oauth_google_denied', { requestId, reason: 'server_error' });
-      res.status(500).json({ ok: false, message: 'We could not sign you in with Google. Please try again.' });
+      oauthLog('oauth_google_denied', {
+        requestId,
+        reason: 'server_error',
+        stage: 'GOOGLE_SIGNUP_FAILED',
+        errorName: e?.name || 'Error',
+        errorCode: e?.code || null,
+        constraint: e?.constraint || null,
+      });
+      res.status(500).json({
+        ok: false,
+        code: 'GOOGLE_SIGNUP_FAILED',
+        message: 'We couldn\'t complete your registration. Please try again.',
+      });
     }
   });
 
