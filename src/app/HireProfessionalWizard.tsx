@@ -151,6 +151,9 @@ export default function HireProfessionalWizard({
     dispatchPricing?.authorizedNow ??
     dispatchCouponPreview?.discountedAmount ??
     baseDispatchFee;
+  const dispatchReady = ["ai_review_complete", "awaiting_service_payment", "paid_for_dispatch", "awaiting_contractor"].includes(
+    job.status
+  );
   const dispatchPaid =
     job.visitFeeAuthorized ||
     ["paid_for_dispatch", "awaiting_contractor", "contractor_invited", "scheduled"].includes(job.status);
@@ -751,15 +754,20 @@ export default function HireProfessionalWizard({
           </button>
         )}
         {step === "review" && !dispatchPaid && (
-          <button
-            type="button"
-            onClick={() => void handlePay()}
-            disabled={busy || !allChecked(dispatchConsents, dispatchConsentKeys)}
-            className="ml-auto inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white shadow-lg disabled:opacity-60 sm:flex-none"
-          >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Authorize & Request Professional — {formatMoney(dispatchHoldAmount)}
-          </button>
+          <div className="ml-auto flex flex-1 flex-col items-end gap-2 sm:flex-none">
+            {!dispatchReady ? (
+              <p className="text-xs text-muted-foreground">Preparing recommendation... You can review details now. Authorization stays locked until it finishes.</p>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => void handlePay()}
+              disabled={busy || !dispatchReady || !allChecked(dispatchConsents, dispatchConsentKeys)}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white shadow-lg disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {dispatchReady ? `Authorize & Request Professional — ${formatMoney(dispatchHoldAmount)}` : "Authorization waiting on recommendation"}
+            </button>
+          </div>
         )}
       </div>
       {ackGate.modal}

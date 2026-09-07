@@ -163,6 +163,16 @@ function normalizeAssessmentMessage(msg?: string | null) {
  return msg;
 }
 
+function markHirePerf(stage: string, startedAt?: number) {
+ if (typeof performance === "undefined") return;
+ const now = performance.now();
+ console.info(JSON.stringify({
+ scope: "hire_perf",
+ stage,
+ ms: startedAt == null ? Math.round(now) : Math.round(now - startedAt),
+ }));
+}
+
 /** Shrink phone photos so create+assess don't hang on multi'MB data URLs. */
 function compressImageForAssessment(file: File, maxEdge = 1280, quality = 0.72): Promise<string> {
  return new Promise((resolve, reject) => {
@@ -395,6 +405,7 @@ export default function HomeownerDashboard({
  const { unreadNotifications, unreadMessages, refresh: refreshComms } = useInAppComms(true);
  const [proposal, setProposal] = useState<Proposal | null>(null);
  const [busy, setBusy] = useState(false);
+ const [checkoutBusy, setCheckoutBusy] = useState(false);
  const [step, setStep] = useState<ReportStep>("intake");
  const [intakePhase, setIntakePhase] = useState<IntakePhase>("describe");
  const [reportPath, setReportPath] = useState<"ai" | "experts" | null>(null);
@@ -501,6 +512,7 @@ export default function HomeownerDashboard({
  const [assessmentMsg, setAssessmentMsg] = useState<string | null>(null);
  const [assessLoadingStep, setAssessLoadingStep] = useState<number | null>(null);
  const [assessLoadingZip, setAssessLoadingZip] = useState<string | null>(null);
+ const [hireScreenOpen, setHireScreenOpen] = useState(false);
  const [intakeDraftSavedAt, setIntakeDraftSavedAt] = useState<string | null>(null);
  const [hasIntakeDraft, setHasIntakeDraft] = useState(false);
  const [showTechMessage, setShowTechMessage] = useState(false);
@@ -800,7 +812,6 @@ export default function HomeownerDashboard({
  propertyId: number,
  body: Partial<Property> & { homeSystems?: HomeSystemRecord[] }
  ): Promise<boolean> {
- setBusy(true);
  setError(null);
  try {
  const r = await updateProperty(propertyId, body);
@@ -814,13 +825,13 @@ export default function HomeownerDashboard({
  await refresh();
  }
  return true;
- } finally {
- setBusy(false);
+ } catch (err) {
+ setError(err instanceof Error ? err.message : "Could not save property.");
+ return false;
  }
  }
 
  async function saveHealthProfile(propertyId: number, next: PropertyHealthProfile) {
- setBusy(true);
  setError(null);
  try {
  // Optimistic local update so Overview / Maintenance reflect changes immediately
@@ -839,17 +850,14 @@ export default function HomeownerDashboard({
  );
  const r = await updatePropertyHealth(propertyId, next);
  if (!r.ok) {
- setError(r.message || "Could not save property health.");
- await refresh();
+ setError(r.message || "Could not save home details.");
  return;
  }
  if (r.property) {
  upsertPropertyInState(r.property, { makePrimary: false });
- } else {
- await refresh();
  }
- } finally {
- setBusy(false);
+ } catch (err) {
+ setError(err instanceof Error ? err.message : "Could not save home details.");
  }
  }
 
@@ -1021,12 +1029,14 @@ export default function HomeownerDashboard({
  }
 
  async function refresh() {
- setLoading(true);
+ const firstLoad = properties.length === 0 && jobs.length === 0;
+ if (firstLoad) setLoading(true);
  setError(null);
  try {
  const [j, p] = await Promise.all([listMyManagedJobs(), listProperties()]);
  if (j.ok) setJobs(j.jobs || []);
  if (p.ok) setProperties(p.properties || []);
+ if (!j.ok && !p.ok) setError("Could not load your account data.");
  } catch {
  setError("Could not load your account data.");
  } finally {
@@ -1270,16 +1280,17 @@ export default function HomeownerDashboard({
  }, []);
 
  useEffect(() => {
- if (step !== "assessment" || !activeJob?.id) return;
+ // Resume an in-flight assessment only on the report tab. Do not use the shared `busy`
+ // flag — that locked uploads, passport save, and HomeCare upgrades across the portal.
+ if (tab !== "report" || step !== "assessment" || !activeJob?.id) return;
  if (hasRenderableAssessment(activeJob)) return;
  if (!isAssessmentProcessing(activeJob)) return;
- if (busy || assessInFlightRef.current === activeJob.id) return;
+ if (assessInFlightRef.current === activeJob.id) return;
  if (assessmentRecoveryRef.current === activeJob.id) return;
  assessmentRecoveryRef.current = activeJob.id;
  const jobId = activeJob.id;
  const propZip = properties.find((p) => p.id === activeJob.propertyId)?.zip || null;
  void (async () => {
- setBusy(true);
  try {
  const assessed = await runAssessWithProgress(jobId, propZip);
  if (assessed.ok && assessed.job) {
@@ -1289,11 +1300,12 @@ export default function HomeownerDashboard({
  setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
  }
  } finally {
- setBusy(false);
- if (assessmentRecoveryRef.current === jobId) assessmentRecoveryRef.current = null;
+ // Keep the guard so a failed poll cannot restart forever.
  }
  })();
- }, [step, activeJob?.id, activeJob?.assessmentStatus, activeJob?.aiAssessment, busy, properties]);
+ // Intentionally omit `busy` and `properties` — those retriggered this loop.
+ // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [tab, step, activeJob?.id, activeJob?.assessmentStatus, activeJob?.aiAssessment]);
 
  useEffect(() => {
  void refresh();
@@ -1471,7 +1483,7 @@ export default function HomeownerDashboard({
  }, [selectedJobId, jobs, step, tab]);
 
  async function handleSubscribe(jobId?: number, planCode = PAID_HOME_CARE_PLAN_CODE) {
- setBusy(true);
+ setCheckoutBusy(true);
  setError(null);
  try {
  const r = await startSubscription(planCode, jobId);
@@ -1487,7 +1499,7 @@ export default function HomeownerDashboard({
  } catch (e: unknown) {
  setError(e instanceof Error ? e.message : "Could not complete subscription.");
  } finally {
- setBusy(false);
+ setCheckoutBusy(false);
  }
  }
 
@@ -1595,14 +1607,14 @@ export default function HomeownerDashboard({
 
  useEffect(() => {
  if (tab !== "report") return;
- if (step === "assessment" && !activeJob && assessLoadingStep == null) {
+ if (step === "assessment" && !activeJob && assessLoadingStep == null && !hireScreenOpen) {
  setStep("intake");
  setIntakePhase("describe");
  }
  if (step === "intake") {
  setIntakePhase((phase) => normalizeIntakePhase(phase));
  }
- }, [tab, step, activeJob, assessLoadingStep]);
+ }, [tab, step, activeJob, assessLoadingStep, hireScreenOpen]);
 
  useEffect(() => {
  if (tab !== "report" || step !== "intake") return;
@@ -1860,11 +1872,24 @@ export default function HomeownerDashboard({
  setBusy(true);
  setError(null);
  setAssessmentMsg(null);
+ const startedAt = typeof performance !== "undefined" ? performance.now() : 0;
  const propZip = properties.find((p) => p.id === propertyId)?.zip || null;
  if (path === "ai") {
  openAssessmentFlow("ai");
  } else {
  setAssessmentMode("expert");
+ setReportPath("experts");
+ setHireScreenOpen(true);
+ setAssessLoadingStep(null);
+ navigateTo({
+ role: "homeowner",
+ tab: "report",
+ reportStep: "assessment",
+ reportPath: "experts",
+ jobId: null,
+ });
+ markHirePerf("hire_professional_page_init", startedAt);
+ scrollReportToTop();
  }
  try {
  const code = partnerCode.trim().toUpperCase();
@@ -1898,7 +1923,8 @@ export default function HomeownerDashboard({
  });
  if (!created.ok || !created.job) {
  setError(created.message || "Could not submit issue.");
- if (path === "ai") returnToIntakeDetails();
+ setHireScreenOpen(false);
+ if (path === "ai" || path === "experts") returnToIntakeDetails();
  return;
  }
  try {
@@ -1914,16 +1940,25 @@ export default function HomeownerDashboard({
  setActiveJob(created.job);
  setAssistantHandoffIntent(null);
  setReportPath(path);
+ setSelectedJobId(created.job.id);
  if (path === "experts") {
- navigateTo({
- role: "homeowner",
- tab: "report",
- reportStep: "assessment",
- reportPath: "experts",
- jobId: null,
- });
  setAssessmentMode("expert");
- scrollReportToTop();
+ setHireScreenOpen(true);
+ setBusy(false);
+ markHirePerf("dispatch_create", startedAt);
+ void (async () => {
+ markHirePerf("assessment_fetch");
+ const assessed = await runAssessWithProgress(created.job!.id, propZip);
+ markHirePerf("assessment_fetch", startedAt);
+ if (!assessed.ok || !assessed.job) {
+ setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
+ } else {
+ setActiveJob(assessed.job);
+ setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
+ }
+ void refresh();
+ })();
+ return;
  }
  const assessed = await runAssessWithProgress(created.job.id, propZip);
  if (!assessed.ok || !assessed.job) {
@@ -1937,12 +1972,8 @@ export default function HomeownerDashboard({
  null
  );
  }
- if (path === "ai") {
  setAssessmentMode("diy");
- }
  await refresh();
- // Keep assessment for DIY/hire choice; tracking is one click away
- setSelectedJobId(created.job.id);
  } finally {
  setBusy(false);
  }
@@ -1977,6 +2008,7 @@ export default function HomeownerDashboard({
  setError(null);
  setReportPath("experts");
  setStep("experts");
+ markHirePerf("hire_professional_page_init");
  }
 
  async function payFee() {
@@ -2209,7 +2241,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <ProFeatureProvider
  planCode={user.planCode}
  homeCareSubscription={user.homeCareSubscription}
- busy={busy}
+ busy={checkoutBusy}
  onUpgrade={handleAuthenticatedCheckout}
  onProActivated={handleProActivated}
  >
@@ -2963,7 +2995,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </motion.form>
  )}
 
- {step === "assessment" && (activeJob || assessLoadingStep != null) && (
+ {step === "assessment" && (activeJob || assessLoadingStep != null || hireScreenOpen) && (
  <div className="space-y-5 rounded-lg border border-border bg-card p-4">
  <div className="flex flex-wrap items-center justify-between gap-2">
  <button
@@ -3006,9 +3038,77 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </p>
  ) : null}
 
- {assessLoadingStep != null ||
- busy ||
- (isAssessmentProcessing(activeJob) && !hasRenderableAssessment(activeJob)) ? (
+ {((assessmentMode === "expert" || reportPath === "experts") && (activeJob || hireScreenOpen)) ? (
+ <div className="space-y-4">
+ <div className="rounded-xl border border-border/70 bg-muted/20 px-4 py-3 text-sm">
+ <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Your property</p>
+ <p className="mt-1 font-medium">
+ {(() => {
+ const prop = properties.find((p) => p.id === (activeJob?.propertyId || propertyId));
+ return [prop?.addressLine1, prop?.city, prop?.state, prop?.zip].filter(Boolean).join(", ") || "Selected property";
+ })()}
+ </p>
+ {description.trim() ? (
+ <p className="mt-2 text-muted-foreground">{description.trim()}</p>
+ ) : null}
+ </div>
+ {!activeJob ? (
+ <p className="flex items-center gap-2 text-sm text-muted-foreground">
+ <Loader2 className="h-4 w-4 animate-spin" /> Creating your service request...
+ </p>
+ ) : (
+ <>
+ {(assessLoadingStep != null || (isAssessmentProcessing(activeJob) && !hasRenderableAssessment(activeJob))) ? (
+ <div className="rounded-xl border border-border/70 px-4 py-3 text-sm">
+ <p className="font-medium">AI recommendation</p>
+ <p className="mt-1 text-muted-foreground">Preparing recommendation... You can continue scheduling.</p>
+ </div>
+ ) : hasRenderableAssessment(activeJob) ? (
+ <p className="text-sm leading-relaxed">{activeJob.aiAssessment?.summary || "Assessment saved."}</p>
+ ) : (
+ <div className="rounded-xl border border-amber-300/70 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+ <p>Recommendation temporarily unavailable. You can still review scheduling. Authorization stays locked until the recommendation finishes.</p>
+ <button
+ type="button"
+ className="mt-2 text-xs font-semibold text-[#FF4D1C]"
+ onClick={() => {
+ requestAiAssessment(async () => {
+ const retryZip = properties.find((p) => p.id === activeJob.propertyId)?.zip || null;
+ const assessed = await runAssessWithProgress(activeJob.id, retryZip, { force: true });
+ if (!assessed.ok || !assessed.job) {
+ setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
+ } else {
+ setActiveJob(assessed.job);
+ setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
+ }
+ });
+ }}
+ >
+ Try recommendation again
+ </button>
+ </div>
+ )}
+ <HireProfessionalWizard
+ job={activeJob}
+ busy={busy}
+ setBusy={setBusy}
+ onError={setError}
+ onJobUpdated={(updated) => {
+ setActiveJob(updated);
+ setSelectedJobId(updated.id);
+ }}
+ onPaid={async () => {
+ setDispatchSuccessMsg("Dispatch fee authorized - FixBridge has been notified.");
+ setTab("jobs");
+ setSelectedJobId(activeJob.id);
+ await refresh();
+ }}
+ />
+ </>
+ )}
+ </div>
+ ) : assessLoadingStep != null ||
+ (isAssessmentProcessing(activeJob) && !hasRenderableAssessment(activeJob) && assessInFlightRef.current === activeJob?.id) ? (
  <EstimateLoadingSteps zip={assessLoadingZip} activeStep={assessLoadingStep ?? 0} />
  ) : !hasRenderableAssessment(activeJob) ? (
  <div className="space-y-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
