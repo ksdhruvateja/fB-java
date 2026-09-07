@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+﻿import { useState, useCallback } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
  ArrowRight,
@@ -262,7 +262,7 @@ export default function HomeownerLogin({
  }
  };
 
- const handleGoogleCredential = async (credential: string, opts?: { forceConsents?: boolean }) => {
+ const handleGoogleCredential = useCallback(async (credential: string, opts?: { forceConsents?: boolean }) => {
  setLoading(true);
  setError("");
  try {
@@ -291,21 +291,28 @@ export default function HomeownerLogin({
  setLoading(false);
  return;
  }
- saveSession(data.token, data.user);
+ const user = data.user as AuthUser;
+ const token = data.token as string;
+ if (!user?.id) {
+ setError("Sign-in succeeded but no account was returned. Please try again.");
+ setLoading(false);
+ return;
+ }
+ saveSession(token, user);
  clearPendingReferralCode();
  if (data.needsMarketingOnboarding) {
- setGooglePendingUser(data.user);
+ setGooglePendingUser(user);
  setGoogleOnboarding(true);
  setLoading(false);
  return;
  }
- onLogin(data.user);
+ onLogin(user);
  } catch {
  setError("We couldn't sign you in with Google. Please try again.");
  } finally {
  setLoading(false);
  }
- };
+ }, [tab, accountConsents, marketingEmailOptIn, marketingSmsOptIn, reportPhone, onLogin]);
 
  const completeGoogleConsentSignup = async () => {
  if (!pendingGoogleCredential) return;

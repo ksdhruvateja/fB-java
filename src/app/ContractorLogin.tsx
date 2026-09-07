@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { motion } from "motion/react";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { signInUser, signUpUser, saveSession, updateUserProfile, type AuthUser } from "./auth";
@@ -52,7 +52,7 @@ export default function ContractorLogin({
   const [docs, setDocs] = useState<ContractorApplicationDocs>(emptyDocs);
   const [googleShellAccount, setGoogleShellAccount] = useState(false);
 
-  const handleGoogleCredential = async (credential: string) => {
+  const handleGoogleCredential = useCallback(async (credential: string) => {
     if (loading) return;
     setError("");
     setLoading(true);
@@ -74,10 +74,17 @@ export default function ContractorLogin({
         setLoading(false);
         return;
       }
-      saveSession(data.token, data.user);
+      const user = data.user as AuthUser;
+      const token = data.token as string;
+      if (!user?.id) {
+        setError("Sign-in succeeded but no account was returned. Please try again.");
+        setLoading(false);
+        return;
+      }
+      saveSession(token, user);
       if (data.needsContractorApplication) {
-        const profile = data.googleProfile || {};
-        setEmail(String(profile.email || data.user.email || ""));
+        const profile = data.googleProfile as Record<string, unknown> || {};
+        setEmail(String(profile.email || user.email || ""));
         setPassword("");
         setApplication((prev) => ({
           ...prev,
@@ -90,13 +97,13 @@ export default function ContractorLogin({
         setLoading(false);
         return;
       }
-      onLogin(data.user);
+      onLogin(user);
     } catch {
       setError("We couldn't sign you in with Google. Please try again.");
     } finally {
       setLoading(false);
     }
-  };
+  }, [loading, tab, application.agreeContractorAgreementV4, onLogin]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

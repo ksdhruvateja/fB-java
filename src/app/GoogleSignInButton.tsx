@@ -53,6 +53,9 @@ export default function GoogleSignInButton({
   const containerRef = useRef<HTMLDivElement>(null);
   const [ready, setReady] = useState(false);
   const [configured, setConfigured] = useState<boolean | null>(null);
+  // Keep a stable ref so GIS always calls the latest handler without re-initializing
+  const onCredentialRef = useRef(onCredential);
+  useEffect(() => { onCredentialRef.current = onCredential; });
 
   useEffect(() => {
     let cancelled = false;
@@ -70,7 +73,7 @@ export default function GoogleSignInButton({
         window.google!.accounts.id.initialize({
           client_id: cfg.clientId,
           callback: (response: { credential?: string }) => {
-            if (response?.credential) onCredential(response.credential);
+            if (response?.credential) onCredentialRef.current(response.credential);
           },
           auto_select: false,
           use_fedcm_for_prompt: false,
@@ -91,7 +94,7 @@ export default function GoogleSignInButton({
     return () => {
       cancelled = true;
     };
-  }, [onCredential, text]);
+  }, [text]); // GIS re-initializes only when button text changes, not on every parent re-render
 
   if (configured === false) return null;
 
