@@ -252,6 +252,8 @@ export async function applyInvoiceSubscriptionStatus(pool, stripeSubscriptionId,
   invalidateHomeCareEntitlementCache(userId);
   return syncUserHomeCareEntitlement(pool, userId, { force: true });
 }
+
+export async function userHasActivePaidSubscription(pool, userId) {
   const sub = await loadBestHomeCareSubscription(pool, userId);
   return subscriptionGrantsProAccess(sub);
 }
