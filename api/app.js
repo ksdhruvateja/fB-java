@@ -1056,20 +1056,36 @@ app.use(
 );
 
 // ── Rate limiters ─────────────────────────────────────────────────────────────
+// Netlify/serverless sometimes has no req.ip. express-rate-limit v8 then throws
+// ValidationError, and Express's default handler returns HTML. The Google
+// signup form treats that as "unexpected response".
+function rateLimitKey(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  const fromHeader = Array.isArray(forwarded)
+    ? forwarded[0]
+    : String(forwarded || '').split(',')[0].trim();
+  const nfIp = String(req.headers['x-nf-client-connection-ip'] || '').trim();
+  return req.ip || fromHeader || nfIp || 'unknown';
+}
 
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: Number(process.env.API_RATE_LIMIT_MAX || 400),
+const rateLimitBase = {
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { ip: false, xForwardedForHeader: false },
+  keyGenerator: rateLimitKey,
+};
+
+const apiLimiter = rateLimit({
+  ...rateLimitBase,
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.API_RATE_LIMIT_MAX || 400),
   message: { ok: false, message: 'Too many requests. Please slow down and try again.' },
 });
 
 const signInLimiter = rateLimit({
+  ...rateLimitBase,
   windowMs: 15 * 60 * 1000, // 15 min
   max: Number(process.env.SIGNIN_RATE_LIMIT_MAX || (process.env.NODE_ENV === 'production' ? 15 : 200)),
-  standardHeaders: true,
-  legacyHeaders: false,
   handler: (_req, res) =>
     res.status(429).json({ ok: false, message: 'Too many sign-in attempts. Please wait 15 minutes and try again.' }),
 });
@@ -3174,6 +3190,34 @@ app.get('/api/admin/production-config', requireAuth, requireAdmin, requirePermis
     checks,
     missingRequired,
     note: 'Secret values are never returned — only presence flags.',
+  });
+});
+
+// Always JSON. Auth clients treat HTML (Express default / Netlify error pages)
+// as "Server returned an unexpected response."
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  const status = Number(err?.status || err?.statusCode) || 500;
+  const isParse = err?.type === 'entity.parse.failed' || err instanceof SyntaxError;
+  const isRateLimit = err?.code === 'ERR_ERL_UNDEFINED_IP_ADDRESS';
+  const code = isParse ? 'INVALID_REQUEST' : isRateLimit ? 'RATE_LIMIT' : 'GOOGLE_SIGNUP_FAILED';
+  const message = isParse
+    ? 'Unable to complete Google registration.'
+    : isRateLimit
+      ? 'We couldn\'t complete your registration. Please try again.'
+      : 'We couldn\'t complete your registration. Please try again.';
+  if (status >= 500) {
+    console.error(JSON.stringify({
+      scope: 'api_error',
+      route: req.originalUrl || req.url,
+      status,
+      code: err?.code || err?.name || 'Error',
+    }));
+  }
+  res.status(isParse ? 400 : status >= 400 ? status : 500).json({
+    ok: false,
+    code,
+    message,
   });
 });
 

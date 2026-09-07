@@ -84,10 +84,32 @@ export async function signInWithGoogle(
       }),
     });
     const text = await res.text();
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) {
+      console.error("Unexpected auth response", {
+        status: res.status,
+        contentType,
+        route: "/api/auth/google",
+      });
+      return {
+        ok: false,
+        code: "AUTH_SERVER_RESPONSE_INVALID",
+        message: "We couldn't complete your registration. Please try again.",
+      };
+    }
     try {
       return JSON.parse(text) as Record<string, unknown> & { ok: boolean };
     } catch {
-      return { ok: false, message: "Server returned an unexpected response. Please try again." };
+      console.error("Unexpected auth response", {
+        status: res.status,
+        contentType,
+        route: "/api/auth/google",
+      });
+      return {
+        ok: false,
+        code: "AUTH_SERVER_RESPONSE_INVALID",
+        message: "We couldn't complete your registration. Please try again.",
+      };
     }
   } catch {
     return { ok: false, message: "Network error. Please check your connection and try again." };
