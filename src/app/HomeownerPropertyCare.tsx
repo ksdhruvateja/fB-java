@@ -40,6 +40,7 @@ function passportSectionForLegacy(section: PropertyCareSection): PropertyPasspor
 export default function HomeownerPropertyCare({
   properties,
   jobs,
+  propertiesLoading = false,
   busy,
   initialSection = "passport",
   initialPropertyId,
@@ -53,6 +54,7 @@ export default function HomeownerPropertyCare({
 }: {
   properties: Property[];
   jobs: ManagedJob[];
+  propertiesLoading?: boolean;
   busy?: boolean;
   initialSection?: PropertyCareSection;
   initialPropertyId?: number | null;
@@ -92,6 +94,7 @@ export default function HomeownerPropertyCare({
     initialPropertyId ?? properties[0]?.id ?? null
   );
   const [showAddHome, setShowAddHome] = useState(false);
+  const [savingHome, setSavingHome] = useState(false);
   const [newLabel, setNewLabel] = useState("");
   const [newAddress, setNewAddress] = useState("");
   const [newAddressLine2, setNewAddressLine2] = useState("");
@@ -199,7 +202,10 @@ export default function HomeownerPropertyCare({
       return;
     }
     setAddHomeError(null);
-    const created = await onAddProperty({
+    setSavingHome(true);
+    let created: Property | null = null;
+    try {
+    created = await onAddProperty({
       addressLine1: structured.addressLine1,
       addressLine2: structured.addressLine2 || undefined,
       city: structured.city,
@@ -216,6 +222,9 @@ export default function HomeownerPropertyCare({
     setShowAddHome(false);
     resetAddHomeForm();
     selectProperty(created.id);
+    } finally {
+      setSavingHome(false);
+    }
   }
 
   const propertyBar = (
@@ -275,7 +284,7 @@ export default function HomeownerPropertyCare({
           onStateChange={setNewState}
           onZipChange={setNewZip}
           onVerificationChange={setNewHomeVerification}
-          disabled={busy}
+          disabled={savingHome}
           zipRequired
         />
       </div>
@@ -285,10 +294,10 @@ export default function HomeownerPropertyCare({
       <div className="flex gap-2 sm:col-span-2">
         <button
           type="submit"
-          disabled={busy}
+          disabled={savingHome}
           className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
         >
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save home"}
+          {savingHome ? "Saving..." : "Save home"}
         </button>
         <button
           type="button"
@@ -303,6 +312,17 @@ export default function HomeownerPropertyCare({
       </div>
     </form>
   ) : null;
+
+  if (propertiesLoading && !properties.length) {
+    return (
+      <section className="mx-auto max-w-5xl space-y-5">
+        <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight">
+          Property Passport
+        </h1>
+        <p className="text-sm text-muted-foreground">Loading your property...</p>
+      </section>
+    );
+  }
 
   if (!properties.length) {
     return (

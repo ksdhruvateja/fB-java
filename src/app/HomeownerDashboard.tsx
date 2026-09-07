@@ -397,6 +397,7 @@ export default function HomeownerDashboard({
  const [jobs, setJobs] = useState<ManagedJob[]>([]);
  const [properties, setProperties] = useState<Property[]>([]);
  const [loading, setLoading] = useState(true);
+ const [propertiesLoading, setPropertiesLoading] = useState(true);
  const [error, setError] = useState<string | null>(null);
  const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
  const [jobFocus, setJobFocus] = useState<"quote" | "invoice" | "tracking" | "completion" | "dispute" | null>(null);
@@ -943,7 +944,6 @@ export default function HomeownerDashboard({
  addressVerified?: boolean;
  postalCodePlus4?: string;
  }) {
- setBusy(true);
  setError(null);
  try {
  const r = await createAndAdoptProperty(
@@ -965,8 +965,9 @@ export default function HomeownerDashboard({
  return null;
  }
  return r.property;
- } finally {
- setBusy(false);
+ } catch (err) {
+ setError(err instanceof Error ? err.message : "Could not add address.");
+ return null;
  }
  }
 
@@ -1029,19 +1030,32 @@ export default function HomeownerDashboard({
  }
 
  async function refresh() {
- const firstLoad = properties.length === 0 && jobs.length === 0;
- if (firstLoad) setLoading(true);
+ const started = performance.now();
+ if (jobs.length === 0) setLoading(true);
+ if (properties.length === 0) setPropertiesLoading(true);
  setError(null);
- try {
- const [j, p] = await Promise.all([listMyManagedJobs(), listProperties()]);
+ const jobsPromise = listMyManagedJobs()
+ .then((j) => {
  if (j.ok) setJobs(j.jobs || []);
+ return j;
+ })
+ .catch(() => ({ ok: false as const }))
+ .finally(() => setLoading(false));
+ const propsPromise = listProperties()
+ .then((p) => {
  if (p.ok) setProperties(p.properties || []);
+ return p;
+ })
+ .catch(() => ({ ok: false as const }))
+ .finally(() => setPropertiesLoading(false));
+ const [j, p] = await Promise.all([jobsPromise, propsPromise]);
  if (!j.ok && !p.ok) setError("Could not load your account data.");
- } catch {
- setError("Could not load your account data.");
- } finally {
- setLoading(false);
- }
+ console.info(JSON.stringify({
+ event: "dashboard_data",
+ durationMs: Math.round(performance.now() - started),
+ jobsOk: Boolean(j.ok),
+ propertiesOk: Boolean(p.ok),
+ }));
  }
 
  async function handleSaveZipAndProceed() {
@@ -2368,7 +2382,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <HomeownerPropertyCare
  properties={properties}
  jobs={jobs}
- busy={busy}
+ propertiesLoading={propertiesLoading}
+ busy={false}
  initialSection={careSection}
  initialPropertyId={primaryPropertyId}
  onSaveHealth={saveHealthProfile}
@@ -2394,7 +2409,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  onToggleDark={onToggleDark}
  onLogout={onLogout}
  onGoPro={() => navigateTab("go-pro")}
- goProBusy={busy}
+ goProBusy={checkoutBusy}
  showGoPro={!hasHomeCarePro}
  />
  )}
@@ -2473,7 +2488,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <div className="rounded-[1.75rem] bg-[#F3F4F6] px-4 py-8 dark:bg-muted/30 sm:px-6">
  <HomeownerGoProPlans
  currentPlanCode={user.planCode}
- busy={busy}
+ busy={checkoutBusy}
  isAuthenticated
  onAuthenticatedCheckout={handleAuthenticatedCheckout}
  onSelectPlan={handleSelectGoProPlan}
@@ -4019,7 +4034,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  {tab === "properties" && (
  <HomeownerPropertyPage
  properties={properties}
- busy={busy}
+ propertiesLoading={propertiesLoading}
+ busy={false}
  onBusy={setBusy}
  onError={setError}
  onRefresh={refresh}

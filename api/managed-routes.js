@@ -1800,7 +1800,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     const columns = includeDataUrl
       ? '*'
       : `id, property_id, owner_user_id, category, title, file_name, mime_type, notes, system_key, created_at,
-         (data_url IS NOT NULL AND length(data_url) > 0) AS has_file`;
+         true AS has_file`;
     const { rows } = await pool.query(
       `SELECT ${columns} FROM property_documents
        WHERE property_id=$1 AND owner_user_id=$2
@@ -1823,10 +1823,24 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         `SELECT * FROM properties WHERE owner_user_id=$1 ORDER BY created_at ASC, id ASC`,
         [req.authUser.id]
       );
-      const properties = [];
-      for (const row of rows) {
-        properties.push(await serializeOwnedProperty(row, req.authUser.id, req.authUser.planCode));
+      const ids = rows.map((row) => row.id);
+      const docsByProperty = new Map();
+      if (ids.length) {
+        const { rows: docRows } = await pool.query(
+          `SELECT id, property_id, owner_user_id, category, title, file_name, mime_type, notes, system_key, created_at,
+                  true AS has_file
+           FROM property_documents
+           WHERE owner_user_id=$1 AND property_id = ANY($2::int[])
+           ORDER BY created_at DESC`,
+          [req.authUser.id, ids]
+        );
+        for (const doc of docRows) {
+          const list = docsByProperty.get(doc.property_id) || [];
+          list.push(doc);
+          docsByProperty.set(doc.property_id, list);
+        }
       }
+      const properties = rows.map((row) => serializeProperty(row, docsByProperty.get(row.id) || []));
       res.json({ ok: true, properties });
     } catch (e) {
       console.error(e);

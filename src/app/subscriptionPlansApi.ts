@@ -33,10 +33,15 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return data;
 }
 
+let goProPlansCache: { ok: boolean; plans: ManagedSubscriptionPlan[]; pricingRevision?: string } | null = null;
+
 export async function listGoProPlans() {
-  return api<{ ok: boolean; plans: ManagedSubscriptionPlan[]; pricingRevision?: string }>(
+  if (goProPlansCache?.plans?.length) return goProPlansCache;
+  const result = await api<{ ok: boolean; plans: ManagedSubscriptionPlan[]; pricingRevision?: string }>(
     "/api/platform/go-pro-plans"
   );
+  if (result.plans?.length) goProPlansCache = result;
+  return result;
 }
 
 const PRICING_REVISION_KEY = "fixbridge-pricing-revision";

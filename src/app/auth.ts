@@ -287,14 +287,17 @@ export async function resetPassword(
 
 // ── Validate existing token (called on app startup) ──────────────────────────
 
-export async function validateToken(): Promise<
+export async function validateToken(options?: { syncCheckout?: boolean }): Promise<
   { ok: true; user: AuthUser } | { ok: false; reason?: "no-token" | "invalid" | "network" }
 > {
   const token = getStoredToken();
   if (!token) return { ok: false, reason: "no-token" };
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 8000);
   try {
-    const res = await fetch("/api/auth/me", {
+    const res = await fetch(options?.syncCheckout ? "/api/auth/me?sync=checkout" : "/api/auth/me", {
       headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
     });
     const data = await res.json();
     if (!data.ok) {
@@ -309,6 +312,8 @@ export async function validateToken(): Promise<
     const cached = getStoredUser();
     if (cached) return { ok: true, user: cached };
     return { ok: false, reason: "network" };
+  } finally {
+    window.clearTimeout(timer);
   }
 }
 

@@ -101,6 +101,7 @@ function dataUrlToObjectUrl(dataUrl: string) {
 
 export default function HomeownerPropertyPage({
   properties,
+  propertiesLoading = false,
   busy,
   onBusy,
   onError,
@@ -110,6 +111,7 @@ export default function HomeownerPropertyPage({
   onReloadProperty,
 }: {
   properties: Property[];
+  propertiesLoading?: boolean;
   busy?: boolean;
   onBusy: (v: boolean) => void;
   onError: (msg: string | null) => void;
@@ -181,6 +183,9 @@ export default function HomeownerPropertyPage({
   const [extractDraft, setExtractDraft] = useState<PropertyDocumentExtraction | null>(null);
   const [extractBusy, setExtractBusy] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [savingFacts, setSavingFacts] = useState(false);
+  const [savingSystems, setSavingSystems] = useState(false);
+  const [savingHome, setSavingHome] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [localDocs, setLocalDocs] = useState<PropertyDocument[]>([]);
@@ -230,7 +235,7 @@ export default function HomeownerPropertyPage({
       onError("Address Line 1, City, State, and a valid ZIP Code are required.");
       return;
     }
-    onBusy(true);
+    setSavingFacts(true);
     onError(null);
     try {
       const r = await updateProperty(selected.id, {
@@ -259,13 +264,13 @@ export default function HomeownerPropertyPage({
         await onRefresh();
       }
     } finally {
-      onBusy(false);
+      setSavingFacts(false);
     }
   }
 
   async function saveSystems() {
     if (!selected) return;
-    onBusy(true);
+    setSavingSystems(true);
     onError(null);
     try {
       const r = await updateProperty(selected.id, { homeSystems: systems });
@@ -280,7 +285,7 @@ export default function HomeownerPropertyPage({
         await onRefresh();
       }
     } finally {
-      onBusy(false);
+      setSavingSystems(false);
     }
   }
 
@@ -297,7 +302,7 @@ export default function HomeownerPropertyPage({
       onError("Address Line 1, City, State, and a valid ZIP Code are required.");
       return;
     }
-    onBusy(true);
+    setSavingHome(true);
     onError(null);
     try {
       if (!onCreateProperty) {
@@ -332,7 +337,7 @@ export default function HomeownerPropertyPage({
       setNewLabel("");
       setSelectedId(r.property.id);
     } finally {
-      onBusy(false);
+      setSavingHome(false);
     }
   }
 
@@ -550,17 +555,17 @@ export default function HomeownerPropertyPage({
               onStateChange={setNewState}
               onZipChange={setNewZip}
               onVerificationChange={setNewHomeVerification}
-              disabled={busy}
+              disabled={savingHome}
               zipRequired
             />
           </div>
           <div className="sm:col-span-2 flex gap-2">
             <button
               type="submit"
-              disabled={busy}
+              disabled={savingHome}
               className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
             >
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save home"}
+              {savingHome ? "Saving..." : "Save home"}
             </button>
             <button
               type="button"
@@ -573,7 +578,9 @@ export default function HomeownerPropertyPage({
         </form>
       )}
 
-      {properties.length === 0 ? (
+      {propertiesLoading && properties.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Loading your property...</p>
+      ) : properties.length === 0 ? (
         <div className="rounded-[1.5rem] border border-dashed border-border bg-card px-6 py-12 text-center">
           <Home className="mx-auto h-8 w-8 text-primary" />
           <p className="mt-3 text-sm font-medium">No homes yet</p>
@@ -627,17 +634,18 @@ export default function HomeownerPropertyPage({
                   </div>
                   <button
                     type="button"
+                    disabled={savingFacts}
                     onClick={() => (editingFacts ? void saveFacts() : setEditingFacts(true))}
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-xs font-semibold hover:bg-muted"
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-xs font-semibold hover:bg-muted disabled:opacity-60"
                   >
-                    {busy && editingFacts ? (
+                    {savingFacts ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : editingFacts ? (
                       <CheckCircle2 className="h-3.5 w-3.5" />
                     ) : (
                       <Pencil className="h-3.5 w-3.5" />
                     )}
-                    {editingFacts ? "Save" : "Edit"}
+                    {savingFacts ? "Saving..." : editingFacts ? "Save" : "Edit"}
                   </button>
                 </div>
 
@@ -664,7 +672,7 @@ export default function HomeownerPropertyPage({
                         onZipChange={setZip}
                         onVerificationChange={setEditVerification}
                         initiallyVerified={selected?.addressVerified === true}
-                        disabled={busy}
+                        disabled={savingFacts}
                         zipRequired
                       />
                     </div>
@@ -737,17 +745,18 @@ export default function HomeownerPropertyPage({
                   </div>
                   <button
                     type="button"
+                    disabled={savingSystems}
                     onClick={() => (editingSystems ? void saveSystems() : setEditingSystems(true))}
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-xs font-semibold hover:bg-muted"
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-xs font-semibold hover:bg-muted disabled:opacity-60"
                   >
-                    {busy && editingSystems ? (
+                    {savingSystems ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : editingSystems ? (
                       <CheckCircle2 className="h-3.5 w-3.5" />
                     ) : (
                       <Pencil className="h-3.5 w-3.5" />
                     )}
-                    {editingSystems ? "Save systems" : "Edit systems"}
+                    {savingSystems ? "Saving..." : editingSystems ? "Save systems" : "Edit systems"}
                   </button>
                 </div>
 

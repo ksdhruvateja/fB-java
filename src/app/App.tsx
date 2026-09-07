@@ -562,7 +562,9 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(initialState.currentUser);
   // True while the startup JWT check is in-flight; prevents white-screen flash on
   // the first render when a cached user exists but the token hasn't been validated yet.
-  const [authLoading, setAuthLoading] = useState(() => Boolean(initialState.currentUser));
+  // Cached session renders immediately. /api/auth/me refreshes in the background
+  // and must not hide the dashboard behind a full-screen spinner.
+  const [authLoading, setAuthLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [resetParams, setResetParams] = useState<{ token: string; role: ResetRole } | null>(null);
   const [subscriptionSuccessPlan, setSubscriptionSuccessPlan] = useState<string | null>(null);
@@ -866,7 +868,7 @@ export default function App() {
     let attempts = 0;
     const tick = async () => {
       attempts += 1;
-      const result = await validateToken();
+      const result = await validateToken({ syncCheckout: true });
       if (cancelled) return;
       if (result.ok) {
         setCurrentUser(result.user);

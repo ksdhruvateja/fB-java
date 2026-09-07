@@ -135,7 +135,19 @@ export async function loadBestHomeCareSubscription(pool, userId) {
  * Sync users.plan_code from authoritative subscription state.
  * Returns resolved state for API responses.
  */
-export async function syncUserHomeCareEntitlement(pool, userId, { now = new Date() } = {}) {
+const entitlementCache = new Map();
+const ENTITLEMENT_TTL_MS = 15_000;
+
+export function invalidateHomeCareEntitlementCache(userId) {
+  if (userId == null) entitlementCache.clear();
+  else entitlementCache.delete(Number(userId));
+}
+
+export async function syncUserHomeCareEntitlement(pool, userId, { now = new Date(), force = false } = {}) {
+  const cached = entitlementCache.get(Number(userId));
+  if (!force && cached && Date.now() - cached.at < ENTITLEMENT_TTL_MS) {
+    return cached.state;
+  }
   const subscription = await loadBestHomeCareSubscription(pool, userId);
   const { rows: userRows } = await pool.query(`SELECT plan_code FROM users WHERE id=$1`, [userId]);
   const storedPlanCode = userRows[0]?.plan_code || null;
@@ -168,6 +180,7 @@ export async function syncUserHomeCareEntitlement(pool, userId, { now = new Date
     }
   }
 
+  entitlementCache.set(Number(userId), { at: Date.now(), state });
   return state;
 }
 
@@ -179,7 +192,8 @@ export async function syncEntitlementForStripeSubscriptionId(pool, stripeSubscri
   );
   const userId = rows[0]?.user_id;
   if (!userId) return null;
-  return syncUserHomeCareEntitlement(pool, userId);
+  invalidateHomeCareEntitlementCache(userId);
+  return syncUserHomeCareEntitlement(pool, userId, { force: true });
 }
 
 /**
@@ -235,10 +249,9 @@ export async function applyInvoiceSubscriptionStatus(pool, stripeSubscriptionId,
   );
   const userId = rows[0]?.user_id;
   if (!userId) return null;
-  return syncUserHomeCareEntitlement(pool, userId);
+  invalidateHomeCareEntitlementCache(userId);
+  return syncUserHomeCareEntitlement(pool, userId, { force: true });
 }
-
-export async function userHasActivePaidSubscription(pool, userId) {
   const sub = await loadBestHomeCareSubscription(pool, userId);
   return subscriptionGrantsProAccess(sub);
 }
@@ -309,5 +322,6 @@ export async function activateSubscriptionFromCheckout(pool, {
     );
   }
 
-  return syncUserHomeCareEntitlement(pool, userId);
+  invalidateHomeCareEntitlementCache(userId);
+  return syncUserHomeCareEntitlement(pool, userId, { force: true });
 }

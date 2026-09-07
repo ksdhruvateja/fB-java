@@ -64,6 +64,7 @@ import {
 } from './job-reviews.js';
 import {
   syncUserHomeCareEntitlement,
+  invalidateHomeCareEntitlementCache,
   activateSubscriptionFromCheckout,
   toPublicHomeCareSubscriptionDto,
 } from './subscription-state.js';
@@ -1033,6 +1034,20 @@ const app = express();
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
 app.use(securityHeaders);
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')) return next();
+  const started = Date.now();
+  res.on('finish', () => {
+    const route = `${req.method} ${req.path}`;
+    console.log(JSON.stringify({
+      requestId: req.headers['x-nf-request-id'] || null,
+      route,
+      status: res.statusCode,
+      durationMs: Date.now() - started,
+    }));
+  });
+  next();
+});
 app.use(
   cors({
     origin: corsOriginDelegate,
@@ -1441,10 +1456,15 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
 // ── GET /api/auth/me ──────────────────────────────────────────────────────────
 app.get('/api/auth/me', requireAuth, async (req, res) => {
   try {
-    const { rows: pendingPayments } = await pool.query(
-      `SELECT * FROM payments WHERE user_id=$1 AND status='pending' AND stripe_session_id IS NOT NULL`,
-      [req.authUser.id]
-    );
+    // Stripe checkout sync is only for the post-payment poll. Doing it on every
+    // session restore made the whole dashboard wait on an external API.
+    const syncCheckout = req.query.sync === 'checkout';
+    const { rows: pendingPayments } = syncCheckout
+      ? await pool.query(
+          `SELECT * FROM payments WHERE user_id=$1 AND status='pending' AND stripe_session_id IS NOT NULL`,
+          [req.authUser.id]
+        )
+      : { rows: [] };
     for (const payment of pendingPayments) {
       try {
         const stripe = await getStripe();
@@ -1487,10 +1507,11 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
 
     const { rows } = await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id]);
     if (!rows.length) return res.status(401).json({ ok: false, message: 'User not found.' });
-    await ensureUserReferralCode(pool, rows[0]);
+    if (!rows[0].referral_code) await ensureUserReferralCode(pool, rows[0]);
     let homeCareSubscription = req.authUser.homeCareSubscription || null;
-    if (rows[0].role === 'homeowner') {
-      const subState = await syncUserHomeCareEntitlement(pool, rows[0].id);
+    if (syncCheckout && rows[0].role === 'homeowner') {
+      invalidateHomeCareEntitlementCache(rows[0].id);
+      const subState = await syncUserHomeCareEntitlement(pool, rows[0].id, { force: true });
       homeCareSubscription = toPublicHomeCareSubscriptionDto(subState);
     }
     const user = rowToUser(rows[0], { homeCareSubscription });

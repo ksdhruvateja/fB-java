@@ -422,6 +422,10 @@ export async function initManagedSchema(pool) {
       created_at      TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS property_documents_property_owner_idx
+     ON property_documents (property_id, owner_user_id, created_at DESC)`
+  );
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS street_address TEXT`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS city TEXT`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS state TEXT`);
