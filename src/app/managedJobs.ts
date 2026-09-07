@@ -486,7 +486,14 @@ export async function addPropertyDocument(
 ) {
   return api<{ ok: boolean; document?: PropertyDocument; message?: string }>(
     `/api/properties/${propertyId}/documents`,
-    { method: "POST", body: JSON.stringify(body) }
+    { method: "POST", body: JSON.stringify(body), timeoutMs: 90000 }
+  );
+}
+
+export async function getPropertyDocument(propertyId: number, docId: number) {
+  return api<{ ok: boolean; document?: PropertyDocument; message?: string }>(
+    `/api/properties/${propertyId}/documents/${docId}`,
+    { timeoutMs: 60000 }
   );
 }
 
