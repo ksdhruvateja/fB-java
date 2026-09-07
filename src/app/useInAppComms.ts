@@ -10,8 +10,13 @@ export function useInAppComms(enabled = true) {
   const [loading, setLoading] = useState(true);
   const timerRef = useRef<number | null>(null);
 
-  const refresh = useCallback(async () => {
+  const lastRefreshAt = useRef(0);
+
+  const refresh = useCallback(async (force = false) => {
     if (!enabled) return;
+    const now = Date.now();
+    if (!force && now - lastRefreshAt.current < 20_000) return;
+    lastRefreshAt.current = now;
     try {
       const [n, m] = await Promise.all([fetchUnreadNotificationCount(), fetchUnreadMessageCount()]);
       setUnreadNotifications(n.count || 0);
@@ -25,13 +30,13 @@ export function useInAppComms(enabled = true) {
 
   useEffect(() => {
     if (!enabled) return;
-    void refresh();
+    void refresh(true);
 
     const schedule = () => {
       if (timerRef.current) window.clearInterval(timerRef.current);
       const hidden = document.visibilityState === "hidden";
       timerRef.current = window.setInterval(() => {
-        if (document.visibilityState === "visible") void refresh();
+        if (document.visibilityState === "visible") void refresh(true);
       }, hidden ? POLL_MS * 3 : POLL_MS);
     };
 

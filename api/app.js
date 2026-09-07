@@ -421,8 +421,41 @@ async function ensureDemoUsers() {
   }
 }
 
+const SCHEMA_READY_VERSION = 20260907;
+
+async function readSchemaReadyVersion() {
+  try {
+    const { rows } = await pool.query(`SELECT version FROM app_schema_meta WHERE id = 1`);
+    return Number(rows[0]?.version || 0);
+  } catch {
+    return 0;
+  }
+}
+
+async function writeSchemaReadyVersion() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_schema_meta (
+      id INT PRIMARY KEY,
+      version INT NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(
+    `INSERT INTO app_schema_meta (id, version, updated_at)
+     VALUES (1, $1, NOW())
+     ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version, updated_at = NOW()`,
+    [SCHEMA_READY_VERSION]
+  );
+}
+
 export async function initDb() {
   if (initDb._done) return;
+  // Cold Netlify isolates used to run hundreds of sequential DDL statements
+  // before any save, upload, or navigation request could start.
+  if ((await readSchemaReadyVersion()) >= SCHEMA_READY_VERSION) {
+    initDb._done = true;
+    return;
+  }
   try {
     const check = await pool.query("SELECT id FROM users LIMIT 1");
     if (check.rows.length > 0) {
@@ -441,6 +474,7 @@ export async function initDb() {
       await initMarketingConsent(pool);
       await migratePrimaryAdminEmail();
       await ensureDemoUsers();
+      await writeSchemaReadyVersion();
       initDb._done = true;
       return;
     }
@@ -653,6 +687,7 @@ export async function initDb() {
   await initMarketingConsent(pool);
 
   console.log('[FixBridge API] DB ready ✓');
+  await writeSchemaReadyVersion();
   initDb._done = true;
 }
 
@@ -674,6 +709,9 @@ function makeToken(user, { authStage = 'complete', expiresIn = '7d' } = {}) {
   );
 }
 
+const authUserCache = new Map();
+const AUTH_USER_TTL_MS = 15_000;
+
 /** Reject requests that don't carry a valid JWT. */
 async function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -682,6 +720,17 @@ async function requireAuth(req, res, next) {
   }
   try {
     const decoded = jwt.verify(authHeader.slice(7), JWT_SECRET, { algorithms: ['HS256'] });
+    const cached = authUserCache.get(Number(decoded.id));
+    if (cached && Date.now() - cached.at < AUTH_USER_TTL_MS) {
+      if (cached.row.is_blocked === true) {
+        return res.status(403).json({ ok: false, message: 'This account has been blocked. Please contact support.' });
+      }
+      req.authUser = {
+        ...cached.authUser,
+        authStage: decoded.authStage || 'complete',
+      };
+      return next();
+    }
     const { rows } = await pool.query('SELECT * FROM users WHERE id=$1', [decoded.id]);
     if (!rows.length) {
       return res.status(401).json({ ok: false, message: 'User not found.' });
@@ -713,6 +762,11 @@ async function requireAuth(req, res, next) {
       adminRolePreset: rows[0].admin_role_preset || null,
       authStage: decoded.authStage || 'complete',
     };
+    authUserCache.set(Number(rows[0].id), {
+      at: Date.now(),
+      row: rows[0],
+      authUser: req.authUser,
+    });
     next();
   } catch {
     return res.status(401).json({ ok: false, message: 'Invalid or expired token.' });

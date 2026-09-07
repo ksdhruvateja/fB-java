@@ -389,15 +389,42 @@ export const STATUS_LABELS: Record<string, string> = {
   disputed: "Disputed",
 };
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
+const inflightGets = new Map<string, Promise<unknown>>();
+
+async function api<T>(path: string, init?: RequestInit & { timeoutMs?: number }): Promise<T> {
+  const method = String(init?.method || "GET").toUpperCase();
+  const dedupeKey = method === "GET" ? path : "";
+  if (dedupeKey && inflightGets.has(dedupeKey)) {
+    return inflightGets.get(dedupeKey) as Promise<T>;
+  }
+  const run = apiRequest<T>(path, init);
+  if (dedupeKey) {
+    inflightGets.set(dedupeKey, run);
+    void run.finally(() => {
+      if (inflightGets.get(dedupeKey) === run) inflightGets.delete(dedupeKey);
+    });
+  }
+  return run;
+}
+
+async function apiRequest<T>(path: string, init?: RequestInit & { timeoutMs?: number }): Promise<T> {
   const token = getStoredToken();
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    ...(init?.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
     ...(init?.headers as Record<string, string> | undefined),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
+  const method = String(init?.method || "GET").toUpperCase();
+  const timeoutMs = init?.timeoutMs ?? (method === "GET" ? 12000 : 45000);
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  if (init?.signal) {
+    if (init.signal.aborted) controller.abort();
+    else init.signal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
   try {
-    const res = await fetch(path, { ...init, headers });
+    const { timeoutMs: _ignored, ...rest } = init || {};
+    const res = await fetch(path, { ...rest, headers, signal: controller.signal });
     const text = await res.text();
     const contentType = res.headers.get("content-type") || "";
     let parsed: Record<string, unknown> | null = null;
@@ -437,9 +464,11 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
       ok: false,
       code: ASSESSMENT_UNAVAILABLE_CODE,
       message: aborted
-        ? "The assessment took too long. Please try again."
-        : "Network error. Is the API running?",
+        ? "The request timed out. Please try again."
+        : "Network error. Please check your connection and try again.",
     } as T;
+  } finally {
+    window.clearTimeout(timer);
   }
 }
 
