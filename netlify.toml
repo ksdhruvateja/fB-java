@@ -42,12 +42,9 @@
   status = 200
   force = true
 
-# Canonical host: www → apex (only applies when www is served by this Netlify site)
-[[redirects]]
-  from = "https://www.fixbridge.us/*"
-  to = "https://fixbridge.us/:splat"
-  status = 301
-  force = true
+# Do not 301 www → apex. A stale apex cache still pointed at Hostinger parking,
+# so that redirect sent visitors to the parking page and they never reached FixBridge.
+# Both hosts serve this site directly.
 
 # SPA fallback for client-side navigation (login/dashboard state lives in history)
 [[redirects]]
