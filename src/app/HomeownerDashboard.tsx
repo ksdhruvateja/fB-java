@@ -124,6 +124,8 @@ import DiyStopProfessionalBar from "./DiyStopProfessionalBar";
 import DiySafetyFeedback from "./DiySafetyFeedback";
 import DiyIncidentReportForm from "./DiyIncidentReportForm";
 import { DIY_PROFESSIONAL_HANDOFF_MESSAGE, DIY_SESSION_REMINDER, riskStatusLabel } from "./diySafetyCopy";
+import HomeownerDiyExperience, { type DiyView } from "./diy/HomeownerDiyExperience";
+import { readDiyChat, readDiyProgress, writeDiyChat, writeDiyProgress } from "./diy/diyProgressStore";
 import { stopDiyAndEscalate } from "./diySafetyApi";
 import { fetchHomeownerConsentStatus, recordConsentAction } from "./homeownerConsentApi";
 import { useAcknowledgmentGate } from "./useAcknowledgmentGate";
@@ -552,17 +554,46 @@ export default function HomeownerDashboard({
  const [diyChatMessages, setDiyChatMessages] = useState<ChatMessage[]>([]);
  const [diyChatInput, setDiyChatInput] = useState("");
  const [diyChatBusy, setDiyChatBusy] = useState(false);
+ const [diyView, setDiyView] = useState<DiyView>("home");
+ const [diyBookmarked, setDiyBookmarked] = useState(false);
+ const [diySavingStep, setDiySavingStep] = useState(false);
+ const [diyStepSaved, setDiyStepSaved] = useState(false);
 
  useEffect(() => {
- if (activeJob) {
- setDiyChatMessages([
+ if (!activeJob) return;
+ const savedChat = readDiyChat<ChatMessage>(user.id, activeJob.id);
+ setDiyChatMessages(
+ savedChat?.length
+ ? savedChat
+ : [
  {
  role: "assistant",
- content: `Hi ${user.name}! I've generated this DIY Action Plan for your ${activeJob.category || "repair"} issue. Ask me anything about the tools, materials, or steps above if you need clarification!`
+ content:
+ "Hi! I’m your FixBridge assistant.\n\nAsk me anything about home repairs, tools, or DIY ideas. I’m here to help!",
+ },
+ ]
+ );
+ const saved = readDiyProgress(user.id, activeJob.id);
+ const steps = assessmentStringList(activeJob.aiAssessment?.diy_steps);
+ if (saved && steps.length) {
+ const next: Record<number, boolean> = {};
+ for (const idx of saved.completedSteps) {
+ if (idx >= 0 && idx < steps.length) next[idx] = true;
  }
- ]);
+ setDiyCompletedSteps(next);
+ setDiyStepIndex(Math.min(Math.max(saved.stepIndex, 0), steps.length - 1));
+ } else {
+ setDiyCompletedSteps({});
+ setDiyStepIndex(0);
  }
- }, [activeJob]);
+ setDiyView("home");
+ setDiyStepSaved(false);
+ }, [activeJob?.id, user.id, activeJob?.aiAssessment?.diy_steps?.length]);
+
+ useEffect(() => {
+ if (!activeJob || !diyChatMessages.length) return;
+ writeDiyChat(user.id, activeJob.id, diyChatMessages);
+ }, [activeJob, user.id, diyChatMessages]);
 
  useEffect(() => {
  void fetchHomeownerConsentStatus().then((r) => {
@@ -625,6 +656,7 @@ export default function HomeownerDashboard({
  setDiyConsentOpen(false);
  if (diyConsentAfter === "guided") {
  setDiyIsGuided(true);
+ setDiyView("step");
  } else if (diyConsentAfter === "chat" && pendingDiyChatText) {
  const text = pendingDiyChatText;
  setPendingDiyChatText(null);
@@ -649,6 +681,55 @@ export default function HomeownerDashboard({
  }
  setDiyShowProfessionalHandoff(true);
  setAssessmentMode("expert");
+ }
+
+ function openProfessionalFromDiy() {
+ setDiyShowProfessionalHandoff(true);
+ if (activeJob) setSelectedJobId(activeJob.id);
+ setAssessmentMode("expert");
+ }
+
+ function persistDiyProgress(nextIndex: number, completed: Record<number, boolean>) {
+ if (!activeJob) return;
+ const risk = String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green");
+ writeDiyProgress(user.id, {
+ jobId: activeJob.id,
+ topic: activeJob.title || activeJob.category || "Repair",
+ risk,
+ stepIndex: nextIndex,
+ completedSteps: Object.entries(completed).filter(([, done]) => done).map(([idx]) => Number(idx)),
+ updatedAt: new Date().toISOString(),
+ });
+ }
+
+ async function completeCurrentDiyStep() {
+ if (!activeJob) return;
+ const steps = assessmentStringList(activeJob.aiAssessment?.diy_steps);
+ if (!steps.length) return;
+ if (String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green").toLowerCase() === "red") return;
+ setDiySavingStep(true);
+ const completed = { ...diyCompletedSteps, [diyStepIndex]: true };
+ const nextIndex = Math.min(diyStepIndex + 1, steps.length - 1);
+ setDiyCompletedSteps(completed);
+ setDiyStepIndex(nextIndex);
+ persistDiyProgress(nextIndex, completed);
+ setDiyStepSaved(true);
+ setDiySavingStep(false);
+ window.setTimeout(() => setDiyStepSaved(false), 1200);
+ }
+
+ async function openGuidedDiyStep() {
+ const risk = String(activeJob?.diyRiskLevel || activeJob?.aiAssessment?.diy_risk_level || "green").toLowerCase();
+ if (risk === "red") {
+ setDiyView("step");
+ return;
+ }
+ if (!diySafetyAccepted) {
+ await startGuidedDiy();
+ return;
+ }
+ setDiyIsGuided(true);
+ setDiyView("step");
  }
 
  const selectedJob = useMemo(
@@ -3452,371 +3533,47 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
  )}
 
- <HomeownerLocalEstimate job={activeJob} compact />
-
- {/* Split Grid Layout: Left Side (Action plan tools, steps) and Right Side (AI Assistant chat) */}
- <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_0.9fr] gap-6 items-start">
- 
- {/* Left Side: Plan, Tools, checklist */}
- <div className="space-y-5">
- <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-3">
- <div>
- <h3 className="font-semibold text-foreground text-sm uppercase tracking-wider">AI DIY Action Plan</h3>
- <p className="text-xs text-muted-foreground">Tailored for: {activeJob.category}</p>
- </div>
- <div className="flex items-center gap-2">
- <span className="text-xs text-muted-foreground">Difficulty:</span>
- <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase ${
- String(activeJob.aiAssessment?.diy_difficulty || "").toLowerCase() === "easy"
- ? "bg-green-500/10 text-green-700 dark:text-green-400"
- : String(activeJob.aiAssessment?.diy_difficulty || "").toLowerCase() === "moderate"
- ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
- : "bg-red-500/10 text-red-700 dark:text-red-400"
- }`}>
- {activeJob.aiAssessment?.diy_difficulty || "Moderate"}
- </span>
- </div>
- </div>
-
- {/* Tools and Materials grid */}
- <div className="grid gap-4 sm:grid-cols-2">
- <div className="rounded-xl border border-border bg-muted/20 p-4">
- <h4 className="font-semibold text-sm mb-3 flex items-center gap-1.5">
- Required Tools
- </h4>
- {assessmentStringList(activeJob.aiAssessment?.tools_required).length > 0 ? (
- <ul className="space-y-2">
- {assessmentStringList(activeJob.aiAssessment?.tools_required).map((tool, idx) => (
- <li key={idx} className="flex items-start gap-2 text-xs">
- <input type="checkbox" className="mt-0.5 h-3.5 w-3.5 rounded border-border text-[#FF4D1C] focus:ring-[#FF4D1C]" />
- <span className="text-muted-foreground">{tool}</span>
- </li>
- ))}
- </ul>
- ) : (
- <p className="text-xs text-muted-foreground">No special tools required.</p>
- )}
- </div>
-
- <div className="rounded-xl border border-border bg-muted/20 p-4">
- <h4 className="font-semibold text-sm mb-3 flex items-center gap-1.5">
- Materials Needed
- </h4>
- {assessmentStringList(activeJob.aiAssessment?.materials_needed).length > 0 ? (
- <ul className="space-y-2">
- {assessmentStringList(activeJob.aiAssessment?.materials_needed).map((item, idx) => (
- <li key={idx} className="flex items-start gap-2 text-xs">
- <input type="checkbox" className="mt-0.5 h-3.5 w-3.5 rounded border-border text-[#FF4D1C] focus:ring-[#FF4D1C]" />
- <span className="text-muted-foreground">{item}</span>
- </li>
- ))}
- </ul>
- ) : (
- <p className="text-xs text-muted-foreground">No special materials needed.</p>
- )}
- </div>
- </div>
-
- {/* Steps Checklist */}
- <div className="rounded-xl border border-border p-4">
- <div className="flex items-center justify-between mb-4">
- <h4 className="font-semibold text-sm">Step-by-Step Instructions</h4>
- {assessmentStringList(activeJob.aiAssessment?.diy_steps).length > 0 &&
- String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green") !== "red" && (
- <button
- type="button"
- onClick={() => void (diyIsGuided ? setDiyIsGuided(false) : startGuidedDiy())}
- className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary hover:bg-primary/20 transition-colors"
- >
- {diyIsGuided ? "Switch to List View" : "Switch to Guided Mode"}
- </button>
- )}
- </div>
-
- {assessmentStringList(activeJob.aiAssessment?.diy_steps).length > 0 ? (
- String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green") === "red" ? (
- <p className="text-sm text-muted-foreground">
- Repair instructions are not shown for this safety risk. Request a professional for on-site help.
- </p>
- ) : diyIsGuided ? (
- <div className="space-y-4">
- <DiyGuidedSafetyBar onGetProfessional={() => void stopDiyAndGetProfessional()} />
- {/* Progress bar */}
- <div>
- <div className="flex justify-between text-xs text-muted-foreground mb-1">
- <span>Progress</span>
- <span>
- {Math.round(
- (Object.values(diyCompletedSteps).filter(Boolean).length /
- assessmentStringList(activeJob.aiAssessment?.diy_steps).length) *
- 100
- )}% Complete
- </span>
- </div>
- <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
- <div
- className="h-full bg-primary transition-all duration-300"
- style={{
- width: `${
- (Object.values(diyCompletedSteps).filter(Boolean).length /
- assessmentStringList(activeJob.aiAssessment?.diy_steps).length) *
- 100
- }%`,
- }}
- />
- </div>
- </div>
-
- {/* Active Step Card */}
- <div className="rounded-xl border border-primary/20 bg-primary/5 p-5 relative overflow-hidden">
- <div className="absolute right-3 top-3 text-[10px] font-bold text-primary/30 uppercase tracking-widest">
- Step {diyStepIndex + 1} of {assessmentStringList(activeJob.aiAssessment?.diy_steps).length}
- </div>
- 
- <p className="text-xs font-semibold text-primary uppercase tracking-wider mb-1">Active Step</p>
- <p className="text-sm font-medium text-foreground leading-relaxed">
- {assessmentStringList(activeJob.aiAssessment?.diy_steps)[diyStepIndex]}
- </p>
-
- {/* Checkbox click to complete */}
- <div className="mt-5 flex items-center">
- <label className="flex items-center gap-2.5 cursor-pointer select-none">
- <input
- type="checkbox"
- checked={!!diyCompletedSteps[diyStepIndex]}
- onChange={(e) => {
- setDiyCompletedSteps({
- ...diyCompletedSteps,
- [diyStepIndex]: e.target.checked,
- });
- }}
- className="h-4 w-4 rounded border-border text-[#FF4D1C] focus:ring-[#FF4D1C]"
- />
- <span className="text-xs font-bold text-muted-foreground hover:text-foreground">
- {diyCompletedSteps[diyStepIndex] ? "OK I completed this step!" : "Mark this step as done"}
- </span>
- </label>
- </div>
- </div>
-
- {/* Navigation buttons */}
- <div className="flex justify-between gap-3 pt-2">
- <button
- type="button"
- disabled={diyStepIndex === 0}
- onClick={() => setDiyStepIndex((idx) => idx - 1)}
- className="rounded-full border border-border bg-card px-4 py-2 text-xs font-semibold text-foreground hover:bg-secondary/40 disabled:opacity-50"
- >
- Previous Step
- </button>
- <button
- type="button"
- disabled={diyStepIndex === assessmentStringList(activeJob.aiAssessment?.diy_steps).length - 1}
- onClick={() => setDiyStepIndex((idx) => idx + 1)}
- className="rounded-full bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-primary/90 disabled:opacity-50"
- >
- Next Step
- </button>
- </div>
- </div>
- ) : (
- <div className="relative border-l border-border/80 pl-4 ml-2 space-y-4">
- {assessmentStringList(activeJob.aiAssessment?.diy_steps).map((stepItem, idx) => (
- <div key={idx} className="relative">
- <div className="absolute -left-[25px] top-0 flex h-4 w-4 items-center justify-center rounded-full bg-background border border-border text-[9px] font-bold">
- {idx + 1}
- </div>
- <div className="flex items-start justify-between gap-4">
- <div>
- <p className="text-xs font-semibold text-foreground">Step {idx + 1}</p>
- <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{stepItem}</p>
- </div>
- <input
- type="checkbox"
- checked={!!diyCompletedSteps[idx]}
- onChange={(e) => {
- setDiyCompletedSteps({
- ...diyCompletedSteps,
- [idx]: e.target.checked,
- });
- }}
- className="h-3.5 w-3.5 rounded border-border text-[#FF4D1C] focus:ring-[#FF4D1C] shrink-0 mt-0.5"
- />
- </div>
- </div>
- ))}
- </div>
- )
- ) : (
- <p className="text-xs text-muted-foreground">No instructions generated.</p>
- )}
- </div>
-
- {/* Stop conditions warning */}
- {assessmentStringList(activeJob.aiAssessment?.stop_conditions).length > 0 && (
- <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
- <h4 className="font-semibold text-sm text-amber-800 dark:text-amber-400 mb-2 flex items-center gap-1.5">
- Warning: Safety Stop Conditions
- </h4>
- <p className="text-xs text-muted-foreground mb-3 leading-relaxed">
- Stop immediately and request a professional dispatcher if you experience any of the following:
- </p>
- <ul className="space-y-2">
- {assessmentStringList(activeJob.aiAssessment?.stop_conditions).map((stopItem, idx) => (
- <li key={idx} className="flex items-start gap-2 text-xs text-amber-950 dark:text-amber-200">
- <span className="mt-1 h-1.5 w-1.5 rounded-full bg-[#FF4D1C] shrink-0" />
- <span>{stopItem}</span>
- </li>
- ))}
- </ul>
- </div>
- )}
- </div>
-
- <DiyIncidentReportForm jobId={activeJob.id} />
-
- {/* Right Side: AI Assistant Chat (Sticky on Desktop) */}
- <div className="lg:sticky lg:top-24 space-y-4">
- <style dangerouslySetInnerHTML={{__html: `
- @keyframes soundwave {
- 0%, 100% { height: 4px; }
- 50% { height: 14px; }
- }
- .sound-bar {
- animation: soundwave 0.8s infinite ease-in-out;
- }
- `}} />
- <div className="rounded-xl border border-border bg-card p-4 space-y-4 shadow-sm relative overflow-hidden">
- <div className="flex items-center justify-between border-b border-border pb-3">
- <div className="flex items-center gap-2.5">
- {/* Animated Mascot */}
- <div
- onClick={() => speakText("Hi! I am your FixBridge DIY assistant bot. Feel free to type any questions, or click on the speaker icon on any message to hear me read it out loud!")}
- className={`cursor-pointer rounded-full p-2 bg-[#FF4D1C]/15 text-[#FF4D1C] transition-transform active:scale-95 duration-200 ${
- diyChatBusy ? "animate-bounce" : "hover:scale-105"
- }`}
- title="Click me to speak!"
- >
- <Bot className="h-5 w-5" />
- </div>
- <div>
- <h4 className="font-semibold text-sm text-foreground flex items-center gap-1">
- DIY Assistant Chat
- {speakingText && (
- <span className="flex items-center gap-0.5 h-3.5 ml-1" title="Speaking...">
- <span className="w-0.5 bg-[#FF4D1C] rounded-full sound-bar" />
- <span className="w-0.5 bg-[#FF4D1C] rounded-full sound-bar" style={{ animationDelay: "0.15s" }} />
- <span className="w-0.5 bg-[#FF4D1C] rounded-full sound-bar" style={{ animationDelay: "0.3s" }} />
- </span>
- )}
- </h4>
- <p className="text-[11px] text-muted-foreground leading-none mt-1">Ask questions or tap messages to hear them</p>
- </div>
- </div>
- </div>
-
- {/* Scrollable messages container */}
- <div className="max-h-[300px] overflow-y-auto space-y-3 pr-1 flex flex-col scrollbar-thin">
- {diyChatMessages.map((msg, idx) => (
- <div
- key={idx}
- className={`group relative max-w-[85%] rounded-xl px-3 py-2 text-xs leading-relaxed ${
- msg.role === "user"
- ? "bg-[#FF4D1C] text-white self-end rounded-tr-none"
- : "bg-muted text-foreground self-start rounded-tl-none border border-border"
- }`}
- >
- <p className="whitespace-pre-line pr-5">{formatChatMessage(msg.content)}</p>
- {msg.role === "assistant" ? (
- <DiySafetyFeedback
+ <HomeownerDiyExperience
+ userName={user.name}
  jobId={activeJob.id}
- riskLevel={String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green")}
- messageIndex={idx}
- chatExcerpt={msg.content}
- onUnsafe={() => {
+ title={activeJob.title || activeJob.category || "Repair"}
+ category={activeJob.category || ""}
+ photoUrl={activeJob.mediaType?.startsWith("image") ? activeJob.mediaDataUrl : null}
+ risk={String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green").toLowerCase() === "red" ? "red" : String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green").toLowerCase() === "yellow" ? "yellow" : "green"}
+ steps={assessmentStringList(activeJob.aiAssessment?.diy_steps)}
+ tools={assessmentStringList(activeJob.aiAssessment?.tools_required)}
+ materials={assessmentStringList(activeJob.aiAssessment?.materials_needed)}
+ causes={assessmentStringList(activeJob.aiAssessment?.visual_findings)}
+ stopConditions={assessmentStringList(activeJob.aiAssessment?.stop_conditions)}
+ stepIndex={diyStepIndex}
+ completed={diyCompletedSteps}
+ bookmarked={diyBookmarked}
+ savingStep={diySavingStep}
+ stepSaved={diyStepSaved}
+ chatMessages={diyChatMessages}
+ chatInput={diyChatInput}
+ chatBusy={diyChatBusy}
+ chatBlocked={String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green").toLowerCase() === "red" || diyUserStopActive}
+ speakingText={speakingText}
+ view={diyView}
+ onView={setDiyView}
+ onBack={() => setDiyView("home")}
+ onOpenStep={() => void openGuidedDiyStep()}
+ onOpenIdeas={() => setDiyView("ideas")}
+ onCompleteStep={() => void completeCurrentDiyStep()}
+ onToggleBookmark={() => setDiyBookmarked((v) => !v)}
+ onHire={openProfessionalFromDiy}
+ onNotComfortable={openProfessionalFromDiy}
+ onChatInput={setDiyChatInput}
+ onSendChat={(text) => void sendDiyChatMessage(text)}
+ onSpeak={speakText}
+ onUnsafeChat={() => {
  setDiyUserStopActive(true);
  setDiyIsGuided(false);
  }}
  />
- ) : null}
- <button
- type="button"
- onClick={() => speakText(msg.content)}
- className={`absolute right-1.5 top-1.5 p-1 rounded-full hover:bg-black/10 dark:hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity ${
- speakingText === msg.content ? "opacity-100 text-primary" : "text-muted-foreground"
- }`}
- title={speakingText === msg.content ? "Stop speaking" : "Speak message"}
- >
- {speakingText === msg.content ? (
- <VolumeX className="h-3 w-3" />
- ) : (
- <Volume2 className="h-3 w-3" />
- )}
- </button>
- </div>
- ))}
- {diyChatBusy && (
- <div className="flex items-center gap-2 text-xs text-muted-foreground self-start bg-muted rounded-xl rounded-tl-none px-3 py-2 border border-border">
- <Loader2 className="h-3 w-3 animate-spin text-[#FF4D1C]" />
- <span>Assistant is typing...</span>
- </div>
- )}
- </div>
 
- {/* Chat input form */}
- {(() => {
- const chatRisk = String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green").toLowerCase();
- const chatBlocked = chatRisk === "red" || diyUserStopActive;
- return (
- <form
- onSubmit={(e) => {
- e.preventDefault();
- if (chatBlocked) return;
- void sendDiyChatMessage();
- }}
- className="flex gap-2 border-t border-border pt-3"
- >
- <input
- type="text"
- disabled={diyChatBusy || chatBlocked}
- value={diyChatInput}
- onChange={(e) => setDiyChatInput(e.target.value)}
- placeholder={
- chatBlocked
- ? "Chat paused — request a professional for help"
- : "Ask a question about instructions..."
- }
- className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-xs focus:border-[#FF4D1C] focus:outline-none focus:ring-1 focus:ring-[#FF4D1C] disabled:opacity-50 text-foreground"
- />
- <button
- type="submit"
- disabled={diyChatBusy || chatBlocked || !diyChatInput.trim()}
- className="inline-flex items-center justify-center rounded-lg bg-[#FF4D1C] p-2 text-white hover:brightness-105 active:scale-[0.98] transition disabled:opacity-55"
- >
- <Send className="h-4 w-4" />
- </button>
- </form>
- );
- })()}
- </div>
-
- <p className="rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-center text-xs text-muted-foreground">
- Prefer not to do it yourself?{" "}
- <button
- type="button"
- onClick={() => {
- setAssessmentMode("expert");
- if (activeJob) setSelectedJobId(activeJob.id);
- }}
- className="inline-flex items-center gap-1 font-semibold text-[#FF4D1C] underline-offset-2 hover:underline"
- >
- <HardHat className="h-3.5 w-3.5" />
- Hire a professional instead
- </button>
- </p>
- </div>
-
- </div>
+ <DiyIncidentReportForm jobId={activeJob.id} />
  </div>
  )
  )}
