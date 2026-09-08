@@ -1729,14 +1729,10 @@ export default function HomeownerDashboard({
  goProPlans.find((p) => p.planCode === user.planCode) ||
  null;
 
- const hasDiyAccess = Boolean(
- user.homeCareSubscription?.isPro ||
- (user.planCode &&
- (diyUnlockCodes.length === 0
- ? isPaidHomeCarePlan(user.planCode)
- : diyUnlockCodes.includes(user.planCode)))
- );
  const { isPro: hasHomeCarePro } = resolveClientProAccess(user);
+ const hasDiyAccess = Boolean(
+ hasHomeCarePro || (user.planCode && diyUnlockCodes.includes(user.planCode))
+ );
  const homeCareSub = user.homeCareSubscription ?? null;
 
  function handleProActivated(feature: ProFeatureId | null) {
@@ -1747,7 +1743,7 @@ export default function HomeownerDashboard({
  }
 
  useEffect(() => {
- if (user.homeCareSubscription?.isPro) return;
+ if (user.homeCareSubscription != null) return;
  let cancelled = false;
  void validateToken().then((r) => {
  if (!cancelled && r.ok) onUserUpdated?.(r.user);
@@ -1755,7 +1751,7 @@ export default function HomeownerDashboard({
  return () => {
  cancelled = true;
  };
- }, [user.id, user.homeCareSubscription?.isPro, onUserUpdated]);
+ }, [user.id, user.homeCareSubscription, onUserUpdated]);
 
  useEffect(() => {
  if (user.homeCareSubscription == null || hasHomeCarePro || homeCareSub?.paymentIssue) return;
@@ -1928,14 +1924,14 @@ export default function HomeownerDashboard({
  reader.readAsDataURL(file);
  return;
  }
- const fileName = String(file.name || "").toLowerCase();
- const heic = file.type === "image/heic" || file.type === "image/heif" || fileName.endsWith(".heic") || fileName.endsWith(".heif");
+ const name = file.name.toLowerCase();
+ const heic = file.type === "image/heic" || file.type === "image/heif" || name.endsWith(".heic") || name.endsWith(".heif");
  if (heic) {
  setError("This image format isn't supported for analysis yet. Please upload a JPG, PNG, or WEBP.");
  return;
  }
  if (!file.type.startsWith("image/")) {
- setError("Please upload a photo (JPEG, PNG, or WebP).");
+ setError("This image format isn't supported for analysis yet. Please upload a JPG, PNG, or WEBP.");
  return;
  }
  void (async () => {

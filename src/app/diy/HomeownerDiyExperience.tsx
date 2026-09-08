@@ -948,7 +948,7 @@ export default function HomeownerDiyExperience(props: Props) {
 
   return (
     <div className="rounded-[24px] bg-[#F8F7F4] p-4 text-[#2c2926] sm:p-5">
-      <div className="mx-auto grid max-w-6xl gap-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.85fr)]">
+      <div className="mx-auto grid max-w-6xl gap-5 md:grid-cols-[minmax(0,0.9fr)_minmax(280px,0.7fr)] xl:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.85fr)]">
         <div className={view === "chat" ? "hidden lg:block" : ""}>{main}</div>
         <div className={view === "chat" ? "block" : "hidden lg:block"}>{chatPanel}</div>
       </div>

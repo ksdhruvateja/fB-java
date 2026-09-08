@@ -38,7 +38,7 @@ export async function ensureQaGuidedDiyEntitlement(pool, userId, email) {
     note: 'Complimentary QA access for a designated demo homeowner. Not a customer payment.',
   });
   if (existing && String(existing.status || '').toLowerCase() === 'active' && existing.simulated === true) {
-    return true;
+    return false;
   }
   if (existing) {
     await pool.query(
