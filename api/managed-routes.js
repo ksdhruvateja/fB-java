@@ -3349,7 +3349,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (Number(job.homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
-      if (!['ai_review_complete', 'awaiting_service_payment'].includes(job.status)) {
+      const assessmentFailed = job.assessment_status === 'failed';
+      const professionalAllowed =
+        ['ai_review_complete', 'awaiting_service_payment'].includes(job.status) ||
+        (assessmentFailed && job.status === 'draft');
+      if (!professionalAllowed) {
         return res.status(400).json({
           ok: false,
           message: 'Professional dispatch is not available for this job status.',
@@ -3407,14 +3411,16 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         [jobId, serviceTiming, preferredDate, preferredTimeSlot, propertyPurpose, transactionStage]
       );
 
-      if (job.status === 'ai_review_complete') {
+      if (job.status === 'ai_review_complete' || (assessmentFailed && job.status === 'draft')) {
         await pushStatus(
           pool,
           jobId,
           job.status,
           'awaiting_service_payment',
           req.authUser.id,
-          'Homeowner requested professional dispatch'
+          assessmentFailed
+            ? 'Homeowner requested professional dispatch after assessment failure'
+            : 'Homeowner requested professional dispatch'
         );
       }
 

@@ -3398,7 +3398,11 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <p className="text-sm leading-relaxed">{activeJob.aiAssessment?.summary || "Assessment saved."}</p>
  ) : (
  <div className="rounded-xl border border-amber-300/70 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
- <p>Recommendation temporarily unavailable. You can still review scheduling. Authorization stays locked until the recommendation finishes.</p>
+ <p>
+ {activeJob.assessmentStatus === "failed"
+ ? "Fixa couldn't complete this assessment. Your request is saved — you can still schedule a professional visit."
+ : "Recommendation temporarily unavailable. You can still review scheduling. Authorization stays locked until the recommendation finishes."}
+ </p>
  <button
  type="button"
  className="mt-2 text-xs font-semibold text-[#FF4D1C]"

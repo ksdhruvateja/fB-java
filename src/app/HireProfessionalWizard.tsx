@@ -151,9 +151,9 @@ export default function HireProfessionalWizard({
     dispatchPricing?.authorizedNow ??
     dispatchCouponPreview?.discountedAmount ??
     baseDispatchFee;
-  const dispatchReady = ["ai_review_complete", "awaiting_service_payment", "paid_for_dispatch", "awaiting_contractor"].includes(
-    job.status
-  );
+  const dispatchReady =
+    ["ai_review_complete", "awaiting_service_payment", "paid_for_dispatch", "awaiting_contractor"].includes(job.status) ||
+    (job.assessmentStatus === "failed" && job.status === "draft");
   const dispatchPaid =
     job.visitFeeAuthorized ||
     ["paid_for_dispatch", "awaiting_contractor", "contractor_invited", "scheduled"].includes(job.status);
@@ -757,6 +757,8 @@ export default function HireProfessionalWizard({
           <div className="ml-auto flex flex-1 flex-col items-end gap-2 sm:flex-none">
             {!dispatchReady ? (
               <p className="text-xs text-muted-foreground">Preparing recommendation... You can review details now. Authorization stays locked until it finishes.</p>
+            ) : job.assessmentStatus === "failed" ? (
+              <p className="text-xs text-muted-foreground">Fixa could not finish the assessment. You can still request a professional with the saved job, property, and photo.</p>
             ) : null}
             <button
               type="button"
