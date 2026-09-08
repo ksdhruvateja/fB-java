@@ -71,58 +71,67 @@ function prepareImageForAi(imageDataUrl) {
 }
 
 /** Structured assessment — NO prices. Pricing engine owns retail ranges. */
-export const STRUCTURED_PROMPT = `You are a property-repair assessment engine. Analyze the issue and photo if attached.
+export const STRUCTURED_PROMPT = `You are an experienced home-repair technician guiding a homeowner remotely. Inspect any attached photo or video carefully. The media must change the diagnosis and the steps. Do not treat it as a decoration.
 Return ONLY valid JSON with this exact schema (no prices, no dollar amounts, no markdown):
 {
   "category": "plumbing|electrical|hvac|painting|roofing|flooring|carpentry|snow_removal|landscaping|cleaning|others",
-  "summary": "1-2 short sentences",
+  "summary": "1-2 short sentences naming the visible system and likely issue",
   "urgency": "low|medium|high|emergency",
   "confidence": 0.0,
   "recommended_trade": "licensed_plumber|electrician|hvac_tech|painter|roofer|flooring_tech|carpenter|handyman",
   "professional_required": true,
   "safe_diy_allowed": false,
   "immediate_safety_steps": ["step"],
-  "visual_findings": ["finding"],
+  "visual_findings": ["Observed: exact thing visible"],
+  "observed_evidence": ["Observed: only what is actually visible"],
+  "likely_causes": ["Likely: probable cause, labeled as likely not certain"],
+  "needs_confirmation": ["Needs confirmation: what the homeowner should check next"],
   "estimated_labor_hours_min": 1,
   "estimated_labor_hours_max": 3,
+  "estimated_time": "20-40 minutes",
   "complexity": "low|medium|high",
   "service_type": "diagnostic|minor_repair|standard_repair|major_repair|replacement|installation|maintenance|emergency",
-  "service_subcategory": "e.g. cooling_repair, drain_clog, panel_upgrade",
+  "service_subcategory": "specific subtype such as kitchen_faucet_spout_drip",
   "problem_classification": "short label of the specific issue",
   "questions_needed": [],
   "diy_difficulty": "easy|moderate|hard|blocked",
-  "tools_required": ["tool"],
-  "materials_needed": ["material"],
+  "tools_required": ["named tool"],
+  "materials_needed": ["named material or none"],
+  "preparation_steps": ["what to have ready before step 1"],
   "diy_guide_steps": [{
     "step_number": 1,
-    "title": "short action title",
-    "instruction": "specific what to do",
+    "title": "one action, not a category",
+    "goal": "what this step is trying to prove or finish",
+    "instruction": "exact sequence: where to look, which direction to turn, how long, what not to force",
     "explanation": "why this step matters",
-    "tools": ["tool"],
-    "safety_note": "stop condition for this step",
-    "expected_result": "what the homeowner should see",
-    "if_not": "what to do if this step does not work",
+    "tools": ["tool needed for this step only"],
+    "materials": ["material for this step, or empty"],
+    "safety_note": "specific stop condition for this action",
+    "what_to_look_for": "the exact visual or tactile cue",
+    "expected_result": "what should happen if the step worked",
+    "failure_signs": "what the homeowner will see if it failed",
+    "if_not": "the next safe troubleshooting action, or stop and hire a professional",
+    "when_to_stop": "when this step becomes a professional job",
     "image_needed": false,
-    "image_prompt": "instructional close-up, only if a visual genuinely helps and the work is low-risk"
+    "image_prompt": "close-up instructional view only if a visual genuinely helps and the work is low-risk"
   }],
-  "diy_steps": ["diy step"],
+  "completion_checks": ["how to confirm the original issue is gone"],
+  "diy_steps": ["one-line title of each guide step"],
   "stop_conditions": ["when to call a pro"],
   "disclaimer": "AI-assisted assessment, not a professional diagnosis."
 }
 Rules:
 - Never invent prices or cost ranges.
-- Classify service_type from the actual problem — diagnostic/troubleshoot vs minor repair vs replacement/installation are different scopes.
-- replacement/installation implies full unit or system work; do not classify a simple repair as replacement.
-- Set safe_diy_allowed=false for gas, major electrical, flooding, sewage, fire/smoke/CO, structural, dangerous roof, asbestos/lead/hazmat, or low confidence.
+- Split Observed, Likely, and Needs confirmation. Do not invent damage, brands, wiring, or leaks that are not visible or reasonably implied.
+- If a photo is attached, name the visible object, position, and any damage, hardware, staining, corrosion, cracks, gaps, or access limits you can actually see. Put those in observed_evidence and visual_findings.
+- If the photo contradicts the written issue, classify from the photo or the more severe safety risk, set confidence below 0.4, and ask for the matching photo in questions_needed.
+- DIY steps must be sequential and specific. Forbidden alone: "inspect the area", "check the component", "repair if needed", "tighten the connection", "fix the faucet". Every instruction must say WHERE to look, WHAT to do, HOW, and WHAT RESULT to expect.
+- One logical action per step. For a safe simple repair use 4-6 detailed steps. For a more involved but still safe repair use 6-8. Never dump the whole repair into 2-3 steps. Never pad to 10.
+- Include the shutoff, isolation, or power-off step first when the repair needs it, with the exact direction and the check that flow or power actually stopped.
+- Name tools and materials the homeowner needs before they start, not halfway through.
+- Set safe_diy_allowed=false for gas, major electrical, flooding, sewage, fire/smoke/CO, structural, dangerous roof, asbestos/lead/hazmat, or low confidence. Leave diy_guide_steps empty in those cases.
 - Active leaks / flooding / gas smell => urgency high or emergency and professional_required true.
-- CATEGORY MATCHING & DETECTING MISMATCHES:
-  1. Inspect the attached photo carefully and compare it to the homeowner's written description.
-  2. If there is a mismatch (e.g., they upload an electrical switchboard photo but write a description about a plumbing leak, or upload a plumbing fixture but say they have a roofing leak):
-     - Classify the 'category' based on the ACTUAL source of the issue or the more severe safety risk.
-     - Set 'confidence' to a low value (below 0.4).
-     - Populate 'questions_needed' with clear requests asking the homeowner to upload specific photos of the actual issue (e.g. "The attached photo shows an electrical switchboard, but your description mentions a pipe leak. Please upload a photo of the leak itself") and provide a more detailed summary of the problem.
-  3. If no photo is attached, rely on the written description, but if the description is extremely vague, set 'confidence' to a lower value (below 0.4) and ask for a detailed description and photos in 'questions_needed'.
-  4. Never assume the user's category selection is correct if the text or photo clearly indicates a different trade category. Categorize correctly based on the visual evidence.`;
+- Classify service_type from the actual problem. Do not classify a simple repair as replacement.`;
 
 export const SUMMARY_PROMPT = STRUCTURED_PROMPT;
 export const DETAIL_PROMPT = STRUCTURED_PROMPT;
@@ -206,22 +215,29 @@ function normalizeGuideSteps(value) {
     .map((step, index) => {
       if (!step || typeof step !== 'object') return null;
       const title = asString(step.title);
-      const instruction = asString(step.instruction);
+      const instruction = asString(step.instruction) || asString(step.instructions);
       if (!title && !instruction) return null;
+      const imagePrompt = asString(step.image_prompt) || asString(step.visual_prompt);
       const unsafeVisual = /live panel|open electrical panel|gas line|climb|roof edge|asbestos/i.test(
-        `${step.image_prompt || ''} ${instruction}`
+        `${imagePrompt} ${instruction}`
       );
+      const visualNeeded = step.image_needed === true || step.visual_needed === true;
       return {
         step_number: Number(step.step_number) || index + 1,
         title: title || `Step ${index + 1}`,
+        goal: asString(step.goal),
         instruction,
-        explanation: asString(step.explanation),
+        explanation: asString(step.explanation) || asString(step.why),
         tools: asStringArray(step.tools),
-        safety_note: asString(step.safety_note),
+        materials: asStringArray(step.materials),
+        safety_note: asString(step.safety_note) || asString(step.safety_notes),
+        what_to_look_for: asString(step.what_to_look_for),
         expected_result: asString(step.expected_result),
-        if_not: asString(step.if_not),
-        image_needed: step.image_needed === true && !unsafeVisual,
-        image_prompt: unsafeVisual ? '' : asString(step.image_prompt),
+        failure_signs: asString(step.failure_signs),
+        if_not: asString(step.if_not) || asString(step.if_step_fails),
+        when_to_stop: asString(step.when_to_stop),
+        image_needed: visualNeeded && !unsafeVisual,
+        image_prompt: unsafeVisual ? '' : imagePrompt,
       };
     })
     .filter(Boolean);
@@ -267,6 +283,12 @@ export function parseStructuredAssessment(text) {
       visual_findings: asStringArray(parsed.visual_findings).length
         ? asStringArray(parsed.visual_findings)
         : asStringArray(parsed.imageObservations),
+      observed_evidence: asStringArray(parsed.observed_evidence),
+      likely_causes: asStringArray(parsed.likely_causes),
+      needs_confirmation: asStringArray(parsed.needs_confirmation),
+      estimated_time: asString(parsed.estimated_time),
+      preparation_steps: asStringArray(parsed.preparation_steps),
+      completion_checks: asStringArray(parsed.completion_checks),
       estimated_labor_hours_min: Number(parsed.estimated_labor_hours_min) || 1,
       estimated_labor_hours_max: Number(parsed.estimated_labor_hours_max) || 3,
       complexity: asString(parsed.complexity, 'medium').toLowerCase(),
@@ -486,15 +508,20 @@ export function fallbackStructuredAssessment({ category, description } = {}) {
       tools_required,
       materials_needed,
       diy_steps,
-      diy_guide_steps: diy_steps.map((instruction, index) => ({
+        diy_guide_steps: diy_steps.map((instruction, index) => ({
         step_number: index + 1,
         title: String(instruction).split(/[.!?]/)[0].slice(0, 80),
+        goal: 'Finish this one action before changing any part.',
         instruction,
-        explanation: 'This check confirms the cause before any part is replaced.',
+        explanation: 'This check confirms the cause before parts are replaced.',
         tools: tools_required,
-        safety_note: stop_conditions[0] || 'Stop if the condition looks unsafe.',
+        materials: materials_needed,
+        safety_note: stop_conditions[0] || 'Stop if the part is stuck, damaged, or looks different from this step.',
+        what_to_look_for: 'Look for movement, resistance, moisture, or a change from the condition you started with.',
         expected_result: 'The step finishes without a new leak, spark, odor, or unusual resistance.',
-        if_not: 'Do not force the part. Request a professional.',
+        failure_signs: 'The part will not turn, water or power remains, or a new leak or damage appears.',
+        if_not: 'Do not force the part. Stop this step and choose Hire a Professional.',
+        when_to_stop: stop_conditions[0] || 'Stop if you cannot complete this action safely.',
         image_needed: /valve|filter|reset|shutoff/i.test(instruction),
         image_prompt: '',
       })),
@@ -1109,6 +1136,12 @@ export async function analyzeRepairStructured(input) {
         complexity: result.assessment.complexity || 'medium',
         service_subcategory: result.assessment.service_subcategory || '',
         problem_classification: result.assessment.problem_classification || '',
+        observed_evidence: result.assessment.observed_evidence || [],
+        likely_causes: result.assessment.likely_causes || [],
+        needs_confirmation: result.assessment.needs_confirmation || [],
+        estimated_time: result.assessment.estimated_time || '',
+        preparation_steps: result.assessment.preparation_steps || [],
+        completion_checks: result.assessment.completion_checks || [],
         questions_needed: result.assessment.questions_needed || [],
         diy_difficulty: result.assessment.diy_difficulty || 'blocked',
         tools_required: result.assessment.tools_required || result.assessment.toolsRequired || [],

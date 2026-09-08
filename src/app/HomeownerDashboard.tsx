@@ -3407,7 +3407,12 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
  ) : assessLoadingStep != null ||
  (isAssessmentProcessing(activeJob) && !hasRenderableAssessment(activeJob) && assessInFlightRef.current === activeJob?.id) ? (
- <EstimateLoadingSteps zip={assessLoadingZip} activeStep={assessLoadingStep ?? 0} />
+ <EstimateLoadingSteps
+ zip={assessLoadingZip}
+ activeStep={assessLoadingStep ?? 0}
+ mediaUrl={activeJob.mediaDataUrl || mediaDataUrl}
+ mediaType={activeJob.mediaType || mediaType}
+ />
  ) : !hasRenderableAssessment(activeJob) ? (
  <div className="space-y-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
  <p className="text-sm font-semibold">We couldn&apos;t complete the assessment right now.</p>
@@ -3582,11 +3587,31 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
  )}
  <HomeownerLocalEstimate job={activeJob} />
+ <div className="rounded-xl border border-border bg-card p-4 text-sm">
+ <p className="font-semibold">Your existing assessment will be sent with the service request.</p>
+ <p className="mt-1 text-muted-foreground">You do not need to re-enter the property, issue, or photos.</p>
+ <dl className="mt-3 grid gap-2 sm:grid-cols-2">
+ <div>
+ <dt className="text-xs text-muted-foreground">Issue</dt>
+ <dd>{activeJob.title || activeJob.description || "Reported issue"}</dd>
+ </div>
+ <div>
+ <dt className="text-xs text-muted-foreground">Property</dt>
+ <dd>{activeJob.fullAddress || activeJob.cityStateZip || "Saved property"}</dd>
+ </div>
+ <div>
+ <dt className="text-xs text-muted-foreground">Assessment</dt>
+ <dd>{activeJob.aiAssessment?.summary || "Assessment on file"}</dd>
+ </div>
+ <div>
+ <dt className="text-xs text-muted-foreground">Risk</dt>
+ <dd className="capitalize">{String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green")}</dd>
+ </div>
+ </dl>
  {diyShowProfessionalHandoff ? (
- <p className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-foreground">
- {DIY_PROFESSIONAL_HANDOFF_MESSAGE}
- </p>
+ <p className="mt-3 text-muted-foreground">{DIY_PROFESSIONAL_HANDOFF_MESSAGE}</p>
  ) : null}
+ </div>
  <HireProfessionalWizard
  job={activeJob}
  busy={busy}

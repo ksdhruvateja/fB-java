@@ -749,8 +749,11 @@ export default function HomeownerDiyExperience(props: Props) {
         <>
           <div className="rounded-[22px] bg-white p-4">
             <h3 className="text-[26px] font-semibold leading-tight text-[#2c2926]">{parsed.title}</h3>
+            {currentGuide?.goal ? (
+              <p className="mt-2 text-[14px] text-[#5c574f]">{currentGuide.goal}</p>
+            ) : null}
             <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">What to do</p>
-            <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">{currentGuide?.instruction || parsed.body || parsed.title}</p>
+            <p className="mt-1 whitespace-pre-line text-[15px] leading-relaxed text-[#5c574f]">{currentGuide?.instruction || parsed.body || parsed.title}</p>
             <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">Why this matters</p>
             <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">
               {currentGuide?.explanation || "This check confirms the cause before any part is replaced."}
@@ -776,17 +779,39 @@ export default function HomeownerDiyExperience(props: Props) {
                 <DIYToolChip key={tool} label={tool} />
               ))}
             </div>
+            {currentGuide?.materials?.length ? (
+              <div className="mt-3">
+                <p className="mb-2 text-[14px] font-semibold text-[#2c2926]">Materials</p>
+                <div className="flex flex-wrap gap-2">
+                  {currentGuide.materials.map((item) => (
+                    <DIYToolChip key={item} label={item} />
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
           <div className="rounded-[22px] bg-white p-4">
             <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">Safety note</p>
             <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">{currentGuide?.safety_note || tip}</p>
+            <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">What you should look for</p>
+            <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">
+              {currentGuide?.what_to_look_for || "A clear change from the condition you started with."}
+            </p>
             <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">What you should see</p>
             <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">
               {currentGuide?.expected_result || "The step finishes without a new leak, spark, odor, or unusual resistance."}
             </p>
+            <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">If this does not happen</p>
+            <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">
+              {currentGuide?.failure_signs || "Nothing changes, or a new problem appears."}
+            </p>
             <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">What to do if it does not work</p>
             <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">
               {currentGuide?.if_not || "Do not force the part. Use Hire a Professional and keep this step noted."}
+            </p>
+            <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">When to stop</p>
+            <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">
+              {currentGuide?.when_to_stop || "Stop if you cannot complete this action safely."}
             </p>
           </div>
           <div className="grid grid-cols-2 gap-2">

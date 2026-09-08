@@ -4,19 +4,23 @@ import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 import { ManagedJob, retailRangeLabel } from "./managedJobs";
 
 const STEPS = [
-  "Reviewing your issue",
-  "Checking the photo",
-  "Identifying the system",
-  "Checking safety",
-  "Preparing next steps",
+  "Uploading media",
+  "Inspecting visible components",
+  "Identifying the issue",
+  "Checking safety risk",
+  "Building your repair plan",
 ] as const;
 
 export function EstimateLoadingSteps({
   zip,
   activeStep,
+  mediaUrl,
+  mediaType,
 }: {
   zip?: string | null;
   activeStep: number;
+  mediaUrl?: string | null;
+  mediaType?: string | null;
 }) {
   const zipLabel = zip ? String(zip).slice(0, 5) : "your area";
   const [slow, setSlow] = useState(false);
@@ -24,11 +28,28 @@ export function EstimateLoadingSteps({
     const timer = window.setTimeout(() => setSlow(true), 4000);
     return () => window.clearTimeout(timer);
   }, []);
+  const stage = STEPS[Math.min(Math.max(activeStep, 0), STEPS.length - 1)];
+  const isVideo = String(mediaType || "").startsWith("video");
   return (
     <div className="space-y-4 py-2">
-      <div className="flex items-center gap-2">
-        <Loader2 className="h-4 w-4 animate-spin text-[#FF4D1C]" />
-        <p className="text-sm font-semibold text-foreground">Analyzing your issue...</p>
+      <div className="overflow-hidden rounded-2xl border border-border bg-card">
+        <div className="relative aspect-[16/10] max-h-64 bg-[#F4EFE8]">
+          {mediaUrl ? (
+            isVideo ? (
+              <video src={mediaUrl} className="h-full w-full object-cover" muted playsInline />
+            ) : (
+              <img src={mediaUrl} alt="" className="h-full w-full object-cover" />
+            )
+          ) : (
+            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Reviewing your description</div>
+          )}
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/10 to-transparent motion-reduce:hidden" />
+          <div className="pointer-events-none absolute inset-x-6 top-1/3 h-px bg-[#FF4D1C]/70 motion-safe:animate-pulse motion-reduce:hidden" />
+        </div>
+        <div className="space-y-1 px-4 py-3">
+          <p className="text-sm font-semibold text-foreground">{stage}</p>
+          <p className="text-xs text-muted-foreground">AI inspection in progress. Results appear when the assessment is ready.</p>
+        </div>
       </div>
       {slow ? (
         <p className="text-xs text-muted-foreground">
