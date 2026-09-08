@@ -2919,7 +2919,7 @@ app.post('/api/chat/:jobId', requireAuth, async (req, res) => {
   }
 });
 
-// ── Multi-provider AI assessment (Gemini / OpenAI / OpenRouter / custom) ──────
+// ── Experiential Labs GPT-6 Astra assessment ──
 app.get('/api/ai/status', requireAuth, (_req, res) => {
   return res.json(getAiStatus());
 });

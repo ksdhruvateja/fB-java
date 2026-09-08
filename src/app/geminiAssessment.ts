@@ -35,13 +35,7 @@ type AssessInput = {
   mode?: "summary" | "detail";
 };
 
-export type AiProviderSource =
-  | "gemini"
-  | "openai"
-  | "openrouter"
-  | "custom"
-  | "fallback"
-  | "error";
+export type AiProviderSource = "explabs" | "fallback" | "error";
 
 export type AnalyzeResult = {
   assessment: AiAssessment | null;
@@ -82,24 +76,18 @@ const EMPTY_ASSESSMENT: AiAssessment = {
 function buildOfflineAssessment(input: AssessInput): AiAssessment {
   return {
     ...EMPTY_ASSESSMENT,
-    overview:
-      "No AI provider connected. Add OPENAI_API_KEY, OPENROUTER_API_KEY, AI_API_KEY (+ AI_BASE_URL), or GEMINI_API_KEY in .env.",
+    overview: "We couldn't complete the assessment right now. Please try again.",
     imageObservations: input.imageDataUrl
-      ? ["Photo uploaded but AI is offline — connect an API key for visual analysis."]
+      ? ["Photo uploaded. Assessment is temporarily unavailable."]
       : ["No photo uploaded."],
-    diagnosis: `Offline preview for: ${input.description.trim().slice(0, 200)}`,
-    likelyRootCause: "Connect an AI API key for a live assessment.",
-    professionalSteps: ["Connect API key", "Re-run analysis with photo attached"],
-    partsNeeded: ["Connect AI for part identification"],
-    workScope: ["Real scope available after API connection"],
+    diagnosis: "We couldn't complete the assessment right now. Please try again.",
+    likelyRootCause: "Please try again in a few minutes.",
+    professionalSteps: ["Try the assessment again"],
+    partsNeeded: [],
+    workScope: [],
     toolsRequired: [],
     diySteps: [],
-    suggestions: [
-      "OpenAI: set OPENAI_API_KEY (optional OPENAI_MODEL)",
-      "OpenRouter: set OPENROUTER_API_KEY or AI_API_KEY=sk-or-…",
-      "Any OpenAI-compatible API: set AI_API_KEY + AI_BASE_URL + AI_MODEL",
-      "Gemini: set GEMINI_API_KEY from Google AI Studio / Cloud Console",
-    ],
+    suggestions: [],
     estimatedCost: "—",
     estimatedDuration: "—",
     urgency: "—",
@@ -145,7 +133,7 @@ export function getAiProviderLabel(): string | null {
 
 export function getAiKeyIssue(): string | null {
   if (cachedConfigured === false) {
-    return "Add OPENAI_API_KEY, OPENROUTER_API_KEY, AI_API_KEY (+ AI_BASE_URL), or GEMINI_API_KEY to .env and restart the API";
+    return "We couldn't complete the assessment right now. Please try again.";
   }
   return null;
 }
@@ -199,7 +187,7 @@ export async function analyzeWithAi(input: AssessInput): Promise<AnalyzeResult> 
       }
       return {
         assessment: data.assessment,
-        source: data.source ?? "openai",
+        source: data.source ?? "explabs",
         model: data.model,
       };
     }
@@ -237,7 +225,7 @@ export type ChatResult = {
   code?: string;
 };
 
-/** Live customer chat via the same OpenRouter / OpenAI / Gemini provider. */
+/** Live customer chat via Experiential Labs. */
 export async function chatWithAi(
   messages: ChatMessage[],
   options?: { jobId?: number }
