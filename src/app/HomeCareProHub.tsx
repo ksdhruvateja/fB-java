@@ -78,7 +78,7 @@ export default function HomeCareProHub({
   onOpenDocuments: () => void;
   onOpenJob?: (jobId: number) => void;
 }) {
-  const { isPro, requestFeature, openUpgrade } = useProFeature();
+  const { isPro, entitlementReady, requestFeature, openUpgrade } = useProFeature();
   const [view, setView] = useState<HubView>("hub");
   const [services, setServices] = useState<RecurringService[]>([]);
   const [loading, setLoading] = useState(false);
@@ -164,6 +164,7 @@ export default function HomeCareProHub({
             key={c.id}
             type="button"
             onClick={() => {
+              if (!entitlementReady) return;
               if (!isPro) {
                 openUpgrade(c.feature, "homecare-hub");
                 return;

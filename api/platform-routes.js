@@ -19,7 +19,14 @@ import { isAdminRole } from './auth-helpers.js';
 import { reconcileRefundForJob } from './payment-settlement.js';
 import { FINANCIAL_EVENT, recordFinancialEvent } from './financial-ledger.js';
 import { isPaidHomeCarePlan, PAID_HOME_CARE_PLAN_CODE } from './subscription-catalog.js';
-import { userHasActivePaidSubscription } from './subscription-state.js';
+import {
+  syncUserHomeCareEntitlement,
+  toPublicHomeCareSubscriptionDto,
+  loadBestHomeCareSubscription,
+  subscriptionGrantsProAccess,
+  parseSubscriptionMeta,
+  invalidateHomeCareEntitlementCache,
+} from './subscription-state.js';
 import { writeAudit } from './audit.js';
 import { sendEmailSafe, sendSmsSafe, notifyOps, mailStatus } from './notify.js';
 import { lookupTimezoneFromCoordinates, isValidIanaTimezone } from './property-timezone.js';
@@ -155,18 +162,26 @@ async function startSubscriptionCheckout(pool, {
     err.status = 400;
     throw err;
   }
-  assertPaymentsAvailable();
-
   if (isPaidHomeCarePlan(planCode)) {
-    const alreadyActive = await userHasActivePaidSubscription(pool, userId);
-    if (alreadyActive) {
-      const err = new Error(
-        'You already have an active HomeCare Pro subscription. Manage it from your account profile.'
-      );
+    const state = await syncUserHomeCareEntitlement(pool, userId, { force: true });
+    if (state.isPro) {
+      return {
+        alreadySubscribed: true,
+        plan: state.effectivePlanCode || state.planCode || planCode,
+        status: state.status || 'active',
+        cancelAtPeriodEnd: state.cancelAtPeriodEnd,
+        subscription: toPublicHomeCareSubscriptionDto(state),
+      };
+    }
+    if (state.paymentIssue) {
+      const err = new Error('There is a problem with your HomeCare Pro billing. Update your payment method instead of starting a new subscription.');
       err.status = 409;
+      err.code = 'BILLING_ISSUE';
       throw err;
     }
   }
+
+  assertPaymentsAvailable();
 
   const successPath = jobId
     ? `/?paid=subscription&plan=${encodeURIComponent(planCode)}&jobId=${jobId}`
@@ -191,6 +206,7 @@ async function startSubscriptionCheckout(pool, {
       userId: String(userId),
       jobId: jobId ? String(jobId) : '',
     },
+    idempotencyKey: `homecare-${userId}-${planCode}-${Math.floor(Date.now() / 20000)}`,
   });
 
   await pool.query(
@@ -688,11 +704,24 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
         lookupManagedPlan,
         auditUserId: req.authUser.id,
       });
+      if (result.alreadySubscribed) {
+        return res.json({
+          ok: true,
+          alreadySubscribed: true,
+          plan: result.plan,
+          status: result.status || 'active',
+          subscription: result.subscription,
+        });
+      }
       if (result.url) return res.json({ ok: true, url: result.url });
       return res.status(502).json({ ok: false, message: 'Stripe checkout URL missing.' });
     } catch (e) {
       console.error(e);
-      return res.status(e.status || 500).json({ ok: false, message: e.message || 'Could not start subscription.' });
+      return res.status(e.status || 500).json({
+        ok: false,
+        code: e.code || undefined,
+        message: e.message || 'Could not start subscription.',
+      });
     }
   });
 
@@ -760,6 +789,70 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
     } catch (e) {
       console.error('guest-checkout:', e);
       return res.status(e.status || 500).json({ ok: false, message: e.message || 'Could not start subscription.' });
+    }
+  });
+
+  async function mutateHomeCareCancelFlag(req, res, cancelAtPeriodEnd) {
+    const sub = await loadBestHomeCareSubscription(pool, req.authUser.id);
+    if (!sub || !subscriptionGrantsProAccess(sub)) {
+      return res.status(400).json({ ok: false, message: 'No active HomeCare subscription to update.' });
+    }
+    if (sub.stripe_subscription_id && stripeConfigured()) {
+      const stripe = await getStripe();
+      if (stripe) {
+        await stripe.subscriptions.update(sub.stripe_subscription_id, {
+          cancel_at_period_end: cancelAtPeriodEnd,
+        });
+      }
+    }
+    const meta = {
+      ...parseSubscriptionMeta(sub.meta),
+      cancelAtPeriodEnd,
+      cancel_at_period_end: cancelAtPeriodEnd,
+    };
+    await pool.query(`UPDATE subscriptions SET meta=$1::jsonb WHERE id=$2`, [JSON.stringify(meta), sub.id]);
+    invalidateHomeCareEntitlementCache(req.authUser.id);
+    const state = await syncUserHomeCareEntitlement(pool, req.authUser.id, { force: true });
+    return res.json({ ok: true, subscription: toPublicHomeCareSubscriptionDto(state) });
+  }
+
+  app.post('/api/subscriptions/cancel', requireAuth, async (req, res) => {
+    try {
+      return await mutateHomeCareCancelFlag(req, res, true);
+    } catch (e) {
+      console.error('subscriptions/cancel:', e);
+      return res.status(500).json({ ok: false, message: e.message || 'Could not cancel subscription.' });
+    }
+  });
+
+  app.post('/api/subscriptions/resume', requireAuth, async (req, res) => {
+    try {
+      return await mutateHomeCareCancelFlag(req, res, false);
+    } catch (e) {
+      console.error('subscriptions/resume:', e);
+      return res.status(500).json({ ok: false, message: e.message || 'Could not keep subscription.' });
+    }
+  });
+
+  app.post('/api/subscriptions/billing-portal', requireAuth, async (req, res) => {
+    try {
+      const sub = await loadBestHomeCareSubscription(pool, req.authUser.id);
+      if (!sub) return res.status(400).json({ ok: false, message: 'No HomeCare subscription found.' });
+      const meta = parseSubscriptionMeta(sub.meta);
+      const customerId = meta.stripeCustomerId || meta.stripe_customer_id || null;
+      if (!customerId || !stripeConfigured()) {
+        return res.status(400).json({ ok: false, message: 'Billing management is not available for this subscription yet.' });
+      }
+      const stripe = await getStripe();
+      const origin = (req.get('origin') || req.get('referer') || '').replace(/\/$/, '');
+      const session = await stripe.billingPortal.sessions.create({
+        customer: customerId,
+        return_url: `${origin || ''}/`,
+      });
+      return res.json({ ok: true, url: session.url });
+    } catch (e) {
+      console.error('subscriptions/billing-portal:', e);
+      return res.status(500).json({ ok: false, message: e.message || 'Could not open billing portal.' });
     }
   });
 

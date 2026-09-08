@@ -258,6 +258,21 @@ export async function userHasActivePaidSubscription(pool, userId) {
   return subscriptionGrantsProAccess(sub);
 }
 
+/** One normalized entitlement shape for API and feature gates. */
+export async function getHomeCareEntitlement(pool, userId) {
+  const state = await syncUserHomeCareEntitlement(pool, userId);
+  const dto = toPublicHomeCareSubscriptionDto(state);
+  return {
+    plan: dto.planCode,
+    status: dto.status,
+    hasAccess: dto.isPro === true,
+    cancelAtPeriodEnd: Boolean(dto.cancelAtPeriodEnd),
+    currentPeriodEnd: dto.currentPeriodEnd,
+    paymentIssue: Boolean(dto.paymentIssue),
+    subscription: dto,
+  };
+}
+
 export async function activateSubscriptionFromCheckout(pool, {
   userId,
   planCode,

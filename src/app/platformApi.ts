@@ -37,10 +37,41 @@ export async function listPlans() {
 }
 
 export async function startSubscription(planCode: string, jobId?: number) {
-  return api<{ ok: boolean; url?: string; simulated?: boolean; message?: string; subscription?: unknown }>(
+  return api<{
+    ok: boolean;
+    url?: string;
+    simulated?: boolean;
+    message?: string;
+    code?: string;
+    alreadySubscribed?: boolean;
+    plan?: string;
+    status?: string;
+    subscription?: unknown;
+  }>(
     "/api/subscriptions/checkout",
     { method: "POST", body: JSON.stringify({ planCode, jobId }) }
   );
+}
+
+export async function cancelHomeCareSubscription() {
+  return api<{ ok: boolean; message?: string; subscription?: unknown }>("/api/subscriptions/cancel", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function resumeHomeCareSubscription() {
+  return api<{ ok: boolean; message?: string; subscription?: unknown }>("/api/subscriptions/resume", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function openHomeCareBillingPortal() {
+  return api<{ ok: boolean; url?: string; message?: string }>("/api/subscriptions/billing-portal", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export async function guestSubscriptionCheckout(body: {

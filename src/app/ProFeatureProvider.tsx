@@ -20,6 +20,8 @@ import { PAID_HOME_CARE_PLAN_CODE } from "./subscriptionCatalog";
 
 type ProFeatureContextValue = {
   isPro: boolean;
+  entitlementReady: boolean;
+  paymentIssue: boolean;
   planCode?: string | null;
   pendingFeature: ProFeatureId | null;
   requestFeature: (feature: ProFeatureId, source?: string) => boolean;
@@ -33,19 +35,24 @@ const ProFeatureContext = createContext<ProFeatureContextValue | null>(null);
 export function ProFeatureProvider({
   planCode,
   homeCareSubscription,
+  entitlementReady = homeCareSubscription != null,
   busy,
   onUpgrade,
+  onManageBilling,
   onProActivated,
   children,
 }: {
   planCode?: string | null;
   homeCareSubscription?: HomeCareSubscription | null;
+  entitlementReady?: boolean;
   busy?: boolean;
   onUpgrade: (planCode: string) => void | Promise<void>;
+  onManageBilling?: () => void | Promise<void>;
   onProActivated?: (feature: ProFeatureId | null) => void;
   children: ReactNode;
 }) {
   const isPro = hasProEntitlement(planCode, homeCareSubscription);
+  const paymentIssue = Boolean(homeCareSubscription?.paymentIssue) && !isPro;
   const [modalFeature, setModalFeature] = useState<ProFeatureId | null>(null);
   const [modalSource, setModalSource] = useState<string | undefined>();
   const [pendingFeature, setPendingFeature] = useState<ProFeatureId | null>(null);
@@ -53,11 +60,16 @@ export function ProFeatureProvider({
   const prevProRef = useRef(isPro);
 
   const openUpgrade = useCallback((feature: ProFeatureId, source?: string) => {
+    if (!entitlementReady || isPro) return;
+    if (paymentIssue) {
+      setDisabledNotice("There's a problem with your HomeCare Pro billing. Update your payment method — you don't need to subscribe again.");
+      return;
+    }
     trackProFeatureEvent("pro_feature_clicked", { feature, source });
     setPendingFeature(feature);
     setModalFeature(feature);
     setModalSource(source);
-  }, []);
+  }, [entitlementReady, isPro, paymentIssue]);
 
   const closeUpgrade = useCallback(() => {
     setModalFeature(null);
@@ -66,11 +78,12 @@ export function ProFeatureProvider({
 
   const requestFeature = useCallback(
     (feature: ProFeatureId, source?: string) => {
+      if (!entitlementReady) return false;
       if (hasProEntitlement(planCode, homeCareSubscription)) return true;
       openUpgrade(feature, source);
       return false;
     },
-    [planCode, homeCareSubscription, openUpgrade]
+    [entitlementReady, planCode, homeCareSubscription, openUpgrade]
   );
 
   const consumePendingFeature = useCallback(() => {
@@ -83,7 +96,7 @@ export function ProFeatureProvider({
     function onProRequired(e: Event) {
       const detail = (e as CustomEvent<ProRequiredDetail>).detail;
       if (!detail) return;
-      if (hasProEntitlement(planCode, homeCareSubscription)) return;
+      if (!entitlementReady || hasProEntitlement(planCode, homeCareSubscription)) return;
       openUpgrade(detail.feature || "document_vault", detail.source);
     }
     function onFeatureDisabled(e: Event) {
@@ -96,7 +109,7 @@ export function ProFeatureProvider({
       window.removeEventListener(PRO_REQUIRED_EVENT, onProRequired);
       window.removeEventListener(FEATURE_DISABLED_EVENT, onFeatureDisabled);
     };
-  }, [planCode, homeCareSubscription, openUpgrade]);
+  }, [entitlementReady, planCode, homeCareSubscription, openUpgrade]);
 
   useEffect(() => {
     if (!prevProRef.current && isPro) {
@@ -110,6 +123,8 @@ export function ProFeatureProvider({
   const value = useMemo(
     (): ProFeatureContextValue => ({
       isPro,
+      entitlementReady,
+      paymentIssue,
       planCode,
       pendingFeature,
       requestFeature,
@@ -117,14 +132,14 @@ export function ProFeatureProvider({
       closeUpgrade,
       consumePendingFeature,
     }),
-    [isPro, planCode, pendingFeature, requestFeature, openUpgrade, closeUpgrade, consumePendingFeature]
+    [isPro, entitlementReady, paymentIssue, planCode, pendingFeature, requestFeature, openUpgrade, closeUpgrade, consumePendingFeature]
   );
 
   return (
     <ProFeatureContext.Provider value={value}>
       {children}
       <UpgradeToProModal
-        open={modalFeature != null}
+        open={entitlementReady && !isPro && !paymentIssue && modalFeature != null}
         feature={modalFeature || "maintenance_calendar"}
         source={modalSource}
         busy={busy}
@@ -136,9 +151,16 @@ export function ProFeatureProvider({
           <div className="max-w-md rounded-2xl border border-border bg-card p-6 shadow-xl">
             <p className="text-sm font-semibold">Feature unavailable</p>
             <p className="mt-2 text-sm text-muted-foreground">{disabledNotice}</p>
-            <button type="button" className="mt-4 rounded-xl bg-[#FF4D1C] px-4 py-2 text-sm font-medium text-white" onClick={() => setDisabledNotice(null)}>
-              OK
-            </button>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {paymentIssue && onManageBilling ? (
+                <button type="button" className="rounded-xl bg-[#FF4D1C] px-4 py-2 text-sm font-medium text-white" onClick={() => { setDisabledNotice(null); void onManageBilling(); }}>
+                  Update payment method
+                </button>
+              ) : null}
+              <button type="button" className="rounded-xl border border-border px-4 py-2 text-sm font-medium" onClick={() => setDisabledNotice(null)}>
+                OK
+              </button>
+            </div>
           </div>
         </div>
       )}

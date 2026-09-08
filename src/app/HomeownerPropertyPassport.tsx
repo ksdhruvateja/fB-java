@@ -186,12 +186,14 @@ export default function HomeownerPropertyPassport({
   const [extractDoc, setExtractDoc] = useState<PropertyDocument | null>(null);
   const [extractDraft, setExtractDraft] = useState<PropertyDocumentExtraction | null>(null);
   const [extractBusy, setExtractBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [memorySuggestions, setMemorySuggestions] = useState<MemorySuggestion[]>([]);
   const [docCategory, setDocCategory] = useState("warranty");
   const [docTitle, setDocTitle] = useState("");
   const [docSystemKey, setDocSystemKey] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
-  const { isPro, requestFeature, openUpgrade } = useProFeature();
+  const { isPro, entitlementReady, requestFeature, openUpgrade } = useProFeature();
 
   function proFeatureForSection(id: PropertyPassportSection): ProFeatureId {
     if (id === "maintenance") return "maintenance_calendar";
@@ -215,13 +217,14 @@ export default function HomeownerPropertyPassport({
   }, [property?.id, isPro]);
 
   useEffect(() => {
+    if (!entitlementReady) return;
     if (isProPassportSection(initialSection) && !isPro) {
       requestFeature(proFeatureForSection(initialSection), "property-passport");
       setSection("overview");
       return;
     }
     setSection(initialSection);
-  }, [initialSection, isPro, requestFeature]);
+  }, [initialSection, isPro, entitlementReady, requestFeature]);
 
   const health = useMemo(
     () => normalizeHealthProfile(property?.healthProfile as PropertyHealthProfile | null),
@@ -240,21 +243,28 @@ export default function HomeownerPropertyPassport({
   }
 
   async function saveHomeDetails() {
-    if (!property?.id) return;
-    const nextHealth = mergePassportIntoHealth(health, {
-      ...passport,
-      homeDetails: homeDetailsDraft,
-    });
-    await onSaveHealth(property.id, nextHealth);
-    await onSaveProperty(property.id, {
-      propertyType: homeDetailsDraft.propertyType || property.propertyType,
-      yearBuilt: homeDetailsDraft.yearBuilt ? Number(homeDetailsDraft.yearBuilt) : null,
-      beds: homeDetailsDraft.bedrooms ? Number(homeDetailsDraft.bedrooms) : null,
-      baths: homeDetailsDraft.bathrooms ? Number(homeDetailsDraft.bathrooms) : null,
-      sqft: homeDetailsDraft.squareFootage ? Number(homeDetailsDraft.squareFootage) : null,
-      accessNotes: homeDetailsDraft.otherNotes || property.accessNotes,
-    });
-    setEditingHomeDetails(false);
+    if (!property?.id || saving) return;
+    setSaving(true);
+    setSaveMessage(null);
+    try {
+      const nextHealth = mergePassportIntoHealth(health, {
+        ...passport,
+        homeDetails: homeDetailsDraft,
+      });
+      await onSaveHealth(property.id, nextHealth);
+      await onSaveProperty(property.id, {
+        propertyType: homeDetailsDraft.propertyType || property.propertyType,
+        yearBuilt: homeDetailsDraft.yearBuilt ? Number(homeDetailsDraft.yearBuilt) : null,
+        beds: homeDetailsDraft.bedrooms ? Number(homeDetailsDraft.bedrooms) : null,
+        baths: homeDetailsDraft.bathrooms ? Number(homeDetailsDraft.bathrooms) : null,
+        sqft: homeDetailsDraft.squareFootage ? Number(homeDetailsDraft.squareFootage) : null,
+        accessNotes: homeDetailsDraft.otherNotes || property.accessNotes,
+      });
+      setEditingHomeDetails(false);
+      setSaveMessage("Saved");
+    } finally {
+      setSaving(false);
+    }
   }
 
   function openEquipmentEdit(eq: HomeSystemRecord) {
@@ -263,15 +273,24 @@ export default function HomeownerPropertyPassport({
   }
 
   async function saveEquipment() {
-    if (!property?.id || !equipmentDraft) return;
-    const isApp = equipmentDraft.category === "appliance";
-    const list = isApp ? appliances : systems;
-    const nextList = list.map((s) => (s.key === equipmentDraft.key ? equipmentDraft : s));
-    const other = isApp ? systems : appliances;
-    const ok = await onSaveProperty(property.id, { homeSystems: [...other, ...nextList] });
-    if (ok) {
-      setEditingEquipment(null);
-      setEquipmentDraft(null);
+    if (!property?.id || !equipmentDraft || saving) return;
+    setSaving(true);
+    setSaveMessage(null);
+    try {
+      const isApp = equipmentDraft.category === "appliance";
+      const list = isApp ? appliances : systems;
+      const nextList = list.map((s) => (s.key === equipmentDraft.key ? equipmentDraft : s));
+      const other = isApp ? systems : appliances;
+      const ok = await onSaveProperty(property.id, { homeSystems: [...other, ...nextList] });
+      if (ok) {
+        setEditingEquipment(null);
+        setEquipmentDraft(null);
+        setSaveMessage("Saved");
+      } else {
+        setSaveMessage("Could not save. Please try again.");
+      }
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -297,14 +316,21 @@ export default function HomeownerPropertyPassport({
   }
 
   async function saveLocation() {
-    if (!property?.id || !locationDraft?.name.trim()) return;
-    const existing = passport.importantLocations || [];
-    const idx = existing.findIndex((l) => l.id === locationDraft.id);
-    const nextLocs = idx >= 0 ? existing.map((l, i) => (i === idx ? locationDraft : l)) : [...existing, locationDraft];
-    const nextHealth = mergePassportIntoHealth(health, { ...passport, importantLocations: nextLocs });
-    await onSaveHealth(property.id, nextHealth);
-    setEditingLocation(null);
-    setLocationDraft(null);
+    if (!property?.id || !locationDraft?.name.trim() || saving) return;
+    setSaving(true);
+    setSaveMessage(null);
+    try {
+      const existing = passport.importantLocations || [];
+      const idx = existing.findIndex((l) => l.id === locationDraft.id);
+      const nextLocs = idx >= 0 ? existing.map((l, i) => (i === idx ? locationDraft : l)) : [...existing, locationDraft];
+      const nextHealth = mergePassportIntoHealth(health, { ...passport, importantLocations: nextLocs });
+      await onSaveHealth(property.id, nextHealth);
+      setEditingLocation(null);
+      setLocationDraft(null);
+      setSaveMessage("Saved");
+    } finally {
+      setSaving(false);
+    }
   }
 
   function openWarrantyEdit(w?: PassportWarranty) {
@@ -314,13 +340,20 @@ export default function HomeownerPropertyPassport({
   }
 
   async function saveWarranty() {
-    if (!property?.id || !warrantyDraft?.name.trim()) return;
-    const existing = passport.warranties || [];
-    const idx = existing.findIndex((w) => w.id === warrantyDraft.id);
-    const next = idx >= 0 ? existing.map((w, i) => (i === idx ? warrantyDraft : w)) : [...existing, warrantyDraft];
-    await onSaveHealth(property.id, mergePassportIntoHealth(health, { ...passport, warranties: next }));
-    setEditingWarranty(null);
-    setWarrantyDraft(null);
+    if (!property?.id || !warrantyDraft?.name.trim() || saving) return;
+    setSaving(true);
+    setSaveMessage(null);
+    try {
+      const existing = passport.warranties || [];
+      const idx = existing.findIndex((w) => w.id === warrantyDraft.id);
+      const next = idx >= 0 ? existing.map((w, i) => (i === idx ? warrantyDraft : w)) : [...existing, warrantyDraft];
+      await onSaveHealth(property.id, mergePassportIntoHealth(health, { ...passport, warranties: next }));
+      setEditingWarranty(null);
+      setWarrantyDraft(null);
+      setSaveMessage("Saved");
+    } finally {
+      setSaving(false);
+    }
   }
 
   function handleAddInformation(kind: AddInformationKind) {
@@ -484,6 +517,9 @@ export default function HomeownerPropertyPassport({
           <h2 className="[font-family:'Barlow_Condensed',sans-serif] text-2xl font-black uppercase tracking-tight sm:text-3xl">
             {section === "overview" ? "Everything we know about this home" : PASSPORT_SECTIONS.find((s) => s.id === section)?.label}
           </h2>
+          {saveMessage ? (
+            <p className="mt-1 text-xs font-semibold text-primary">{saveMessage}</p>
+          ) : null}
           {property ? (
             <div className="mt-2 text-sm text-muted-foreground whitespace-pre-line">
               {formatPropertyAddress(property)}
@@ -922,7 +958,7 @@ export default function HomeownerPropertyPassport({
               />
             ))}
             <TextAreaField label="Utility Notes" value={homeDetailsDraft.utilityNotes || ""} onChange={(v) => setHomeDetailsDraft({ ...homeDetailsDraft, utilityNotes: v })} />
-            <FormActions busy={busy} onCancel={() => setEditingHomeDetails(false)} />
+            <FormActions busy={saving} onCancel={() => setEditingHomeDetails(false)} />
           </form>
         </ModalShell>
       ) : null}
@@ -945,7 +981,7 @@ export default function HomeownerPropertyPassport({
             <TextField label="Location in Home" value={equipmentDraft.location || ""} onChange={(v) => setEquipmentDraft({ ...equipmentDraft, location: v })} />
             <TextField label="Warranty Until" value={equipmentDraft.warrantyUntil || ""} onChange={(v) => setEquipmentDraft({ ...equipmentDraft, warrantyUntil: v })} />
             <TextAreaField label="Notes" value={equipmentDraft.notes || ""} onChange={(v) => setEquipmentDraft({ ...equipmentDraft, notes: v })} />
-            <FormActions busy={busy} onCancel={() => setEditingEquipment(null)} />
+            <FormActions busy={saving} onCancel={() => setEditingEquipment(null)} />
           </form>
         </ModalShell>
       ) : null}
@@ -1009,7 +1045,7 @@ export default function HomeownerPropertyPassport({
               />
             </label>
             <TextAreaField label="Description / Directions" value={locationDraft.description || ""} onChange={(v) => setLocationDraft({ ...locationDraft, description: v })} />
-            <FormActions busy={busy} onCancel={() => setEditingLocation(null)} />
+            <FormActions busy={saving} onCancel={() => setEditingLocation(null)} />
           </form>
         </ModalShell>
       ) : null}
@@ -1025,7 +1061,7 @@ export default function HomeownerPropertyPassport({
             <TextField label="Expiration Date" value={warrantyDraft.expirationDate || ""} onChange={(v) => setWarrantyDraft({ ...warrantyDraft, expirationDate: v })} />
             <TextField label="Coverage" value={warrantyDraft.coverage || ""} onChange={(v) => setWarrantyDraft({ ...warrantyDraft, coverage: v })} />
             <TextAreaField label="Notes" value={warrantyDraft.notes || ""} onChange={(v) => setWarrantyDraft({ ...warrantyDraft, notes: v })} />
-            <FormActions busy={busy} onCancel={() => setEditingWarranty(null)} />
+            <FormActions busy={saving} onCancel={() => setEditingWarranty(null)} />
           </form>
         </ModalShell>
       ) : null}
@@ -1072,7 +1108,7 @@ export default function HomeownerPropertyPassport({
             <TextField label="City" value={addressDraft.city} onChange={(v) => setAddressDraft({ ...addressDraft, city: v })} />
             <TextField label="State" value={addressDraft.state} onChange={(v) => setAddressDraft({ ...addressDraft, state: v })} />
             <TextField label="ZIP" value={addressDraft.zip} onChange={(v) => setAddressDraft({ ...addressDraft, zip: v })} />
-            <FormActions busy={busy} onCancel={() => setEditingPropertyAddress(false)} />
+            <FormActions busy={saving} onCancel={() => setEditingPropertyAddress(false)} />
           </form>
         </ModalShell>
       ) : null}
@@ -1128,9 +1164,9 @@ function FormActions({ busy, onCancel }: { busy?: boolean; onCancel: () => void 
   return (
     <div className="flex gap-2 pt-2">
       <button type="submit" disabled={busy} className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">
-        {busy ? <Loader2 className="inline h-4 w-4 animate-spin" /> : null} Save
+        {busy ? "Saving…" : "Save"}
       </button>
-      <button type="button" onClick={onCancel} className="rounded-xl border border-border px-4 py-2 text-xs font-semibold">Cancel</button>
+      <button type="button" onClick={onCancel} disabled={busy} className="rounded-xl border border-border px-4 py-2 text-xs font-semibold">Cancel</button>
     </div>
   );
 }

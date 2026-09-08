@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import type { AuthUser } from "./auth";
-import { getStoredToken } from "./auth";
+import { getStoredToken, validateToken } from "./auth";
 import { chatWithAi, type ChatMessage } from "./geminiAssessment";
 import { brand } from "../config/brand";
 import AppLogo from "./AppLogo";
@@ -38,7 +38,7 @@ import {
  type Property,
  type Proposal,
 } from "./managedJobs";
-import { startSubscription } from "./platformApi";
+import { cancelHomeCareSubscription, openHomeCareBillingPortal, resumeHomeCareSubscription, startSubscription } from "./platformApi";
 import { listGoProPlans } from "./subscriptionPlansApi";
 import { PAID_HOME_CARE_PLAN_CODE, isPaidHomeCarePlan, displayPlanLabel } from "./subscriptionCatalog";
 import { resolveClientProAccess } from "./proFeatures";
@@ -535,6 +535,8 @@ export default function HomeownerDashboard({
  const [aiAckChecked, setAiAckChecked] = useState(false);
  const [aiAckBusy, setAiAckBusy] = useState(false);
  const [aiAckError, setAiAckError] = useState<string | null>(null);
+ const [subActionBusy, setSubActionBusy] = useState(false);
+ const [cancelPlanOpen, setCancelPlanOpen] = useState(false);
  const aiAckSaveRef = useRef(false);
 
  // Guided DIY interactive states
@@ -1580,11 +1582,31 @@ export default function HomeownerDashboard({
  }, [selectedJobId, jobs, step, tab]);
 
  async function handleSubscribe(jobId?: number, planCode = PAID_HOME_CARE_PLAN_CODE) {
+ if (user.homeCareSubscription?.isPro) {
+ setError(null);
+ return;
+ }
+ if (user.homeCareSubscription?.paymentIssue) {
+ setError("There's a problem with your HomeCare Pro billing. Update your payment method instead of starting a new subscription.");
+ void handleManageBilling();
+ return;
+ }
  setCheckoutBusy(true);
  setError(null);
  try {
  const r = await startSubscription(planCode, jobId);
+ if (r.alreadySubscribed) {
+ const me = await validateToken({ syncCheckout: true });
+ if (me.ok) onUserUpdated?.(me.user);
+ setError(null);
+ return;
+ }
  if (!r.ok) {
+ if (r.code === "BILLING_ISSUE") {
+ setError(r.message || "There's a problem with your HomeCare Pro billing.");
+ void handleManageBilling();
+ return;
+ }
  setError(r.message || "Failed to start subscription.");
  return;
  }
@@ -1597,6 +1619,27 @@ export default function HomeownerDashboard({
  setError(e instanceof Error ? e.message : "Could not complete subscription.");
  } finally {
  setCheckoutBusy(false);
+ }
+ }
+
+ async function refreshHomeCareEntitlement() {
+ const me = await validateToken({ syncCheckout: true });
+ if (me.ok) onUserUpdated?.(me.user);
+ return me;
+ }
+
+ async function handleManageBilling() {
+ setSubActionBusy(true);
+ setError(null);
+ try {
+ const r = await openHomeCareBillingPortal();
+ if (r.ok && r.url) {
+ window.location.href = r.url;
+ return;
+ }
+ setError(r.message || "Billing management is not available yet.");
+ } finally {
+ setSubActionBusy(false);
  }
  }
 
@@ -1628,10 +1671,22 @@ export default function HomeownerDashboard({
  }
 
  useEffect(() => {
- if (!hasHomeCarePro && tab === "documents") {
+ if (user.homeCareSubscription != null) return;
+ let cancelled = false;
+ void validateToken().then((r) => {
+ if (!cancelled && r.ok) onUserUpdated?.(r.user);
+ });
+ return () => {
+ cancelled = true;
+ };
+ }, [user.id, user.homeCareSubscription, onUserUpdated]);
+
+ useEffect(() => {
+ if (user.homeCareSubscription == null || hasHomeCarePro || homeCareSub?.paymentIssue) return;
+ if (tab === "documents") {
  promptProUpgrade("document_vault", tab);
  }
- }, [tab, hasHomeCarePro]);
+ }, [tab, hasHomeCarePro, user.homeCareSubscription, homeCareSub?.paymentIssue]);
 
  useEffect(() => {
  const code = partnerCode.trim().toUpperCase();
@@ -2405,7 +2460,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </section>
  );
 
- const goProPromoCard = !hasHomeCarePro && (
+ const entitlementReady = user.homeCareSubscription != null;
+ const goProPromoCard = entitlementReady && !hasHomeCarePro && !homeCareSub?.paymentIssue && (
  <div className="mx-3.5 my-3 rounded-xl border border-border/80 bg-muted/30 p-4 text-left">
  <p className="text-xs font-semibold text-foreground">HomeCare Pro</p>
  <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
@@ -2425,6 +2481,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <ProFeatureProvider
  planCode={user.planCode}
  homeCareSubscription={user.homeCareSubscription}
+ entitlementReady={user.homeCareSubscription != null}
+ onManageBilling={handleManageBilling}
  busy={checkoutBusy}
  onUpgrade={handleAuthenticatedCheckout}
  onProActivated={handleProActivated}
@@ -2440,7 +2498,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
  </div>
  <div className="flex items-center gap-1">
- {!hasHomeCarePro && (
+ {entitlementReady && !hasHomeCarePro && !homeCareSub?.paymentIssue && (
  <button
  type="button"
  onClick={() => navigateTab("go-pro")}
@@ -2580,7 +2638,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  onLogout={onLogout}
  onGoPro={() => navigateTab("go-pro")}
  goProBusy={checkoutBusy}
- showGoPro={!hasHomeCarePro}
+ showGoPro={entitlementReady && !hasHomeCarePro && !homeCareSub?.paymentIssue}
  />
  )}
 
@@ -3923,16 +3981,32 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
 
  <div className="rounded-lg border border-border bg-muted/20 p-4">
- <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">HomeCare subscription</p>
- {hasHomeCarePro ? (
+ <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Subscription</p>
+ {!entitlementReady ? (
+ <p className="mt-2 text-xs text-muted-foreground">Checking your plan...</p>
+ ) : hasHomeCarePro ? (
  <>
- <p className="mt-1 text-base font-semibold">HomeCare Pro</p>
+ <p className="mt-1 text-xs text-muted-foreground">Current plan</p>
+ <p className="text-base font-semibold">HomeCare Pro</p>
  <p className="mt-1 text-xs text-muted-foreground">
- Status: <span className="font-medium text-foreground">Active</span>
+ Status:{" "}
+ <span className="font-medium text-foreground">
+ {homeCareSub?.cancelAtPeriodEnd ? "Cancellation scheduled" : "Active"}
+ </span>
  </p>
- {homeCareSub?.currentPeriodEnd ? (
+ {homeCareSub?.cancelAtPeriodEnd && homeCareSub.currentPeriodEnd ? (
+ <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+ Your HomeCare Pro plan remains active until{" "}
+ {new Date(homeCareSub.currentPeriodEnd).toLocaleDateString(undefined, {
+ month: "short",
+ day: "numeric",
+ year: "numeric",
+ })}
+ .
+ </p>
+ ) : homeCareSub?.currentPeriodEnd ? (
  <p className="mt-1 text-xs text-muted-foreground">
- Next billing date:{" "}
+ Billing renews{" "}
  <span className="font-medium text-foreground">
  {new Date(homeCareSub.currentPeriodEnd).toLocaleDateString(undefined, {
  month: "short",
@@ -3942,37 +4016,64 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </span>
  </p>
  ) : null}
- {homeCareSub?.cancelAtPeriodEnd && homeCareSub.currentPeriodEnd ? (
- <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
- Cancels on{" "}
- {new Date(homeCareSub.currentPeriodEnd).toLocaleDateString(undefined, {
- month: "short",
- day: "numeric",
- year: "numeric",
- })}
- </p>
- ) : null}
- <p className="mt-2 text-xs text-muted-foreground">
- Manage billing from HomeCare plans or contact support if you need help.
- </p>
+ <div className="mt-3 flex flex-wrap items-center gap-2">
+ <button
+ type="button"
+ disabled={subActionBusy}
+ onClick={() => void handleManageBilling()}
+ className="inline-flex rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold disabled:opacity-60"
+ >
+ Manage subscription
+ </button>
+ {homeCareSub?.cancelAtPeriodEnd ? (
+ <button
+ type="button"
+ disabled={subActionBusy}
+ onClick={() => {
+ setSubActionBusy(true);
+ void resumeHomeCareSubscription()
+ .then(async (r) => {
+ if (!r.ok) {
+ setError(r.message || "Could not keep your subscription.");
+ return;
+ }
+ await refreshHomeCareEntitlement();
+ })
+ .finally(() => setSubActionBusy(false));
+ }}
+ className="inline-flex rounded-lg bg-[#FF6B2C] px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+ >
+ Keep subscription
+ </button>
+ ) : (
+ <button
+ type="button"
+ disabled={subActionBusy}
+ onClick={() => setCancelPlanOpen(true)}
+ className="inline-flex text-xs font-medium text-muted-foreground underline-offset-2 hover:underline disabled:opacity-60"
+ >
+ Cancel subscription
+ </button>
+ )}
+ </div>
  </>
  ) : homeCareSub?.paymentIssue ? (
  <>
- <p className="mt-1 text-base font-semibold text-amber-700 dark:text-amber-300">Payment issue</p>
- <p className="mt-1 text-xs text-muted-foreground">
- Update your payment method to restore HomeCare Pro access.
- </p>
+ <p className="mt-1 text-base font-semibold">HomeCare Pro</p>
+ <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">There's a problem with your HomeCare Pro billing.</p>
  <button
  type="button"
- onClick={() => navigateTab("go-pro")}
- className="mt-3 inline-flex rounded-lg border border-[#FF6B2C]/40 bg-[#FF6B2C]/10 px-3 py-2 text-xs font-semibold text-[#FF6B2C]"
+ disabled={subActionBusy}
+ onClick={() => void handleManageBilling()}
+ className="mt-3 inline-flex rounded-lg border border-[#FF6B2C]/40 bg-[#FF6B2C]/10 px-3 py-2 text-xs font-semibold text-[#FF6B2C] disabled:opacity-60"
  >
  Update payment method
  </button>
  </>
  ) : (
  <>
- <p className="mt-1 text-base font-semibold">{displayPlanLabel(user.planCode)}</p>
+ <p className="mt-1 text-xs text-muted-foreground">Current plan</p>
+ <p className="text-base font-semibold">{displayPlanLabel(user.planCode)}</p>
  <button
  type="button"
  onClick={() => navigateTab("go-pro")}
@@ -3983,6 +4084,44 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </>
  )}
  </div>
+ {cancelPlanOpen ? (
+ <div className="rounded-lg border border-amber-300/70 bg-amber-50 p-4 text-sm dark:border-amber-800 dark:bg-amber-950/30">
+ <p className="font-semibold">Cancel HomeCare Pro?</p>
+ <p className="mt-1 text-xs text-muted-foreground">
+ Your plan will remain available until the end of the current billing period. After that, HomeCare Pro features will no longer be available.
+ </p>
+ <div className="mt-3 flex flex-wrap gap-2">
+ <button
+ type="button"
+ disabled={subActionBusy}
+ onClick={() => setCancelPlanOpen(false)}
+ className="inline-flex rounded-lg bg-[#FF6B2C] px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+ >
+ Keep HomeCare Pro
+ </button>
+ <button
+ type="button"
+ disabled={subActionBusy}
+ onClick={() => {
+ setSubActionBusy(true);
+ void cancelHomeCareSubscription()
+ .then(async (r) => {
+ if (!r.ok) {
+ setError(r.message || "Could not cancel subscription.");
+ return;
+ }
+ setCancelPlanOpen(false);
+ await refreshHomeCareEntitlement();
+ })
+ .finally(() => setSubActionBusy(false));
+ }}
+ className="inline-flex rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold disabled:opacity-60"
+ >
+ Cancel subscription
+ </button>
+ </div>
+ </div>
+ ) : null}
 
  {isEditingProfile ? (
  <form

@@ -152,7 +152,7 @@ export default function HomeownerPropertyCare({
     [property, health, propertyJobs]
   );
 
-  const { isPro, requestFeature, openUpgrade } = useProFeature();
+  const { isPro, entitlementReady, requestFeature, openUpgrade } = useProFeature();
 
   function selectHub(next: PropertyCareSection) {
     const tab = CARE_HUB_TABS.find((t) => t.id === next);
@@ -161,11 +161,10 @@ export default function HomeownerPropertyCare({
   }
 
   useEffect(() => {
-    if (!isPro && hub === "maintenance") {
-      requestFeature("maintenance_calendar", "property-care");
-      setHub("passport");
-    }
-  }, [hub, isPro, requestFeature]);
+    if (!entitlementReady || isPro || hub !== "maintenance") return;
+    requestFeature("maintenance_calendar", "property-care");
+    setHub("passport");
+  }, [hub, isPro, entitlementReady, requestFeature]);
 
   function selectProperty(id: number) {
     setSelectedId(id);
