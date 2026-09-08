@@ -593,8 +593,20 @@ export function getGcpLocation() {
 }
 
 function getExplabsKey() {
-  return process.env.EXPLABS_API_KEY?.trim() || '';
+  let raw = String(process.env.EXPLABS_API_KEY || '');
+  raw = raw.replace(/^\uFEFF/, '').trim();
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    raw = raw.slice(1, -1).trim();
+  }
+  raw = raw.replace(/^bearer\s+/i, '').replace(/\s+/g, '');
+  if (!raw) return '';
+  if (!raw.startsWith('xpl_')) {
+    console.error('[ai] EXPLABS_API_KEY is set but is not an Experiential Labs key');
+  }
+  return raw;
 }
+
+const HOMEOWNER_AI_ERROR = "We couldn't complete the assessment right now. Please try again.";
 
 function createChatClient(apiKey, baseURL) {
   return new OpenAI({
@@ -868,7 +880,8 @@ function parseOpenAiError(body, status, provider) {
       return `${provider} rate limit hit. Retry shortly or switch model/provider in .env.`;
     }
     if (status === 401 || status === 403) {
-      return `${provider} rejected this API key. Check EXPLABS_API_KEY / OPENAI_API_KEY / AI_API_KEY in .env.`;
+      console.error(`[ai] Experiential Labs rejected the request (${status})`);
+      return HOMEOWNER_AI_ERROR;
     }
     if (rawText) return rawText.split('\n')[0];
     if (text) return text.split('\n')[0];
@@ -974,7 +987,7 @@ export async function analyzeRepair(input) {
     return {
       assessment: null,
       source: 'fallback',
-      error: "We couldn't complete the assessment right now. Please try again.",
+      error: HOMEOWNER_AI_ERROR,
     };
   }
 
@@ -1055,12 +1068,12 @@ export async function analyzeRepairStructured(input) {
   }
 
   if (!structured) {
-    structured = fallbackStructuredAssessment(input);
+    console.error('[ai] assessment unavailable', result.source || 'error');
     return {
-      assessment: applyDiySafetyRules(structured, input.description),
-      source: result.source === 'error' ? 'fallback' : result.source || 'fallback',
+      assessment: null,
+      source: 'error',
       model: result.model,
-      error: result.error,
+      error: HOMEOWNER_AI_ERROR,
     };
   }
 
