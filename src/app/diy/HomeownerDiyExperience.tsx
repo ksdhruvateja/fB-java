@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Bookmark,
   Bot,
@@ -29,6 +29,12 @@ type Props = {
   jobId: number;
   title: string;
   category: string;
+  selectedCategory?: string | null;
+  assessmentCategory?: string | null;
+  subcategory?: string | null;
+  description?: string | null;
+  findings?: string[];
+  summary?: string | null;
   photoUrl?: string | null;
   risk: Risk;
   steps: string[];
@@ -295,11 +301,98 @@ function HeaderBar({ title, onBack, extra }: { title: string; onBack: () => void
   );
 }
 
+type CategorySource = "user_selected" | "ai_detected" | "service_request" | "assessment";
+
+type CategoryGuess = {
+  id: string;
+  title: string;
+  subcategory: string;
+  confidence: number;
+  source: CategorySource;
+  reason: string;
+};
+
+const CATEGORY_RULES: Array<{ id: string; title: string; match: RegExp }> = [
+  { id: "plumbing", title: "Plumbing", match: /plumb|faucet|sink|toilet|drain|leak|water heater|pipe|shut-?off/i },
+  { id: "electrical", title: "Electrical", match: /electr|outlet|switch|breaker|wiring|light/i },
+  { id: "hvac", title: "HVAC", match: /hvac|heat|cool|filter|furnace|thermostat|condensate|air condition/i },
+  { id: "appliances", title: "Appliances", match: /appliance|washer|dryer|fridge|refriger|dishwasher|oven/i },
+  { id: "safety", title: "Safety Check", match: /safety|hazard|gas leak|carbon monoxide/i },
+];
+
+const SUBCATEGORY_RULES: Array<{ category: string; label: string; match: RegExp }> = [
+  { category: "plumbing", label: "Kitchen Faucet Leak", match: /faucet|sink/i },
+  { category: "plumbing", label: "Toilet", match: /toilet/i },
+  { category: "plumbing", label: "Drain", match: /drain|clog/i },
+  { category: "plumbing", label: "Water Heater", match: /water heater/i },
+  { category: "hvac", label: "Condensate drain", match: /condensate|drain pan/i },
+  { category: "hvac", label: "Filter", match: /filter/i },
+  { category: "hvac", label: "Thermostat", match: /thermostat/i },
+  { category: "hvac", label: "AC not cooling", match: /not cooling|air condition|ac /i },
+  { category: "appliances", label: "Refrigerator", match: /fridge|refriger/i },
+  { category: "appliances", label: "Dishwasher", match: /dishwasher/i },
+  { category: "appliances", label: "Washer", match: /washer|washing machine/i },
+  { category: "electrical", label: "Outlet", match: /outlet|receptacle/i },
+  { category: "electrical", label: "Switch or light", match: /switch|light/i },
+];
+
+function normalizeCategoryId(value?: string | null) {
+  const text = String(value || "");
+  return CATEGORY_RULES.find((rule) => rule.match.test(text) || rule.title.toLowerCase() === text.toLowerCase())?.id || "";
+}
+
+function guessFromText(text: string, source: CategorySource): CategoryGuess | null {
+  const rule = CATEGORY_RULES.find((item) => item.match.test(text));
+  if (!rule) return null;
+  const sub = SUBCATEGORY_RULES.find((item) => item.category === rule.id && item.match.test(text));
+  const hits = (text.match(rule.match) || []).length;
+  return {
+    id: rule.id,
+    title: rule.title,
+    subcategory: sub?.label || "",
+    confidence: Math.min(0.95, 0.62 + hits * 0.08),
+    source,
+    reason: text.slice(0, 180),
+  };
+}
+
+function sessionKey(jobId: number) {
+  return `fixbridge-diy-category:${jobId}`;
+}
+
+function readConfirmedCategory(jobId: number): { id: string; subcategory: string } | null {
+  try {
+    const raw = sessionStorage.getItem(sessionKey(jobId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { id?: string; subcategory?: string };
+    return parsed?.id ? { id: parsed.id, subcategory: parsed.subcategory || "" } : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeConfirmedCategory(jobId: number, id: string, subcategory: string, source: CategorySource) {
+  try {
+    sessionStorage.setItem(
+      sessionKey(jobId),
+      JSON.stringify({ id, subcategory, source, categoryConfirmed: true })
+    );
+  } catch {
+    /* session confirmation is optional */
+  }
+}
+
 export default function HomeownerDiyExperience(props: Props) {
   const {
     userName,
     title,
     category,
+    selectedCategory,
+    assessmentCategory,
+    subcategory,
+    description,
+    findings,
+    summary,
     photoUrl,
     risk,
     steps,
@@ -334,6 +427,8 @@ export default function HomeownerDiyExperience(props: Props) {
   } = props;
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [confirmedId, setConfirmedId] = useState<string | null>(() => readConfirmedCategory(jobId)?.id || null);
   const doneCount = Object.values(completed).filter(Boolean).length;
   const current = steps[stepIndex] || "";
   const parsed = splitStep(current);
@@ -358,8 +453,47 @@ export default function HomeownerDiyExperience(props: Props) {
     []
   );
 
+  const evidenceText = [title, description, summary, subcategory, ...(findings || [])].filter(Boolean).join(" ");
+  const userPick = normalizeCategoryId(selectedCategory);
+  const detected =
+    guessFromText(evidenceText, photoUrl ? "ai_detected" : "assessment") ||
+    guessFromText(String(assessmentCategory || ""), "assessment") ||
+    guessFromText(String(category || ""), "service_request");
+  const saved = readConfirmedCategory(jobId);
+  const servicePick = normalizeCategoryId(category) || normalizeCategoryId(assessmentCategory);
+  const workingId = confirmedId || saved?.id || userPick || detected?.id || servicePick || "";
+  const working = categories.find((item) => item.id === workingId) || null;
+  const detectedSub =
+    saved?.subcategory ||
+    subcategory ||
+    SUBCATEGORY_RULES.find((item) => item.category === workingId && item.match.test(evidenceText))?.label ||
+    detected?.subcategory ||
+    "";
+  const mismatch =
+    Boolean(userPick && detected?.id && userPick !== detected.id && detected.confidence >= 0.75);
+  const confidence = userPick ? Math.max(detected?.confidence || 0, 0.9) : detected?.confidence || 0;
+  const showConfirm = !browseOpen && Boolean(working) && (confidence >= 0.55 || Boolean(userPick) || Boolean(servicePick));
+
+  function confirmCategory(id: string, nextSubcategory: string, source: CategorySource) {
+    setConfirmedId(id);
+    setBrowseOpen(false);
+    writeConfirmedCategory(jobId, id, nextSubcategory, source);
+    if (!blocked) onOpenStep();
+  }
+
+  useEffect(() => {
+    if (browseOpen || blocked || mismatch || !userPick || !working || confirmedId) return;
+    const timer = window.setTimeout(() => {
+      confirmCategory(working.id, detectedSub, "user_selected");
+    }, 900);
+    return () => window.clearTimeout(timer);
+    // confirm once when the homeowner already chose this category
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId, userPick, working?.id, mismatch, browseOpen, blocked, confirmedId]);
+
   function openGuided() {
     if (blocked) return;
+    if (working) writeConfirmedCategory(jobId, working.id, detectedSub, userPick ? "user_selected" : "ai_detected");
     onOpenStep();
   }
 
@@ -463,21 +597,73 @@ export default function HomeownerDiyExperience(props: Props) {
         </div>
       </div>
       <DIYProgressCard completed={doneCount} total={steps.length} />
-      <div className="flex items-center justify-between">
-        <h3 className="text-[20px] font-semibold text-[#2c2926]">Browse by Category</h3>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        {categories.map((item) => (
-          <DIYCategoryCard
-            key={item.id}
-            title={item.title}
-            description={item.description}
-            icon={item.icon}
-            tone={item.tone}
-            onClick={openGuided}
-          />
-        ))}
-      </div>
+      {showConfirm && working ? (
+        <section className={`rounded-[22px] bg-white p-4 ${cardShadow}`} aria-label="Category confirmation">
+          <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-[#8a847b]">
+            {mismatch ? "This photo appears to be a different issue" : userPick ? "Category confirmed" : "We think this is a match"}
+          </p>
+          <h3 className="mt-2 text-[22px] font-semibold text-[#2c2926]">
+            {mismatch ? detected?.title : working.title}
+          </h3>
+          {detectedSub ? <p className="mt-1 text-[15px] text-[#5c574f]">{detectedSub}</p> : null}
+          <p className="mt-2 text-[14px] leading-relaxed text-[#5c574f]">
+            {mismatch
+              ? `This photo appears to be related to ${detected?.title} rather than ${working.title}.`
+              : photoUrl
+                ? `Based on your photo, this appears to be a ${working.title.toLowerCase()} issue${detectedSub ? ` involving ${detectedSub.toLowerCase()}` : ""}.`
+                : `We'll continue with ${working.title}${detectedSub ? ` — ${detectedSub}` : ""}.`}
+          </p>
+          <div className="mt-4 space-y-2">
+            <button
+              type="button"
+              onClick={() =>
+                confirmCategory(
+                  mismatch ? detected!.id : working.id,
+                  mismatch ? detected?.subcategory || detectedSub : detectedSub,
+                  userPick && !mismatch ? "user_selected" : "ai_detected"
+                )
+              }
+              className="inline-flex w-full items-center justify-center rounded-[16px] bg-[#E07A4A] px-4 py-3.5 text-[16px] font-semibold text-white"
+            >
+              {mismatch ? `Use ${detected?.title}` : "Confirm & Continue"}
+            </button>
+            {mismatch ? (
+              <button
+                type="button"
+                onClick={() => confirmCategory(working.id, detectedSub, "user_selected")}
+                className="inline-flex w-full items-center justify-center rounded-[16px] border border-[#eadfd4] bg-white px-4 py-3 text-[15px] font-semibold text-[#2c2926]"
+              >
+                Keep {working.title}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setBrowseOpen(true)}
+              className="w-full py-2 text-[14px] font-medium text-[#5c574f] underline-offset-2 hover:underline"
+            >
+              Change category
+            </button>
+          </div>
+        </section>
+      ) : (
+        <>
+          <div className="flex items-center justify-between">
+            <h3 className="text-[20px] font-semibold text-[#2c2926]">Browse by Category</h3>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            {categories.map((item) => (
+              <DIYCategoryCard
+                key={item.id}
+                title={item.title}
+                description={item.description}
+                icon={item.icon}
+                tone={item.tone}
+                onClick={() => confirmCategory(item.id, "", "user_selected")}
+              />
+            ))}
+          </div>
+        </>
+      )}
       {steps.length > 0 && !blocked ? (
         <div>
           <h3 className="mb-3 text-[20px] font-semibold text-[#2c2926]">Continue your repair</h3>

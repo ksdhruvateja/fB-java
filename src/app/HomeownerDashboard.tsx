@@ -53,6 +53,7 @@ import type { ConsentMap } from "./legalDocuments";
 import { clearIntakeDraft, loadIntakeDraft, saveIntakeDraft } from "./intakeDraft";
 import {
  tradeToCategory,
+ tradeLabel,
  categoryToTradeId,
  formatAdaptiveAnswersNote,
  resolveRequestTradeId,
@@ -3694,6 +3695,12 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  jobId={activeJob.id}
  title={activeJob.title || activeJob.category || "Repair"}
  category={activeJob.category || ""}
+ selectedCategory={requestSystemId ? tradeLabel(requestSystemId) : ""}
+ assessmentCategory={activeJob.aiAssessment?.recommended_trade || activeJob.aiAssessment?.category || ""}
+ subcategory={activeJob.serviceSubcategory || activeJob.aiAssessment?.service_subcategory || ""}
+ description={activeJob.description || ""}
+ findings={assessmentStringList(activeJob.aiAssessment?.visual_findings)}
+ summary={activeJob.aiAssessment?.summary || ""}
  photoUrl={activeJob.mediaType?.startsWith("image") ? activeJob.mediaDataUrl : null}
  risk={String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green").toLowerCase() === "red" ? "red" : String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green").toLowerCase() === "yellow" ? "yellow" : "green"}
  steps={assessmentStringList(activeJob.aiAssessment?.diy_steps)}
