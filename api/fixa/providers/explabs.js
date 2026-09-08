@@ -10,7 +10,25 @@ const BASE_URL = 'https://api.experientiallabs.ai/v1';
 const TIMEOUT_MS = Number(process.env.AI_FETCH_TIMEOUT_MS || 38000);
 
 export function readExplabsKey() {
-  return String(process.env.EXPLABS_API_KEY || '').trim();
+  let raw = String(process.env.EXPLABS_API_KEY || '').replace(/^\uFEFF/, '').trim();
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    raw = raw.slice(1, -1).trim();
+  }
+  raw = raw.replace(/^EXPLABS_API_KEY\s*=\s*/i, '').replace(/^bearer\s+/i, '').trim();
+  if (/^xpl_/i.test(raw)) raw = raw.replace(/\s+/g, '');
+  if (/^xpl_[0-9a-fA-F]{40}$/.test(raw)) raw = `xpl_${raw.slice(4).toLowerCase()}`;
+  return raw;
+}
+
+export function explabsKeyDiagnostics() {
+  const key = readExplabsKey();
+  const matchesProviderFormat = /^xpl_[0-9a-f]{40}$/.test(key);
+  return {
+    keyPresent: Boolean(key),
+    keyLength: key.length,
+    matchesProviderFormat,
+    keyShape: !key ? 'empty' : matchesProviderFormat ? 'xpl' : 'unrecognized',
+  };
 }
 
 function sanitizedProviderCode(err, status) {
@@ -92,6 +110,7 @@ export const explabsProvider = {
   },
   async healthCheck() {
     const apiKey = readExplabsKey();
+    const keyDiagnostics = explabsKeyDiagnostics();
     const configured = Boolean(apiKey);
     const report = {
       assistant: 'Fixa',
@@ -102,13 +121,36 @@ export const explabsProvider = {
       modelReachable: false,
       healthy: false,
       code: configured ? 'unverified' : 'not_configured',
+      ...keyDiagnostics,
     };
     if (!configured) {
       console.error('[fixa] health check skipped', { keyPresent: false, provider: 'experiential-labs', model: MODEL });
-      return report;
+      return { ...report, ...keyDiagnostics };
     }
 
-    console.info('[fixa] health check started', { keyPresent: true, provider: 'experiential-labs', model: MODEL });
+    if (!keyDiagnostics.matchesProviderFormat) {
+      console.error('[fixa] health check skipped', {
+        keyPresent: true,
+        provider: 'experiential-labs',
+        model: MODEL,
+        keyShape: keyDiagnostics.keyShape,
+        keyLength: keyDiagnostics.keyLength,
+      });
+      return {
+        ...report,
+        ...keyDiagnostics,
+        code: 'key_shape_invalid',
+        providerCode: 'key_shape_invalid',
+      };
+    }
+
+    console.info('[fixa] health check started', {
+      keyPresent: true,
+      provider: 'experiential-labs',
+      model: MODEL,
+      keyShape: keyDiagnostics.keyShape,
+      keyLength: keyDiagnostics.keyLength,
+    });
     const modelsStarted = Date.now();
     let modelsStatus = 0;
     let modelsCode = null;

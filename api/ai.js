@@ -3,7 +3,7 @@
  * Server-side EXPLABS_API_KEY. Never expose the key to the browser.
  */
 
-import { explabsProvider } from './fixa/providers/explabs.js';
+import { explabsProvider, readExplabsKey } from './fixa/providers/explabs.js';
 import {
   classifyDiyRiskLevel,
   stripDangerousGuidanceFromAssessment,
@@ -593,17 +593,7 @@ export function getGcpLocation() {
 }
 
 function getExplabsKey() {
-  let raw = String(process.env.EXPLABS_API_KEY || '');
-  raw = raw.replace(/^\uFEFF/, '').trim();
-  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
-    raw = raw.slice(1, -1).trim();
-  }
-  raw = raw.replace(/^bearer\s+/i, '').replace(/\s+/g, '');
-  if (!raw) return '';
-  if (!raw.startsWith('xpl_')) {
-    console.error('[ai] EXPLABS_API_KEY is set but is not an Experiential Labs key');
-  }
-  return raw;
+  return readExplabsKey();
 }
 
 const HOMEOWNER_AI_ERROR = "We couldn't complete the assessment right now. Please try again.";
