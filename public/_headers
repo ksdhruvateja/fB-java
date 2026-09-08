@@ -1,3 +1,10 @@
+/favicon.ico
+  Cache-Control: public, max-age=86400
+  Content-Type: image/x-icon
+
+/og-image.png
+  Cache-Control: public, max-age=86400
+
 # Google Identity Services popup must be able to post the credential back to this page.
 # same-origin leaves a blank white popup and never calls the GIS callback.
 /*

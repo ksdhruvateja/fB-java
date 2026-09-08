@@ -16,7 +16,7 @@ function resolveBuildStamp(): string {
 const BUILD_STAMP = resolveBuildStamp()
 
 function resolveSiteUrl(): string {
-  const raw = process.env.VITE_SITE_URL || process.env.URL || process.env.DEPLOY_PRIME_URL || ''
+  const raw = process.env.VITE_SITE_URL || process.env.URL || process.env.DEPLOY_PRIME_URL || 'https://fixbridge.us'
   return raw.replace(/\/$/, '')
 }
 

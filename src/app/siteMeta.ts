@@ -63,8 +63,15 @@ export function applySiteMeta(page: SiteMetaPage) {
   setMetaTag("property", "og:title", title);
   setMetaTag("property", "og:description", description);
   setMetaTag("property", "og:image", image);
+  setMetaTag("property", "og:image:secure_url", image);
+  setMetaTag("property", "og:image:type", "image/png");
+  setMetaTag("property", "og:image:width", "1200");
+  setMetaTag("property", "og:image:height", "630");
+  setMetaTag("property", "og:image:alt", "FixBridge logo");
   setMetaTag("property", "og:url", url);
+  setMetaTag("name", "twitter:card", "summary_large_image");
   setMetaTag("name", "twitter:title", title);
   setMetaTag("name", "twitter:description", description);
   setMetaTag("name", "twitter:image", image);
+  setMetaTag("name", "twitter:image:alt", "FixBridge logo");
 }

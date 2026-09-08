@@ -9,13 +9,15 @@
       content="AI-powered property care and service coordination. Get transparent quotes, verified providers, and coordinated home repairs."
     />
 
-    <!-- Favicons & install icons -->
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!-- Favicons & install icons. favicon.ico first so Chrome's tab uses the logo, not the SPA HTML fallback. -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="shortcut icon" href="/favicon.ico" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
-    <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
+    <link rel="canonical" href="%SITE_URL%/" />
 
     <!-- Open Graph / link previews -->
     <meta property="og:type" content="website" />
@@ -26,9 +28,11 @@
       content="AI-powered property care and service coordination. Get transparent quotes, verified providers, and coordinated home repairs."
     />
     <meta property="og:image" content="%SITE_URL%/og-image.png" />
+    <meta property="og:image:secure_url" content="%SITE_URL%/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="FixBridge — AI-powered property care" />
+    <meta property="og:image:alt" content="FixBridge logo" />
     <meta property="og:url" content="%SITE_URL%/" />
 
     <!-- Twitter / iMessage / Slack -->
@@ -39,7 +43,7 @@
       content="AI-powered property care and service coordination. Get transparent quotes, verified providers, and coordinated home repairs."
     />
     <meta name="twitter:image" content="%SITE_URL%/og-image.png" />
-    <meta name="twitter:image:alt" content="FixBridge — AI-powered property care" />
+    <meta name="twitter:image:alt" content="FixBridge logo" />
 
     <meta name="application-name" content="FixBridge" />
     <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)" />
