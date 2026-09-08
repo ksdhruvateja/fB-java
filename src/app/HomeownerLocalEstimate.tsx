@@ -47,7 +47,7 @@ export function EstimateLoadingSteps({
           <div className="pointer-events-none absolute inset-x-6 top-1/3 h-px bg-[#FF4D1C]/70 motion-safe:animate-pulse motion-reduce:hidden" />
         </div>
         <div className="space-y-1 px-4 py-3">
-          <p className="text-sm font-semibold text-foreground">Fixa is analyzing your repair</p>
+          <p className="text-sm font-semibold text-foreground">Fixa is reviewing your media</p>
           <p className="text-xs text-muted-foreground">{stage}</p>
         </div>
       </div>

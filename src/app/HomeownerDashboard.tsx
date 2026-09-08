@@ -688,6 +688,39 @@ export default function HomeownerDashboard({
  setAssessmentMode("expert");
  }
 
+ async function reassessWithFixa(observation: string) {
+ if (!activeJob) return;
+ setDiyChatBusy(true);
+ try {
+ const token = window.localStorage.getItem("fixbridge-auth-token");
+ const response = await fetch("/api/fixa/reassess", {
+ method: "POST",
+ headers: {
+ "Content-Type": "application/json",
+ ...(token ? { Authorization: `Bearer ${token}` } : {}),
+ },
+ body: JSON.stringify({
+ jobId: activeJob.id,
+ category: activeJob.category,
+ description: activeJob.description,
+ observation,
+ currentStep: diyStepIndex,
+ }),
+ });
+ const data = await response.json();
+ if (!data?.assessment) {
+ setError(data?.error || "We couldn't complete the assessment right now. Please try again.");
+ return;
+ }
+ setActiveJob((prev) => prev ? { ...prev, aiAssessment: { ...prev.aiAssessment, ...data.assessment } } : prev);
+ setDiyView("steps");
+ } catch {
+ setError("We couldn't complete the assessment right now. Please try again.");
+ } finally {
+ setDiyChatBusy(false);
+ }
+ }
+
  function openProfessionalFromDiy() {
  setDiyShowProfessionalHandoff(true);
  if (activeJob) {
@@ -3761,7 +3794,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <div className="text-sm">
  <p className="font-semibold">Professional Service Recommended</p>
  <p className="mt-1 opacity-90 text-xs leading-relaxed">
- Our AI safety protocol indicates this repair has heightened risks or complexity. We strongly advise using a licensed professional. If you proceed, do so with extreme caution.
+ Fixa found something that may require a professional. A licensed professional is the safer next step.
  </p>
  </div>
  </div>
@@ -3808,12 +3841,13 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  return;
  }
  const stepTitle = activeJob.aiAssessment?.diy_guide_steps?.[diyStepIndex]?.title || `step ${diyStepIndex + 1}`;
- const prompt =
- kind === "failed"
- ? `Step "${stepTitle}" did not work. Give one focused next check for this step only. Do not rewrite the repair plan.`
- : `I see something different on "${stepTitle}". Clarify what to compare, and offer to update the repair plan if the diagnosis is wrong. Do not rewrite the plan unless I ask.`;
+ if (kind === "failed") {
+ const prompt = `Step "${stepTitle}" did not work. Give one focused next check for this step only. Do not rewrite the repair plan.`;
  setDiyView("chat");
  void sendDiyChatMessage(prompt);
+ return;
+ }
+ void reassessWithFixa(`I see something different on ${stepTitle}.`);
  }}
  onToggleBookmark={() => setDiyBookmarked((v) => !v)}
  onHire={openProfessionalFromDiy}

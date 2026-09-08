@@ -6,7 +6,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
-import { assessRepair, complete, getFixaPublicStatus, getFixaAdminProviders } from './fixa/index.js';
+import { assessRepair, complete, reassessRepair, prepareProfessionalHandoff, getFixaPublicStatus, getFixaAdminProviders } from './fixa/index.js';
 import { initManagedSchema, ensureReferralCodeColumns } from './schema-managed.js';
 import { initSupportTicketSchema, registerSupportTicketRoutes } from './support-tickets.js';
 import { initInAppNotificationSchema, registerInAppNotificationRoutes } from './in-app-notifications.js';
@@ -3032,6 +3032,52 @@ async function handleFixaAssessment(req, res) {
 
 app.post('/api/ai/assess', requireAuth, aiLimiter, handleFixaAssessment);
 app.post('/api/fixa/assessment', requireAuth, aiLimiter, handleFixaAssessment);
+
+app.post('/api/fixa/reassess', requireAuth, aiLimiter, async (req, res) => {
+  try {
+    const observation = clampString(req.body?.observation, 2000);
+    if (!observation) {
+      return res.status(400).json({ ok: false, message: 'A new observation is required.' });
+    }
+    const result = await reassessRepair({
+      category: clampString(req.body?.category, 80),
+      description: clampString(req.body?.description, 4000),
+      observation,
+      currentStep: req.body?.currentStep ?? null,
+      jobId: req.body?.jobId || null,
+      actor: 'homeowner',
+      homeownerId: req.authUser.id,
+    });
+    return res.json({
+      ok: Boolean(result.assessment),
+      assessment: result.assessment,
+      assistant: 'Fixa',
+      error: result.assessment ? undefined : result.error,
+    });
+  } catch (e) {
+    console.error('fixa reassess:', e);
+    return res.status(500).json({
+      ok: false,
+      assessment: null,
+      error: "We couldn't complete the assessment right now. Please try again.",
+    });
+  }
+});
+
+app.post('/api/fixa/professional-handoff', requireAuth, (req, res) => {
+  return res.json(prepareProfessionalHandoff({
+    jobId: req.body?.jobId || null,
+    description: clampString(req.body?.description, 4000),
+    category: clampString(req.body?.category, 80),
+    subcategory: clampString(req.body?.subcategory, 80),
+    risk: clampString(req.body?.risk, 20),
+    completedSteps: Array.isArray(req.body?.completedSteps) ? req.body.completedSteps.slice(0, 20) : [],
+    failedStep: clampString(req.body?.failedStep, 200),
+    concern: clampString(req.body?.concern, 1000),
+    reason: clampString(req.body?.reason, 300) || 'Homeowner requested a professional',
+    assessment: req.body?.assessment || null,
+  }));
+});
 
   registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser });
   registerMarketingRoutes(app, { pool, requireAuth, requireAdmin, requirePermission });

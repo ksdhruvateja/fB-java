@@ -3,7 +3,7 @@
  * Server-side EXPLABS_API_KEY. Never expose the key to the browser.
  */
 
-import OpenAI from 'openai';
+import { explabsProvider } from './fixa/providers/explabs.js';
 import {
   classifyDiyRiskLevel,
   stripDangerousGuidanceFromAssessment,
@@ -608,14 +608,6 @@ function getExplabsKey() {
 
 const HOMEOWNER_AI_ERROR = "We couldn't complete the assessment right now. Please try again.";
 
-function createChatClient(apiKey, baseURL) {
-  return new OpenAI({
-    apiKey,
-    baseURL,
-    timeout: AI_FETCH_TIMEOUT_MS,
-  });
-}
-
 /**
  * Experiential Labs GPT-6 Astra is the only assessment provider.
  * Missing key is a server configuration error — never fall back to another provider.
@@ -931,37 +923,28 @@ async function analyzeWithOpenAiCompatible(config, input) {
     {
       role: 'system',
       content:
-        'You are FixBridge AI. Respond with ONLY valid JSON matching the schema in the user message. No markdown fences.',
+        'You are Fixa, the FixBridge assistant. Respond with ONLY valid JSON matching the schema in the user message. No markdown fences.',
     },
     { role: 'user', content },
   ];
 
-  const client = createChatClient(apiKey, baseUrl);
   const mode = input.mode === 'detail' ? 'detail' : 'summary';
   const attempts = [true, false];
-  let lastError = `${provider} API unavailable`;
+  let lastError = 'We couldn\'t complete the assessment right now. Please try again.';
 
   for (const useJsonFormat of attempts) {
-    let payload;
-    try {
-      payload = await client.chat.completions.create({
-        model,
-        temperature: 0.15,
-        max_tokens: mode === 'detail' ? 2800 : 2400,
-        messages,
-        ...(useJsonFormat ? { response_format: { type: 'json_object' } } : {}),
-      });
-    } catch (err) {
-      const status = Number(err?.status || err?.statusCode || 0);
-      const message = err instanceof Error ? err.message : `Network error calling ${provider}`;
-      lastError = status ? parseOpenAiError(JSON.stringify({ error: { message } }), status, provider) : message;
-      if (useJsonFormat && (/response_format|json_object|not supported/i.test(lastError) || status === 400)) {
-        continue;
-      }
-      return { assessment: null, source: 'error', error: lastError };
+    const completion = await explabsProvider.analyze({
+      messages,
+      temperature: 0.15,
+      maxTokens: mode === 'detail' ? 2800 : 2400,
+      json: useJsonFormat,
+    });
+    if (!completion.ok) {
+      lastError = HOMEOWNER_AI_ERROR;
+      if (useJsonFormat && completion.code === 'provider_http_400') continue;
+      return { assessment: null, source: 'error', error: lastError, providerCode: completion.code };
     }
-
-    const messageText = extractMessageText(payload?.choices?.[0]?.message);
+    const messageText = extractMessageText(completion.message);
     if (!messageText) {
       lastError = `${provider} returned an empty response`;
       continue;
@@ -1510,25 +1493,17 @@ async function chatWithOpenAiCompatible(config, messages) {
       .map((m) => ({ role: m.role, content: m.content })),
   ];
 
-  let payload;
-  try {
-    const client = createChatClient(apiKey, baseUrl);
-    payload = await client.chat.completions.create({
-      model,
-      temperature: 0.55,
-      max_tokens: 900,
-      messages: payloadMessages,
-    });
-  } catch (err) {
-    const status = Number(err?.status || err?.statusCode || 0);
-    const message = err instanceof Error ? err.message : `Network error calling ${provider}`;
-    return {
-      reply: null,
-      error: status ? parseOpenAiError(JSON.stringify({ error: { message } }), status, provider) : message,
-    };
+  const completion = await explabsProvider.complete({
+    messages: payloadMessages,
+    temperature: 0.55,
+    maxTokens: 900,
+    json: false,
+  });
+  if (!completion.ok) {
+    return { reply: null, error: HOMEOWNER_AI_ERROR, providerCode: completion.code };
   }
 
-  const reply = extractMessageText(payload?.choices?.[0]?.message);
+  const reply = extractMessageText(completion.message);
   if (!reply?.trim()) {
     return { reply: null, error: `${provider} returned an empty reply` };
   }

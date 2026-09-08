@@ -1,7 +1,13 @@
 export {
   assessRepair,
+  reassessRepair,
+  chat,
   complete,
+  respond,
   extractDocument,
+  prepareProfessionalHandoff,
+  evaluateRepairOutcome,
+  getContext,
   run,
   getFixaPublicStatus,
   getFixaAdminProviders,
