@@ -578,6 +578,7 @@ function getOpenAiKey() {
   return (
     process.env.OPENAI_API_KEY?.trim() ||
     process.env.AI_API_KEY?.trim() ||
+    process.env.OPENROUTER_API_KEY?.trim() ||
     ''
   );
 }
@@ -616,7 +617,10 @@ function getConfiguredModel(provider) {
  */
 export function resolveAiProvider() {
   const rawProvider = (process.env.AI_PROVIDER || 'auto').trim().toLowerCase();
-  const forced = rawProvider === 'openrouter' ? 'explabs' : rawProvider;
+  // Keep the current OpenRouter config until EXPLABS_API_KEY is present.
+  const forced = rawProvider === 'openrouter'
+    ? (getExplabsKey() ? 'explabs' : 'custom')
+    : rawProvider;
   const geminiKey = getGeminiApiKey();
   const openAiKey = getOpenAiKey();
   const explabsKey = getExplabsKey();
