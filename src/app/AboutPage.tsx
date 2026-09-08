@@ -1,15 +1,7 @@
 import { useMemo, useRef } from "react";
 import { motion, useScroll, useTransform } from "motion/react";
-import {
-  ArrowRight,
-  MapPin,
-  Sparkles,
-  Users,
-  FileCheck,
-  CheckCircle,
-} from "lucide-react";
+import { ArrowRight, MapPin, CheckCircle } from "lucide-react";
 import { Counter, ScrollReveal, SectionLabel } from "./shared";
-import { Icon3D } from "./Icon3D";
 import { BrandLogo } from "./BrandLogo";
 import { brand } from "../config/brand";
 
@@ -61,32 +53,68 @@ function pickPhoto<T>(pool: T[], salt = 0): T {
   return pool[i];
 }
 
-const PRINCIPLES = [
+const FIXA_HELPS = [
+  "Analyze photos and videos of home problems",
+  "Identify visible signs and likely causes",
+  "Understand the type of repair you may be dealing with",
+  "Evaluate whether Guided DIY is appropriate",
+  "Create detailed step-by-step DIY instructions",
+  "Explain what tools and materials may be needed",
+  "Tell you what result to expect after each step",
+  "Adjust guidance when something looks different",
+  "Recognize when it is better to stop and get professional help",
+  "Carry your existing assessment into the professional service process",
+];
+
+const SUPER_FIXBRIDGE = [
+  "Fixa Intelligence",
+  "Guided DIY",
+  "Photo & Video Analysis",
+  "Professional Home Services",
+  "Property History",
+  "Property Passport",
+  "HomeCare",
+  "Repair Assessments",
+  "Job Tracking",
+  "Homeowner Support",
+  "Contractor Coordination",
+];
+
+const HOW_IT_WORKS = [
   {
-    icon: Sparkles,
-    title: "AI First, Human Accountable",
-    body: `${brand.productName} turns messy home repair problems into clear scopes, estimated ranges, and better-informed decisions before a contractor even bids.`,
-    tone: "coral" as const,
+    title: "You show Fixa the problem",
+    body: "Upload a photo or video and explain what you're experiencing.",
   },
   {
-    icon: FileCheck,
-    title: "Trust Before Transactions",
-    body: "We are built around verified contractors, cleaner job intake, and transparent expectations on both sides of the marketplace.",
-    tone: "ink" as const,
+    title: "Fixa understands the situation",
+    body: "Fixa reviews the information available for the repair, identifies relevant details, and builds an assessment around your specific situation.",
   },
   {
-    icon: Users,
-    title: "Better For Both Sides",
-    body: "Homeowners get clarity and confidence. Contractors get qualified jobs with real specs instead of low-intent leads.",
-    tone: "steel" as const,
+    title: "Fixa checks the next safe path",
+    body: "If the problem is appropriate for Guided DIY, Fixa can walk you through the process. If it needs a professional, FixBridge moves the same information into the service flow.",
   },
 ];
 
-const COVERAGE = [
-  "Nationwide service coverage",
-  "Licensed trade verification and profile trust signals",
-  "AI-guided repair intake before job posting",
-  "Structured bidding flow for apples-to-apples quotes",
+const DIY_DETAIL = [
+  "What to do",
+  "How to do it",
+  "Why the step matters",
+  "What tools may be needed",
+  "What to look for",
+  "What result to expect",
+  "What to do if the step does not work",
+  "When to stop and request professional assistance",
+];
+
+const HANDOFF = [
+  "The original issue",
+  "Property information",
+  "Uploaded photos or videos",
+  "Fixa's assessment",
+  "Repair category",
+  "Risk information",
+  "DIY steps already attempted",
+  "Where the homeowner encountered a problem",
 ];
 
 const IMPACT = [
@@ -145,12 +173,12 @@ export default function AboutPage({
               className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase text-white leading-[0.92] mb-3 sm:mb-5 tracking-tight"
               style={{ fontSize: "clamp(2.25rem,8vw,4.5rem)" }}
             >
-              We make home repair
+              A smarter way
               <br />
-              make sense.
+              to care for home.
             </h1>
             <p className="text-white/70 text-sm sm:text-base md:text-lg leading-relaxed mb-5 sm:mb-8 max-w-md">
-              The layer between homeowners and contractors — AI-structured requests, clearer scope, fewer surprises.
+              Real help. A more livable you. Meet Fixa, the intelligence behind {brand.productName}.
             </p>
             <div className="flex flex-col sm:flex-row flex-wrap gap-2.5 sm:gap-3 w-full sm:w-auto">
               <button
@@ -199,38 +227,54 @@ export default function AboutPage({
         </div>
       </section>
 
-      <section className="py-16 sm:py-28 px-4 sm:px-6 max-w-7xl mx-auto">
+      <section className="py-16 sm:py-28 px-4 sm:px-6 max-w-3xl mx-auto">
         <ScrollReveal>
-          <SectionLabel left="What We Believe" right="3 Principles" />
-        </ScrollReveal>
-        <ScrollReveal delay={0.1}>
+          <SectionLabel left="About FixBridge" right="One place" />
           <h2
-            className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.9] mb-10 sm:mb-16"
-            style={{ fontSize: "clamp(2.5rem,8vw,5.5rem)" }}
+            className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.9] mb-6"
+            style={{ fontSize: "clamp(2.25rem,7vw,4.5rem)" }}
           >
-            LESS FRICTION.
-            <br />
-            <span style={{ WebkitTextStroke: "2px #FF4D1C", WebkitTextFillColor: "transparent" }}>
-              MORE TRUST.
-            </span>
+            A smarter way to take care of your home
           </h2>
+          <div className="space-y-4 text-sm sm:text-base text-muted-foreground leading-relaxed">
+            <p>
+              {brand.productName} is an AI-powered home repair and property care platform built to make maintaining a home simpler, faster, and more transparent.
+            </p>
+            <p>
+              From understanding what is wrong to figuring out what to do next, {brand.productName} brings homeowners, intelligent technology, guided DIY support, property information, and trusted professionals together in one connected experience.
+            </p>
+            <p>
+              Upload a photo or video, describe what is happening, understand the problem, follow guided repair steps when appropriate, or move the same assessment to a professional when expert help is needed.
+            </p>
+            <p className="text-foreground font-medium">Our goal is simple: Real help. A more livable you.</p>
+          </div>
         </ScrollReveal>
+      </section>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 border-l border-border">
-          {PRINCIPLES.map(({ icon, title, body, tone }, index) => (
-            <ScrollReveal key={title} delay={index * 0.08}>
-              <div className="border-r border-b border-border p-6 sm:p-8 lg:p-10 h-full">
-                <div className="mb-5 sm:mb-6">
-                  <Icon3D icon={icon} tone={tone} size="responsive" />
-                </div>
-                <h3 className="[font-family:'Barlow_Condensed',sans-serif] font-bold uppercase text-xl sm:text-2xl text-foreground mb-3">
-                  {title}
-                </h3>
-                <p className="text-sm text-muted-foreground leading-relaxed">{body}</p>
-              </div>
-            </ScrollReveal>
+      <section className="py-16 sm:py-28 px-4 sm:px-6 max-w-7xl mx-auto border-t border-border">
+        <ScrollReveal>
+          <SectionLabel left="Meet Fixa" right="Central assistant" />
+          <h2
+            className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.9] mb-6 max-w-3xl"
+            style={{ fontSize: "clamp(2.25rem,7vw,4.5rem)" }}
+          >
+            The intelligence behind {brand.productName}
+          </h2>
+          <p className="max-w-3xl text-sm sm:text-base text-muted-foreground leading-relaxed mb-8">
+            Think of Fixa as the brain behind your {brand.productName} experience. Fixa is designed to understand your home, your repair issue, the photos or videos you provide, the current job, previous repair information, and where you are in the repair process.
+          </p>
+        </ScrollReveal>
+        <ul className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {FIXA_HELPS.map((item) => (
+            <li key={item} className="flex items-start gap-3 rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground">
+              <CheckCircle size={16} className="text-primary shrink-0 mt-0.5" />
+              <span>{item}</span>
+            </li>
           ))}
-        </div>
+        </ul>
+        <p className="mt-8 max-w-3xl text-sm sm:text-base text-foreground leading-relaxed">
+          Fixa doesn&apos;t just answer a question. It understands the scenario and helps determine what should happen next.
+        </p>
       </section>
 
       <section className="py-16 sm:py-28 bg-card border-y border-border">
@@ -268,25 +312,21 @@ export default function AboutPage({
           <ScrollReveal delay={0.15}>
             <div>
               <span className="font-mono text-[11px] tracking-[0.2em] text-primary uppercase block mb-6">
-                Why We Exist
+                Super FixBridge
               </span>
               <h2
                 className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.9] mb-6"
-                style={{ fontSize: "clamp(2.5rem,5vw,4.5rem)" }}
+                style={{ fontSize: "clamp(2.25rem,5vw,4.5rem)" }}
               >
-                A CLEARER PATH
+                One platform.
                 <br />
-                <span className="text-primary">FROM PROBLEM</span>
-                <br />
-                TO PRO.
+                <span className="text-primary">One assistant.</span>
               </h2>
-              <p className="text-muted-foreground text-lg leading-relaxed mb-8 max-w-xl">
-                Most repair marketplaces optimize for lead volume. {brand.productName} is built to improve
-                understanding first, so the matching, bidding, and hiring process starts from a
-                better brief.
+              <p className="text-muted-foreground text-base sm:text-lg leading-relaxed mb-8 max-w-xl">
+                Your home already has history. Your repairs already have context. Fixa helps {brand.productName} use that information so homeowners don&apos;t have to start from zero every time something goes wrong.
               </p>
-              <ul className="space-y-3">
-                {COVERAGE.map((item) => (
+              <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {SUPER_FIXBRIDGE.map((item) => (
                   <li key={item} className="flex items-start gap-3 text-sm text-muted-foreground">
                     <CheckCircle size={14} className="text-primary shrink-0 mt-0.5" />
                     {item}
@@ -296,6 +336,88 @@ export default function AboutPage({
             </div>
           </ScrollReveal>
         </div>
+      </section>
+
+      <section className="py-16 sm:py-28 px-4 sm:px-6 max-w-7xl mx-auto">
+        <ScrollReveal>
+          <SectionLabel left="How Fixa works" right="Same job" />
+        </ScrollReveal>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {HOW_IT_WORKS.map((step, index) => (
+            <ScrollReveal key={step.title} delay={index * 0.06}>
+              <article className="h-full rounded-2xl border border-border bg-card p-5 sm:p-6">
+                <p className="font-mono text-[11px] tracking-widest text-primary uppercase">Step {index + 1}</p>
+                <h3 className="mt-2 text-lg font-semibold text-foreground">{step.title}</h3>
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{step.body}</p>
+              </article>
+            </ScrollReveal>
+          ))}
+        </div>
+        <p className="mt-6 max-w-3xl text-sm text-muted-foreground">No starting over. No repeatedly explaining the same issue.</p>
+      </section>
+
+      <section className="py-16 sm:py-24 px-4 sm:px-6 max-w-7xl mx-auto border-t border-border">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12">
+          <div>
+            <SectionLabel left="Guided DIY with Fixa" right="Not highlights" />
+            <h2 className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.9] mb-4" style={{ fontSize: "clamp(2rem,6vw,3.5rem)" }}>
+              Beyond “check the connection.”
+            </h2>
+            <p className="text-sm sm:text-base text-muted-foreground leading-relaxed mb-5">
+              When a repair is appropriate for DIY, Fixa walks through the action, why it matters, what to look for, and when to stop.
+            </p>
+            <ul className="space-y-2">
+              {DIY_DETAIL.map((item) => (
+                <li key={item} className="flex items-start gap-3 text-sm text-muted-foreground">
+                  <CheckCircle size={14} className="text-primary shrink-0 mt-0.5" />
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className="space-y-4">
+            <article className="rounded-2xl border border-border bg-card p-5 sm:p-6">
+              <h3 className="text-lg font-semibold">Safety comes first</h3>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                Fixa works together with {brand.productName}&apos;s safety systems. AI does not get the final word on whether a potentially dangerous repair should continue. Higher-risk situations restrict DIY guidance when professional help is the safer option.
+              </p>
+            </article>
+            <article className="rounded-2xl border border-border bg-card p-5 sm:p-6">
+              <h3 className="text-lg font-semibold">From DIY to professional help</h3>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                If DIY is unsuccessful, something changes, or you are not comfortable continuing, Hire a Professional keeps the same repair context.
+              </p>
+              <ul className="mt-4 space-y-2">
+                {HANDOFF.map((item) => (
+                  <li key={item} className="flex items-start gap-3 text-sm text-muted-foreground">
+                    <CheckCircle size={14} className="text-primary shrink-0 mt-0.5" />
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section className="py-16 sm:py-24 px-4 sm:px-6 max-w-3xl mx-auto">
+        <ScrollReveal>
+          <SectionLabel left="Fixa remains" right="Models may change" />
+          <h2 className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.9] mb-4" style={{ fontSize: "clamp(2rem,6vw,3.5rem)" }}>
+            Built to grow with {brand.productName}
+          </h2>
+          <div className="space-y-4 text-sm sm:text-base text-muted-foreground leading-relaxed">
+            <p>
+              Fixa is the permanent intelligence layer of {brand.productName}. The underlying AI technology can evolve. Homeowners keep interacting with one assistant: Fixa.
+            </p>
+            <p>
+              Over time, Fixa is being designed to understand previous repairs, recurring problems, home systems, maintenance, past visits, homeowner-confirmed details, and professional outcomes — so every future interaction is more informed than the last.
+            </p>
+            <p className="text-foreground font-medium">
+              Your home has problems. Fixa helps understand them. {brand.productName} helps solve them.
+            </p>
+          </div>
+        </ScrollReveal>
       </section>
 
       <section className="py-16 sm:py-28 bg-primary relative overflow-hidden">
@@ -313,13 +435,12 @@ export default function AboutPage({
               className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.88] text-white mb-5 sm:mb-6"
               style={{ fontSize: "clamp(2.5rem,10vw,7rem)" }}
             >
-              READY TO USE
+              Welcome to
               <br />
-              {brand.productName.toUpperCase()}?
+              Super {brand.productName}
             </h2>
             <p className="text-white/75 text-base sm:text-xl mb-8 sm:mb-10 max-w-2xl mx-auto leading-relaxed">
-              Start from the side you are on: post a repair as a homeowner, or join the network
-              as a contractor.
+              Models may change. Fixa remains. Post a repair as a homeowner, or join the network as a contractor.
             </p>
             <div className="flex flex-col sm:flex-row flex-wrap gap-3 sm:gap-4 justify-center">
               <button
