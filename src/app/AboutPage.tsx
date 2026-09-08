@@ -53,7 +53,7 @@ function pickPhoto<T>(pool: T[], salt = 0): T {
   return pool[i];
 }
 
-const FIXA_HELPS = [
+const FIXERA_HELPS = [
   "Analyze photos and videos of home problems",
   "Identify visible signs and likely causes",
   "Understand the type of repair you may be dealing with",
@@ -67,7 +67,7 @@ const FIXA_HELPS = [
 ];
 
 const SUPER_FIXBRIDGE = [
-  "Fixa Intelligence",
+  "Fixera Intelligence",
   "Guided DIY",
   "Photo & Video Analysis",
   "Professional Home Services",
@@ -82,16 +82,16 @@ const SUPER_FIXBRIDGE = [
 
 const HOW_IT_WORKS = [
   {
-    title: "You show Fixa the problem",
+    title: "You show Fixera the problem",
     body: "Upload a photo or video and explain what you're experiencing.",
   },
   {
-    title: "Fixa understands the situation",
-    body: "Fixa reviews the information available for the repair, identifies relevant details, and builds an assessment around your specific situation.",
+    title: "Fixera understands the situation",
+    body: "Fixera reviews the information available for the repair, identifies relevant details, and builds an assessment around your specific situation.",
   },
   {
-    title: "Fixa checks the next safe path",
-    body: "If the problem is appropriate for Guided DIY, Fixa can walk you through the process. If it needs a professional, FixBridge moves the same information into the service flow.",
+    title: "Fixera checks the next safe path",
+    body: "If the problem is appropriate for Guided DIY, Fixera can walk you through the process. If it needs a professional, FixBridge moves the same information into the service flow.",
   },
 ];
 
@@ -110,7 +110,7 @@ const HANDOFF = [
   "The original issue",
   "Property information",
   "Uploaded photos or videos",
-  "Fixa's assessment",
+  "Fixera's assessment",
   "Repair category",
   "Risk information",
   "DIY steps already attempted",
@@ -178,7 +178,7 @@ export default function AboutPage({
               to care for home.
             </h1>
             <p className="text-white/70 text-sm sm:text-base md:text-lg leading-relaxed mb-5 sm:mb-8 max-w-md">
-              Real help. A more livable you. Meet Fixa, the intelligence behind {brand.productName}.
+              Real help. A more livable you. Meet Fixera, the intelligence behind {brand.productName}.
             </p>
             <div className="flex flex-col sm:flex-row flex-wrap gap-2.5 sm:gap-3 w-full sm:w-auto">
               <button
@@ -253,7 +253,7 @@ export default function AboutPage({
 
       <section className="py-16 sm:py-28 px-4 sm:px-6 max-w-7xl mx-auto border-t border-border">
         <ScrollReveal>
-          <SectionLabel left="Meet Fixa" right="Central assistant" />
+          <SectionLabel left="Meet Fixera" right="Central assistant" />
           <h2
             className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.9] mb-6 max-w-3xl"
             style={{ fontSize: "clamp(2.25rem,7vw,4.5rem)" }}
@@ -261,11 +261,11 @@ export default function AboutPage({
             The intelligence behind {brand.productName}
           </h2>
           <p className="max-w-3xl text-sm sm:text-base text-muted-foreground leading-relaxed mb-8">
-            Think of Fixa as the brain behind your {brand.productName} experience. Fixa is designed to understand your home, your repair issue, the photos or videos you provide, the current job, previous repair information, and where you are in the repair process.
+            Fixera is the central AI assistant powering Super FixBridge. Fixera understands your repair, your property, your uploaded photos and videos, your current job, your previous repair context, and what should happen next. Models may change. Fixera remains.
           </p>
         </ScrollReveal>
         <ul className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {FIXA_HELPS.map((item) => (
+          {FIXERA_HELPS.map((item) => (
             <li key={item} className="flex items-start gap-3 rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground">
               <CheckCircle size={16} className="text-primary shrink-0 mt-0.5" />
               <span>{item}</span>
@@ -273,7 +273,7 @@ export default function AboutPage({
           ))}
         </ul>
         <p className="mt-8 max-w-3xl text-sm sm:text-base text-foreground leading-relaxed">
-          Fixa doesn&apos;t just answer a question. It understands the scenario and helps determine what should happen next.
+          Fixera doesn&apos;t just answer a question. It understands the scenario and helps determine what should happen next.
         </p>
       </section>
 
@@ -323,7 +323,7 @@ export default function AboutPage({
                 <span className="text-primary">One assistant.</span>
               </h2>
               <p className="text-muted-foreground text-base sm:text-lg leading-relaxed mb-8 max-w-xl">
-                Your home already has history. Your repairs already have context. Fixa helps {brand.productName} use that information so homeowners don&apos;t have to start from zero every time something goes wrong.
+                Super FixBridge is the connected experience, powered by Fixera. Your home already has history. Your repairs already have context. Fixera helps {brand.productName} use that information so homeowners don&apos;t have to start from zero every time something goes wrong.
               </p>
               <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {SUPER_FIXBRIDGE.map((item) => (
@@ -340,7 +340,7 @@ export default function AboutPage({
 
       <section className="py-16 sm:py-28 px-4 sm:px-6 max-w-7xl mx-auto">
         <ScrollReveal>
-          <SectionLabel left="How Fixa works" right="Same job" />
+          <SectionLabel left="How Fixera works" right="Same job" />
         </ScrollReveal>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {HOW_IT_WORKS.map((step, index) => (
@@ -359,12 +359,12 @@ export default function AboutPage({
       <section className="py-16 sm:py-24 px-4 sm:px-6 max-w-7xl mx-auto border-t border-border">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12">
           <div>
-            <SectionLabel left="Guided DIY with Fixa" right="Not highlights" />
+            <SectionLabel left="Guided DIY with Fixera" right="Not highlights" />
             <h2 className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.9] mb-4" style={{ fontSize: "clamp(2rem,6vw,3.5rem)" }}>
               Beyond “check the connection.”
             </h2>
             <p className="text-sm sm:text-base text-muted-foreground leading-relaxed mb-5">
-              When a repair is appropriate for DIY, Fixa walks through the action, why it matters, what to look for, and when to stop.
+              When a repair is appropriate for DIY, Fixera walks through the action, why it matters, what to look for, and when to stop.
             </p>
             <ul className="space-y-2">
               {DIY_DETAIL.map((item) => (
@@ -379,7 +379,7 @@ export default function AboutPage({
             <article className="rounded-2xl border border-border bg-card p-5 sm:p-6">
               <h3 className="text-lg font-semibold">Safety comes first</h3>
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                Fixa works together with {brand.productName}&apos;s safety systems. AI does not get the final word on whether a potentially dangerous repair should continue. Higher-risk situations restrict DIY guidance when professional help is the safer option.
+                Fixera works together with {brand.productName}&apos;s safety systems. AI does not get the final word on whether a potentially dangerous repair should continue. Higher-risk situations restrict DIY guidance when professional help is the safer option.
               </p>
             </article>
             <article className="rounded-2xl border border-border bg-card p-5 sm:p-6">
@@ -402,19 +402,19 @@ export default function AboutPage({
 
       <section className="py-16 sm:py-24 px-4 sm:px-6 max-w-3xl mx-auto">
         <ScrollReveal>
-          <SectionLabel left="Fixa remains" right="Models may change" />
+          <SectionLabel left="Fixera remains" right="Models may change" />
           <h2 className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.9] mb-4" style={{ fontSize: "clamp(2rem,6vw,3.5rem)" }}>
             Built to grow with {brand.productName}
           </h2>
           <div className="space-y-4 text-sm sm:text-base text-muted-foreground leading-relaxed">
             <p>
-              Fixa is the permanent intelligence layer of {brand.productName}. The underlying AI technology can evolve. Homeowners keep interacting with one assistant: Fixa.
+              Fixera is the permanent intelligence layer of {brand.productName}. The underlying AI technology can evolve. Homeowners keep interacting with one assistant: Fixera.
             </p>
             <p>
-              Over time, Fixa is being designed to understand previous repairs, recurring problems, home systems, maintenance, past visits, homeowner-confirmed details, and professional outcomes — so every future interaction is more informed than the last.
+              Over time, Fixera is being designed to understand previous repairs, recurring problems, home systems, maintenance, past visits, homeowner-confirmed details, and professional outcomes — so every future interaction is more informed than the last.
             </p>
             <p className="text-foreground font-medium">
-              Your home has problems. Fixa helps understand them. {brand.productName} helps solve them.
+              Your home has problems. Fixera helps understand them. {brand.productName} helps solve them.
             </p>
           </div>
         </ScrollReveal>
@@ -440,7 +440,7 @@ export default function AboutPage({
               Super {brand.productName}
             </h2>
             <p className="text-white/75 text-base sm:text-xl mb-8 sm:mb-10 max-w-2xl mx-auto leading-relaxed">
-              Models may change. Fixa remains. Post a repair as a homeowner, or join the network as a contractor.
+              Models may change. Fixera remains. Post a repair as a homeowner, or join the network as a contractor.
             </p>
             <div className="flex flex-col sm:flex-row flex-wrap gap-3 sm:gap-4 justify-center">
               <button

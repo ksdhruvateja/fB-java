@@ -517,7 +517,7 @@ export default function HomeownerDiyExperience(props: Props) {
         </span>
         <div>
           <h3 className="text-[16px] font-semibold text-[#2c2926]">DIY Chat</h3>
-          <p className="text-[12px] text-[#7a746c]">Ask about this repair, tools, or next steps</p>
+          <p className="text-[12px] text-[#7a746c]">Ask Fixera about this repair, tools, or next steps</p>
         </div>
       </div>
       <div className="flex-1 space-y-2 overflow-y-auto pr-1">
@@ -547,7 +547,7 @@ export default function HomeownerDiyExperience(props: Props) {
           </div>
         ))}
         {chatBusy ? (
-          <DIYChatBubble role="assistant">FixBridge is thinking...</DIYChatBubble>
+          <DIYChatBubble role="assistant">Fixera is thinking...</DIYChatBubble>
         ) : null}
         <div ref={chatEndRef} />
       </div>
@@ -738,7 +738,7 @@ export default function HomeownerDiyExperience(props: Props) {
           </button>
         }
       />
-      <p className="text-[13px] font-medium text-[#7a746c]">Guided by Fixa · Step {stepIndex + 1} of {steps.length || 1}</p>
+      <p className="text-[13px] font-medium text-[#7a746c]">Guided by Fixera · Step {stepIndex + 1} of {steps.length || 1}</p>
       {steps.length > 0 ? <DIYStepProgress current={stepIndex} total={steps.length} completed={completed} /> : null}
       <DIYSafetyBadge risk={risk} />
       {blocked ? (

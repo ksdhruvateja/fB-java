@@ -1968,6 +1968,45 @@ export async function initManagedSchema(pool) {
     ON job_operational_events (job_id, created_at DESC)
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fixera_interactions (
+      id                      TEXT PRIMARY KEY,
+      user_role               TEXT,
+      job_id                  BIGINT,
+      property_id             INT,
+      task_type               TEXT,
+      input_summary           TEXT,
+      media_refs              JSONB,
+      knowledge_refs          JSONB,
+      provider                TEXT,
+      model                   TEXT,
+      output_summary          TEXT,
+      safety_classification   TEXT,
+      evaluator_score         TEXT,
+      schema_quality          TEXT,
+      quality_status          TEXT DEFAULT 'UNREVIEWED',
+      professional_escalation BOOLEAN DEFAULT FALSE,
+      created_at              TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fixera_training_candidates (
+      id                    TEXT PRIMARY KEY,
+      interaction_id        TEXT,
+      job_id                BIGINT,
+      category              TEXT,
+      scenario              TEXT,
+      diagnosis             TEXT,
+      quality_status        TEXT DEFAULT 'UNREVIEWED',
+      approved_for_training BOOLEAN DEFAULT FALSE,
+      gold_example          BOOLEAN DEFAULT FALSE,
+      pii_minimized         BOOLEAN DEFAULT TRUE,
+      dataset_version       TEXT,
+      payload               JSONB,
+      created_at            TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
   try {
     const { seedLegalDocumentVersions } = await import('./legal-document-store.js');
     await seedLegalDocumentVersions(pool);

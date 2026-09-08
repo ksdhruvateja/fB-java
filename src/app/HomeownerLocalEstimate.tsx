@@ -10,7 +10,7 @@ const STEPS = [
   "Checking safety conditions…",
   "Comparing likely causes…",
   "Building your repair plan…",
-  "Preparing Guided DIY…",
+  "Preparing your next steps…",
 ] as const;
 
 export function EstimateLoadingSteps({
@@ -50,7 +50,7 @@ export function EstimateLoadingSteps({
           <div className="pointer-events-none absolute inset-x-6 h-px bg-[#FF4D1C]/80 motion-safe:animate-pulse motion-reduce:hidden" style={{ top: "38%" }} />
         </div>
         <div className="space-y-1 px-4 py-3">
-          <p className="text-sm font-semibold text-foreground">Fixa is analyzing your repair</p>
+          <p className="text-sm font-semibold text-foreground">Fixera is analyzing your repair</p>
           <p className="text-xs text-muted-foreground">{stage}</p>
         </div>
       </div>

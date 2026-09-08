@@ -6,7 +6,9 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
-import { assessRepair, complete, reassessRepair, prepareProfessionalHandoff, getFixaPublicStatus, getFixaHealth, getFixaAdminProviders } from './fixa/index.js';
+import { assessRepair, complete, reassessRepair, prepareProfessionalHandoff, getFixeraPublicStatus, getFixeraHealth, getFixeraAdminProviders } from './fixera/index.js';
+import { persistFixeraInteraction, recordFixeraFeedback, recordFixeraInteraction, trainingOverview, exportApprovedTraining, listRecentExperiences } from './fixera/experience/store.js';
+import { getPricingIntelligence } from './fixera/pricing/intelligence.js';
 import { initManagedSchema, ensureReferralCodeColumns } from './schema-managed.js';
 import { initSupportTicketSchema, registerSupportTicketRoutes } from './support-tickets.js';
 import { initInAppNotificationSchema, registerInAppNotificationRoutes } from './in-app-notifications.js';
@@ -2919,21 +2921,22 @@ app.post('/api/chat/:jobId', requireAuth, async (req, res) => {
   }
 });
 
-// ── Fixa — central assistant. Features never call a vendor SDK directly. ──
-function sendFixaStatus(_req, res) {
-  return res.json(getFixaPublicStatus());
+// ── Fixera — central assistant. Features never call a vendor SDK directly. ──
+function sendFixeraStatus(_req, res) {
+  return res.json(getFixeraPublicStatus());
 }
 
-app.get('/api/ai/status', requireAuth, sendFixaStatus);
-app.get('/api/fixa/status', requireAuth, sendFixaStatus);
+app.get('/api/ai/status', requireAuth, sendFixeraStatus);
+app.get('/api/fixera/status', requireAuth, sendFixeraStatus);
+app.get('/api/fixa/status', requireAuth, sendFixeraStatus);
 
-app.get('/api/fixa/health', requireAuth, aiLimiter, async (_req, res) => {
+async function sendFixeraHealth(_req, res) {
   try {
-    return res.json(await getFixaHealth());
+    return res.json(await getFixeraHealth());
   } catch (e) {
-    console.error('fixa health:', e);
+    console.error('fixera health:', e);
     return res.status(500).json({
-      assistant: 'Fixa',
+      assistant: 'Fixera',
       provider: 'experiential-labs',
       model: 'gpt-6-astra',
       configured: false,
@@ -2943,14 +2946,65 @@ app.get('/api/fixa/health', requireAuth, aiLimiter, async (_req, res) => {
       code: 'health_check_failed',
     });
   }
+}
+
+app.get('/api/fixera/health', requireAuth, aiLimiter, sendFixeraHealth);
+app.get('/api/fixa/health', requireAuth, aiLimiter, sendFixeraHealth);
+
+async function sendFixeraAdminProviders(_req, res) {
+  try {
+    return res.json(await getFixeraAdminProviders());
+  } catch (e) {
+    console.error('fixera admin providers:', e);
+    return res.status(500).json({ ok: false, message: 'Fixera provider status is unavailable.' });
+  }
+}
+
+app.get('/api/admin/fixera/providers', requireAuth, requireAdmin, requirePermission('settings.view'), sendFixeraAdminProviders);
+app.get('/api/admin/fixa/providers', requireAuth, requireAdmin, requirePermission('settings.view'), sendFixeraAdminProviders);
+
+app.get('/api/admin/fixera/pricing', requireAuth, requireAdmin, requirePermission('settings.view'), async (req, res) => {
+  try {
+    const intelligence = await getPricingIntelligence(pool, {
+      zip: req.query.zip,
+      category: req.query.category,
+      subcategory: req.query.subcategory,
+      currentQuote: req.query.quote,
+    });
+    return res.json(intelligence);
+  } catch (e) {
+    console.error('fixera pricing:', e);
+    return res.status(500).json({ ok: false, message: 'Fixera pricing intelligence is unavailable.' });
+  }
 });
 
-app.get('/api/admin/fixa/providers', requireAuth, requireAdmin, requirePermission('settings.view'), async (_req, res) => {
+app.get('/api/admin/fixera/training', requireAuth, requireAdmin, requirePermission('settings.view'), async (_req, res) => {
   try {
-    return res.json(await getFixaAdminProviders());
+    const overview = await trainingOverview(pool);
+    return res.json({
+      assistant: 'Fixera',
+      productName: 'Fixera Super Training',
+      experiences: listRecentExperiences(12),
+      ...overview,
+    });
   } catch (e) {
-    console.error('fixa admin providers:', e);
-    return res.status(500).json({ ok: false, message: 'Fixa provider status is unavailable.' });
+    console.error('fixera training:', e);
+    return res.status(500).json({ ok: false, message: 'Fixera training overview is unavailable.' });
+  }
+});
+
+app.get('/api/admin/fixera/training/export', requireAuth, requireAdmin, requirePermission('settings.view'), async (_req, res) => {
+  try {
+    const rows = await exportApprovedTraining(pool);
+    return res.json({
+      assistant: 'Fixera',
+      datasetVersion: 'fixera-training-v1',
+      count: rows.length,
+      jsonl: rows.map((row) => JSON.stringify(row)).join('\n'),
+    });
+  } catch (e) {
+    console.error('fixera training export:', e);
+    return res.status(500).json({ ok: false, message: 'Fixera training export is unavailable.' });
   }
 });
 
@@ -3006,8 +3060,28 @@ async function handleFixaAssessment(req, res) {
       category: cat,
       description: desc || 'No written description provided. Analyze the attached photo and infer the repair issue.',
       imageDataUrl: hasImage ? imageDataUrl : null,
+      jobId: req.body?.jobId || null,
     });
     const a = structured.assessment;
+    try {
+      const interaction = recordFixeraInteraction({
+        requestId: invocationId,
+        userRole: req.authUser?.role || 'homeowner',
+        jobId: req.body?.jobId || null,
+        task: 'repair_assessment',
+        inputSummary: `${cat}: ${String(desc || 'photo assessment').slice(0, 120)}`,
+        provider: 'explabs',
+        model: structured.model || 'gpt-6-astra',
+        outputSummary: a?.summary || structured.error || null,
+        safety: a?.diy_risk_level || null,
+        evaluator: a ? 'recorded' : 'fail',
+        schemaQuality: a ? 'present' : 'missing',
+        professionalEscalation: Boolean(a?.professional_required),
+      });
+      await persistFixeraInteraction(pool, interaction);
+    } catch (captureError) {
+      console.warn('fixera experience capture:', captureError?.message || captureError);
+    }
     return res.json({
       assessment: a
         ? {
@@ -3030,8 +3104,8 @@ async function handleFixaAssessment(req, res) {
             ...a,
           }
         : null,
-      source: structured.source || 'fixa',
-      assistant: 'Fixa',
+      source: structured.source || 'fixera',
+      assistant: 'Fixera',
       error: structured.error,
       mode: mode === 'detail' ? 'detail' : 'summary',
     });
@@ -3047,16 +3121,17 @@ async function handleFixaAssessment(req, res) {
     return res.status(500).json({
       assessment: null,
       source: 'error',
-      assistant: 'Fixa',
+      assistant: 'Fixera',
       error: "We couldn't complete the assessment right now. Please try again.",
     });
   }
 }
 
 app.post('/api/ai/assess', requireAuth, aiLimiter, handleFixaAssessment);
+app.post('/api/fixera/assessment', requireAuth, aiLimiter, handleFixaAssessment);
 app.post('/api/fixa/assessment', requireAuth, aiLimiter, handleFixaAssessment);
 
-app.post('/api/fixa/reassess', requireAuth, aiLimiter, async (req, res) => {
+async function handleFixeraReassess(req, res) {
   try {
     const observation = clampString(req.body?.observation, 2000);
     if (!observation) {
@@ -3074,20 +3149,23 @@ app.post('/api/fixa/reassess', requireAuth, aiLimiter, async (req, res) => {
     return res.json({
       ok: Boolean(result.assessment),
       assessment: result.assessment,
-      assistant: 'Fixa',
+      assistant: 'Fixera',
       error: result.assessment ? undefined : result.error,
     });
   } catch (e) {
-    console.error('fixa reassess:', e);
+    console.error('fixera reassess:', e);
     return res.status(500).json({
       ok: false,
       assessment: null,
       error: "We couldn't complete the assessment right now. Please try again.",
     });
   }
-});
+}
 
-app.post('/api/fixa/professional-handoff', requireAuth, (req, res) => {
+app.post('/api/fixera/reassess', requireAuth, aiLimiter, handleFixeraReassess);
+app.post('/api/fixa/reassess', requireAuth, aiLimiter, handleFixeraReassess);
+
+function handleFixeraProfessionalHandoff(req, res) {
   return res.json(prepareProfessionalHandoff({
     jobId: req.body?.jobId || null,
     description: clampString(req.body?.description, 4000),
@@ -3100,7 +3178,10 @@ app.post('/api/fixa/professional-handoff', requireAuth, (req, res) => {
     reason: clampString(req.body?.reason, 300) || 'Homeowner requested a professional',
     assessment: req.body?.assessment || null,
   }));
-});
+}
+
+app.post('/api/fixera/professional-handoff', requireAuth, handleFixeraProfessionalHandoff);
+app.post('/api/fixa/professional-handoff', requireAuth, handleFixeraProfessionalHandoff);
 
   registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser });
   registerMarketingRoutes(app, { pool, requireAuth, requireAdmin, requirePermission });
@@ -3273,14 +3354,33 @@ async function handleFixaChat(req, res) {
     return res.status(500).json({
       reply: null,
       source: 'error',
-      assistant: 'Fixa',
+      assistant: 'Fixera',
       error: "We couldn't complete that reply right now. Please try again.",
     });
   }
 }
 
 app.post('/api/ai/chat', requireAuth, aiLimiter, handleFixaChat);
+app.post('/api/fixera/chat', requireAuth, aiLimiter, handleFixaChat);
 app.post('/api/fixa/chat', requireAuth, aiLimiter, handleFixaChat);
+
+async function handleFixeraFeedback(req, res) {
+  const helpful = String(req.body?.helpful || '').toLowerCase();
+  const diyResult = String(req.body?.diyResult || '').toLowerCase();
+  const allowedHelpful = helpful === 'yes' || helpful === 'no' ? helpful : null;
+  const allowedDiy = ['solved', 'partially', 'not_solved'].includes(diyResult) ? diyResult : null;
+  const row = recordFixeraFeedback({
+    interactionId: req.body?.interactionId || null,
+    jobId: req.body?.jobId || null,
+    helpful: allowedHelpful,
+    diyResult: allowedDiy,
+    note: req.body?.note,
+  });
+  return res.json({ ok: true, assistant: 'Fixera', feedback: { helpful: row.helpful, diy_result: row.diy_result } });
+}
+
+app.post('/api/fixera/feedback', requireAuth, handleFixeraFeedback);
+app.post('/api/fixa/feedback', requireAuth, handleFixeraFeedback);
 
 app.get('/api/health', async (_req, res) => {
   const production = isDeployedProduction();

@@ -68,7 +68,7 @@ export default function AiAssessmentAckModal({
           <div id={descId} className="mt-3 space-y-3 text-sm leading-relaxed text-muted-foreground">
             <p>{AI_ASSESSMENT_INTRO}</p>
             <div className="rounded-xl border border-border/80 bg-muted/30 p-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-foreground/80">Fixa Assessment</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-foreground/80">Fixera Assessment</p>
               <p className="mt-2">{AI_ASSESSMENT_DISCLAIMER_BODY}</p>
             </div>
             <div className="rounded-xl border border-amber-300/50 bg-amber-50/80 p-3 text-amber-950 dark:border-amber-800/50 dark:bg-amber-950/30 dark:text-amber-100">

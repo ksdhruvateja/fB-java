@@ -35,7 +35,7 @@ type AssessInput = {
   mode?: "summary" | "detail";
 };
 
-export type AiProviderSource = "fixa" | "explabs" | "fallback" | "error";
+export type AiProviderSource = "fixera" | "fixa" | "explabs" | "fallback" | "error";
 
 export type AnalyzeResult = {
   assessment: AiAssessment | null;
@@ -98,7 +98,7 @@ function buildOfflineAssessment(input: AssessInput): AiAssessment {
 
 export async function refreshAiStatus(): Promise<boolean> {
   try {
-    const response = await fetch("/api/fixa/status");
+    const response = await fetch("/api/fixera/status");
     if (!response.ok) {
       cachedConfigured = false;
       cachedProvider = null;
@@ -155,7 +155,7 @@ export async function analyzeWithAi(input: AssessInput): Promise<AnalyzeResult> 
     } catch {
       // ignore
     }
-    const response = await fetch("/api/fixa/assessment", {
+    const response = await fetch("/api/fixera/assessment", {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -241,7 +241,7 @@ export async function chatWithAi(
     } catch {
       // ignore
     }
-    const response = await fetch("/api/fixa/chat", {
+    const response = await fetch("/api/fixera/chat", {
       method: "POST",
       headers,
       body: JSON.stringify({

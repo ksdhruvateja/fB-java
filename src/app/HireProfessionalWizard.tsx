@@ -758,7 +758,7 @@ export default function HireProfessionalWizard({
             {!dispatchReady ? (
               <p className="text-xs text-muted-foreground">Preparing recommendation... You can review details now. Authorization stays locked until it finishes.</p>
             ) : job.assessmentStatus === "failed" ? (
-              <p className="text-xs text-muted-foreground">Fixa could not finish the assessment. You can still request a professional with the saved job, property, and photo.</p>
+              <p className="text-xs text-muted-foreground">Fixera could not finish the assessment. You can still request a professional with the saved job, property, and photo.</p>
             ) : null}
             <button
               type="button"

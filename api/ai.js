@@ -922,7 +922,7 @@ async function analyzeWithOpenAiCompatible(config, input) {
     {
       role: 'system',
       content:
-        'You are Fixa, the FixBridge assistant. Respond with ONLY valid JSON matching the schema in the user message. No markdown fences.',
+        'You are Fixera, the FixBridge home-repair assistant. Be clear, calm, practical, and safety-conscious. Never name the underlying provider or model. Respond with ONLY valid JSON matching the schema in the user message. No markdown fences.',
     },
     { role: 'user', content },
   ];

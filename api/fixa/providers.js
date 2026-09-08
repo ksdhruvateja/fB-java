@@ -37,6 +37,19 @@ function explabsRecord() {
 
 const DISCONNECTED = [
   {
+    id: 'fixera-local',
+    name: 'Fixera Local',
+    status: 'not_deployed',
+    defaultModel: null,
+    models: [],
+    supportsVision: false,
+    supportsVideo: false,
+    supportsStructuredOutput: true,
+    keyHint: null,
+    secretStorage: 'separate_inference',
+    note: 'Not deployed. A self-hosted model requires separate inference infrastructure, not Netlify Functions.',
+  },
+  {
     id: 'openai',
     name: 'OpenAI',
     status: 'not_connected',

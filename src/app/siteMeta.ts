@@ -16,7 +16,7 @@ export type SiteMetaPage =
 const PAGE_TITLES: Record<SiteMetaPage, string> = {
   home: "AI-Powered Home Repair & Property Care",
   contractors: "For Contractors",
-  about: "About FixBridge and Fixa",
+  about: "About FixBridge and Fixera",
   "go-pro": "HomeCare Pro",
   "homeowner-login": "Homeowner Sign In",
   "contractor-login": "Contractor Sign In",

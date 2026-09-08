@@ -1,5 +1,5 @@
 /**
- * Fixa core. Features call these methods. They do not choose a vendor.
+ * Fixera core. Features call these methods. They do not choose a vendor.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -23,8 +23,8 @@ function requestId() {
 function publicAssessment(result) {
   return {
     ...result,
-    source: result?.assessment ? 'fixa' : 'error',
-    assistant: 'Fixa',
+    source: result?.assessment ? 'fixera' : 'error',
+    assistant: 'Fixera',
     model: undefined,
     provider: undefined,
   };
@@ -39,7 +39,7 @@ export function getContext(input, task = 'repair_assessment') {
 
 export function getFixaPublicStatus() {
   return {
-    assistant: 'Fixa',
+    assistant: 'Fixera',
     configured: Boolean(readExplabsKey()),
     provider: 'experiential-labs',
     model: 'gpt-6-astra',
@@ -49,7 +49,7 @@ export function getFixaPublicStatus() {
 export async function getFixaHealth() {
   const health = await explabsProvider.healthCheck();
   return {
-    assistant: 'Fixa',
+    assistant: 'Fixera',
     provider: 'experiential-labs',
     model: 'gpt-6-astra',
     configured: Boolean(health.configured),
@@ -78,8 +78,8 @@ export async function getFixaHealth() {
 export async function getFixaAdminProviders() {
   const health = await explabsProvider.healthCheck();
   return {
-    assistant: 'Fixa',
-    principle: 'Models may change. Fixa remains.',
+    assistant: 'Fixera',
+    principle: 'Models may change. Fixera remains.',
     currentProvider: 'Experiential Labs',
     currentModel: 'gpt-6-astra',
     connection: health.healthy ? 'connected' : health.configured ? 'error' : 'not_connected',
@@ -115,7 +115,7 @@ export async function assessRepair(input) {
       code: 'not_connected',
       jobId: packed.context.jobId,
     });
-    return { assessment: null, source: 'error', assistant: 'Fixa', error: FIXA_UNAVAILABLE };
+    return { assessment: null, source: 'error', assistant: 'Fixera', error: FIXA_UNAVAILABLE };
   }
   const result = await analyzeRepairStructured({
     ...input,
@@ -165,7 +165,7 @@ export async function chat(input) {
   const id = requestId();
   const route = selectProvider(input?.task || 'customer_support');
   if (!route.provider) {
-    return { reply: null, source: 'error', assistant: 'Fixa', error: FIXA_UNAVAILABLE };
+    return { reply: null, source: 'error', assistant: 'Fixera', error: FIXA_UNAVAILABLE };
   }
   const result = await chatWithCustomer(input);
   recordFixaEvent({
@@ -181,8 +181,8 @@ export async function chat(input) {
   });
   return {
     ...result,
-    source: result?.reply ? 'fixa' : 'error',
-    assistant: 'Fixa',
+    source: result?.reply ? 'fixera' : 'error',
+    assistant: 'Fixera',
     model: undefined,
     error: result?.reply ? result.error : FIXA_UNAVAILABLE,
   };
@@ -194,16 +194,16 @@ export const respond = chat;
 export async function extractDocument(input) {
   const route = selectProvider('document_extract');
   if (!route.provider) {
-    return { extraction: null, source: 'error', assistant: 'Fixa', error: FIXA_UNAVAILABLE };
+    return { extraction: null, source: 'error', assistant: 'Fixera', error: FIXA_UNAVAILABLE };
   }
   const result = await extractPropertyDocumentFields(input);
-  return { ...result, assistant: 'Fixa', model: undefined };
+  return { ...result, assistant: 'Fixera', model: undefined };
 }
 
 export function prepareProfessionalHandoff(input = {}) {
   const packed = getContext({ ...input, escalated: true }, 'professional_handoff');
   return {
-    assistant: 'Fixa',
+    assistant: 'Fixera',
     sameJob: true,
     jobId: packed.context.jobId,
     summary: {

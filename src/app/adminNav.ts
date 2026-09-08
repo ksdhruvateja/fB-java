@@ -9,6 +9,7 @@ export type AdminTab =
   | "partners"
   | "referrals"
   | "platform"
+  | "fixera"
   | "fixa"
   | "subscriptions"
   | "access"
@@ -32,6 +33,7 @@ export const ADMIN_TABS = new Set<AdminTab>([
   "partners",
   "referrals",
   "platform",
+  "fixera",
   "fixa",
   "subscriptions",
   "access",
@@ -46,6 +48,7 @@ export const ADMIN_TABS = new Set<AdminTab>([
 ]);
 
 export function sanitizeAdminTab(value: unknown): AdminTab {
-  const tab = String(value || "overview") as AdminTab;
+  const raw = String(value || "overview");
+  const tab = (raw === "fixa" ? "fixera" : raw) as AdminTab;
   return ADMIN_TABS.has(tab) ? tab : "overview";
 }

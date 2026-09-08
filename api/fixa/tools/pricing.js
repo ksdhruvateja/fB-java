@@ -10,4 +10,4 @@ export function readAuthoritativeVisitFee(rules, options = {}) {
   return resolveCustomerVisitFee(rules, options);
 }
 
-export const PRICING_RULE = 'Fixa may explain that price comes from FixBridge. It must not invent fees, discounts, or Stripe amounts.';
+export const PRICING_RULE = 'Fixera may explain that price comes from FixBridge. It must not invent fees, discounts, or Stripe amounts.';

@@ -23,7 +23,7 @@ import AdminWorkQueue from "./AdminWorkQueue";
 import AdminJobDrawer from "./AdminJobDrawer";
 import AdminCommandPalette, { type CommandAction } from "./AdminCommandPalette";
 import AdminPricingPanel, { type PricingRules } from "./AdminPricingPanel";
-import AdminFixaPanel from "./AdminFixaPanel";
+import AdminFixeraPanel from "./AdminFixaPanel";
 import AdminContractorPayoutsPanel from "./AdminContractorPayoutsPanel";
 import AdminPayoutSettingsPanel from "./AdminPayoutSettingsPanel";
 import AdminOrderLedgerPanel from "./AdminOrderLedgerPanel";
@@ -143,6 +143,7 @@ type Tab =
   | "partners"
   | "referrals"
   | "platform"
+  | "fixera"
   | "fixa"
   | "subscriptions"
   | "access"
@@ -195,7 +196,7 @@ const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React
       { id: "access", label: "Team & Roles", icon: Shield },
       { id: "audit-logs", label: "Audit Logs", icon: ScrollText },
       { id: "legal-system", label: "Legal / System", icon: ScrollText },
-      { id: "fixa", label: "Fixa", icon: Sparkles },
+      { id: "fixera", label: "Fixera", icon: Sparkles },
       { id: "platform", label: "Settings", icon: Settings2 },
     ],
   },
@@ -3381,9 +3382,9 @@ export default function AdminPanel({
           </section>
         )}
 
-        {tab === "fixa" && (
+        {(tab === "fixera" || tab === "fixa") && (
           <section className="space-y-4">
-            <AdminFixaPanel />
+            <AdminFixeraPanel />
           </section>
         )}
 

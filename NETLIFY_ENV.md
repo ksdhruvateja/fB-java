@@ -17,7 +17,7 @@ Add these for **Production** (and Preview if you want them there too):
 | `CORS_ORIGINS` | Optional comma-separated extras, e.g. `https://fixbridge.netlify.app,https://www.fixbridge.us`. |
 | `GOOGLE_CLIENT_ID` | Google **OAuth web client ID** for Sign in with Google (`….apps.googleusercontent.com`). Public. |
 | `VITE_GOOGLE_CLIENT_ID` | Optional server-side fallback of the same client ID only (never a secret). |
-| `EXPLABS_API_KEY` | Required for Fixa. First connected provider (Experiential Labs GPT-6 Astra). Server-side only — never `VITE_`. |
+| `EXPLABS_API_KEY` | Required for Fixera. First connected provider (Experiential Labs GPT-6 Astra). Server-side only — never `VITE_`. |
 
 ### Google Sign-In notes (GIS ID-token flow)
 

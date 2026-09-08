@@ -574,7 +574,7 @@ export default function HomeownerDashboard({
  {
  role: "assistant",
  content:
- "Hi! I’m your FixBridge assistant.\n\nAsk me anything about home repairs, tools, or DIY ideas. I’m here to help!",
+ "Hi! I’m Fixera, the intelligence behind FixBridge.\n\nAsk Fixera about this repair, tools, or what should happen next.",
  },
  ]
  );
@@ -688,12 +688,12 @@ export default function HomeownerDashboard({
  setAssessmentMode("expert");
  }
 
- async function reassessWithFixa(observation: string) {
+ async function reassessWithFixera(observation: string) {
  if (!activeJob) return;
  setDiyChatBusy(true);
  try {
  const token = window.localStorage.getItem("fixbridge-auth-token");
- const response = await fetch("/api/fixa/reassess", {
+ const response = await fetch("/api/fixera/reassess", {
  method: "POST",
  headers: {
  "Content-Type": "application/json",
@@ -3360,13 +3360,13 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <ShieldAlert className="mt-0.5 h-5 w-5 text-[#FF4D1C]" />
  <div>
  <h2 className="text-lg font-semibold">
- {assessmentMode === "expert" || reportPath === "experts" ? "Assessment" : "Fixa Assessment"}
+ {assessmentMode === "expert" || reportPath === "experts" ? "Assessment" : "Fixera Assessment"}
  </h2>
  <p className="text-sm text-muted-foreground">
  {activeJob?.aiAssessment
  ? activeJob.aiAssessment.disclaimer ||
- "Fixa assessment, not a professional diagnosis."
- : "Fixa is analyzing your repair."}
+ "Fixera assessment, not a professional diagnosis."
+ : "Fixera is analyzing your repair."}
  </p>
  </div>
  </div>
@@ -3408,7 +3408,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <div className="rounded-xl border border-amber-300/70 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
  <p>
  {activeJob.assessmentStatus === "failed"
- ? "Fixa couldn't complete this assessment. Your request is saved — you can still schedule a professional visit."
+ ? "Fixera couldn't complete this assessment. Your request is saved — you can still schedule a professional visit."
  : "Recommendation temporarily unavailable. You can still review scheduling. Authorization stays locked until the recommendation finishes."}
  </p>
  <button
@@ -3460,7 +3460,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  />
  ) : !hasRenderableAssessment(activeJob) ? (
  <div className="space-y-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
- <p className="text-sm font-semibold">Fixa couldn&apos;t finish this assessment</p>
+ <p className="text-sm font-semibold">Fixera couldn&apos;t finish this assessment</p>
  <p className="text-sm leading-relaxed">
  Your repair request and uploaded media are saved.
  </p>
@@ -3798,7 +3798,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <div className="text-sm">
  <p className="font-semibold">Professional Service Recommended</p>
  <p className="mt-1 opacity-90 text-xs leading-relaxed">
- Fixa found something that may require a professional. A licensed professional is the safer next step.
+ Fixera found something that may require a professional. A licensed professional is the safer next step.
  </p>
  </div>
  </div>
@@ -3806,7 +3806,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
 
  <div className="grid gap-3 md:grid-cols-3">
  <div className="rounded-xl border border-border bg-card p-3 text-sm">
- <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">What Fixa sees</p>
+ <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">What Fixera sees</p>
  <ul className="mt-2 list-disc space-y-1 pl-4">
  {(assessmentStringList(activeJob.aiAssessment?.observed_evidence).length
  ? assessmentStringList(activeJob.aiAssessment?.observed_evidence)
@@ -3878,7 +3878,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  void sendDiyChatMessage(prompt);
  return;
  }
- void reassessWithFixa(`I see something different on ${stepTitle}.`);
+ void reassessWithFixera(`I see something different on ${stepTitle}.`);
  }}
  onToggleBookmark={() => setDiyBookmarked((v) => !v)}
  onHire={openProfessionalFromDiy}

@@ -120,7 +120,7 @@ export const explabsProvider = {
     const keyDiagnostics = explabsKeyDiagnostics();
     const configured = Boolean(apiKey);
     const report = {
-      assistant: 'Fixa',
+      assistant: 'Fixera',
       provider: 'experiential-labs',
       model: MODEL,
       configured,
