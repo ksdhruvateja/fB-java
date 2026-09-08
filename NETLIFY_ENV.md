@@ -13,13 +13,23 @@ Add these for **Production** (and Preview if you want them there too):
 | `GMAIL_USER` | Gmail address for SMTP (password reset + notifications). |
 | `GMAIL_APP_PASSWORD` | Google App Password for **SMTP only** (not Google Sign-In). |
 | `FROM_EMAIL` | Optional — e.g. `FixBridge <you@gmail.com>`. |
-| `APP_URL` | Public site URL, e.g. `https://YOUR-SITE.netlify.app` (reset + unsubscribe links). |
-| `GOOGLE_CLIENT_ID` | Google OAuth client ID for homeowner **Continue with Google** (public). |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret (server only — never expose to frontend). |
-| `GOOGLE_REDIRECT_URI` | Optional — only if using authorization-code flow; ID token flow uses client ID only. |
-| `VITE_GEMINI_API_KEY` | Optional — Gemini key for AI assessment. |
+| `APP_URL` | Canonical public site URL: `https://fixbridge.us` (also used for CORS allowlist). |
+| `CORS_ORIGINS` | Optional comma-separated extras, e.g. `https://fixbridge.netlify.app,https://www.fixbridge.us`. |
+| `GOOGLE_CLIENT_ID` | Google **OAuth web client ID** for Sign in with Google (`….apps.googleusercontent.com`). Public. |
+| `VITE_GOOGLE_CLIENT_ID` | Optional server-side fallback of the same client ID only (never a secret). |
+| `EXPLABS_API_KEY` | Required for AI assessment. Experiential Labs GPT-6 Astra. Server-side only — never `VITE_`. |
 
-Email/password login works without Google OAuth. If `GOOGLE_CLIENT_ID` is unset, **Continue with Google** is hidden.
+### Google Sign-In notes (GIS ID-token flow)
+
+FixBridge uses **Google Identity Services ID tokens**, not an authorization-code redirect callback.
+
+- Set **`GOOGLE_CLIENT_ID`** to the Web client ID only.
+- **`GOOGLE_CLIENT_SECRET` is not required** for this flow. If present in Netlify, keep it server-only and never prefix it with `VITE_`.
+- Do **not** put a secret (`GOCSPX-…`) into `GOOGLE_CLIENT_ID`.
+- Authorized **JavaScript origins** must include production hosts (see final report / Google Cloud Console).
+- **Authorized redirect URIs** are not used by the current button + ID-token design.
+
+Email/password login works without Google OAuth. If `GOOGLE_CLIENT_ID` is unset or invalid, **Continue with Google** is hidden.
 
 Gmail App Password is for **email delivery only**. Do not use it for Google Sign-In.
 

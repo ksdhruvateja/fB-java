@@ -1,13 +1,6 @@
 /**
- * Multi-provider AI assessment for FixBridge.
- * OpenAI-compatible calls use the OpenAI SDK. Experiential Labs GPT-6 Astra
- * replaces the previous OpenRouter provider.
- *
- * Env (pick one provider — AI_PROVIDER=auto chooses from available keys):
- *   AI_PROVIDER=auto|gemini|openai|explabs|custom
- *   EXPLABS_API_KEY / OPENAI_API_KEY / AI_API_KEY / GEMINI_API_KEY
- *   AI_BASE_URL / OPENAI_BASE_URL   (custom OpenAI-compatible base)
- *   AI_MODEL / OPENAI_MODEL
+ * FixBridge AI assessment — Experiential Labs GPT-6 Astra only.
+ * Server-side EXPLABS_API_KEY. Never expose the key to the browser.
  */
 
 import OpenAI from 'openai';
@@ -25,9 +18,7 @@ const GEMINI_MODELS = [
   'gemini-1.5-flash-8b',
 ];
 
-const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
 const EXPLABS_MODEL = 'gpt-6-astra';
-const OPENAI_BASE = 'https://api.openai.com/v1';
 const EXPLABS_BASE = 'https://api.experientiallabs.ai/v1';
 
 /** Hard cap so AI calls cannot hang the assess UI forever. */
@@ -601,15 +592,6 @@ export function getGcpLocation() {
   );
 }
 
-function getOpenAiKey() {
-  return (
-    process.env.OPENAI_API_KEY?.trim() ||
-    process.env.AI_API_KEY?.trim() ||
-    process.env.OPENROUTER_API_KEY?.trim() ||
-    ''
-  );
-}
-
 function getExplabsKey() {
   return process.env.EXPLABS_API_KEY?.trim() || '';
 }
@@ -622,103 +604,22 @@ function createChatClient(apiKey, baseURL) {
   });
 }
 
-function getCustomBaseUrl() {
-  return (
-    process.env.AI_BASE_URL?.trim() ||
-    process.env.OPENAI_BASE_URL?.trim() ||
-    ''
-  ).replace(/\/$/, '');
-}
-
-function getConfiguredModel(provider) {
-  if (provider === 'explabs') return EXPLABS_MODEL;
-  const explicit = process.env.AI_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || '';
-  if (explicit) return explicit;
-  if (provider === 'openai' || provider === 'custom') return DEFAULT_OPENAI_MODEL;
-  return GEMINI_MODELS[0];
-}
-
 /**
- * Resolve which provider to use.
- * AI_PROVIDER=auto (default) picks from available keys.
+ * Experiential Labs GPT-6 Astra is the only assessment provider.
+ * Missing key is a server configuration error — never fall back to another provider.
  */
 export function resolveAiProvider() {
-  const rawProvider = (process.env.AI_PROVIDER || 'auto').trim().toLowerCase();
-  // Keep the current OpenRouter config until EXPLABS_API_KEY is present.
-  const forced = rawProvider === 'openrouter'
-    ? (getExplabsKey() ? 'explabs' : 'custom')
-    : rawProvider;
-  const geminiKey = getGeminiApiKey();
-  const openAiKey = getOpenAiKey();
-  const explabsKey = getExplabsKey();
-  const baseUrl = getCustomBaseUrl();
-  if (forced && forced !== 'auto') {
-    if (forced === 'gemini') {
-      return geminiKey
-        ? { provider: 'gemini', apiKey: geminiKey, baseUrl: null, model: getConfiguredModel('gemini') }
-        : null;
-    }
-    if (forced === 'explabs') {
-      return explabsKey
-        ? {
-            provider: 'explabs',
-            apiKey: explabsKey,
-            baseUrl: EXPLABS_BASE,
-            model: EXPLABS_MODEL,
-          }
-        : null;
-    }
-    if (forced === 'openai') {
-      return openAiKey
-        ? {
-            provider: 'openai',
-            apiKey: openAiKey,
-            baseUrl: baseUrl || OPENAI_BASE,
-            model: getConfiguredModel('openai'),
-          }
-        : null;
-    }
-    if (forced === 'custom') {
-      return openAiKey && baseUrl
-        ? { provider: 'custom', apiKey: openAiKey, baseUrl, model: getConfiguredModel('custom') }
-        : null;
-    }
+  const apiKey = getExplabsKey();
+  if (!apiKey) {
+    console.error('[ai] EXPLABS_API_KEY is not configured');
+    return null;
   }
-
-  // Auto: Gemini first when configured, then Experiential Labs, then other OpenAI-compatible keys.
-  if (geminiKey) {
-    return {
-      provider: 'gemini',
-      apiKey: geminiKey,
-      baseUrl: null,
-      model: getConfiguredModel('gemini'),
-    };
-  }
-  if (explabsKey) {
-    return {
-      provider: 'explabs',
-      apiKey: explabsKey,
-      baseUrl: EXPLABS_BASE,
-      model: EXPLABS_MODEL,
-    };
-  }
-  if (baseUrl && openAiKey) {
-    return {
-      provider: 'custom',
-      apiKey: openAiKey,
-      baseUrl,
-      model: getConfiguredModel('custom'),
-    };
-  }
-  if (openAiKey) {
-    return {
-      provider: 'openai',
-      apiKey: openAiKey,
-      baseUrl: baseUrl || OPENAI_BASE,
-      model: getConfiguredModel('openai'),
-    };
-  }
-  return null;
+  return {
+    provider: 'explabs',
+    apiKey,
+    baseUrl: EXPLABS_BASE,
+    model: EXPLABS_MODEL,
+  };
 }
 
 export function isAiConfigured() {
@@ -1073,8 +974,7 @@ export async function analyzeRepair(input) {
     return {
       assessment: null,
       source: 'fallback',
-      error:
-        'No AI API key configured. Set EXPLABS_API_KEY, OPENAI_API_KEY, AI_API_KEY (+ AI_BASE_URL), or GEMINI_API_KEY in .env, then restart the API.',
+      error: "We couldn't complete the assessment right now. Please try again.",
     };
   }
 
@@ -1089,9 +989,6 @@ export async function analyzeRepair(input) {
   };
 
   try {
-    if (resolved.provider === 'gemini') {
-      return await analyzeWithGemini(resolved.apiKey, payload, resolved.model);
-    }
     return await analyzeWithOpenAiCompatible(resolved, payload);
   } catch (err) {
     return {
@@ -1288,31 +1185,14 @@ export async function extractPropertyDocumentFields(input) {
   try {
     let reply = null;
     let model = resolved.model;
-    if (resolved.provider === 'gemini') {
-      // Reuse chat helper for text; if image present, fall back to analyze path via description
-      const chat = await chatWithCustomer({
-        messages: [
-          { role: 'system', content: PROPERTY_DOC_EXTRACT_PROMPT },
-          {
-            role: 'user',
-            content: prepared.imageDataUrl
-              ? `${userText}\n\n(Image attached as data URL length ${prepared.imageDataUrl.length}; if you cannot see it, use metadata.)`
-              : userText,
-          },
-        ],
-      });
-      reply = chat.reply;
-      model = chat.model || model;
-    } else {
-      const chat = await chatWithCustomer({
-        messages: [
-          { role: 'system', content: PROPERTY_DOC_EXTRACT_PROMPT },
-          { role: 'user', content: userText },
-        ],
-      });
-      reply = chat.reply;
-      model = chat.model || model;
-    }
+    const chat = await chatWithCustomer({
+      messages: [
+        { role: 'system', content: PROPERTY_DOC_EXTRACT_PROMPT },
+        { role: 'user', content: userText },
+      ],
+    });
+    reply = chat.reply;
+    model = chat.model || model;
 
     const parsed = parseJsonObjectFromText(reply);
     if (!parsed || typeof parsed !== 'object') {
@@ -1653,8 +1533,7 @@ export async function chatWithCustomer(input) {
   const policy = guidancePolicyForRisk(riskLevel);
   const safetyPrefix = { role: 'system', content: policy.systemPrompt };
   if (!resolved) {
-    const lastUserMsg = messages.filter(m => m.role === 'user').pop()?.content || 'this step';
-    let reply = `[Local Fallback Mode] I received your question: "${lastUserMsg}". Since you are running in local simulation mode (or GEMINI_API_KEY is not configured in .env), I cannot call the live LLM dynamically. Once GEMINI_API_KEY is active, I will analyze your specific questions relative to the tools, materials, and steps of the DIY Action Plan!`;
+    const reply = "We couldn't complete that reply right now. Please try again.";
     return {
       reply,
       source: 'fallback'
@@ -1662,12 +1541,6 @@ export async function chatWithCustomer(input) {
   }
   if (!messages.some((m) => m.role === 'user' && typeof m.content === 'string' && m.content.trim())) {
     return { reply: null, source: 'error', error: 'At least one user message is required.' };
-  }
-
-  if (resolved.provider === 'gemini') {
-    const result = await chatWithGemini(resolved.apiKey, [safetyPrefix, ...messages], resolved.model || GEMINI_MODELS[0]);
-    if (!result.reply) return { reply: null, source: 'error', error: result.error };
-    return { reply: result.reply, source: 'gemini', model: resolved.model, riskLevel };
   }
 
   const result = await chatWithOpenAiCompatible(resolved, [safetyPrefix, ...messages]);

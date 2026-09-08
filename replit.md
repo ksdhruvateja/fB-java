@@ -7,7 +7,7 @@ A React + Vite web app connecting homeowners with local contractors. Features AI
 - **Frontend**: React 18 + Vite 6, Tailwind CSS v4, shadcn/ui (Radix UI), MUI, React Router 7
 - **API**: Express 5 (`api/app.js`) — runs locally on port 3001, proxied via Vite as `/api/*`
 - **Database**: Neon Postgres (`NEON_DATABASE_URL`), or in-memory fallback if omitted
-- **AI**: Multi-provider — OpenRouter/OpenAI/Gemini (configured via `AI_PROVIDER` in `.env`)
+- **AI**: Experiential Labs GPT-6 Astra only (`EXPLABS_API_KEY`)
 - **Auth**: JWT sessions + email/password (no OAuth)
 - **Payments**: Stripe (`stripe` SDK)
 - **Email**: Direct Gmail SMTP (`nodemailer` + App Password)
@@ -34,8 +34,8 @@ All secrets are stored as Replit Secrets or in `.env`. Key variables:
 | `GMAIL_APP_PASSWORD` | For email | Google App Password |
 | `FROM_EMAIL` | Optional | Display From header |
 | `APP_URL` | Recommended | Public site URL for reset links |
-| `AI_PROVIDER` | Optional | `openrouter`, `openai`, `gemini`, or `auto` |
-| `OPENROUTER_API_KEY` | Optional | OpenRouter AI key |
+| `EXPLABS_API_KEY` | Required for AI | Experiential Labs GPT-6 Astra (server-side only) |
+| `EXPLABS_API_KEY` | Optional | Experiential Labs API key (server only) |
 | `GEMINI_API_KEY` | Optional | Google Gemini key |
 | `STRIPE_SECRET_KEY` | Optional | Stripe payments |
 

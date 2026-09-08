@@ -1,6 +1,6 @@
 /**
  * Backward-compatible re-exports.
- * Multi-provider logic lives in ./ai.js (Gemini, OpenAI, OpenRouter, custom).
+ * Experiential Labs GPT-6 Astra logic lives in ./ai.js.
  */
 export {
   analyzeRepair,
