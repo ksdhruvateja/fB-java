@@ -10,6 +10,7 @@ export {
   getContext,
   run,
   getFixaPublicStatus,
+  getFixaHealth,
   getFixaAdminProviders,
   FIXA_UNAVAILABLE,
 } from './core.js';

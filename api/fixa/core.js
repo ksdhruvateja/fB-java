@@ -11,7 +11,8 @@ import { explabsProvider } from './providers/explabs.js';
 import { evaluateRepairAssessment } from './evaluator/responseEvaluator.js';
 import { recordFixaEvent, fixaObservabilitySummary } from './observability/events.js';
 import { recordLearningCandidate } from './learning/candidates.js';
-import { getConnectedProvider, listFixaProviders } from './providers.js';
+import { listFixaProviders } from './providers.js';
+import { readExplabsKey } from './providers/explabs.js';
 
 export const FIXA_UNAVAILABLE = "We couldn't complete the assessment right now. Please try again.";
 
@@ -38,9 +39,25 @@ export function getContext(input, task = 'repair_assessment') {
 
 export function getFixaPublicStatus() {
   return {
-    configured: Boolean(getConnectedProvider('explabs')),
     assistant: 'Fixa',
-    provider: 'fixa',
+    configured: Boolean(readExplabsKey()),
+    provider: 'experiential-labs',
+    model: 'gpt-6-astra',
+  };
+}
+
+export async function getFixaHealth() {
+  const health = await explabsProvider.healthCheck();
+  return {
+    assistant: 'Fixa',
+    provider: 'experiential-labs',
+    model: 'gpt-6-astra',
+    configured: Boolean(health.configured),
+    authenticated: Boolean(health.authenticated),
+    modelReachable: Boolean(health.modelReachable),
+    healthy: Boolean(health.healthy),
+    code: health.code,
+    ...(health.httpStatus ? { httpStatus: health.httpStatus } : {}),
   };
 }
 
@@ -51,7 +68,7 @@ export async function getFixaAdminProviders() {
     principle: 'Models may change. Fixa remains.',
     currentProvider: 'Experiential Labs',
     currentModel: 'gpt-6-astra',
-    connection: health.connection,
+    connection: health.healthy ? 'connected' : health.configured ? 'error' : 'not_connected',
     health,
     routing: {
       repair_assessment: { primary: 'Experiential Labs', model: 'gpt-6-astra', fallback: null },
@@ -61,7 +78,7 @@ export async function getFixaAdminProviders() {
     providers: listFixaProviders().map((provider) => ({
       ...provider,
       status: provider.id === 'explabs'
-        ? (health.connection === 'connected' ? 'connected' : provider.status === 'invalid' ? 'invalid' : 'not_connected')
+        ? (health.healthy ? 'connected' : health.configured ? 'error' : 'not_connected')
         : 'not_configured',
     })),
     observability: fixaObservabilitySummary(),

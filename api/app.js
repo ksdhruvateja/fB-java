@@ -6,7 +6,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
-import { assessRepair, complete, reassessRepair, prepareProfessionalHandoff, getFixaPublicStatus, getFixaAdminProviders } from './fixa/index.js';
+import { assessRepair, complete, reassessRepair, prepareProfessionalHandoff, getFixaPublicStatus, getFixaHealth, getFixaAdminProviders } from './fixa/index.js';
 import { initManagedSchema, ensureReferralCodeColumns } from './schema-managed.js';
 import { initSupportTicketSchema, registerSupportTicketRoutes } from './support-tickets.js';
 import { initInAppNotificationSchema, registerInAppNotificationRoutes } from './in-app-notifications.js';
@@ -2926,6 +2926,24 @@ function sendFixaStatus(_req, res) {
 
 app.get('/api/ai/status', requireAuth, sendFixaStatus);
 app.get('/api/fixa/status', requireAuth, sendFixaStatus);
+
+app.get('/api/fixa/health', requireAuth, async (_req, res) => {
+  try {
+    return res.json(await getFixaHealth());
+  } catch (e) {
+    console.error('fixa health:', e);
+    return res.status(500).json({
+      assistant: 'Fixa',
+      provider: 'experiential-labs',
+      model: 'gpt-6-astra',
+      configured: false,
+      authenticated: false,
+      modelReachable: false,
+      healthy: false,
+      code: 'health_check_failed',
+    });
+  }
+});
 
 app.get('/api/admin/fixa/providers', requireAuth, requireAdmin, requirePermission('settings.view'), (_req, res) => {
   return res.json(getFixaAdminProviders());

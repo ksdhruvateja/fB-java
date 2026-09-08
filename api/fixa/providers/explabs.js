@@ -10,25 +10,23 @@ const BASE_URL = 'https://api.experientiallabs.ai/v1';
 const TIMEOUT_MS = Number(process.env.AI_FETCH_TIMEOUT_MS || 38000);
 
 export function readExplabsKey() {
-  let raw = String(process.env.EXPLABS_API_KEY || '');
-  raw = raw.replace(/^\uFEFF/, '').trim();
+  let raw = String(process.env.EXPLABS_API_KEY || '').replace(/^\uFEFF/, '').trim();
   if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
     raw = raw.slice(1, -1).trim();
   }
-  raw = raw.replace(/^bearer\s+/i, '').replace(/\s+/g, '');
+  raw = raw.replace(/^EXPLABS_API_KEY\s*=\s*/i, '').replace(/^bearer\s+/i, '').trim();
   return raw;
-}
-
-function keyStatus(key = readExplabsKey()) {
-  if (!key) return 'not_connected';
-  if (!key.startsWith('xpl_')) return 'invalid';
-  return 'connected';
 }
 
 function clientOrNull() {
   const apiKey = readExplabsKey();
-  if (!apiKey || !apiKey.startsWith('xpl_')) return null;
-  return new OpenAI({ apiKey, baseURL: BASE_URL, timeout: TIMEOUT_MS, maxRetries: 0 });
+  if (!apiKey) return null;
+  return new OpenAI({
+    apiKey,
+    baseURL: BASE_URL,
+    timeout: TIMEOUT_MS,
+    maxRetries: 0,
+  });
 }
 
 function publicError(status) {
@@ -81,28 +79,56 @@ export const explabsProvider = {
     return createCompletion(input);
   },
   async healthCheck() {
-    const status = keyStatus();
-    if (status !== 'connected') {
-      return { ok: false, connection: status === 'invalid' ? 'error' : 'not_connected', code: status, model: MODEL };
-    }
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
+    const configured = Boolean(readExplabsKey());
+    const report = {
+      assistant: 'Fixa',
+      provider: 'experiential-labs',
+      model: MODEL,
+      configured,
+      authenticated: false,
+      modelReachable: false,
+      healthy: false,
+      code: configured ? 'unverified' : 'not_configured',
+    };
+    if (!configured) return report;
+
+    const client = clientOrNull();
     try {
-      const response = await fetch(`${BASE_URL}/models`, {
-        headers: { Authorization: `Bearer ${readExplabsKey()}` },
-        signal: controller.signal,
-      });
-      return {
-        ok: response.ok,
-        connection: response.ok ? 'connected' : 'error',
-        code: response.ok ? 'ok' : publicError(response.status),
-        httpStatus: response.status,
+      const payload = await client.chat.completions.create({
         model: MODEL,
+        temperature: 0,
+        max_tokens: 8,
+        messages: [{ role: 'user', content: 'Reply with the single word OK.' }],
+      });
+      const message = payload?.choices?.[0]?.message;
+      const content = message?.content;
+      const text = typeof content === 'string'
+        ? content
+        : Array.isArray(content)
+          ? content.map((part) => (typeof part === 'string' ? part : part?.text || '')).join('')
+          : '';
+      const healthy = Boolean(String(text || '').trim());
+      return {
+        ...report,
+        authenticated: true,
+        modelReachable: true,
+        healthy,
+        code: healthy ? 'ok' : 'empty_response',
       };
-    } catch {
-      return { ok: false, connection: 'error', code: 'provider_unavailable', model: MODEL };
-    } finally {
-      clearTimeout(timer);
+    } catch (err) {
+      const status = Number(err?.status || err?.statusCode || 0);
+      const code = publicError(status);
+      const rejected = status === 401 || status === 403;
+      const modelMissing = status === 404;
+      console.error('[fixa] health check failed', { status: status || 'network', code });
+      return {
+        ...report,
+        authenticated: Boolean(status) && !rejected,
+        modelReachable: false,
+        healthy: false,
+        code: modelMissing ? 'model_unreachable' : code,
+        httpStatus: status || undefined,
+      };
     }
   },
 };

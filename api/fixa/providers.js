@@ -5,15 +5,12 @@
  * so a missing or failed primary provider cannot fall through.
  */
 
+import { readExplabsKey } from './providers/explabs.js';
+
 const EXPLABS_MODEL = 'gpt-6-astra';
 
 function explabsKey() {
-  let raw = String(process.env.EXPLABS_API_KEY || '');
-  raw = raw.replace(/^\uFEFF/, '').trim();
-  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
-    raw = raw.slice(1, -1).trim();
-  }
-  return raw.replace(/^bearer\s+/i, '').replace(/\s+/g, '');
+  return readExplabsKey();
 }
 
 function maskedKeyHint(key) {
@@ -23,11 +20,11 @@ function maskedKeyHint(key) {
 
 function explabsRecord() {
   const key = explabsKey();
-  const connected = Boolean(key) && key.startsWith('xpl_');
+  const configured = Boolean(key);
   return {
     id: 'explabs',
     name: 'Experiential Labs',
-    status: connected ? 'connected' : key ? 'invalid' : 'not_connected',
+    status: configured ? 'configured' : 'not_connected',
     defaultModel: EXPLABS_MODEL,
     models: [EXPLABS_MODEL],
     supportsVision: true,
@@ -94,7 +91,7 @@ export function listFixaProviders() {
 }
 
 export function getConnectedProvider(id = 'explabs') {
-  return listFixaProviders().find((provider) => provider.id === id && provider.status === 'connected') || null;
+  return listFixaProviders().find((provider) => provider.id === id && provider.status === 'configured') || null;
 }
 
 export const FIXA_MODEL = EXPLABS_MODEL;

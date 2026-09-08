@@ -66,7 +66,9 @@ export default function AdminFixaPanel() {
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Current provider</p>
           <p className="mt-1 font-semibold">{data?.currentProvider || "Experiential Labs"}</p>
           <p className="text-sm text-muted-foreground">Model: {data?.currentModel || "gpt-6-astra"}</p>
-          <p className="mt-2 text-sm">{data?.connection === "connected" ? "Connected" : "Error"}</p>
+          <p className="mt-2 text-sm">
+            {data?.connection === "connected" ? "Connected" : data?.connection === "error" ? "Error" : "Not configured"}
+          </p>
         </div>
         <div className="rounded-xl border border-border bg-card p-4 text-sm">
           <p className="font-semibold">Recent requests</p>
