@@ -37,22 +37,11 @@ export function getContext(input, task = 'repair_assessment') {
   };
 }
 
-export async function getFixaPublicStatus() {
-  const configured = Boolean(readExplabsKey());
-  let healthy = false;
-  if (configured) {
-    const health = await getFixaHealth();
-    healthy = Boolean(health.healthy);
-  }
+export function getFixaPublicStatus() {
   return {
     assistant: 'Fixa',
-    status: configured && healthy ? 'ready' : configured ? 'degraded' : 'not_configured',
-    configured,
-    provider: {
-      name: 'Experiential Labs',
-      configured,
-      healthy,
-    },
+    configured: Boolean(readExplabsKey()),
+    provider: 'experiential-labs',
     model: 'gpt-6-astra',
   };
 }
