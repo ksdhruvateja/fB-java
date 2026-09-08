@@ -351,6 +351,22 @@ export async function initManagedSchema(pool) {
     )
   `);
 
+  await pool.query(`ALTER TABLE partners ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE partners ADD COLUMN IF NOT EXISTS notes TEXT`);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_partners_code_lower
+    ON partners (LOWER(code))
+    WHERE deleted_at IS NULL
+  `).catch((e) => console.warn('[schema] partners code index:', e.message));
+  await pool.query(`ALTER TABLE discount_codes ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE discount_codes ADD COLUMN IF NOT EXISTS starts_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE discount_codes ADD COLUMN IF NOT EXISTS notes TEXT`);
+  await pool.query(`ALTER TABLE discount_codes ADD COLUMN IF NOT EXISTS per_user_limit INT`);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_discount_codes_code_lower
+    ON discount_codes (LOWER(code))
+    WHERE deleted_at IS NULL
+  `).catch((e) => console.warn('[schema] discount code index:', e.message));
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS discount_code TEXT`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS discount_type TEXT`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS discount_value NUMERIC`);

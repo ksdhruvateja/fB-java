@@ -1492,11 +1492,14 @@ export type AdminDiscount = {
   id: number;
   code: string;
   label?: string | null;
+  notes?: string | null;
   discountType: string;
   value: number;
   active: boolean;
   maxUses?: number | null;
   usesCount: number;
+  perUserLimit?: number | null;
+  startsAt?: string | null;
   expiresAt?: string | null;
   createdAt?: string;
 };
@@ -1508,10 +1511,14 @@ export async function adminDiscounts() {
 export async function adminCreateDiscount(body: {
   code: string;
   label?: string;
+  notes?: string;
   discountType: "percent" | "amount";
   value: number;
   maxUses?: number | null;
+  perUserLimit?: number | null;
+  startsAt?: string | null;
   expiresAt?: string | null;
+  active?: boolean;
 }) {
   return api<{ ok: boolean; discount?: AdminDiscount; message?: string }>("/api/admin/discounts", {
     method: "POST",
@@ -1526,6 +1533,12 @@ export async function adminUpdateDiscount(
   return api<{ ok: boolean; message?: string }>(`/api/admin/discounts/${id}`, {
     method: "PUT",
     body: JSON.stringify(body),
+  });
+}
+
+export async function adminDeleteDiscount(id: number) {
+  return api<{ ok: boolean; archived?: boolean; message?: string }>(`/api/admin/discounts/${id}`, {
+    method: "DELETE",
   });
 }
 
@@ -1561,6 +1574,10 @@ export async function adminPartners() {
       company?: string;
       email?: string;
       phone?: string;
+      notes?: string | null;
+      active?: boolean;
+      created_at?: string;
+      createdAt?: string;
       intakeUrl?: string;
     }>;
   }>("/api/admin/partners");
@@ -1569,10 +1586,24 @@ export async function adminPartners() {
 export async function adminCreatePartner(body: Record<string, unknown>) {
   return api<{
     ok: boolean;
-    partner?: { id: number; code: string; name: string; email?: string; intakeUrl?: string };
+    message?: string;
+    partner?: { id: number; code: string; name: string; email?: string; active?: boolean; intakeUrl?: string };
   }>("/api/admin/partners", {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+export async function adminUpdatePartner(id: number, body: { active: boolean }) {
+  return api<{ ok: boolean; active?: boolean; message?: string }>(`/api/admin/partners/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function adminDeletePartner(id: number) {
+  return api<{ ok: boolean; archived?: boolean; message?: string }>(`/api/admin/partners/${id}`, {
+    method: "DELETE",
   });
 }
 

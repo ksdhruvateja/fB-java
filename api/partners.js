@@ -52,14 +52,21 @@ export function mapJobStatusToPartnerStatus(jobStatus) {
 }
 
 
+export function normalizePartnerCode(raw) {
+  return String(raw || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_-]/g, '');
+}
+
 export async function lookupPartnerByCode(pool, code) {
   if (!code || !String(code).trim()) return null;
   const { rows } = await pool.query(
-    `SELECT id, code, name, company, email, phone, active
+    `SELECT id, code, name, company, email, phone, active, deleted_at
      FROM partners WHERE LOWER(code)=LOWER($1) LIMIT 1`,
     [String(code).trim()]
   );
-  if (!rows[0] || rows[0].active === false) return null;
+  if (!rows[0] || rows[0].active === false || rows[0].deleted_at) return null;
   return rows[0];
 }
 

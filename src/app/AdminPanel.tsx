@@ -92,12 +92,15 @@ import {
   adminApplyJobDiscount,
   adminAssign,
   adminCreatePartner,
+  adminUpdatePartner,
+  adminDeletePartner,
   adminCreateDiscount,
   adminDiscounts,
   adminMarkJobCompleted,
   adminMarkJobDispatched,
   adminMarkJobStarted,
   adminUpdateDiscount,
+  adminDeleteDiscount,
   adminHomeownerJobs,
   adminInvite,
   adminListJobs,
@@ -217,6 +220,17 @@ const btnPrimary =
   "inline-flex items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:brightness-110 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50";
 const btnSecondary =
   "inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-background px-4 py-2.5 text-sm font-medium transition hover:bg-muted active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50";
+
+function normalizeCodeInput(value: string) {
+  return value.toUpperCase().replace(/[^A-Z0-9_-]/g, "");
+}
+
+function generateReferralCode() {
+  const roll = Math.random();
+  if (roll < 0.34) return `FIXBRIDGE${10 + Math.floor(Math.random() * 40)}`;
+  if (roll < 0.67) return `WELCOME${10 + Math.floor(Math.random() * 40)}`;
+  return `SPRING${new Date().getFullYear()}`;
+}
 
 function SectionHeader({
   title,
@@ -426,7 +440,19 @@ export default function AdminPanel({
   const [payments, setPayments] = useState<unknown[]>([]);
   const [transfers, setTransfers] = useState<unknown[]>([]);
   const [partners, setPartners] = useState<
-    Array<{ id: number; code: string; name: string; company?: string; email?: string; phone?: string; intakeUrl?: string }>
+    Array<{
+      id: number;
+      code: string;
+      name: string;
+      company?: string;
+      email?: string;
+      phone?: string;
+      notes?: string | null;
+      active?: boolean;
+      created_at?: string;
+      createdAt?: string;
+      intakeUrl?: string;
+    }>
   >([]);
   const [referrals, setReferrals] = useState<
     Array<{
@@ -472,12 +498,27 @@ export default function AdminPanel({
   const [partnerName, setPartnerName] = useState("");
   const [partnerCompany, setPartnerCompany] = useState("");
   const [partnerEmail, setPartnerEmail] = useState("");
+  const [partnerCodeInput, setPartnerCodeInput] = useState("");
+  const [partnerNotes, setPartnerNotes] = useState("");
+  const [partnerCreateOpen, setPartnerCreateOpen] = useState(false);
+  const [partnerCreateBusy, setPartnerCreateBusy] = useState(false);
+  const [partnerActionId, setPartnerActionId] = useState<number | null>(null);
   const [discounts, setDiscounts] = useState<AdminDiscount[]>([]);
   const [discountCodeInput, setDiscountCodeInput] = useState("");
   const [discountLabel, setDiscountLabel] = useState("");
+  const [discountNotes, setDiscountNotes] = useState("");
   const [discountType, setDiscountType] = useState<"percent" | "amount">("percent");
   const [discountValue, setDiscountValue] = useState(10);
   const [discountMaxUses, setDiscountMaxUses] = useState<number | "">("");
+  const [discountPerUserLimit, setDiscountPerUserLimit] = useState<number | "">("");
+  const [discountStartsAt, setDiscountStartsAt] = useState("");
+  const [discountExpiresAt, setDiscountExpiresAt] = useState("");
+  const [discountCreateBusy, setDiscountCreateBusy] = useState(false);
+  const [discountActionId, setDiscountActionId] = useState<number | null>(null);
+  const [codeDeleteTarget, setCodeDeleteTarget] = useState<
+    { kind: "partner" | "discount"; id: number; code: string } | null
+  >(null);
+  const [codeDeleteBusy, setCodeDeleteBusy] = useState(false);
   // Subscription overrides
   const [overrideHomeownerId, setOverrideHomeownerId] = useState<number | null>(null);
   const [overrideHomeownerName, setOverrideHomeownerName] = useState("");
@@ -2482,61 +2523,132 @@ export default function AdminPanel({
               </div>
             )}
 
-            <div className={`${cardClass} grid gap-3 p-5 sm:grid-cols-3`}>
-              <input
-                className={fieldClass}
-                placeholder="Partner name"
-                value={partnerName}
-                onChange={(e) => setPartnerName(e.target.value)}
-              />
-              <input
-                className={fieldClass}
-                placeholder="Company (optional)"
-                value={partnerCompany}
-                onChange={(e) => setPartnerCompany(e.target.value)}
-              />
-              <input
-                className={fieldClass}
-                placeholder="Email for status updates"
-                value={partnerEmail}
-                onChange={(e) => setPartnerEmail(e.target.value)}
-              />
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-muted-foreground">
+                Partner referral codes are saved to the database. Enter a custom code or generate one.
+              </p>
               <button
                 type="button"
-                disabled={busy}
-                className={`${btnPrimary} sm:col-span-3`}
-                onClick={async () => {
-                  setBusy(true);
-                  const r = await adminCreatePartner({
-                    name: partnerName || "Partner",
-                    company: partnerCompany || undefined,
-                    email: partnerEmail || undefined,
-                  });
-                  if (r.ok) {
-                    const code = r.partner?.code || "";
-                    setMessage(code ? `Partner created. Share this code: ${code}` : "Partner created.");
-                    setPartnerName("");
-                    setPartnerCompany("");
-                    setPartnerEmail("");
-                    if (code) {
-                      try {
-                        await navigator.clipboard.writeText(code);
-                        setMessage(`Partner created. Code ${code} copied — share the code only.`);
-                      } catch {
-                        // message already set
-                      }
-                    }
-                  }
-                  const [list, refs] = await Promise.all([adminPartners(), adminPartnerReferrals()]);
-                  if (list.ok) setPartners(list.partners || []);
-                  if (refs.ok) setReferrals(refs.referrals || []);
-                  setBusy(false);
+                disabled={isReadOnly}
+                className={btnPrimary}
+                onClick={() => {
+                  setPartnerCreateOpen(true);
+                  setMessage(null);
                 }}
               >
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
-                Generate referral code
+                <Link2 className="h-4 w-4" />
+                Create referral code
               </button>
             </div>
+
+            {partnerCreateOpen && (
+              <div className={`${cardClass} grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-3`}>
+                <label className="grid gap-1 text-sm">
+                  <span className="font-medium">Referral code</span>
+                  <div className="flex gap-2">
+                    <input
+                      className={`${fieldClass} font-mono uppercase`}
+                      placeholder="e.g. FIXBRIDGE10"
+                      value={partnerCodeInput}
+                      onChange={(e) => setPartnerCodeInput(normalizeCodeInput(e.target.value))}
+                    />
+                    <button
+                      type="button"
+                      className={btnSecondary}
+                      onClick={() => setPartnerCodeInput(generateReferralCode())}
+                    >
+                      Generate
+                    </button>
+                  </div>
+                </label>
+                <label className="grid gap-1 text-sm">
+                  <span className="font-medium">Campaign / partner name</span>
+                  <input
+                    className={fieldClass}
+                    placeholder="Partner or campaign name"
+                    value={partnerName}
+                    onChange={(e) => setPartnerName(e.target.value)}
+                  />
+                </label>
+                <label className="grid gap-1 text-sm">
+                  <span className="font-medium">Company (optional)</span>
+                  <input
+                    className={fieldClass}
+                    placeholder="Company"
+                    value={partnerCompany}
+                    onChange={(e) => setPartnerCompany(e.target.value)}
+                  />
+                </label>
+                <label className="grid gap-1 text-sm">
+                  <span className="font-medium">Email for status updates</span>
+                  <input
+                    className={fieldClass}
+                    placeholder="partner@example.com"
+                    value={partnerEmail}
+                    onChange={(e) => setPartnerEmail(e.target.value)}
+                  />
+                </label>
+                <label className="grid gap-1 text-sm sm:col-span-2">
+                  <span className="font-medium">Notes (optional)</span>
+                  <input
+                    className={fieldClass}
+                    placeholder="Internal notes"
+                    value={partnerNotes}
+                    onChange={(e) => setPartnerNotes(e.target.value)}
+                  />
+                </label>
+                <div className="flex flex-wrap items-end gap-2">
+                  <button
+                    type="button"
+                    className={btnSecondary}
+                    disabled={partnerCreateBusy}
+                    onClick={() => setPartnerCreateOpen(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={partnerCreateBusy || isReadOnly}
+                    className={btnPrimary}
+                    onClick={async () => {
+                      const code = normalizeCodeInput(partnerCodeInput);
+                      if (code && code.length < 3) {
+                        setMessage("Enter a referral code with at least 3 characters.");
+                        return;
+                      }
+                      setPartnerCreateBusy(true);
+                      setMessage(null);
+                      const r = await adminCreatePartner({
+                        code: code || undefined,
+                        name: partnerName || "Partner",
+                        company: partnerCompany || undefined,
+                        email: partnerEmail || undefined,
+                        notes: partnerNotes || undefined,
+                      });
+                      if (!r.ok) {
+                        setMessage(r.message || "Unable to create referral code.");
+                        setPartnerCreateBusy(false);
+                        return;
+                      }
+                      const created = r.partner?.code || code;
+                      setMessage(created ? `Referral code ${created} created.` : "Referral code created.");
+                      setPartnerName("");
+                      setPartnerCompany("");
+                      setPartnerEmail("");
+                      setPartnerCodeInput("");
+                      setPartnerNotes("");
+                      setPartnerCreateOpen(false);
+                      const list = await adminPartners();
+                      if (list.ok) setPartners(list.partners || []);
+                      setPartnerCreateBusy(false);
+                    }}
+                  >
+                    {partnerCreateBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
+                    {partnerCreateBusy ? "Creating..." : "Create Code"}
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="space-y-3">
               <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Partner codes</h2>
@@ -2551,12 +2663,24 @@ export default function AdminPanel({
                     transition={{ delay: Math.min(i * 0.04, 0.2) }}
                     className={`${cardClass} p-4`}
                   >
-                    <p className="font-medium">
-                      {p.name}
-                      {p.company ? ` · ${p.company}` : ""}
-                    </p>
-                    {p.email && <p className="mt-1 text-sm text-muted-foreground">{p.email}</p>}
-                    <div className="mt-3 flex flex-wrap items-center gap-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="font-medium">
+                          {p.name}
+                          {p.company ? ` · ${p.company}` : ""}
+                        </p>
+                        {p.email && <p className="mt-1 text-sm text-muted-foreground">{p.email}</p>}
+                        {p.notes ? <p className="mt-1 text-xs text-muted-foreground">{p.notes}</p> : null}
+                      </div>
+                      <span
+                        className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                          p.active !== false ? "bg-teal-500/15 text-teal-800" : "bg-slate-500/15 text-slate-600"
+                        }`}
+                      >
+                        {p.active !== false ? "Active" : "Inactive"}
+                      </span>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
                       <span className="rounded-xl bg-[#FF4D1C]/10 px-4 py-2 font-mono text-xl font-semibold tracking-[0.18em] text-[#FF4D1C]">
                         {p.code}
                       </span>
@@ -2576,6 +2700,42 @@ export default function AdminPanel({
                       >
                         {copiedPartnerId === p.id ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                         {copiedPartnerId === p.id ? "Code copied" : "Copy code"}
+                      </button>
+                      <button
+                        type="button"
+                        className={btnSecondary}
+                        disabled={partnerActionId === p.id || isReadOnly}
+                        onClick={async () => {
+                          setPartnerActionId(p.id);
+                          setMessage(null);
+                          const nextActive = p.active === false;
+                          const r = await adminUpdatePartner(p.id, { active: nextActive });
+                          if (!r.ok) {
+                            setMessage(r.message || "Unable to update referral code.");
+                            setPartnerActionId(null);
+                            return;
+                          }
+                          const list = await adminPartners();
+                          if (list.ok) setPartners(list.partners || []);
+                          setMessage(nextActive ? `${p.code} activated.` : `${p.code} deactivated.`);
+                          setPartnerActionId(null);
+                        }}
+                      >
+                        {partnerActionId === p.id
+                          ? p.active === false
+                            ? "Activating..."
+                            : "Deactivating..."
+                          : p.active === false
+                            ? "Activate"
+                            : "Deactivate"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={partnerActionId === p.id || isReadOnly}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-300 bg-red-50 px-4 py-2.5 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:pointer-events-none disabled:opacity-50"
+                        onClick={() => setCodeDeleteTarget({ kind: "partner", id: p.id, code: p.code })}
+                      >
+                        Delete
                       </button>
                     </div>
                     <p className="mt-2 text-xs text-muted-foreground">
@@ -2644,11 +2804,11 @@ export default function AdminPanel({
                     className={`${fieldClass} font-mono uppercase`}
                     placeholder="e.g. SAVE10"
                     value={discountCodeInput}
-                    onChange={(e) => setDiscountCodeInput(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, ""))}
+                    onChange={(e) => setDiscountCodeInput(normalizeCodeInput(e.target.value))}
                   />
                 </label>
                 <label className="grid gap-1 text-sm">
-                  <span className="font-medium">Label (optional)</span>
+                  <span className="font-medium">Description / campaign</span>
                   <input
                     className={fieldClass}
                     placeholder="Spring promo"
@@ -2691,50 +2851,113 @@ export default function AdminPanel({
                   />
                 </label>
                 <label className="grid gap-1 text-sm">
-                  <span className="font-medium">Max uses (optional)</span>
+                  <span className="font-medium">Usage limit</span>
                   <input
                     type="number"
-                    min={1}
+                    min={0}
                     className={fieldClass}
                     placeholder="Unlimited"
                     value={discountMaxUses}
                     onChange={(e) => setDiscountMaxUses(e.target.value ? Number(e.target.value) : "")}
                   />
                 </label>
+                <label className="grid gap-1 text-sm">
+                  <span className="font-medium">Per-user limit</span>
+                  <input
+                    type="number"
+                    min={0}
+                    className={fieldClass}
+                    placeholder="Unlimited"
+                    value={discountPerUserLimit}
+                    onChange={(e) => setDiscountPerUserLimit(e.target.value ? Number(e.target.value) : "")}
+                  />
+                </label>
+                <label className="grid gap-1 text-sm">
+                  <span className="font-medium">Start date</span>
+                  <input
+                    type="date"
+                    className={fieldClass}
+                    value={discountStartsAt}
+                    onChange={(e) => setDiscountStartsAt(e.target.value)}
+                  />
+                </label>
+                <label className="grid gap-1 text-sm">
+                  <span className="font-medium">End date</span>
+                  <input
+                    type="date"
+                    className={fieldClass}
+                    value={discountExpiresAt}
+                    onChange={(e) => setDiscountExpiresAt(e.target.value)}
+                  />
+                </label>
+                <label className="grid gap-1 text-sm sm:col-span-2">
+                  <span className="font-medium">Notes</span>
+                  <input
+                    className={fieldClass}
+                    placeholder="Optional notes"
+                    value={discountNotes}
+                    onChange={(e) => setDiscountNotes(e.target.value)}
+                  />
+                </label>
                 <button
                   type="button"
-                  disabled={busy || !discountCodeInput.trim()}
+                  disabled={discountCreateBusy || isReadOnly || !discountCodeInput.trim()}
                   className={`${btnPrimary} self-end`}
                   onClick={async () => {
-                    setBusy(true);
+                    const code = normalizeCodeInput(discountCodeInput);
+                    if (code.length < 3) {
+                      setMessage("Enter a referral code with at least 3 characters.");
+                      return;
+                    }
+                    if (!Number.isFinite(discountValue) || discountValue <= 0) {
+                      setMessage("Enter a valid discount value.");
+                      return;
+                    }
+                    if (discountType === "percent" && discountValue > 90) {
+                      setMessage("Percent discount cannot exceed 90%.");
+                      return;
+                    }
+                    if (discountMaxUses !== "" && discountMaxUses < 0) {
+                      setMessage("Usage limit must be zero or greater.");
+                      return;
+                    }
+                    if (discountStartsAt && discountExpiresAt && discountExpiresAt < discountStartsAt) {
+                      setMessage("End date cannot be before the start date.");
+                      return;
+                    }
+                    setDiscountCreateBusy(true);
+                    setMessage(null);
                     const r = await adminCreateDiscount({
-                      code: discountCodeInput.trim(),
+                      code,
                       label: discountLabel.trim() || undefined,
+                      notes: discountNotes.trim() || undefined,
                       discountType,
                       value: discountValue,
                       maxUses: discountMaxUses === "" ? null : Number(discountMaxUses),
+                      perUserLimit: discountPerUserLimit === "" ? null : Number(discountPerUserLimit),
+                      startsAt: discountStartsAt || null,
+                      expiresAt: discountExpiresAt || null,
                     });
                     if (r.ok && r.discount) {
-                      setMessage(`Discount ${r.discount.code} created — share the code only.`);
+                      setMessage(`Referral code ${r.discount.code} created.`);
                       setDiscountCodeInput("");
                       setDiscountLabel("");
+                      setDiscountNotes("");
                       setDiscountValue(10);
                       setDiscountMaxUses("");
-                      try {
-                        await navigator.clipboard.writeText(r.discount.code);
-                      } catch {
-                        // ignore
-                      }
+                      setDiscountPerUserLimit("");
+                      setDiscountStartsAt("");
+                      setDiscountExpiresAt("");
                       const list = await adminDiscounts();
                       if (list.ok) setDiscounts(list.discounts || []);
                     } else {
-                      setMessage(r.message || "Could not create discount code.");
+                      setMessage(r.message || "Unable to create referral code.");
                     }
-                    setBusy(false);
+                    setDiscountCreateBusy(false);
                   }}
                 >
-                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <DollarSign className="h-4 w-4" />}
-                  Create discount code
+                  {discountCreateBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <DollarSign className="h-4 w-4" />}
+                  {discountCreateBusy ? "Creating..." : "Create Code"}
                 </button>
               </div>
 
@@ -2772,6 +2995,8 @@ export default function AdminPanel({
                         <p className="mt-0.5 text-xs text-muted-foreground">
                           Used {d.usesCount}
                           {d.maxUses != null ? ` / ${d.maxUses}` : ""} times
+                          {d.startsAt ? ` · Starts ${new Date(d.startsAt).toLocaleDateString()}` : ""}
+                          {d.expiresAt ? ` · Ends ${new Date(d.expiresAt).toLocaleDateString()}` : ""}
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-2">
@@ -2792,14 +3017,37 @@ export default function AdminPanel({
                         <button
                           type="button"
                           className={btnSecondary}
+                          disabled={discountActionId === d.id || isReadOnly}
                           onClick={async () => {
-                            await adminUpdateDiscount(d.id, { active: !d.active });
+                            setDiscountActionId(d.id);
+                            setMessage(null);
+                            const r = await adminUpdateDiscount(d.id, { active: !d.active });
+                            if (!r.ok) {
+                              setMessage(r.message || "Unable to update referral code.");
+                              setDiscountActionId(null);
+                              return;
+                            }
                             const list = await adminDiscounts();
                             if (list.ok) setDiscounts(list.discounts || []);
                             setMessage(d.active ? `${d.code} deactivated.` : `${d.code} activated.`);
+                            setDiscountActionId(null);
                           }}
                         >
-                          {d.active ? "Deactivate" : "Activate"}
+                          {discountActionId === d.id
+                            ? d.active
+                              ? "Deactivating..."
+                              : "Activating..."
+                            : d.active
+                              ? "Deactivate"
+                              : "Activate"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={discountActionId === d.id || isReadOnly}
+                          className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-300 bg-red-50 px-4 py-2.5 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:pointer-events-none disabled:opacity-50"
+                          onClick={() => setCodeDeleteTarget({ kind: "discount", id: d.id, code: d.code })}
+                        >
+                          Delete
                         </button>
                       </div>
                     </motion.div>
@@ -2807,6 +3055,67 @@ export default function AdminPanel({
                 )}
               </div>
             </div>
+
+            {codeDeleteTarget && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-xl">
+                  <h3 className="text-lg font-semibold">Delete referral code?</h3>
+                  <p className="mt-3 text-sm text-muted-foreground">Code:</p>
+                  <p className="mt-1 font-mono text-lg font-semibold tracking-widest text-[#FF4D1C]">
+                    {codeDeleteTarget.code}
+                  </p>
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    This action will remove this referral code from future use. Historical usage stays attached to past
+                    requests.
+                  </p>
+                  <div className="mt-5 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      className={btnSecondary}
+                      disabled={codeDeleteBusy}
+                      onClick={() => setCodeDeleteTarget(null)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={codeDeleteBusy}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                      onClick={async () => {
+                        const target = codeDeleteTarget;
+                        setCodeDeleteBusy(true);
+                        setMessage(null);
+                        const r =
+                          target.kind === "partner"
+                            ? await adminDeletePartner(target.id)
+                            : await adminDeleteDiscount(target.id);
+                        if (!r.ok) {
+                          setMessage(r.message || "Unable to delete referral code.");
+                          setCodeDeleteBusy(false);
+                          return;
+                        }
+                        if (target.kind === "partner") {
+                          const list = await adminPartners();
+                          if (list.ok) setPartners(list.partners || []);
+                        } else {
+                          const list = await adminDiscounts();
+                          if (list.ok) setDiscounts(list.discounts || []);
+                        }
+                        setMessage(
+                          r.archived
+                            ? `${target.code} archived. It can no longer be used.`
+                            : `${target.code} deleted.`
+                        );
+                        setCodeDeleteTarget(null);
+                        setCodeDeleteBusy(false);
+                      }}
+                    >
+                      {codeDeleteBusy ? "Deleting..." : "Delete Code"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
         )}
 

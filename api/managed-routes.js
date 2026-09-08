@@ -90,6 +90,7 @@ import {
 import { PAYOUT_STATUS } from './payout-service.js';
 import {
   lookupPartnerByCode,
+  normalizePartnerCode,
   publicPartnerView,
   syncPartnerReferralFromJob,
   intakeShareUrl,
@@ -208,7 +209,7 @@ async function applyAutoReferralDiscount(pool, jobId, partnerCode) {
     // Only B2B partner codes may auto-apply a job discount.
     // Peer referral codes establish relationships / credits — they are not promo coupons.
     const { rows: partners } = await pool.query(
-      `SELECT id FROM partners WHERE LOWER(code)=LOWER($1) AND active=true LIMIT 1`,
+      `SELECT id FROM partners WHERE LOWER(code)=LOWER($1) AND active=true AND deleted_at IS NULL LIMIT 1`,
       [normalized]
     );
     if (!partners.length) return;
@@ -6167,42 +6168,128 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
   app.get('/api/admin/partners', requireAuth, requireAdmin, async (_req, res) => {
     try {
-      const { rows } = await pool.query(`SELECT * FROM partners ORDER BY created_at DESC`);
+      const { rows } = await pool.query(
+        `SELECT * FROM partners WHERE deleted_at IS NULL ORDER BY created_at DESC`
+      );
       const appUrl = process.env.APP_URL || brand.domain;
       res.json({
         ok: true,
         partners: rows.map((p) => ({
           ...p,
+          active: p.active !== false,
           intakeUrl: intakeShareUrl(p.code, appUrl),
         })),
         statusLabels: PARTNER_STATUS_LABELS,
       });
     } catch (e) {
-      res.status(500).json({ ok: false, message: 'Server error' });
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Unable to load referral codes.' });
     }
   });
 
   app.post('/api/admin/partners', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
-      const code = (req.body?.code || crypto.randomBytes(4).toString('hex')).toUpperCase();
+      const requested = req.body?.code != null ? String(req.body.code) : '';
+      const code = requested.trim()
+        ? normalizePartnerCode(requested)
+        : crypto.randomBytes(4).toString('hex').toUpperCase();
+      if (!code || code.length < 3) {
+        return res.status(400).json({ ok: false, message: 'Enter a referral code with at least 3 characters.' });
+      }
+      if (requested.trim() && normalizePartnerCode(requested) !== requested.trim().toUpperCase()) {
+        return res.status(400).json({
+          ok: false,
+          message: 'Referral codes cannot contain spaces or special characters.',
+        });
+      }
+      const name = String(req.body?.name || req.body?.label || '').trim().slice(0, 160) || 'Partner';
+      const notes = String(req.body?.notes || '').trim().slice(0, 500) || null;
+      const existing = await pool.query(
+        `SELECT id, deleted_at FROM partners WHERE LOWER(code)=LOWER($1) LIMIT 1`,
+        [code]
+      );
+      if (existing.rows[0]) {
+        return res.status(400).json({ ok: false, message: 'This referral code already exists.' });
+      }
       const { rows } = await pool.query(
-        `INSERT INTO partners (code, name, company, email, phone)
-         VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        `INSERT INTO partners (code, name, company, email, phone, notes, active)
+         VALUES ($1,$2,$3,$4,$5,$6,true) RETURNING *`,
         [
           code,
-          req.body?.name || 'Partner',
+          name,
           req.body?.company || null,
           req.body?.email || null,
           req.body?.phone || null,
+          notes,
         ]
       );
+      await audit(pool, req.authUser.id, 'referral_code_created', 'partner', rows[0].id, { code });
       const appUrl = process.env.APP_URL || brand.domain;
       res.json({
         ok: true,
-        partner: { ...rows[0], intakeUrl: intakeShareUrl(rows[0].code, appUrl) },
+        partner: { ...rows[0], active: true, intakeUrl: intakeShareUrl(rows[0].code, appUrl) },
       });
     } catch (e) {
-      res.status(500).json({ ok: false, message: 'Server error' });
+      if (String(e.code) === '23505' || String(e.message || '').toLowerCase().includes('unique')) {
+        return res.status(400).json({ ok: false, message: 'This referral code already exists.' });
+      }
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Unable to create referral code.' });
+    }
+  });
+
+  app.put('/api/admin/partners/:id', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { rows } = await pool.query(`SELECT * FROM partners WHERE id=$1`, [id]);
+      if (!rows[0] || rows[0].deleted_at) {
+        return res.status(404).json({ ok: false, message: 'Referral code not found.' });
+      }
+      if (typeof req.body?.active !== 'boolean') {
+        return res.status(400).json({ ok: false, message: 'Unable to update referral code.' });
+      }
+      const active = req.body.active;
+      await pool.query(`UPDATE partners SET active=$1 WHERE id=$2`, [active, id]);
+      await audit(
+        pool,
+        req.authUser.id,
+        active ? 'referral_code_activated' : 'referral_code_deactivated',
+        'partner',
+        id,
+        { code: rows[0].code, active }
+      );
+      res.json({ ok: true, active });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Unable to update referral code.' });
+    }
+  });
+
+  app.delete('/api/admin/partners/:id', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { rows } = await pool.query(`SELECT * FROM partners WHERE id=$1`, [id]);
+      if (!rows[0] || rows[0].deleted_at) {
+        return res.status(404).json({ ok: false, message: 'Referral code not found.' });
+      }
+      const used = await pool.query(
+        `SELECT COUNT(*)::int AS n FROM partner_referrals WHERE partner_id=$1 OR LOWER(partner_code)=LOWER($2)`,
+        [id, rows[0].code]
+      );
+      const usage = Number(used.rows[0]?.n || 0);
+      if (usage > 0) {
+        await pool.query(`UPDATE partners SET deleted_at=NOW(), active=false WHERE id=$1`, [id]);
+      } else {
+        await pool.query(`DELETE FROM partners WHERE id=$1`, [id]);
+      }
+      await audit(pool, req.authUser.id, 'referral_code_deleted', 'partner', id, {
+        code: rows[0].code,
+        archived: usage > 0,
+      });
+      res.json({ ok: true, archived: usage > 0 });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Unable to delete referral code.' });
     }
   });
 
@@ -6258,34 +6345,57 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
+  function mapDiscountAdmin(d) {
+    return {
+      id: Number(d.id),
+      code: d.code,
+      label: d.label,
+      notes: d.notes || null,
+      discountType: d.discount_type,
+      value: Number(d.value),
+      active: d.active !== false,
+      maxUses: d.max_uses != null ? Number(d.max_uses) : null,
+      usesCount: Number(d.uses_count || 0),
+      perUserLimit: d.per_user_limit != null ? Number(d.per_user_limit) : null,
+      startsAt: d.starts_at,
+      expiresAt: d.expires_at,
+      createdAt: d.created_at,
+    };
+  }
+
+  function parseOptionalDate(value) {
+    if (value == null || value === '') return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? 'invalid' : date;
+  }
+
   app.get('/api/admin/discounts', requireAuth, requireAdmin, async (_req, res) => {
     try {
-      const { rows } = await pool.query(`SELECT * FROM discount_codes ORDER BY created_at DESC`);
+      const { rows } = await pool.query(
+        `SELECT * FROM discount_codes WHERE deleted_at IS NULL ORDER BY created_at DESC`
+      );
       res.json({
         ok: true,
-        discounts: rows.map((d) => ({
-          id: Number(d.id),
-          code: d.code,
-          label: d.label,
-          discountType: d.discount_type,
-          value: Number(d.value),
-          active: d.active !== false,
-          maxUses: d.max_uses != null ? Number(d.max_uses) : null,
-          usesCount: Number(d.uses_count || 0),
-          expiresAt: d.expires_at,
-          createdAt: d.created_at,
-        })),
+        discounts: rows.map(mapDiscountAdmin),
       });
     } catch (e) {
-      res.status(500).json({ ok: false, message: 'Server error' });
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Unable to load referral codes.' });
     }
   });
 
   app.post('/api/admin/discounts', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
-      const code = normalizeDiscountCode(req.body?.code || '');
+      const rawCode = String(req.body?.code || '');
+      const code = normalizeDiscountCode(rawCode);
       if (!code || code.length < 3) {
-        return res.status(400).json({ ok: false, message: 'Enter a code with at least 3 characters.' });
+        return res.status(400).json({ ok: false, message: 'Enter a referral code with at least 3 characters.' });
+      }
+      if (rawCode.trim() && code !== rawCode.trim().toUpperCase()) {
+        return res.status(400).json({
+          ok: false,
+          message: 'Referral codes cannot contain spaces or special characters.',
+        });
       }
       const discountType = String(req.body?.discountType || 'percent').toLowerCase() === 'amount' ? 'amount' : 'percent';
       const value = Number(req.body?.value);
@@ -6296,43 +6406,59 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         return res.status(400).json({ ok: false, message: 'Percent discount cannot exceed 90%.' });
       }
       const label = String(req.body?.label || '').trim().slice(0, 120) || null;
+      const notes = String(req.body?.notes || '').trim().slice(0, 500) || null;
       const maxUses = req.body?.maxUses != null && req.body.maxUses !== '' ? Number(req.body.maxUses) : null;
-      const expiresAt = req.body?.expiresAt ? new Date(req.body.expiresAt) : null;
+      if (maxUses != null && (!Number.isFinite(maxUses) || maxUses < 0)) {
+        return res.status(400).json({ ok: false, message: 'Usage limit must be zero or greater.' });
+      }
+      const perUserLimit =
+        req.body?.perUserLimit != null && req.body.perUserLimit !== '' ? Number(req.body.perUserLimit) : null;
+      if (perUserLimit != null && (!Number.isFinite(perUserLimit) || perUserLimit < 0)) {
+        return res.status(400).json({ ok: false, message: 'Per-user limit must be zero or greater.' });
+      }
+      const startsAt = parseOptionalDate(req.body?.startsAt);
+      const expiresAt = parseOptionalDate(req.body?.expiresAt);
+      if (startsAt === 'invalid' || expiresAt === 'invalid') {
+        return res.status(400).json({ ok: false, message: 'Enter a valid start and end date.' });
+      }
+      if (startsAt && expiresAt && expiresAt.getTime() < startsAt.getTime()) {
+        return res.status(400).json({ ok: false, message: 'End date cannot be before the start date.' });
+      }
+      const existing = await pool.query(
+        `SELECT id FROM discount_codes WHERE LOWER(code)=LOWER($1) LIMIT 1`,
+        [code]
+      );
+      if (existing.rows[0]) {
+        return res.status(400).json({ ok: false, message: 'This referral code already exists.' });
+      }
+      const active = req.body?.active !== false;
       const { rows } = await pool.query(
-        `INSERT INTO discount_codes (code, label, discount_type, value, active, max_uses, expires_at, created_by)
-         VALUES ($1,$2,$3,$4,true,$5,$6,$7)
+        `INSERT INTO discount_codes
+           (code, label, notes, discount_type, value, active, max_uses, per_user_limit, starts_at, expires_at, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
          RETURNING *`,
         [
           code,
           label,
+          notes,
           discountType,
           value,
+          active,
           Number.isFinite(maxUses) && maxUses > 0 ? maxUses : null,
-          expiresAt && !Number.isNaN(expiresAt.getTime()) ? expiresAt : null,
+          Number.isFinite(perUserLimit) && perUserLimit > 0 ? perUserLimit : null,
+          startsAt,
+          expiresAt,
           req.authUser.id,
         ]
       );
-      await audit(pool, req.authUser.id, 'discount_created', 'discount_code', rows[0].id, { code });
-      res.json({
-        ok: true,
-        discount: {
-          id: Number(rows[0].id),
-          code: rows[0].code,
-          label: rows[0].label,
-          discountType: rows[0].discount_type,
-          value: Number(rows[0].value),
-          active: true,
-          maxUses: rows[0].max_uses != null ? Number(rows[0].max_uses) : null,
-          usesCount: 0,
-          expiresAt: rows[0].expires_at,
-        },
-      });
+      await audit(pool, req.authUser.id, 'referral_code_created', 'discount_code', rows[0].id, { code });
+      res.json({ ok: true, discount: mapDiscountAdmin(rows[0]) });
     } catch (e) {
-      if (String(e.message || '').toLowerCase().includes('unique')) {
-        return res.status(400).json({ ok: false, message: 'That discount code already exists.' });
+      if (String(e.code) === '23505' || String(e.message || '').toLowerCase().includes('unique')) {
+        return res.status(400).json({ ok: false, message: 'This referral code already exists.' });
       }
       console.error(e);
-      res.status(500).json({ ok: false, message: 'Server error' });
+      res.status(500).json({ ok: false, message: 'Unable to create referral code.' });
     }
   });
 
@@ -6340,7 +6466,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     try {
       const id = Number(req.params.id);
       const { rows: existing } = await pool.query(`SELECT * FROM discount_codes WHERE id=$1`, [id]);
-      if (!existing[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
+      if (!existing[0] || existing[0].deleted_at) {
+        return res.status(404).json({ ok: false, message: 'Referral code not found.' });
+      }
       const cur = existing[0];
       const active = typeof req.body?.active === 'boolean' ? req.body.active : cur.active !== false;
       const label = req.body?.label != null ? String(req.body.label).trim().slice(0, 120) : cur.label;
@@ -6351,21 +6479,65 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
             : 'percent'
           : cur.discount_type;
       const value = req.body?.value != null ? Number(req.body.value) : Number(cur.value);
+      if (!Number.isFinite(value) || value <= 0) {
+        return res.status(400).json({ ok: false, message: 'Enter a valid discount value.' });
+      }
+      if (discountType === 'percent' && value > 90) {
+        return res.status(400).json({ ok: false, message: 'Percent discount cannot exceed 90%.' });
+      }
       const maxUses =
         req.body?.maxUses !== undefined
           ? req.body.maxUses === null || req.body.maxUses === ''
             ? null
             : Number(req.body.maxUses)
           : cur.max_uses;
+      if (maxUses != null && (!Number.isFinite(maxUses) || maxUses < 0)) {
+        return res.status(400).json({ ok: false, message: 'Usage limit must be zero or greater.' });
+      }
       await pool.query(
-        `UPDATE discount_codes SET active=$1, label=$2, discount_type=$3, value=$4, max_uses=$5 WHERE id=$6`,
+        `UPDATE discount_codes SET active=$1, label=$2, discount_type=$3, value=$4, max_uses=$5 WHERE id=$6 AND deleted_at IS NULL`,
         [active, label || null, discountType, value, maxUses, id]
       );
-      await audit(pool, req.authUser.id, 'discount_updated', 'discount_code', id, { active, value });
+      const action =
+        typeof req.body?.active === 'boolean'
+          ? active
+            ? 'referral_code_activated'
+            : 'referral_code_deactivated'
+          : 'referral_code_updated';
+      await audit(pool, req.authUser.id, action, 'discount_code', id, { code: cur.code, active, value });
       res.json({ ok: true });
     } catch (e) {
       console.error(e);
-      res.status(500).json({ ok: false, message: 'Server error' });
+      res.status(500).json({ ok: false, message: 'Unable to update referral code.' });
+    }
+  });
+
+  app.delete('/api/admin/discounts/:id', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { rows } = await pool.query(`SELECT * FROM discount_codes WHERE id=$1`, [id]);
+      if (!rows[0] || rows[0].deleted_at) {
+        return res.status(404).json({ ok: false, message: 'Referral code not found.' });
+      }
+      const uses = Number(rows[0].uses_count || 0);
+      const jobs = await pool.query(
+        `SELECT COUNT(*)::int AS n FROM managed_jobs WHERE LOWER(discount_code)=LOWER($1)`,
+        [rows[0].code]
+      );
+      const usage = Math.max(uses, Number(jobs.rows[0]?.n || 0));
+      if (usage > 0) {
+        await pool.query(`UPDATE discount_codes SET deleted_at=NOW(), active=false WHERE id=$1`, [id]);
+      } else {
+        await pool.query(`DELETE FROM discount_codes WHERE id=$1`, [id]);
+      }
+      await audit(pool, req.authUser.id, 'referral_code_deleted', 'discount_code', id, {
+        code: rows[0].code,
+        archived: usage > 0,
+      });
+      res.json({ ok: true, archived: usage > 0 });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Unable to delete referral code.' });
     }
   });
 
@@ -7105,7 +7277,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
                 if (discountCode && !jobRows[0].coupon_redeemed_at) {
                   const dRow = await lookupDiscountByCode(pool, discountCode);
                   if (dRow?.id) {
-                    await incrementDiscountUse(pool, dRow.id);
+                    await incrementDiscountUse(pool, dRow.id, jobRows[0].homeowner_user_id || userId || null);
                     await pool.query(
                       `UPDATE managed_jobs SET
                          coupon_redeemed_at=NOW(),

@@ -22,7 +22,7 @@ export async function lookupDiscountByCode(pool, code) {
   const normalized = normalizeDiscountCode(code);
   if (!normalized) return null;
   const { rows } = await pool.query(
-    `SELECT * FROM discount_codes WHERE LOWER(code)=LOWER($1) LIMIT 1`,
+    `SELECT * FROM discount_codes WHERE LOWER(code)=LOWER($1) AND deleted_at IS NULL LIMIT 1`,
     [normalized]
   );
   return rows[0] || null;
@@ -31,6 +31,7 @@ export async function lookupDiscountByCode(pool, code) {
 /** Returns { ok, discount?, message? } — public-safe validation. */
 export function validateDiscountRow(row) {
   if (!row) return { ok: false, message: 'This coupon is not valid for this service.' };
+  if (row.deleted_at) return { ok: false, message: 'This coupon is not valid for this service.' };
   if (row.active === false) return { ok: false, message: 'This coupon is not valid for this service.' };
   if (row.starts_at) {
     const start = row.starts_at instanceof Date ? row.starts_at : new Date(row.starts_at);
@@ -150,8 +151,18 @@ export function applyDiscountToPricing(pricing, discount) {
   };
 }
 
-export async function incrementDiscountUse(pool, discountId) {
-  const result = await claimDiscountRedemption(pool, discountId);
+export async function userDiscountRedemptions(pool, code, userId) {
+  if (!code || !userId) return 0;
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM managed_jobs
+     WHERE homeowner_user_id=$1 AND LOWER(discount_code)=LOWER($2) AND coupon_redeemed_at IS NOT NULL`,
+    [userId, code]
+  );
+  return Number(rows[0]?.n || 0);
+}
+
+export async function incrementDiscountUse(pool, discountId, userId = null) {
+  const result = await claimDiscountRedemption(pool, discountId, userId);
   if (!result.ok) throw new Error(result.message || 'Coupon redemption failed.');
   return result;
 }
@@ -160,7 +171,7 @@ export async function incrementDiscountUse(pool, discountId) {
  * Atomically claim one coupon use. Returns { ok, alreadyAtMax?, usesCount? }.
  * Safe under concurrent redemption (max_uses = 1 → exactly one winner).
  */
-export async function claimDiscountRedemption(pool, discountId) {
+export async function claimDiscountRedemption(pool, discountId, userId = null) {
   if (!discountId) return { ok: false, message: 'Missing discount id.' };
   const client = await pool.connect();
   try {
@@ -171,9 +182,18 @@ export async function claimDiscountRedemption(pool, discountId) {
       await client.query('ROLLBACK');
       return { ok: false, message: 'Coupon not found.' };
     }
-    if (row.active === false) {
+    const checked = validateDiscountRow(row);
+    if (!checked.ok) {
       await client.query('ROLLBACK');
-      return { ok: false, message: 'This coupon is not valid for this service.' };
+      return { ok: false, message: checked.message };
+    }
+    const perUserLimit = row.per_user_limit != null ? Number(row.per_user_limit) : null;
+    if (userId && perUserLimit != null && Number.isFinite(perUserLimit) && perUserLimit > 0) {
+      const used = await userDiscountRedemptions(client, row.code, userId);
+      if (used >= perUserLimit) {
+        await client.query('ROLLBACK');
+        return { ok: false, message: 'This coupon has reached its per-user limit.' };
+      }
     }
     const maxUses = row.max_uses != null ? Number(row.max_uses) : null;
     const uses = Number(row.uses_count || 0);
