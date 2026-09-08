@@ -6,7 +6,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
-import { analyzeRepairStructured, chatWithCustomer, getAiStatus } from './ai.js';
+import { assessRepair, complete, getFixaPublicStatus, getFixaAdminProviders } from './fixa/index.js';
 import { initManagedSchema, ensureReferralCodeColumns } from './schema-managed.js';
 import { initSupportTicketSchema, registerSupportTicketRoutes } from './support-tickets.js';
 import { initInAppNotificationSchema, registerInAppNotificationRoutes } from './in-app-notifications.js';
@@ -2919,12 +2919,19 @@ app.post('/api/chat/:jobId', requireAuth, async (req, res) => {
   }
 });
 
-// ── Experiential Labs GPT-6 Astra assessment ──
-app.get('/api/ai/status', requireAuth, (_req, res) => {
-  return res.json(getAiStatus());
+// ── Fixa — central assistant. Features never call a vendor SDK directly. ──
+function sendFixaStatus(_req, res) {
+  return res.json(getFixaPublicStatus());
+}
+
+app.get('/api/ai/status', requireAuth, sendFixaStatus);
+app.get('/api/fixa/status', requireAuth, sendFixaStatus);
+
+app.get('/api/admin/fixa/providers', requireAuth, requireAdmin, requirePermission('settings.view'), (_req, res) => {
+  return res.json(getFixaAdminProviders());
 });
 
-app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
+async function handleFixaAssessment(req, res) {
   try {
     const invocationId = String(req.body?.assessmentInvocationId || req.body?.invocationId || '').trim();
     if (!invocationId) {
@@ -2972,7 +2979,7 @@ app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
       });
     }
     // Prefer structured assessment (no invented prices). Legacy UI still receives mapped fields.
-    const structured = await analyzeRepairStructured({
+    const structured = await assessRepair({
       category: cat,
       description: desc || 'No written description provided. Analyze the attached photo and infer the repair issue.',
       imageDataUrl: hasImage ? imageDataUrl : null,
@@ -3000,8 +3007,8 @@ app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
             ...a,
           }
         : null,
-      source: structured.source,
-      model: structured.model,
+      source: structured.source || 'fixa',
+      assistant: 'Fixa',
       error: structured.error,
       mode: mode === 'detail' ? 'detail' : 'summary',
     });
@@ -3017,10 +3024,14 @@ app.post('/api/ai/assess', requireAuth, aiLimiter, async (req, res) => {
     return res.status(500).json({
       assessment: null,
       source: 'error',
-      error: 'Assessment unavailable. Please retry or request a professional.',
+      assistant: 'Fixa',
+      error: "We couldn't complete the assessment right now. Please try again.",
     });
   }
-});
+}
+
+app.post('/api/ai/assess', requireAuth, aiLimiter, handleFixaAssessment);
+app.post('/api/fixa/assessment', requireAuth, aiLimiter, handleFixaAssessment);
 
   registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser });
   registerMarketingRoutes(app, { pool, requireAuth, requireAdmin, requirePermission });
@@ -3050,7 +3061,7 @@ registerReferralRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite
 registerAddressRoutes(app, { requireAuth });
 registerServiceAreaRoutes(app);
 
-app.post('/api/ai/chat', requireAuth, aiLimiter, async (req, res) => {
+async function handleFixaChat(req, res) {
   try {
     const { messages, jobId } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -3186,17 +3197,21 @@ app.post('/api/ai/chat', requireAuth, aiLimiter, async (req, res) => {
         }
     }
 
-    const result = await chatWithCustomer({ messages: normalized, riskLevel, assessment });
-    return res.json({ ...result, riskLevel });
+    const result = await complete({ messages: normalized, riskLevel, assessment, task: 'diy_guidance' });
+    return res.json({ ...result, model: undefined, riskLevel });
   } catch (e) {
     console.error('ai chat:', e);
     return res.status(500).json({
       reply: null,
       source: 'error',
-      error: 'Chat unavailable. Please try again.',
+      assistant: 'Fixa',
+      error: "We couldn't complete that reply right now. Please try again.",
     });
   }
-});
+}
+
+app.post('/api/ai/chat', requireAuth, aiLimiter, handleFixaChat);
+app.post('/api/fixa/chat', requireAuth, aiLimiter, handleFixaChat);
 
 app.get('/api/health', async (_req, res) => {
   const production = isDeployedProduction();

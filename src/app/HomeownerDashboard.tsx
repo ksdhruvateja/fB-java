@@ -3319,12 +3319,12 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <ShieldAlert className="mt-0.5 h-5 w-5 text-[#FF4D1C]" />
  <div>
  <h2 className="text-lg font-semibold">
- {assessmentMode === "expert" || reportPath === "experts" ? "Assessment" : "AI Assessment"}
+ {assessmentMode === "expert" || reportPath === "experts" ? "Assessment" : "Fixa Assessment"}
  </h2>
  <p className="text-sm text-muted-foreground">
  {activeJob?.aiAssessment
  ? activeJob.aiAssessment.disclaimer ||
- "AI-assisted assessment, not a professional diagnosis."
+ "Fixa assessment, not a professional diagnosis."
  : "Reviewing your request and preparing your price estimate."}
  </p>
  </div>

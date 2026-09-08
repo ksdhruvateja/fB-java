@@ -736,7 +736,7 @@ export default function HomeownerDiyExperience(props: Props) {
           </button>
         }
       />
-      <p className="text-[13px] font-medium text-[#7a746c]">Step {stepIndex + 1} of {steps.length || 1}</p>
+      <p className="text-[13px] font-medium text-[#7a746c]">Guided by Fixa · Step {stepIndex + 1} of {steps.length || 1}</p>
       {steps.length > 0 ? <DIYStepProgress current={stepIndex} total={steps.length} completed={completed} /> : null}
       <DIYSafetyBadge risk={risk} />
       {blocked ? (

@@ -1,7 +1,7 @@
 /**
  * Unified Home Assistant + Property Timeline APIs.
  */
-import { chatWithCustomer } from './ai.js';
+import { complete } from './fixa/index.js';
 import { createRequireHomeCareFeature, resolveFeatureEntitlement } from './homecare-config.js';
 import { buildHomeAssistantContext } from './property-ai-context.js';
 import { buildPropertyTimeline } from './property-timeline.js';
@@ -88,7 +88,7 @@ export function registerHomeAssistantRoutes(app, { pool, requireAuth }) {
           .map((m) => ({ role: m.role, content: String(m.content || '').slice(0, 4000) })),
       ];
 
-      const ai = await chatWithCustomer({ messages: aiMessages });
+      const ai = await complete({ messages: aiMessages, task: 'customer_support' });
       const reply = enforceSingleQuestion(ai?.reply || 'I could not generate a response. Please try again.', ctx.riskLevel);
       res.json({
         ok: true,

@@ -7,7 +7,7 @@ React + Vite app that connects homeowners with local contractors. Auth, jobs, pr
 - **Frontend**: React 18 + Vite 6, Tailwind CSS v4, React Router 7
 - **API**: Express (`api/app.js`) — local Node server or Netlify Function
 - **Database**: Neon Postgres (`NEON_DATABASE_URL`), or in-memory fallback for local-only
-- **AI**: Experiential Labs GPT-6 Astra only (`EXPLABS_API_KEY` server-side; `https://api.experientiallabs.ai/v1`)
+- **AI**: Fixa is the central assistant. Experiential Labs GPT-6 Astra is the first connected provider (`EXPLABS_API_KEY` server-side). Features call Fixa, not a vendor SDK.
 
 ## Local development
 

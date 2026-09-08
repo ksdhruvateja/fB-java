@@ -23,6 +23,7 @@ import AdminWorkQueue from "./AdminWorkQueue";
 import AdminJobDrawer from "./AdminJobDrawer";
 import AdminCommandPalette, { type CommandAction } from "./AdminCommandPalette";
 import AdminPricingPanel, { type PricingRules } from "./AdminPricingPanel";
+import AdminFixaPanel from "./AdminFixaPanel";
 import AdminContractorPayoutsPanel from "./AdminContractorPayoutsPanel";
 import AdminPayoutSettingsPanel from "./AdminPayoutSettingsPanel";
 import AdminOrderLedgerPanel from "./AdminOrderLedgerPanel";
@@ -142,6 +143,7 @@ type Tab =
   | "partners"
   | "referrals"
   | "platform"
+  | "fixa"
   | "subscriptions"
   | "access"
   | "audit-logs"
@@ -193,6 +195,7 @@ const NAV_GROUPS: { label?: string; items: { id: Tab; label: string; icon: React
       { id: "access", label: "Team & Roles", icon: Shield },
       { id: "audit-logs", label: "Audit Logs", icon: ScrollText },
       { id: "legal-system", label: "Legal / System", icon: ScrollText },
+      { id: "fixa", label: "Fixa", icon: Sparkles },
       { id: "platform", label: "Settings", icon: Settings2 },
     ],
   },
@@ -3375,6 +3378,12 @@ export default function AdminPanel({
         {tab === "legal-system" && (
           <section className="space-y-4">
             <AdminLegalSystemPanel />
+          </section>
+        )}
+
+        {tab === "fixa" && (
+          <section className="space-y-4">
+            <AdminFixaPanel />
           </section>
         )}
 

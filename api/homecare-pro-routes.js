@@ -15,7 +15,7 @@ import {
   resolveFeatureEntitlement,
 } from './homecare-config.js';
 import { buildPropertyAIContext, sanitizeQuoteForSecondOpinion } from './property-ai-context.js';
-import { chatWithCustomer } from './ai.js';
+import { complete } from './fixa/index.js';
 import { upsertServiceReminderEligibility } from './service-reminders.js';
 
 function addRecurrenceDays(dateStr, recurrence) {
@@ -671,7 +671,7 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
 Do NOT claim this is a professional inspection. Use sections: Home Overview, Systems to Watch, Maintenance Completed, Upcoming Maintenance, Recurring Issues, Warranty Opportunities, Recommended Priorities, Home Health Summary.
 Property context:
 ${ctx.text}`;
-      const ai = await chatWithCustomer({ messages: [{ role: 'user', content: prompt }] });
+      const ai = await complete({ messages: [{ role: 'user', content: prompt }] });
       const content = {
         sections: {
           raw: ai?.reply || 'Report could not be generated.',
@@ -749,7 +749,7 @@ Never mention contractor internal costs, margins, or admin notes.
 Return JSON with keys: summary, scopeReview, pricingContext, thingsToAsk, recommendation.
 Quote: ${JSON.stringify(safeQuote)}
 Property context: ${propertyContext}`;
-      const ai = await chatWithCustomer({ messages: [{ role: 'user', content: prompt }] });
+      const ai = await complete({ messages: [{ role: 'user', content: prompt }] });
       let parsed = null;
       try {
         const text = ai?.reply || '';

@@ -38,7 +38,7 @@ import {
   resolveFeatureEntitlement,
 } from './homecare-config.js';
 import { buildPropertyAIContext } from './property-ai-context.js';
-import { analyzeRepairStructured, extractPropertyDocumentFields } from './ai.js';
+import { assessRepair, extractDocument } from './fixa/index.js';
 import { resolveJobPricingMode } from './contractor-agreement.js';
 import { createJobAuthorization } from './job-authorization.js';
 import {
@@ -980,7 +980,7 @@ async function runManagedJobAssessment(pool, job, viewer) {
 
   const aiStarted = Date.now();
   console.log('[assessment] AI started', { jobId: job?.id });
-  const result = await analyzeRepairStructured({
+  const result = await assessRepair({
     category: job.category,
     description: job.description,
     imageDataUrl: job.media_data_url,
@@ -1742,7 +1742,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
   async function maybeCreateEquipmentSuggestionFromLabelPhoto(pool, job, report) {
     if (!job.property_id || !report?.equipmentLabelPhotoUrl) return;
     try {
-      const result = await extractPropertyDocumentFields({
+      const result = await extractDocument({
         category: 'equipment_label',
         title: job.title || 'Equipment label',
         fileName: 'equipment-label.jpg',
@@ -2210,7 +2210,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       );
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Document not found.' });
       const d = rows[0];
-      const result = await extractPropertyDocumentFields({
+      const result = await extractDocument({
         category: d.category,
         title: d.title,
         fileName: d.file_name,

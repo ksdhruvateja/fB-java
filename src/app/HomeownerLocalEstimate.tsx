@@ -4,11 +4,11 @@ import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 import { ManagedJob, retailRangeLabel } from "./managedJobs";
 
 const STEPS = [
-  "Uploading media",
+  "Uploading your photo/video",
   "Inspecting visible components",
-  "Identifying the issue",
-  "Checking safety risk",
-  "Building your repair plan",
+  "Identifying likely issue",
+  "Checking safety conditions",
+  "Building your DIY plan",
 ] as const;
 
 export function EstimateLoadingSteps({
@@ -47,8 +47,8 @@ export function EstimateLoadingSteps({
           <div className="pointer-events-none absolute inset-x-6 top-1/3 h-px bg-[#FF4D1C]/70 motion-safe:animate-pulse motion-reduce:hidden" />
         </div>
         <div className="space-y-1 px-4 py-3">
-          <p className="text-sm font-semibold text-foreground">{stage}</p>
-          <p className="text-xs text-muted-foreground">AI inspection in progress. Results appear when the assessment is ready.</p>
+          <p className="text-sm font-semibold text-foreground">Fixa is analyzing your repair</p>
+          <p className="text-xs text-muted-foreground">{stage}</p>
         </div>
       </div>
       {slow ? (

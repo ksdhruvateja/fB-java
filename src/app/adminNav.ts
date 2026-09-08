@@ -9,6 +9,7 @@ export type AdminTab =
   | "partners"
   | "referrals"
   | "platform"
+  | "fixa"
   | "subscriptions"
   | "access"
   | "audit-logs"
@@ -31,6 +32,7 @@ export const ADMIN_TABS = new Set<AdminTab>([
   "partners",
   "referrals",
   "platform",
+  "fixa",
   "subscriptions",
   "access",
   "audit-logs",

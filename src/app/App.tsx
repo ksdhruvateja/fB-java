@@ -359,7 +359,7 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
       links: [
         { label: "Post a Job", page: "homeowner-login" as Page },
         { label: "How It Works", page: "home" as Page },
-        { label: "AI Assessment", page: "home" as Page },
+        { label: "Fixa Assessment", page: "home" as Page },
         { label: "Find a Contractor", page: "home" as Page },
         { label: "Pricing", page: "go-pro" as Page },
         { label: "HomeCare Plans", page: "go-pro" as Page },
