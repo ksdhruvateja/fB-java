@@ -4,6 +4,7 @@
  */
 
 import { explabsProvider, readExplabsKey } from './fixa/providers/explabs.js';
+import { evaluateRepairAssessment } from './fixa/evaluator/responseEvaluator.js';
 import {
   classifyDiyRiskLevel,
   stripDangerousGuidanceFromAssessment,
@@ -48,17 +49,25 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = AI_FETCH_TIMEOUT_
  */
 function prepareImageForAi(imageDataUrl) {
   if (typeof imageDataUrl !== 'string' || !imageDataUrl.startsWith('data:')) {
-    return { imageDataUrl: null, dropped: false };
+    return { imageDataUrl: null, dropped: false, reason: imageDataUrl ? 'unsupported_media_url' : null };
   }
-  // ~700KB raw ≈ safer for free vision models + serverless body limits
+  const mime = String(imageDataUrl.slice(5, imageDataUrl.indexOf(';')) || '').toLowerCase();
+  const supported = mime === 'image/jpeg' || mime === 'image/jpg' || mime === 'image/png' || mime === 'image/webp';
+  if (!supported) {
+    console.warn('[AI] Unsupported assessment image type', { mime: mime || 'unknown' });
+    return { imageDataUrl: null, dropped: true, reason: 'unsupported_mime' };
+  }
+  if (imageDataUrl.includes('blob:') || imageDataUrl.includes('localhost')) {
+    return { imageDataUrl: null, dropped: true, reason: 'inaccessible_url' };
+  }
   const MAX_CHARS = Number(process.env.AI_MAX_IMAGE_CHARS || 700000);
   if (imageDataUrl.length <= MAX_CHARS) {
-    return { imageDataUrl, dropped: false };
+    return { imageDataUrl, dropped: false, reason: null };
   }
   console.warn(
     `[AI] Image payload too large (${Math.round(imageDataUrl.length / 1024)}KB chars); assessing from description only.`
   );
-  return { imageDataUrl: null, dropped: true };
+  return { imageDataUrl: null, dropped: true, reason: 'too_large' };
 }
 
 /** Structured assessment — NO prices. Pricing engine owns retail ranges. */
@@ -921,20 +930,21 @@ async function analyzeWithOpenAiCompatible(config, input) {
   const mode = input.mode === 'detail' ? 'detail' : 'summary';
   const attempts = [true, false];
   let lastError = 'We couldn\'t complete the assessment right now. Please try again.';
+  let correctionUsed = false;
 
   for (const useJsonFormat of attempts) {
     const completion = await explabsProvider.analyze({
       messages,
       temperature: 0.15,
-      maxTokens: mode === 'detail' ? 2800 : 2400,
+      maxTokens: mode === 'detail' ? 6000 : 5000,
       json: useJsonFormat,
     });
     if (!completion.ok) {
       lastError = HOMEOWNER_AI_ERROR;
-      if (useJsonFormat && completion.code === 'provider_http_400') continue;
-      return { assessment: null, source: 'error', error: lastError, providerCode: completion.code };
+      if (useJsonFormat && (completion.status === 400 || completion.code === 'provider_http_400')) continue;
+      return { assessment: null, source: 'error', error: lastError, providerCode: completion.code, model: completion.model };
     }
-    const messageText = extractMessageText(completion.message);
+    const messageText = extractMessageText(completion.message) || completion.text;
     if (!messageText) {
       lastError = `${provider} returned an empty response`;
       continue;
@@ -946,7 +956,30 @@ async function analyzeWithOpenAiCompatible(config, input) {
       continue;
     }
 
-    return { assessment, source: provider, model };
+    const evaluation = evaluateRepairAssessment(assessment);
+    if (!evaluation.ok && evaluation.retryable && !correctionUsed && assessment.safe_diy_allowed === true) {
+      correctionUsed = true;
+      const correction = await explabsProvider.analyze({
+        messages: [
+          ...messages,
+          { role: 'assistant', content: messageText },
+          {
+            role: 'user',
+            content: `The generated DIY plan was rejected because: ${evaluation.issues.join(', ')}. Return the same assessment as JSON with detailed actionable replacements. Every safe DIY step needs a goal, exact actions, why, tools, expected result, failure guidance, and when to stop. Do not invent observations that are not in the photo or description.`,
+          },
+        ],
+        temperature: 0.15,
+        maxTokens: 5000,
+        json: true,
+      });
+      const correctedText = correction.ok ? extractMessageText(correction.message) || correction.text : '';
+      const corrected = correctedText ? parseAssessment(correctedText) : null;
+      if (corrected) {
+        return { assessment: corrected, source: provider, model: correction.model || completion.model };
+      }
+    }
+
+    return { assessment, source: provider, model: completion.model };
   }
 
   return { assessment: null, source: 'error', error: lastError };
@@ -969,7 +1002,7 @@ export async function analyzeRepair(input) {
     ...input,
     imageDataUrl: prepared.imageDataUrl,
     description: prepared.dropped
-      ? `${input.description || ''}\n\n(Note: photo was too large to send to the model; rely on this description.)`
+      ? `${input.description || ''}\n\n(Note: the uploaded photo could not be sent to the model (${prepared.reason || 'unavailable'}). Do not claim you inspected a photo.)`
       : input.description,
     mode: input.mode === 'detail' ? 'detail' : 'summary',
   };

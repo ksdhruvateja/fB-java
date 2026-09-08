@@ -87,7 +87,7 @@ async function createCompletion({ messages, temperature, maxTokens, json }) {
       : Array.isArray(content)
         ? content.map((part) => (typeof part === 'string' ? part : part?.text || '')).join('\n')
         : '';
-    return { ok: true, text, message, model: MODEL, status: 200, code: 'ok' };
+    return { ok: true, text, message, model: payload?.model || MODEL, status: 200, code: 'ok', usage: payload?.usage || null };
   } catch (err) {
     const status = Number(err?.status || err?.statusCode || 0);
     const code = sanitizedProviderCode(err, status);

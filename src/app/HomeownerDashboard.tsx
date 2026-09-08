@@ -1960,7 +1960,7 @@ export default function HomeownerDashboard({
  setAssessLoadingStep(0);
  setAssessLoadingZip(zip ? String(zip).slice(0, 5) : null);
  const timer = window.setInterval(() => {
- setAssessLoadingStep((s) => (s == null ? 0 : Math.min(4, s + 1)));
+ setAssessLoadingStep((s) => (s == null ? 0 : Math.min(6, s + 1)));
  }, 900);
  try {
  return await assessManagedJob(jobId, {
@@ -3358,7 +3358,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  {activeJob?.aiAssessment
  ? activeJob.aiAssessment.disclaimer ||
  "Fixa assessment, not a professional diagnosis."
- : "Reviewing your request and preparing your price estimate."}
+ : "Fixa is analyzing your repair."}
  </p>
  </div>
  </div>
@@ -3452,13 +3452,13 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  />
  ) : !hasRenderableAssessment(activeJob) ? (
  <div className="space-y-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
- <p className="text-sm font-semibold">Fixa couldn&apos;t complete this assessment right now.</p>
+ <p className="text-sm font-semibold">Fixa couldn&apos;t finish this assessment</p>
  <p className="text-sm leading-relaxed">
- Your photo and repair request are saved.
+ Your repair request and uploaded media are saved.
  </p>
- {assessmentMsg ? (
- <p className="text-sm leading-relaxed">{normalizeAssessmentMessage(assessmentMsg)}</p>
- ) : null}
+ <p className="text-sm leading-relaxed">
+ You can try the assessment again or continue directly with professional help.
+ </p>
  {activeJob ? (
  <div className="flex flex-wrap gap-2">
  <button
@@ -3796,6 +3796,30 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
  )}
 
+ <div className="grid gap-3 md:grid-cols-3">
+ <div className="rounded-xl border border-border bg-card p-3 text-sm">
+ <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">What Fixa sees</p>
+ <ul className="mt-2 list-disc space-y-1 pl-4">
+ {(assessmentStringList(activeJob.aiAssessment?.observed_evidence).length
+ ? assessmentStringList(activeJob.aiAssessment?.observed_evidence)
+ : assessmentStringList(activeJob.aiAssessment?.visual_findings)
+ ).slice(0, 4).map((item) => <li key={item}>{item}</li>)}
+ </ul>
+ </div>
+ <div className="rounded-xl border border-border bg-card p-3 text-sm">
+ <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">What may be happening</p>
+ <ul className="mt-2 list-disc space-y-1 pl-4">
+ {assessmentStringList(activeJob.aiAssessment?.likely_causes).slice(0, 4).map((item) => <li key={item}>{item}</li>)}
+ </ul>
+ </div>
+ <div className="rounded-xl border border-border bg-card p-3 text-sm">
+ <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">What to confirm</p>
+ <ul className="mt-2 list-disc space-y-1 pl-4">
+ {assessmentStringList(activeJob.aiAssessment?.needs_confirmation).slice(0, 4).map((item) => <li key={item}>{item}</li>)}
+ </ul>
+ </div>
+ </div>
+
  <HomeownerDiyExperience
  userName={user.name}
  jobId={activeJob.id}
@@ -3805,7 +3829,9 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  assessmentCategory={activeJob.aiAssessment?.recommended_trade || activeJob.aiAssessment?.category || ""}
  subcategory={activeJob.serviceSubcategory || activeJob.aiAssessment?.service_subcategory || ""}
  description={activeJob.description || ""}
- findings={assessmentStringList(activeJob.aiAssessment?.visual_findings)}
+ findings={assessmentStringList(activeJob.aiAssessment?.observed_evidence).length
+ ? assessmentStringList(activeJob.aiAssessment?.observed_evidence)
+ : assessmentStringList(activeJob.aiAssessment?.visual_findings)}
  summary={activeJob.aiAssessment?.summary || ""}
  photoUrl={activeJob.mediaType?.startsWith("image") ? activeJob.mediaDataUrl : null}
  risk={String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green").toLowerCase() === "red" ? "red" : String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green").toLowerCase() === "yellow" ? "yellow" : "green"}
@@ -3813,7 +3839,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  guideSteps={activeJob.aiAssessment?.diy_guide_steps || []}
  tools={assessmentStringList(activeJob.aiAssessment?.tools_required)}
  materials={assessmentStringList(activeJob.aiAssessment?.materials_needed)}
- causes={assessmentStringList(activeJob.aiAssessment?.visual_findings)}
+ causes={assessmentStringList(activeJob.aiAssessment?.likely_causes)}
  stopConditions={assessmentStringList(activeJob.aiAssessment?.stop_conditions)}
  stepIndex={diyStepIndex}
  completed={diyCompletedSteps}

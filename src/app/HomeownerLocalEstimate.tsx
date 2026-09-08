@@ -4,11 +4,13 @@ import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 import { ManagedJob, retailRangeLabel } from "./managedJobs";
 
 const STEPS = [
-  "Uploading your photo/video",
-  "Inspecting visible components",
-  "Identifying likely issue",
-  "Checking safety conditions",
-  "Building your DIY plan",
+  "Reviewing your photo…",
+  "Identifying visible components…",
+  "Looking for signs of damage or wear…",
+  "Checking safety conditions…",
+  "Comparing likely causes…",
+  "Building your repair plan…",
+  "Preparing your next steps…",
 ] as const;
 
 export function EstimateLoadingSteps({
@@ -44,10 +46,11 @@ export function EstimateLoadingSteps({
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Reviewing your description</div>
           )}
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/10 to-transparent motion-reduce:hidden" />
-          <div className="pointer-events-none absolute inset-x-6 top-1/3 h-px bg-[#FF4D1C]/70 motion-safe:animate-pulse motion-reduce:hidden" />
+          <div className="pointer-events-none absolute inset-x-4 top-0 h-16 bg-gradient-to-b from-[#FF4D1C]/25 to-transparent motion-safe:animate-pulse motion-reduce:hidden" />
+          <div className="pointer-events-none absolute inset-x-6 h-px bg-[#FF4D1C]/80 motion-safe:animate-pulse motion-reduce:hidden" style={{ top: "38%" }} />
         </div>
         <div className="space-y-1 px-4 py-3">
-          <p className="text-sm font-semibold text-foreground">Fixa is reviewing your media</p>
+          <p className="text-sm font-semibold text-foreground">Fixa is analyzing your repair</p>
           <p className="text-xs text-muted-foreground">{stage}</p>
         </div>
       </div>
