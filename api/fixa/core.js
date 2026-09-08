@@ -65,7 +65,13 @@ export async function getFixaHealth() {
     ...(health.latencyMs != null ? { latencyMs: health.latencyMs } : {}),
     ...(health.usage ? { usage: health.usage } : {}),
     ...(health.text ? { text: health.text } : {}),
-    ...(health.keyShape ? { keyShape: health.keyShape, keyLength: health.keyLength, matchesProviderFormat: health.matchesProviderFormat } : {}),
+    ...(health.keyShape ? {
+      keyShape: health.keyShape,
+      keyLength: health.keyLength,
+      matchesProviderFormat: health.matchesProviderFormat,
+      prefixXpl: health.prefixXpl,
+      bodyIsHex: health.bodyIsHex,
+    } : {}),
   };
 }
 

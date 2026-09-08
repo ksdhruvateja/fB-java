@@ -15,19 +15,26 @@ export function readExplabsKey() {
     raw = raw.slice(1, -1).trim();
   }
   raw = raw.replace(/^EXPLABS_API_KEY\s*=\s*/i, '').replace(/^bearer\s+/i, '').trim();
-  if (/^xpl_/i.test(raw)) raw = raw.replace(/\s+/g, '');
-  if (/^xpl_[0-9a-fA-F]{40}$/.test(raw)) raw = `xpl_${raw.slice(4).toLowerCase()}`;
+  if (/^xpl_/i.test(raw)) {
+    raw = raw.replace(/\s+/g, '');
+    const body = raw.slice(4);
+    if (/^[0-9a-fA-F]{40}$/.test(body)) raw = `xpl_${body.toLowerCase()}`;
+  }
   return raw;
 }
 
 export function explabsKeyDiagnostics() {
   const key = readExplabsKey();
+  const prefixXpl = /^xpl_/i.test(key);
+  const bodyIsHex = prefixXpl && /^[0-9a-fA-F]{40}$/.test(key.slice(4));
   const matchesProviderFormat = /^xpl_[0-9a-f]{40}$/.test(key);
   return {
     keyPresent: Boolean(key),
     keyLength: key.length,
     matchesProviderFormat,
-    keyShape: !key ? 'empty' : matchesProviderFormat ? 'xpl' : 'unrecognized',
+    prefixXpl,
+    bodyIsHex,
+    keyShape: !key ? 'empty' : matchesProviderFormat ? 'xpl' : prefixXpl ? 'xpl_malformed' : 'unrecognized',
   };
 }
 
