@@ -43,6 +43,8 @@ export function fixaObservabilitySummary() {
   const avgLatencyMs = latencies.length
     ? Math.round(latencies.reduce((sum, n) => sum + n, 0) / latencies.length)
     : null;
+  const lastSuccess = recent.find((row) => row.ok) || null;
+  const lastFailure = recent.find((row) => !row.ok) || null;
   return {
     recentCount: total,
     successRate: total ? Math.round((ok / total) * 100) : null,
@@ -50,6 +52,12 @@ export function fixaObservabilitySummary() {
     schemaFailures,
     safetyRejections,
     evaluatorFailures,
+    lastSuccessfulRequest: lastSuccess
+      ? { at: lastSuccess.startedAt, task: lastSuccess.task, latencyMs: lastSuccess.latencyMs }
+      : null,
+    lastFailure: lastFailure
+      ? { at: lastFailure.startedAt, task: lastFailure.task, code: lastFailure.code, latencyMs: lastFailure.latencyMs }
+      : null,
     recentErrors: recent.filter((row) => !row.ok).slice(0, 8).map((row) => ({
       requestId: row.requestId,
       task: row.task,

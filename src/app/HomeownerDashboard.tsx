@@ -3443,15 +3443,18 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <EstimateLoadingSteps
  zip={assessLoadingZip}
  activeStep={assessLoadingStep ?? 0}
- mediaUrl={activeJob.mediaDataUrl || mediaDataUrl}
- mediaType={activeJob.mediaType || mediaType}
+ mediaUrl={activeJob?.mediaDataUrl || mediaDataUrl}
+ mediaType={activeJob?.mediaType || mediaType}
  />
  ) : !hasRenderableAssessment(activeJob) ? (
  <div className="space-y-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
- <p className="text-sm font-semibold">We couldn&apos;t complete the assessment right now.</p>
+ <p className="text-sm font-semibold">Fixa couldn&apos;t complete this assessment right now.</p>
  <p className="text-sm leading-relaxed">
- {normalizeAssessmentMessage(assessmentMsg)}
+ Your photo and repair request are saved.
  </p>
+ {assessmentMsg ? (
+ <p className="text-sm leading-relaxed">{normalizeAssessmentMessage(assessmentMsg)}</p>
+ ) : null}
  {activeJob ? (
  <div className="flex flex-wrap gap-2">
  <button
@@ -3484,34 +3487,23 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </button>
  <button
  type="button"
- onClick={returnToIntakeDetails}
- className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium"
- >
- Continue without AI
- </button>
- {assessmentMode === "expert" || reportPath === "experts" ? (
- <button
- type="button"
- onClick={() => {
- setSelectedJobId(activeJob.id);
- setTab("jobs");
- }}
- className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium"
- >
- Continue request
- </button>
- ) : (
- <button
- type="button"
  onClick={() => {
  setAssessmentMode("expert");
+ setReportPath("experts");
+ setHireScreenOpen(true);
  if (activeJob) setSelectedJobId(activeJob.id);
  }}
  className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium"
  >
- Continue to hire a professional
+ Hire a Professional
  </button>
- )}
+ <button
+ type="button"
+ onClick={returnToIntakeDetails}
+ className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium"
+ >
+ Return to Repair
+ </button>
  </div>
  ) : null}
  </div>

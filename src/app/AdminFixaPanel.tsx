@@ -15,6 +15,15 @@ type FixaAdmin = {
   currentProvider?: string;
   currentModel?: string;
   connection?: string;
+  health?: {
+    configured?: boolean;
+    authenticated?: boolean;
+    modelReachable?: boolean;
+    healthy?: boolean;
+    providerStatus?: number;
+    providerCode?: string;
+    code?: string;
+  };
   routing?: Record<string, { primary?: string; model?: string; fallback?: string | null }>;
   providers: FixaProvider[];
   observability?: {
@@ -23,6 +32,8 @@ type FixaAdmin = {
     schemaFailures?: number;
     safetyRejections?: number;
     evaluatorFailures?: number;
+    lastSuccessfulRequest?: { at?: string; task?: string; latencyMs?: number } | null;
+    lastFailure?: { at?: string; task?: string; code?: string | null; latencyMs?: number } | null;
     recentErrors?: Array<{ requestId: string; task: string; code: string | null; latencyMs: number }>;
   };
   note?: string;
@@ -54,7 +65,7 @@ export default function AdminFixaPanel() {
   return (
     <section className="mx-auto w-full max-w-3xl space-y-4">
       <div>
-        <h2 className="text-lg font-semibold">Fixa</h2>
+        <h2 className="text-lg font-semibold">Fixa Status</h2>
         <p className="text-sm text-muted-foreground">
           Central assistant for FixBridge. Models are replaceable. Secrets stay on the server.
         </p>
@@ -69,6 +80,17 @@ export default function AdminFixaPanel() {
           <p className="mt-2 text-sm">
             {data?.connection === "connected" ? "Connected" : data?.connection === "error" ? "Error" : "Not configured"}
           </p>
+          <dl className="mt-3 space-y-1 text-sm">
+            <div className="flex justify-between gap-3"><dt>Configured</dt><dd>{data?.health?.configured ? "Yes" : "No"}</dd></div>
+            <div className="flex justify-between gap-3"><dt>Authenticated</dt><dd>{data?.health?.authenticated ? "Yes" : "No"}</dd></div>
+            <div className="flex justify-between gap-3"><dt>Model reachable</dt><dd>{data?.health?.modelReachable ? "Yes" : "No"}</dd></div>
+          </dl>
+          {data?.health?.providerCode ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Last provider result: {data.health.providerCode}
+              {data.health.providerStatus ? ` (${data.health.providerStatus})` : ""}
+            </p>
+          ) : null}
         </div>
         <div className="rounded-xl border border-border bg-card p-4 text-sm">
           <p className="font-semibold">Recent requests</p>
@@ -77,6 +99,13 @@ export default function AdminFixaPanel() {
           <p className="text-muted-foreground">Schema failures: {data?.observability?.schemaFailures ?? 0}</p>
           <p className="text-muted-foreground">Safety rejections: {data?.observability?.safetyRejections ?? 0}</p>
           <p className="text-muted-foreground">Evaluator failures: {data?.observability?.evaluatorFailures ?? 0}</p>
+          <p className="text-muted-foreground">
+            Last successful request: {data?.observability?.lastSuccessfulRequest?.at || "—"}
+          </p>
+          <p className="text-muted-foreground">
+            Last failure: {data?.observability?.lastFailure?.code || data?.observability?.lastFailure?.at || "—"}
+          </p>
+          <p className="text-muted-foreground">Recent schema errors: {data?.observability?.schemaFailures ?? 0}</p>
         </div>
       </div>
       <div className="grid gap-3">

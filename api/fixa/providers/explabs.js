@@ -10,12 +10,17 @@ const BASE_URL = 'https://api.experientiallabs.ai/v1';
 const TIMEOUT_MS = Number(process.env.AI_FETCH_TIMEOUT_MS || 38000);
 
 export function readExplabsKey() {
-  let raw = String(process.env.EXPLABS_API_KEY || '').replace(/^\uFEFF/, '').trim();
-  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
-    raw = raw.slice(1, -1).trim();
+  return String(process.env.EXPLABS_API_KEY || '').trim();
+}
+
+function sanitizedProviderCode(err, status) {
+  const raw = err?.error?.code || err?.code || err?.error?.type || '';
+  const code = String(raw || '').trim().slice(0, 64);
+  if (!code) return publicError(status);
+  if (/authorization|bearer|sk-|api[_-]?key\s*[:=]/i.test(code) && !/^invalid_api_key$/i.test(code)) {
+    return publicError(status);
   }
-  raw = raw.replace(/^EXPLABS_API_KEY\s*=\s*/i, '').replace(/^bearer\s+/i, '').trim();
-  return raw;
+  return code;
 }
 
 function clientOrNull() {
@@ -60,8 +65,15 @@ async function createCompletion({ messages, temperature, maxTokens, json }) {
     return { ok: true, text, message, model: MODEL, status: 200, code: 'ok' };
   } catch (err) {
     const status = Number(err?.status || err?.statusCode || 0);
-    console.error('[fixa] Experiential Labs request failed', { status: status || 'network', code: publicError(status) });
-    return { ok: false, text: '', message: null, model: MODEL, status, code: publicError(status) };
+    const code = sanitizedProviderCode(err, status);
+    console.error('[fixa] Experiential Labs request failed', {
+      keyPresent: Boolean(readExplabsKey()),
+      provider: 'experiential-labs',
+      model: MODEL,
+      status: status || 'network',
+      code,
+    });
+    return { ok: false, text: '', message: null, model: MODEL, status, code };
   }
 }
 
@@ -117,16 +129,24 @@ export const explabsProvider = {
       };
     } catch (err) {
       const status = Number(err?.status || err?.statusCode || 0);
-      const code = publicError(status);
+      const code = sanitizedProviderCode(err, status);
       const rejected = status === 401 || status === 403;
       const modelMissing = status === 404;
-      console.error('[fixa] health check failed', { status: status || 'network', code });
+      console.error('[fixa] health check failed', {
+        keyPresent: Boolean(readExplabsKey()),
+        provider: 'experiential-labs',
+        model: MODEL,
+        status: status || 'network',
+        code,
+      });
       return {
         ...report,
         authenticated: Boolean(status) && !rejected,
         modelReachable: false,
         healthy: false,
         code: modelMissing ? 'model_unreachable' : code,
+        providerStatus: status || undefined,
+        providerCode: code,
         httpStatus: status || undefined,
       };
     }

@@ -57,7 +57,8 @@ export async function getFixaHealth() {
     modelReachable: Boolean(health.modelReachable),
     healthy: Boolean(health.healthy),
     code: health.code,
-    ...(health.httpStatus ? { httpStatus: health.httpStatus } : {}),
+    ...(health.providerStatus ? { providerStatus: health.providerStatus, httpStatus: health.providerStatus } : {}),
+    ...(health.providerCode ? { providerCode: health.providerCode } : {}),
   };
 }
 

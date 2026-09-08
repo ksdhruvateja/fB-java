@@ -2945,8 +2945,13 @@ app.get('/api/fixa/health', requireAuth, aiLimiter, async (_req, res) => {
   }
 });
 
-app.get('/api/admin/fixa/providers', requireAuth, requireAdmin, requirePermission('settings.view'), (_req, res) => {
-  return res.json(getFixaAdminProviders());
+app.get('/api/admin/fixa/providers', requireAuth, requireAdmin, requirePermission('settings.view'), async (_req, res) => {
+  try {
+    return res.json(await getFixaAdminProviders());
+  } catch (e) {
+    console.error('fixa admin providers:', e);
+    return res.status(500).json({ ok: false, message: 'Fixa provider status is unavailable.' });
+  }
 });
 
 async function handleFixaAssessment(req, res) {

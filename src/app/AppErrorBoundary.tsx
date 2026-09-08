@@ -53,7 +53,7 @@ export default class AppErrorBoundary extends Component<AppErrorBoundaryProps, S
             {this.state.error.stack || this.state.error.message}
           </pre>
         ) : null}
-        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+        <div className="mt-6 flex w-full max-w-sm flex-col items-stretch justify-center gap-3 sm:max-w-none sm:flex-row sm:flex-wrap sm:items-center">
           <button
             type="button"
             onClick={this.handleTryAgain}
