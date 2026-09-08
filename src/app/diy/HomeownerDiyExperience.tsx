@@ -21,7 +21,7 @@ import type { ChatMessage } from "../geminiAssessment";
 import DiySafetyFeedback from "../DiySafetyFeedback";
 import { asGuideSteps, guideVisual, type GuideStep } from "./diyGuideVisual";
 
-export type DiyView = "home" | "step" | "chat" | "ideas";
+export type DiyView = "home" | "step" | "chat" | "ideas" | "complete";
 
 type Risk = "green" | "yellow" | "red";
 
@@ -44,6 +44,7 @@ type Props = {
   materials: string[];
   causes: string[];
   stopConditions: string[];
+  completionChecks?: string[];
   stepIndex: number;
   completed: Record<number, boolean>;
   bookmarked: boolean;
@@ -404,6 +405,7 @@ export default function HomeownerDiyExperience(props: Props) {
     materials,
     causes,
     stopConditions,
+    completionChecks = [],
     stepIndex,
     completed,
     bookmarked,
@@ -910,7 +912,39 @@ export default function HomeownerDiyExperience(props: Props) {
     </div>
   );
 
-  const main = view === "step" ? stepScreen : view === "ideas" ? ideas : view === "chat" ? null : landing;
+  const completeScreen = (
+    <div className="space-y-4">
+      <HeaderBar title="Verify the repair" onBack={onBack} />
+      <div className="rounded-[22px] bg-white p-4">
+        <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">Repair steps completed</p>
+        <h3 className="mt-1 text-[26px] font-semibold text-[#2c2926]">Check the result before calling it fixed</h3>
+        <p className="mt-2 text-[15px] leading-relaxed text-[#5c574f]">
+          Completing the steps does not prove the repair is finished. Confirm the original issue is gone.
+        </p>
+      </div>
+      <div className="rounded-[22px] bg-white p-4">
+        <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">Things to check now</p>
+        <ul className="mt-2 space-y-2 text-[15px] leading-relaxed text-[#5c574f]">
+          {(completionChecks.length ? completionChecks : ["The original problem no longer happens during a normal check."]).map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      </div>
+      <div className="grid gap-2">
+        <button type="button" onClick={onBack} className="rounded-[16px] bg-[#E07A4A] px-4 py-3 text-[15px] font-semibold text-white">
+          Issue Resolved
+        </button>
+        <button type="button" onClick={onHire} className="rounded-[16px] bg-white px-4 py-3 text-[15px] font-semibold text-[#2c2926]">
+          Hire a Professional
+        </button>
+        <button type="button" onClick={onBack} className="rounded-[16px] bg-white px-4 py-3 text-[15px] font-semibold text-[#2c2926]">
+          Return to Property
+        </button>
+      </div>
+    </div>
+  );
+
+  const main = view === "complete" ? completeScreen : view === "step" ? stepScreen : view === "ideas" ? ideas : view === "chat" ? null : landing;
 
   return (
     <div className="rounded-[24px] bg-[#F8F7F4] p-4 text-[#2c2926] sm:p-5">

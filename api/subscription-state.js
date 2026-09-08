@@ -10,6 +10,54 @@ import {
   isPaidHomeCarePlan,
 } from './subscription-catalog.js';
 
+/** Designated QA/demo accounts only. Never matches a real customer address. */
+export function isQaGuidedDiyDemoEmail(email) {
+  return /^demo\.homeowner\.[a-z0-9._-]+@example\.com$/i.test(String(email || '').trim());
+}
+
+/**
+ * Complimentary Guided DIY access for a designated demo homeowner.
+ * Creates a simulated subscription only. Does not touch Stripe or pricing_rules.
+ */
+export async function ensureQaGuidedDiyEntitlement(pool, userId, email) {
+  if (!isQaGuidedDiyDemoEmail(email)) return false;
+  const { rows } = await pool.query(
+    `SELECT id, stripe_subscription_id, simulated, status
+     FROM subscriptions
+     WHERE user_id=$1 AND plan_code = ANY($2::text[])
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [userId, PAID_HOME_CARE_PLAN_CODES]
+  );
+  const existing = rows[0];
+  if (existing?.stripe_subscription_id) return false;
+  const meta = JSON.stringify({
+    source: 'qa_guided_diy',
+    purpose: 'guided_diy_qa',
+    grantedAt: new Date().toISOString(),
+    note: 'Complimentary QA access for a designated demo homeowner. Not a customer payment.',
+  });
+  if (existing && String(existing.status || '').toLowerCase() === 'active' && existing.simulated === true) {
+    return true;
+  }
+  if (existing) {
+    await pool.query(
+      `UPDATE subscriptions
+       SET plan_code=$2, plan_family=$2, status='active', simulated=true,
+           current_period_end=NOW() + INTERVAL '30 days', meta=$3
+       WHERE id=$1`,
+      [existing.id, PAID_HOME_CARE_PLAN_CODE, meta]
+    );
+    return true;
+  }
+  await pool.query(
+    `INSERT INTO subscriptions (user_id, plan_code, plan_family, status, simulated, current_period_end, meta)
+     VALUES ($1, $2, $2, 'active', TRUE, NOW() + INTERVAL '30 days', $3)`,
+    [userId, PAID_HOME_CARE_PLAN_CODE, meta]
+  );
+  return true;
+}
+
 /** Stripe statuses that may grant Pro when period is still valid. */
 export const PRO_GRANTING_STATUSES = new Set(['active', 'trialing']);
 
@@ -148,8 +196,11 @@ export async function syncUserHomeCareEntitlement(pool, userId, { now = new Date
   if (!force && cached && Date.now() - cached.at < ENTITLEMENT_TTL_MS) {
     return cached.state;
   }
+  const { rows: userRows } = await pool.query(`SELECT plan_code, email FROM users WHERE id=$1`, [userId]);
+  if (await ensureQaGuidedDiyEntitlement(pool, userId, userRows[0]?.email)) {
+    invalidateHomeCareEntitlementCache(userId);
+  }
   const subscription = await loadBestHomeCareSubscription(pool, userId);
-  const { rows: userRows } = await pool.query(`SELECT plan_code FROM users WHERE id=$1`, [userId]);
   const storedPlanCode = userRows[0]?.plan_code || null;
 
   const state = resolveHomeCareSubscriptionState({

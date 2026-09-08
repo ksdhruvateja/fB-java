@@ -769,9 +769,11 @@ export default function HomeownerDashboard({
  if (String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green").toLowerCase() === "red") return;
  setDiySavingStep(true);
  const completed = { ...diyCompletedSteps, [diyStepIndex]: true };
- const nextIndex = Math.min(diyStepIndex + 1, steps.length - 1);
+ const finished = steps.every((_, idx) => completed[idx]);
+ const nextIndex = finished ? diyStepIndex : Math.min(diyStepIndex + 1, steps.length - 1);
  setDiyCompletedSteps(completed);
  setDiyStepIndex(nextIndex);
+ if (finished) setDiyView("complete");
  persistDiyProgress(nextIndex, completed);
  setDiyStepSaved(true);
  setDiySavingStep(false);
@@ -1728,7 +1730,11 @@ export default function HomeownerDashboard({
  null;
 
  const hasDiyAccess = Boolean(
- user.planCode && diyUnlockCodes.includes(user.planCode)
+ user.homeCareSubscription?.isPro ||
+ (user.planCode &&
+ (diyUnlockCodes.length === 0
+ ? isPaidHomeCarePlan(user.planCode)
+ : diyUnlockCodes.includes(user.planCode)))
  );
  const { isPro: hasHomeCarePro } = resolveClientProAccess(user);
  const homeCareSub = user.homeCareSubscription ?? null;
@@ -1741,7 +1747,7 @@ export default function HomeownerDashboard({
  }
 
  useEffect(() => {
- if (user.homeCareSubscription != null) return;
+ if (user.homeCareSubscription?.isPro) return;
  let cancelled = false;
  void validateToken().then((r) => {
  if (!cancelled && r.ok) onUserUpdated?.(r.user);
@@ -1749,7 +1755,7 @@ export default function HomeownerDashboard({
  return () => {
  cancelled = true;
  };
- }, [user.id, user.homeCareSubscription, onUserUpdated]);
+ }, [user.id, user.homeCareSubscription?.isPro, onUserUpdated]);
 
  useEffect(() => {
  if (user.homeCareSubscription == null || hasHomeCarePro || homeCareSub?.paymentIssue) return;
@@ -1920,6 +1926,12 @@ export default function HomeownerDashboard({
  setMediaType("video");
  };
  reader.readAsDataURL(file);
+ return;
+ }
+ const fileName = String(file.name || "").toLowerCase();
+ const heic = file.type === "image/heic" || file.type === "image/heif" || fileName.endsWith(".heic") || fileName.endsWith(".heif");
+ if (heic) {
+ setError("This image format isn't supported for analysis yet. Please upload a JPG, PNG, or WEBP.");
  return;
  }
  if (!file.type.startsWith("image/")) {
@@ -3841,6 +3853,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  materials={assessmentStringList(activeJob.aiAssessment?.materials_needed)}
  causes={assessmentStringList(activeJob.aiAssessment?.likely_causes)}
  stopConditions={assessmentStringList(activeJob.aiAssessment?.stop_conditions)}
+ completionChecks={assessmentStringList(activeJob.aiAssessment?.completion_checks)}
  stepIndex={diyStepIndex}
  completed={diyCompletedSteps}
  bookmarked={diyBookmarked}

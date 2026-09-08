@@ -10,7 +10,7 @@ const STEPS = [
   "Checking safety conditions…",
   "Comparing likely causes…",
   "Building your repair plan…",
-  "Preparing your next steps…",
+  "Preparing Guided DIY…",
 ] as const;
 
 export function EstimateLoadingSteps({
