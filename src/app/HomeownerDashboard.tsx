@@ -690,8 +690,30 @@ export default function HomeownerDashboard({
 
  function openProfessionalFromDiy() {
  setDiyShowProfessionalHandoff(true);
- if (activeJob) setSelectedJobId(activeJob.id);
+ if (activeJob) {
+ setSelectedJobId(activeJob.id);
+ const attempted = Object.entries(diyCompletedSteps)
+ .filter(([, done]) => done)
+ .map(([idx]) => activeJob.aiAssessment?.diy_guide_steps?.[Number(idx)]?.title || `Step ${Number(idx) + 1}`);
+ try {
+ sessionStorage.setItem(
+ "fixbridge-diy-handoff",
+ JSON.stringify({
+ jobId: activeJob.id,
+ category: activeJob.category,
+ subcategory: activeJob.serviceSubcategory || activeJob.aiAssessment?.service_subcategory || "",
+ summary: activeJob.aiAssessment?.summary || activeJob.description || "",
+ risk: activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green",
+ attempted,
+ })
+ );
+ } catch {
+ /* handoff still uses the existing job */
+ }
+ }
  setAssessmentMode("expert");
+ setTab("report");
+ setStep("assessment");
  }
 
  function persistDiyProgress(nextIndex: number, completed: Record<number, boolean>) {
@@ -1516,8 +1538,16 @@ export default function HomeownerDashboard({
  }
  sessionStorage.removeItem("fixbridge-dispatch-canceled");
  } else if (stripeJobId) {
+ const upgradeReturn = sessionStorage.getItem("fixbridge-upgrade-return");
  setSelectedJobId(Number(stripeJobId));
+ if (upgradeReturn === "diy" || upgradeReturn === "report" || upgradeReturn === "hire") {
+ setTab("report");
+ setStep("assessment");
+ setAssessmentMode(upgradeReturn === "hire" ? "expert" : "diy");
+ sessionStorage.removeItem("fixbridge-upgrade-return");
+ } else {
  setTab("jobs");
+ }
  }
 
  if (stripeJobId) {
@@ -1595,7 +1625,13 @@ export default function HomeownerDashboard({
  setCheckoutBusy(true);
  setError(null);
  try {
- const r = await startSubscription(planCode, jobId);
+ const returnTo = tab === "report" || diyView === "step" || diyView === "home" ? "diy" : tab === "go-pro" ? "dashboard" : tab;
+ try {
+ sessionStorage.setItem("fixbridge-upgrade-return", returnTo);
+ } catch {
+ /* ignore */
+ }
+ const r = await startSubscription(planCode, jobId, returnTo);
  if (r.alreadySubscribed) {
  const me = await validateToken({ syncCheckout: true });
  if (me.ok) onUserUpdated?.(me.user);
@@ -2314,6 +2350,7 @@ export default function HomeownerDashboard({
  const desc = activeJob.description || "";
  const tools = (activeJob.aiAssessment?.tools_required || []).join(", ") || "None";
  const materials = (activeJob.aiAssessment?.materials_needed || []).join(", ") || "None";
+ const guide = activeJob.aiAssessment?.diy_guide_steps?.[diyStepIndex];
  const steps = (activeJob.aiAssessment?.diy_steps || []).map((s, idx) => `${idx + 1}. ${s}`).join("\n") || "No steps generated.";
 
  const jobProperty =
@@ -2322,24 +2359,39 @@ export default function HomeownerDashboard({
  primaryProperty ||
  null;
  const jobHealth = normalizeHealthProfile(jobProperty?.healthProfile as PropertyHealthProfile | null);
- const passportContext = hasHomeCarePro ? buildPassportAiContext(jobProperty, jobHealth) : null;
+ const passportContext = hasHomeCarePro
+ ? buildPassportAiContext(jobProperty, jobHealth)
+ .split("\n")
+ .filter((line) => {
+ const hay = `${category} ${line}`.toLowerCase();
+ if (/plumb/.test(category.toLowerCase())) return /plumb|water|heater|property:|address:/.test(hay);
+ if (/hvac|heat|cool/.test(category.toLowerCase())) return /hvac|heat|cool|filter|furnace|property:|address:/.test(hay);
+ if (/electr/.test(category.toLowerCase())) return /electr|panel|property:|address:/.test(hay);
+ return /property:|address:|type:|built:/.test(line.toLowerCase());
+ })
+ .slice(0, 8)
+ .join("\n")
+ : null;
 
  const systemContext: ChatMessage = {
  role: "user",
  content: `Instructions: You are a friendly, helpful home-repair AI coach helping the homeowner clarify the step-by-step DIY Action Plan generated for their issue.
 Here is the context of the repair issue they are trying to solve:
 - Category: ${category}
+- Subcategory: ${activeJob.serviceSubcategory || activeJob.aiAssessment?.service_subcategory || "unspecified"}
 - Description: "${desc}"
+- Current step: ${guide?.title || `Step ${diyStepIndex + 1}`}
+- Current instruction: ${guide?.instruction || "not started"}
 - Required Tools: ${tools}
 - Materials Needed: ${materials}
 
-Property Passport (selected home — tailor advice to this property when relevant):
-${passportContext || "Upgrade to HomeCare Pro for property-aware recommendations based on your Property Passport."}
+Relevant property context:
+${passportContext || "No extra property context for this step."}
 
 Instructions/Steps:
 ${steps}
 
-Your role is to answer questions about these steps, tools, and materials. Be clear, concise, and encourage safety. When equipment age, systems, or home details matter, use the Property Passport context above.
+Your role is to clarify the current step. Do not silently rewrite the repair plan. If the diagnosis looks wrong, offer an "Update repair plan" option and wait for confirmation.
 CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. gas leak, electrical sparks, structural collapse) or asks to do something unsafe, immediately tell them to STOP and hire a professional (using the "Hire a Professional" option in FixBridge).`
  };
 
@@ -2358,7 +2410,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  ...prev,
  diyRiskLevel: "red",
  aiAssessment: prev.aiAssessment
- ? { ...prev.aiAssessment, diy_risk_level: "red", safe_diy_allowed: false, diy_steps: [] }
+ ? { ...prev.aiAssessment, diy_risk_level: "red", safe_diy_allowed: false, diy_steps: [], diy_guide_steps: [] }
  : prev.aiAssessment,
  }
  : prev
@@ -3704,6 +3756,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  photoUrl={activeJob.mediaType?.startsWith("image") ? activeJob.mediaDataUrl : null}
  risk={String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green").toLowerCase() === "red" ? "red" : String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green").toLowerCase() === "yellow" ? "yellow" : "green"}
  steps={assessmentStringList(activeJob.aiAssessment?.diy_steps)}
+ guideSteps={activeJob.aiAssessment?.diy_guide_steps || []}
  tools={assessmentStringList(activeJob.aiAssessment?.tools_required)}
  materials={assessmentStringList(activeJob.aiAssessment?.materials_needed)}
  causes={assessmentStringList(activeJob.aiAssessment?.visual_findings)}
@@ -3724,6 +3777,19 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  onOpenStep={() => void openGuidedDiyStep()}
  onOpenIdeas={() => setDiyView("ideas")}
  onCompleteStep={() => void completeCurrentDiyStep()}
+ onStepFeedback={(kind) => {
+ if (kind === "worked") {
+ void completeCurrentDiyStep();
+ return;
+ }
+ const stepTitle = activeJob.aiAssessment?.diy_guide_steps?.[diyStepIndex]?.title || `step ${diyStepIndex + 1}`;
+ const prompt =
+ kind === "failed"
+ ? `Step "${stepTitle}" did not work. Give one focused next check for this step only. Do not rewrite the repair plan.`
+ : `I see something different on "${stepTitle}". Clarify what to compare, and offer to update the repair plan if the diagnosis is wrong. Do not rewrite the plan unless I ask.`;
+ setDiyView("chat");
+ void sendDiyChatMessage(prompt);
+ }}
  onToggleBookmark={() => setDiyBookmarked((v) => !v)}
  onHire={openProfessionalFromDiy}
  onNotComfortable={openProfessionalFromDiy}

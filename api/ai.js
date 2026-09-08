@@ -1,14 +1,16 @@
 /**
  * Multi-provider AI assessment for FixBridge.
- * Supports Gemini, OpenAI, OpenRouter, and any OpenAI-compatible endpoint.
+ * OpenAI-compatible calls use the OpenAI SDK. Experiential Labs GPT-6 Astra
+ * replaces the previous OpenRouter provider.
  *
  * Env (pick one provider — AI_PROVIDER=auto chooses from available keys):
- *   AI_PROVIDER=auto|gemini|openai|openrouter|custom
- *   AI_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY / GEMINI_API_KEY
- *   AI_BASE_URL / OPENAI_BASE_URL   (custom OpenAI-compatible base, e.g. https://openrouter.ai/api/v1)
- *   AI_MODEL / OPENAI_MODEL         (e.g. gpt-4o-mini, google/gemma-3-27b-it:free)
+ *   AI_PROVIDER=auto|gemini|openai|explabs|custom
+ *   EXPLABS_API_KEY / OPENAI_API_KEY / AI_API_KEY / GEMINI_API_KEY
+ *   AI_BASE_URL / OPENAI_BASE_URL   (custom OpenAI-compatible base)
+ *   AI_MODEL / OPENAI_MODEL
  */
 
+import OpenAI from 'openai';
 import {
   classifyDiyRiskLevel,
   stripDangerousGuidanceFromAssessment,
@@ -24,11 +26,11 @@ const GEMINI_MODELS = [
 ];
 
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
-const DEFAULT_OPENROUTER_MODEL = 'nvidia/nemotron-nano-12b-v2-vl:free';
+const EXPLABS_MODEL = 'gpt-6-astra';
 const OPENAI_BASE = 'https://api.openai.com/v1';
-const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
+const EXPLABS_BASE = 'https://api.experientiallabs.ai/v1';
 
-/** Hard cap so OpenRouter/Gemini calls cannot hang the assess UI forever. */
+/** Hard cap so AI calls cannot hang the assess UI forever. */
 const AI_FETCH_TIMEOUT_MS = Number(process.env.AI_FETCH_TIMEOUT_MS || 38000);
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = AI_FETCH_TIMEOUT_MS) {
@@ -91,6 +93,18 @@ Return ONLY valid JSON with this exact schema (no prices, no dollar amounts, no 
   "diy_difficulty": "easy|moderate|hard|blocked",
   "tools_required": ["tool"],
   "materials_needed": ["material"],
+  "diy_guide_steps": [{
+    "step_number": 1,
+    "title": "short action title",
+    "instruction": "specific what to do",
+    "explanation": "why this step matters",
+    "tools": ["tool"],
+    "safety_note": "stop condition for this step",
+    "expected_result": "what the homeowner should see",
+    "if_not": "what to do if this step does not work",
+    "image_needed": false,
+    "image_prompt": "instructional close-up, only if a visual genuinely helps and the work is low-risk"
+  }],
   "diy_steps": ["diy step"],
   "stop_conditions": ["when to call a pro"],
   "disclaimer": "AI-assisted assessment, not a professional diagnosis."
@@ -143,6 +157,7 @@ export function applyDiySafetyRules(assessment, description = '') {
       professional_required: true,
       diy_difficulty: 'blocked',
       diy_steps: [],
+      diy_guide_steps: [],
       tools_required: [],
       materials_needed: [],
       immediate_safety_steps:
@@ -183,6 +198,33 @@ export function applyDiySafetyRules(assessment, description = '') {
 
 function asString(value, fallback = '') {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function normalizeGuideSteps(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((step, index) => {
+      if (!step || typeof step !== 'object') return null;
+      const title = asString(step.title);
+      const instruction = asString(step.instruction);
+      if (!title && !instruction) return null;
+      const unsafeVisual = /live panel|open electrical panel|gas line|climb|roof edge|asbestos/i.test(
+        `${step.image_prompt || ''} ${instruction}`
+      );
+      return {
+        step_number: Number(step.step_number) || index + 1,
+        title: title || `Step ${index + 1}`,
+        instruction,
+        explanation: asString(step.explanation),
+        tools: asStringArray(step.tools),
+        safety_note: asString(step.safety_note),
+        expected_result: asString(step.expected_result),
+        if_not: asString(step.if_not),
+        image_needed: step.image_needed === true && !unsafeVisual,
+        image_prompt: unsafeVisual ? '' : asString(step.image_prompt),
+      };
+    })
+    .filter(Boolean);
 }
 
 function asStringArray(value) {
@@ -239,6 +281,7 @@ export function parseStructuredAssessment(text) {
       materials_needed: asStringArray(parsed.materials_needed).length
         ? asStringArray(parsed.materials_needed)
         : asStringArray(parsed.partsNeeded),
+      diy_guide_steps: normalizeGuideSteps(parsed.diy_guide_steps || parsed.steps),
       diy_steps: asStringArray(parsed.diy_steps).length
         ? asStringArray(parsed.diy_steps)
         : asStringArray(parsed.diySteps),
@@ -249,6 +292,25 @@ export function parseStructuredAssessment(text) {
       ),
     };
     if (!assessment.summary) return null;
+    if (!assessment.diy_steps.length && assessment.diy_guide_steps.length) {
+      assessment.diy_steps = assessment.diy_guide_steps.map((step) => step.instruction || step.title);
+    }
+    if (!assessment.diy_guide_steps.length && assessment.diy_steps.length) {
+      assessment.diy_guide_steps = normalizeGuideSteps(
+        assessment.diy_steps.map((instruction, index) => ({
+          step_number: index + 1,
+          title: instruction.split(/[.!?]/)[0].slice(0, 80),
+          instruction,
+          explanation: 'This check narrows the cause before parts are replaced.',
+          tools: assessment.tools_required,
+          safety_note: assessment.stop_conditions[0] || 'Stop if the condition looks unsafe or different from expected.',
+          expected_result: 'The step completes without a new leak, spark, odor, or unusual resistance.',
+          if_not: 'Stop this step and use Hire a Professional rather than forcing the part.',
+          image_needed: false,
+          image_prompt: '',
+        }))
+      );
+    }
     // Strip any accidental price fields from model output
     delete assessment.estimatedCost;
     delete assessment.estimated_cost;
@@ -424,6 +486,18 @@ export function fallbackStructuredAssessment({ category, description } = {}) {
       tools_required,
       materials_needed,
       diy_steps,
+      diy_guide_steps: diy_steps.map((instruction, index) => ({
+        step_number: index + 1,
+        title: String(instruction).split(/[.!?]/)[0].slice(0, 80),
+        instruction,
+        explanation: 'This check confirms the cause before any part is replaced.',
+        tools: tools_required,
+        safety_note: stop_conditions[0] || 'Stop if the condition looks unsafe.',
+        expected_result: 'The step finishes without a new leak, spark, odor, or unusual resistance.',
+        if_not: 'Do not force the part. Request a professional.',
+        image_needed: /valve|filter|reset|shutoff/i.test(instruction),
+        image_prompt: '',
+      })),
       stop_conditions,
       disclaimer: 'AI-assisted assessment, not a professional diagnosis.',
     },
@@ -508,12 +582,16 @@ function getOpenAiKey() {
   );
 }
 
-function getOpenRouterKey() {
-  return (
-    process.env.OPENROUTER_API_KEY?.trim() ||
-    (getOpenAiKey().startsWith('sk-or-') ? getOpenAiKey() : '') ||
-    ''
-  );
+function getExplabsKey() {
+  return process.env.EXPLABS_API_KEY?.trim() || '';
+}
+
+function createChatClient(apiKey, baseURL) {
+  return new OpenAI({
+    apiKey,
+    baseURL,
+    timeout: AI_FETCH_TIMEOUT_MS,
+  });
 }
 
 function getCustomBaseUrl() {
@@ -525,9 +603,9 @@ function getCustomBaseUrl() {
 }
 
 function getConfiguredModel(provider) {
+  if (provider === 'explabs') return EXPLABS_MODEL;
   const explicit = process.env.AI_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || '';
   if (explicit) return explicit;
-  if (provider === 'openrouter') return DEFAULT_OPENROUTER_MODEL;
   if (provider === 'openai' || provider === 'custom') return DEFAULT_OPENAI_MODEL;
   return GEMINI_MODELS[0];
 }
@@ -537,26 +615,25 @@ function getConfiguredModel(provider) {
  * AI_PROVIDER=auto (default) picks from available keys.
  */
 export function resolveAiProvider() {
-  const forced = (process.env.AI_PROVIDER || 'auto').trim().toLowerCase();
+  const rawProvider = (process.env.AI_PROVIDER || 'auto').trim().toLowerCase();
+  const forced = rawProvider === 'openrouter' ? 'explabs' : rawProvider;
   const geminiKey = getGeminiApiKey();
   const openAiKey = getOpenAiKey();
-  const openRouterKey = getOpenRouterKey();
+  const explabsKey = getExplabsKey();
   const baseUrl = getCustomBaseUrl();
-
   if (forced && forced !== 'auto') {
     if (forced === 'gemini') {
       return geminiKey
         ? { provider: 'gemini', apiKey: geminiKey, baseUrl: null, model: getConfiguredModel('gemini') }
         : null;
     }
-    if (forced === 'openrouter') {
-      const key = openRouterKey || openAiKey;
-      return key
+    if (forced === 'explabs') {
+      return explabsKey
         ? {
-            provider: 'openrouter',
-            apiKey: key,
-            baseUrl: baseUrl || OPENROUTER_BASE,
-            model: getConfiguredModel('openrouter'),
+            provider: 'explabs',
+            apiKey: explabsKey,
+            baseUrl: EXPLABS_BASE,
+            model: EXPLABS_MODEL,
           }
         : null;
     }
@@ -571,14 +648,13 @@ export function resolveAiProvider() {
         : null;
     }
     if (forced === 'custom') {
-      const key = openAiKey || openRouterKey;
-      return key && baseUrl
-        ? { provider: 'custom', apiKey: key, baseUrl, model: getConfiguredModel('custom') }
+      return openAiKey && baseUrl
+        ? { provider: 'custom', apiKey: openAiKey, baseUrl, model: getConfiguredModel('custom') }
         : null;
     }
   }
 
-  // Auto: prefer Gemini (since it is natively supported, has vision, and is extremely fast), then OpenRouter
+  // Auto: Gemini first when configured, then Experiential Labs, then other OpenAI-compatible keys.
   if (geminiKey) {
     return {
       provider: 'gemini',
@@ -587,12 +663,12 @@ export function resolveAiProvider() {
       model: getConfiguredModel('gemini'),
     };
   }
-  if (openRouterKey || openAiKey.startsWith('sk-or-')) {
+  if (explabsKey) {
     return {
-      provider: 'openrouter',
-      apiKey: openRouterKey || openAiKey,
-      baseUrl: baseUrl || OPENROUTER_BASE,
-      model: getConfiguredModel('openrouter'),
+      provider: 'explabs',
+      apiKey: explabsKey,
+      baseUrl: EXPLABS_BASE,
+      model: EXPLABS_MODEL,
     };
   }
   if (baseUrl && openAiKey) {
@@ -835,7 +911,7 @@ async function analyzeWithGemini(apiKey, input, preferredModel) {
   return { assessment: null, source: 'error', error: lastError };
 }
 
-// ── OpenAI-compatible provider (OpenAI / OpenRouter / custom) ────────────────
+// ── OpenAI-compatible provider (Experiential Labs / OpenAI / custom) ────────
 
 function parseOpenAiError(body, status, provider) {
   try {
@@ -855,16 +931,12 @@ function parseOpenAiError(body, status, provider) {
         const retry = parsed?.error?.metadata?.retry_after_seconds;
         const retryHint = retry ? ` Retry in ~${retry}s.` : ' Retry shortly.';
         const who = providerName ? ` (${providerName})` : '';
-        return (
-          `The free model is busy upstream${who} — this is not your OpenRouter account quota.` +
-          retryHint +
-          ' Or switch AI_MODEL / use a paid model, or add a provider key at https://openrouter.ai/settings/integrations'
-        );
+        return `The model is busy upstream${who}.${retryHint}`;
       }
       return `${provider} rate limit hit. Retry shortly or switch model/provider in .env.`;
     }
     if (status === 401 || status === 403) {
-      return `${provider} rejected this API key. Check AI_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY in .env.`;
+      return `${provider} rejected this API key. Check EXPLABS_API_KEY / OPENAI_API_KEY / AI_API_KEY in .env.`;
     }
     if (rawText) return rawText.split('\n')[0];
     if (text) return text.split('\n')[0];
@@ -899,11 +971,6 @@ function extractMessageText(message) {
   return '';
 }
 
-function wantsReasoning() {
-  const flag = (process.env.AI_REASONING || 'false').trim().toLowerCase();
-  return flag === '1' || flag === 'true' || flag === 'on';
-}
-
 async function analyzeWithOpenAiCompatible(config, input) {
   const { provider, apiKey, baseUrl, model } = config;
   const content = [{ type: 'text', text: userPromptText(input) }];
@@ -915,16 +982,6 @@ async function analyzeWithOpenAiCompatible(config, input) {
     });
   }
 
-  const headers = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${apiKey}`,
-  };
-  if (provider === 'openrouter') {
-    const appUrl = (process.env.APP_URL || 'http://localhost:5000').replace(/\/$/, '');
-    headers['HTTP-Referer'] = appUrl;
-    headers['X-Title'] = 'FixBridge';
-  }
-
   const messages = [
     {
       role: 'system',
@@ -934,62 +991,29 @@ async function analyzeWithOpenAiCompatible(config, input) {
     { role: 'user', content },
   ];
 
-  const buildBody = (useJsonFormat) => {
-    const mode = input.mode === 'detail' ? 'detail' : 'summary';
-    const body = {
-      model,
-      temperature: 0.15,
-      // Vision + DIY steps need more room than a tiny summary budget
-      max_tokens: mode === 'detail' ? 900 : 700,
-      messages,
-    };
-    // Many free/reasoning models reject response_format — optional.
-    if (useJsonFormat) body.response_format = { type: 'json_object' };
-    if (provider === 'openrouter' && wantsReasoning()) {
-      body.reasoning = { enabled: true };
-    }
-    return body;
-  };
-
-  // Prefer plain JSON prompt; only retry with response_format if parse fails / API error
-  const attempts = provider === 'openrouter' ? [false] : [true, false];
+  const client = createChatClient(apiKey, baseUrl);
+  const mode = input.mode === 'detail' ? 'detail' : 'summary';
+  const attempts = [true, false];
   let lastError = `${provider} API unavailable`;
 
   for (const useJsonFormat of attempts) {
-    let response;
+    let payload;
     try {
-      response = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(buildBody(useJsonFormat)),
+      payload = await client.chat.completions.create({
+        model,
+        temperature: 0.15,
+        max_tokens: mode === 'detail' ? 900 : 700,
+        messages,
+        ...(useJsonFormat ? { response_format: { type: 'json_object' } } : {}),
       });
     } catch (err) {
-      return {
-        assessment: null,
-        source: 'error',
-        error: err instanceof Error ? err.message : `Network error calling ${provider}`,
-      };
-    }
-
-    const text = await response.text();
-    if (!response.ok) {
-      lastError = parseOpenAiError(text, response.status, provider);
-      // Retry without json_object if the model rejects it
-      if (
-        useJsonFormat &&
-        (/response_format|json_object|not supported/i.test(lastError) || response.status === 400)
-      ) {
+      const status = Number(err?.status || err?.statusCode || 0);
+      const message = err instanceof Error ? err.message : `Network error calling ${provider}`;
+      lastError = status ? parseOpenAiError(JSON.stringify({ error: { message } }), status, provider) : message;
+      if (useJsonFormat && (/response_format|json_object|not supported/i.test(lastError) || status === 400)) {
         continue;
       }
       return { assessment: null, source: 'error', error: lastError };
-    }
-
-    let payload;
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      lastError = `${provider} returned invalid JSON envelope`;
-      continue;
     }
 
     const messageText = extractMessageText(payload?.choices?.[0]?.message);
@@ -1019,7 +1043,7 @@ export async function analyzeRepair(input) {
       assessment: null,
       source: 'fallback',
       error:
-        'No AI API key configured. Set OPENAI_API_KEY, OPENROUTER_API_KEY, AI_API_KEY (+ AI_BASE_URL), or GEMINI_API_KEY in .env, then restart the API.',
+        'No AI API key configured. Set EXPLABS_API_KEY, OPENAI_API_KEY, AI_API_KEY (+ AI_BASE_URL), or GEMINI_API_KEY in .env, then restart the API.',
     };
   }
 
@@ -1079,11 +1103,16 @@ export async function analyzeRepairStructured(input) {
         estimated_labor_hours_min: result.assessment.estimated_labor_hours_min || 1,
         estimated_labor_hours_max: result.assessment.estimated_labor_hours_max || 3,
         complexity: result.assessment.complexity || 'medium',
+        service_subcategory: result.assessment.service_subcategory || '',
+        problem_classification: result.assessment.problem_classification || '',
         questions_needed: result.assessment.questions_needed || [],
         diy_difficulty: result.assessment.diy_difficulty || 'blocked',
         tools_required: result.assessment.tools_required || result.assessment.toolsRequired || [],
         materials_needed: result.assessment.materials_needed || result.assessment.partsNeeded || [],
         diy_steps: result.assessment.diy_steps || result.assessment.diySteps || [],
+        diy_guide_steps: Array.isArray(result.assessment.diy_guide_steps)
+          ? result.assessment.diy_guide_steps
+          : [],
         stop_conditions: result.assessment.stop_conditions || [],
         disclaimer:
           result.assessment.disclaimer || 'AI-assisted assessment, not a professional diagnosis.',
@@ -1544,16 +1573,6 @@ async function chatWithGemini(apiKey, messages, model) {
 
 async function chatWithOpenAiCompatible(config, messages) {
   const { provider, apiKey, baseUrl, model } = config;
-  const headers = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${apiKey}`,
-  };
-  if (provider === 'openrouter') {
-    const appUrl = (process.env.APP_URL || 'http://localhost:5000').replace(/\/$/, '');
-    headers['HTTP-Referer'] = appUrl;
-    headers['X-Title'] = 'FixBridge';
-  }
-
   const payloadMessages = [
     { role: 'system', content: CHAT_SYSTEM },
     ...messages
@@ -1561,39 +1580,22 @@ async function chatWithOpenAiCompatible(config, messages) {
       .map((m) => ({ role: m.role, content: m.content })),
   ];
 
-  let response;
+  let payload;
   try {
-    const requestBody = {
+    const client = createChatClient(apiKey, baseUrl);
+    payload = await client.chat.completions.create({
       model,
       temperature: 0.55,
       max_tokens: 900,
       messages: payloadMessages,
-    };
-    if (provider === 'openrouter' && wantsReasoning()) {
-      requestBody.reasoning = { enabled: true };
-    }
-    response = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(requestBody),
     });
   } catch (err) {
+    const status = Number(err?.status || err?.statusCode || 0);
+    const message = err instanceof Error ? err.message : `Network error calling ${provider}`;
     return {
       reply: null,
-      error: err instanceof Error ? err.message : `Network error calling ${provider}`,
+      error: status ? parseOpenAiError(JSON.stringify({ error: { message } }), status, provider) : message,
     };
-  }
-
-  const text = await response.text();
-  if (!response.ok) {
-    return { reply: null, error: parseOpenAiError(text, response.status, provider) };
-  }
-
-  let payload;
-  try {
-    payload = JSON.parse(text);
-  } catch {
-    return { reply: null, error: `${provider} returned invalid JSON` };
   }
 
   const reply = extractMessageText(payload?.choices?.[0]?.message);

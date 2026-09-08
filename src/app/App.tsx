@@ -699,10 +699,18 @@ export default function App() {
         params.delete("jobId");
       }
       if (params.get("paid") === "subscription") {
+        const returnTo = params.get("returnTo");
+        if (returnTo) {
+          try {
+            sessionStorage.setItem("fixbridge-upgrade-return", returnTo);
+          } catch {
+            /* ignore */
+          }
+        }
         if (planCode) setSubscriptionSuccessPlan(planCode);
         setSubscriptionActivating(true);
         setShowSubscriptionSuccess(true);
-        setPostPaymentDashboard(true);
+        setPostPaymentDashboard(returnTo !== "diy" && returnTo !== "report" && returnTo !== "hire");
         validateToken().then((result) => {
           if (result.ok) {
             setCurrentUser(result.user);
@@ -892,13 +900,13 @@ export default function App() {
 
   // Validate the stored JWT and populate user list cache on startup
   useEffect(() => {
-    // Refresh the public user list (for admin panel, contractor display)
-    loadAllUsers();
-
-    // Verify the token and update current user
+    // Verify the token first so the shell can render. Public user cache is secondary.
     validateToken().then((result) => {
       if (result.ok) {
         setCurrentUser(result.user);
+        if (result.user.role === "admin" || result.user.role === "contractor") {
+          void loadAllUsers();
+        }
         const params = new URLSearchParams(window.location.search);
         const stripe = params.get("stripe");
         if (result.user.role === "contractor" && (stripe === "return" || stripe === "refresh")) {
@@ -1186,7 +1194,18 @@ export default function App() {
               isDark={isDark}
               onToggleDark={toggleDark}
               onUserUpdated={(u) => setCurrentUser(u)}
-              initialTab={postPaymentDashboard ? "go-pro" : undefined}
+              initialTab={
+                postPaymentDashboard
+                  ? "go-pro"
+                  : (() => {
+                      try {
+                        const back = sessionStorage.getItem("fixbridge-upgrade-return");
+                        return back === "diy" || back === "report" || back === "hire" ? "report" : undefined;
+                      } catch {
+                        return undefined;
+                      }
+                    })()
+              }
               showSubscriptionSuccess={showSubscriptionSuccess}
               subscriptionSuccessPlanCode={subscriptionSuccessPlan}
               subscriptionActivating={subscriptionActivating}

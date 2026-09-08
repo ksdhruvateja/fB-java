@@ -459,6 +459,7 @@ function serializeJob(row, viewer) {
         return {
           ...a,
           diy_steps: [],
+          diy_guide_steps: [],
           tools_required: [],
           materials_needed: [],
           safe_diy_allowed: false,
@@ -961,7 +962,20 @@ async function runManagedJobAssessment(pool, job, viewer) {
   let propertyAiContext = '';
   if (homeCarePro && job.property_id) {
     const ctx = await buildPropertyAIContext(pool, job.property_id, job.homeowner_user_id);
-    propertyAiContext = ctx?.text || '';
+    const raw = ctx?.text || '';
+    const trade = String(job.category || '').toLowerCase();
+    const keep = /plumb/.test(trade)
+      ? /plumb|water|heater|address|property/i
+      : /hvac|heat|cool/.test(trade)
+        ? /hvac|heat|cool|filter|furnace|address|property/i
+        : /electr/.test(trade)
+          ? /electr|panel|address|property/i
+          : /address|property|year|type/i;
+    propertyAiContext = raw
+      .split('\n')
+      .filter((line, index) => index < 2 || keep.test(line))
+      .slice(0, 12)
+      .join('\n');
   }
 
   const aiStarted = Date.now();

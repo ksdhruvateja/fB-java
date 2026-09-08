@@ -36,7 +36,7 @@ export async function listPlans() {
   );
 }
 
-export async function startSubscription(planCode: string, jobId?: number) {
+export async function startSubscription(planCode: string, jobId?: number, returnTo?: string) {
   return api<{
     ok: boolean;
     url?: string;
@@ -49,7 +49,7 @@ export async function startSubscription(planCode: string, jobId?: number) {
     subscription?: unknown;
   }>(
     "/api/subscriptions/checkout",
-    { method: "POST", body: JSON.stringify({ planCode, jobId }) }
+    { method: "POST", body: JSON.stringify({ planCode, jobId, returnTo }) }
   );
 }
 

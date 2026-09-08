@@ -145,6 +145,7 @@ async function startSubscriptionCheckout(pool, {
   userEmail,
   planCode,
   jobId,
+  returnTo,
   origin,
   lookupManagedPlan,
   auditUserId,
@@ -183,9 +184,13 @@ async function startSubscriptionCheckout(pool, {
 
   assertPaymentsAvailable();
 
+  const returnFeature = ['diy', 'report', 'hire', 'passport', 'dashboard'].includes(String(returnTo || ''))
+    ? String(returnTo)
+    : '';
+  const returnQuery = returnFeature ? `&returnTo=${encodeURIComponent(returnFeature)}` : '';
   const successPath = jobId
-    ? `/?paid=subscription&plan=${encodeURIComponent(planCode)}&jobId=${jobId}`
-    : `/?paid=subscription&plan=${encodeURIComponent(planCode)}`;
+    ? `/?paid=subscription&plan=${encodeURIComponent(planCode)}&jobId=${jobId}${returnQuery}`
+    : `/?paid=subscription&plan=${encodeURIComponent(planCode)}${returnQuery}`;
   const cancelPath = jobId
     ? `/?canceled=subscription&plan=${encodeURIComponent(planCode)}&jobId=${jobId}`
     : `/?canceled=subscription&plan=${encodeURIComponent(planCode)}`;
@@ -694,12 +699,14 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       const planCode = String(req.body?.planCode || '');
       if (!planCode) return res.status(400).json({ ok: false, message: 'Plan code is required.' });
       const jobId = req.body?.jobId ? Number(req.body.jobId) : null;
+      const returnTo = String(req.body?.returnTo || '').slice(0, 32);
       const origin = req.get('origin') || req.get('referer');
       const result = await startSubscriptionCheckout(pool, {
         userId: req.authUser.id,
         userEmail: req.authUser.email,
         planCode,
         jobId,
+        returnTo,
         origin,
         lookupManagedPlan,
         auditUserId: req.authUser.id,

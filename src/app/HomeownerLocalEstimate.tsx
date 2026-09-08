@@ -4,10 +4,10 @@ import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 import { ManagedJob, retailRangeLabel } from "./managedJobs";
 
 const STEPS = [
-  "Details received",
-  "Photos attached",
+  "Reviewing your issue",
+  "Checking the photo",
+  "Identifying the system",
   "Checking safety",
-  "Identifying possible causes",
   "Preparing next steps",
 ] as const;
 

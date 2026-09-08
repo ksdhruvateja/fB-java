@@ -91,6 +91,18 @@ export type StructuredAssessment = {
   tools_required?: string[];
   materials_needed?: string[];
   diy_steps?: string[];
+  diy_guide_steps?: Array<{
+    step_number: number;
+    title: string;
+    instruction: string;
+    explanation: string;
+    tools: string[];
+    safety_note: string;
+    expected_result: string;
+    if_not: string;
+    image_needed: boolean;
+    image_prompt: string;
+  }>;
   stop_conditions?: string[];
   disclaimer?: string;
 };

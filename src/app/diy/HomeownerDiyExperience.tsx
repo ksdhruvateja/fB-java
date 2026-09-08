@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import type { ChatMessage } from "../geminiAssessment";
 import DiySafetyFeedback from "../DiySafetyFeedback";
+import { asGuideSteps, guideVisual, type GuideStep } from "./diyGuideVisual";
 
 export type DiyView = "home" | "step" | "chat" | "ideas";
 
@@ -38,6 +39,7 @@ type Props = {
   photoUrl?: string | null;
   risk: Risk;
   steps: string[];
+  guideSteps?: Array<Record<string, unknown>>;
   tools: string[];
   materials: string[];
   causes: string[];
@@ -56,6 +58,7 @@ type Props = {
   onOpenStep: () => void;
   onOpenIdeas: () => void;
   onCompleteStep: () => void;
+  onStepFeedback?: (kind: "worked" | "failed" | "different") => void;
   onToggleBookmark: () => void;
   onHire: () => void;
   onNotComfortable: () => void;
@@ -396,6 +399,7 @@ export default function HomeownerDiyExperience(props: Props) {
     photoUrl,
     risk,
     steps,
+  guideSteps = [],
     tools,
     materials,
     causes,
@@ -414,6 +418,7 @@ export default function HomeownerDiyExperience(props: Props) {
     onOpenStep,
     onOpenIdeas,
     onCompleteStep,
+    onStepFeedback,
     onToggleBookmark,
     onHire,
     onNotComfortable,
@@ -430,8 +435,13 @@ export default function HomeownerDiyExperience(props: Props) {
   const [browseOpen, setBrowseOpen] = useState(false);
   const [confirmedId, setConfirmedId] = useState<string | null>(() => readConfirmedCategory(jobId)?.id || null);
   const doneCount = Object.values(completed).filter(Boolean).length;
-  const current = steps[stepIndex] || "";
-  const parsed = splitStep(current);
+  const guides = useMemo(() => asGuideSteps(guideSteps, steps), [guideSteps, steps]);
+  const currentGuide: GuideStep | undefined = guides[stepIndex];
+  const current = currentGuide?.instruction || steps[stepIndex] || "";
+  const parsed = currentGuide
+    ? { title: currentGuide.title, body: currentGuide.instruction }
+    : splitStep(current);
+  const visualUrl = currentGuide ? guideVisual(currentGuide, category) : null;
   const tip =
     stopConditions[0] ||
     "Work in a dry, well-lit area and stop if this step looks different from what you expected.";
@@ -645,7 +655,7 @@ export default function HomeownerDiyExperience(props: Props) {
             </button>
           </div>
         </section>
-      ) : (
+      ) : browseOpen || (!steps.length && !summary) ? (
         <>
           <div className="flex items-center justify-between">
             <h3 className="text-[20px] font-semibold text-[#2c2926]">Browse by Category</h3>
@@ -663,7 +673,7 @@ export default function HomeownerDiyExperience(props: Props) {
             ))}
           </div>
         </>
-      )}
+      ) : null}
       {steps.length > 0 && !blocked ? (
         <div>
           <h3 className="mb-3 text-[20px] font-semibold text-[#2c2926]">Continue your repair</h3>
@@ -737,12 +747,21 @@ export default function HomeownerDiyExperience(props: Props) {
         </div>
       ) : (
         <>
-          <div>
+          <div className="rounded-[22px] bg-white p-4">
             <h3 className="text-[26px] font-semibold leading-tight text-[#2c2926]">{parsed.title}</h3>
-            {parsed.body ? <p className="mt-2 text-[15px] leading-relaxed text-[#5c574f]">{parsed.body}</p> : null}
+            <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">What to do</p>
+            <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">{currentGuide?.instruction || parsed.body || parsed.title}</p>
+            <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">Why this matters</p>
+            <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">
+              {currentGuide?.explanation || "This check confirms the cause before any part is replaced."}
+            </p>
           </div>
           <div className="overflow-hidden rounded-[22px] bg-[#EFE8DF]">
-            {photoUrl ? (
+            {visualUrl ? (
+              <img src={visualUrl} alt="" className="h-52 w-full object-cover" />
+            ) : currentGuide?.image_needed ? (
+              <div className="flex h-48 items-center justify-center text-[14px] text-[#8a847b]">Visual unavailable</div>
+            ) : photoUrl ? (
               <img src={photoUrl} alt="" className="h-52 w-full object-cover" />
             ) : (
               <div className="flex h-48 items-center justify-center text-[#8a847b]">
@@ -751,14 +770,39 @@ export default function HomeownerDiyExperience(props: Props) {
             )}
           </div>
           <div>
-            <p className="mb-2 text-[14px] font-semibold text-[#2c2926]">Tools you may need</p>
+            <p className="mb-2 text-[14px] font-semibold text-[#2c2926]">Tools needed</p>
             <div className="flex flex-wrap gap-2">
-              {(toolList.length ? toolList : ["No special tools listed"]).map((tool) => (
+              {(currentGuide?.tools?.length ? currentGuide.tools : toolList.length ? toolList : ["No special tools listed"]).map((tool) => (
                 <DIYToolChip key={tool} label={tool} />
               ))}
             </div>
           </div>
-          <DIYProTip text={tip} />
+          <div className="rounded-[22px] bg-white p-4">
+            <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">Safety note</p>
+            <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">{currentGuide?.safety_note || tip}</p>
+            <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">What you should see</p>
+            <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">
+              {currentGuide?.expected_result || "The step finishes without a new leak, spark, odor, or unusual resistance."}
+            </p>
+            <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">What to do if it does not work</p>
+            <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">
+              {currentGuide?.if_not || "Do not force the part. Use Hire a Professional and keep this step noted."}
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={() => (onStepFeedback ? onStepFeedback("worked") : onCompleteStep())} className="rounded-[16px] bg-white px-3 py-3 text-[13px] font-semibold text-[#2c2926]">
+              It worked
+            </button>
+            <button type="button" onClick={() => onStepFeedback?.("failed")} className="rounded-[16px] bg-white px-3 py-3 text-[13px] font-semibold text-[#2c2926]">
+              It did not work
+            </button>
+            <button type="button" onClick={() => onStepFeedback?.("different")} className="rounded-[16px] bg-white px-3 py-3 text-[13px] font-semibold text-[#2c2926]">
+              I see something different
+            </button>
+            <button type="button" onClick={onNotComfortable} className="rounded-[16px] bg-white px-3 py-3 text-[13px] font-semibold text-[#2c2926]">
+              I am not comfortable continuing
+            </button>
+          </div>
           <div className="sticky bottom-3 space-y-2 bg-[#F8F7F4]/90 pb-1 pt-2 backdrop-blur-sm">
             <button
               type="button"
