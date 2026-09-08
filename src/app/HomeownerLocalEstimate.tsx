@@ -134,7 +134,7 @@ export function HomeownerLocalEstimate({
         ) : null}
       </div>
       <p className="text-xs leading-relaxed text-muted-foreground">
-        Based on similar services and current pricing in your area.
+        Based on similar repair scenarios and local pricing patterns. This is an approximate AI-assisted estimate, not a quote from nearby completed jobs unless verified local data is available.
         {zip ? (
           <>
             {" "}

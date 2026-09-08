@@ -191,6 +191,49 @@
   }
 }
 
+:root {
+  --fixbridge-orange: #ff4d1c;
+  --fixbridge-orange-light: #ff8a62;
+  --fixbridge-orange-dark: #e23d10;
+  --fixbridge-cream: #faf6f1;
+  --fixbridge-sage: #dce8dc;
+  --fixbridge-blue: #dce8f6;
+  --fixbridge-yellow: #f8efd2;
+  --fixbridge-purple: #ebe4f4;
+  --fixbridge-red: #d4183d;
+  --fixbridge-charcoal: #2c2926;
+  --fixbridge-muted-text: #7a746c;
+  --fixbridge-card: #ffffff;
+  --fixbridge-background: #f7f2eb;
+}
+
+.fixera-shell {
+  color: var(--fixbridge-charcoal);
+  background: var(--fixbridge-background);
+  border-radius: 28px;
+  box-shadow: 0 8px 30px rgba(30, 40, 50, 0.06), 0 2px 8px rgba(30, 40, 50, 0.04);
+}
+
+.fixera-card {
+  border-radius: 24px;
+  background: var(--fixbridge-card);
+  box-shadow: 0 8px 30px rgba(30, 40, 50, 0.06), 0 2px 8px rgba(30, 40, 50, 0.04);
+}
+
+.fixera-scan {
+  animation: fixera-scan 2.8s ease-in-out infinite;
+}
+
+@keyframes fixera-scan {
+  0% { transform: translateY(8%); opacity: 0.2; }
+  50% { opacity: 0.9; }
+  100% { transform: translateY(78%); opacity: 0.2; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fixera-scan { animation: none; }
+}
+
 /* Temporary HighLevel launcher: lift above mobile bottom nav. Do not restyle widget internals. */
 @media (max-width: 1023px) {
   html[data-fb-chat="portal"] iframe[src*="leadconnectorhq.com"],

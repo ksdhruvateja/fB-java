@@ -130,7 +130,8 @@ import { readDiyChat, readDiyProgress, writeDiyChat, writeDiyProgress } from "./
 import { stopDiyAndEscalate } from "./diySafetyApi";
 import { fetchHomeownerConsentStatus, recordConsentAction } from "./homeownerConsentApi";
 import { useAcknowledgmentGate } from "./useAcknowledgmentGate";
-import HomeownerLocalEstimate, { EstimateLoadingSteps } from "./HomeownerLocalEstimate";
+import HomeownerLocalEstimate from "./HomeownerLocalEstimate";
+import FixeraAnalysisExperience from "./fixera/FixeraAnalysisExperience";
 import HireProfessionalWizard from "./HireProfessionalWizard";
 import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
 import { VerifiedAddressFields, type AddressVerificationMeta } from "./VerifiedAddressInput";
@@ -177,7 +178,7 @@ function markHirePerf(stage: string, startedAt?: number) {
 }
 
 /** Shrink phone photos so create+assess don't hang on multi'MB data URLs. */
-function compressImageForAssessment(file: File, maxEdge = 1280, quality = 0.72): Promise<string> {
+function compressImageForAssessment(file: File, maxEdge = 1440, quality = 0.82): Promise<string> {
  return new Promise((resolve, reject) => {
  const reader = new FileReader();
  reader.onerror = () => reject(new Error("Could not read image"));
@@ -3366,7 +3367,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  {activeJob?.aiAssessment
  ? activeJob.aiAssessment.disclaimer ||
  "Fixera assessment, not a professional diagnosis."
- : "Fixera is analyzing your repair."}
+ : "A first look appears as soon as Fixera starts. Safety and local pricing follow."}
  </p>
  </div>
  </div>
@@ -3452,11 +3453,13 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
  ) : assessLoadingStep != null ||
  (isAssessmentProcessing(activeJob) && !hasRenderableAssessment(activeJob) && assessInFlightRef.current === activeJob?.id) ? (
- <EstimateLoadingSteps
+ <FixeraAnalysisExperience
  zip={assessLoadingZip}
  activeStep={assessLoadingStep ?? 0}
  mediaUrl={activeJob?.mediaDataUrl || mediaDataUrl}
  mediaType={activeJob?.mediaType || mediaType}
+ category={activeJob?.category || category}
+ description={description}
  />
  ) : !hasRenderableAssessment(activeJob) ? (
  <div className="space-y-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
@@ -3521,6 +3524,13 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  </div>
  ) : hasRenderableAssessment(activeJob) ? (
  <>
+ <div className="fixera-card p-4">
+ <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--fixbridge-orange)]">Here&apos;s what Fixera found</p>
+ <p className="mt-1 text-lg font-semibold">{activeJob.title || activeJob.aiAssessment?.summary || "Your repair assessment"}</p>
+ <p className="mt-1 text-sm text-[var(--fixbridge-muted-text)]">
+ Using Fixera repair intelligence. Similar scenarios are compared for guidance. Learning improvements use validated outcomes, not automatic retraining on this photo.
+ </p>
+ </div>
  {/* Mode Selector Toggle */}
  <div className="flex border-b border-border">
  <button
