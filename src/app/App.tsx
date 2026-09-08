@@ -39,6 +39,7 @@ import LegalDocumentPage from "./LegalDocumentPage";
 import MarketingUnsubscribePage from "./MarketingUnsubscribePage";
 import { PUBLIC_FOOTER_LEGAL_LINKS, PUBLIC_CONTRACTOR_LEGAL_LINKS } from "./legalDocuments";
 import { applySiteMeta } from "./siteMeta";
+import LeadConnectorChatWidget, { shouldShowLeadConnectorChat } from "./LeadConnectorChatWidget";
 
 function isResetRole(role: string | null): role is ResetRole {
   return role === "homeowner" || role === "contractor" || role === "admin" || role === "partner";
@@ -1246,6 +1247,10 @@ export default function App() {
         {/* Footer only on marketing pages */}
         {isMarketing && <Footer onNavigate={navigate} />}
       </div>
+      <LeadConnectorChatWidget
+        enabled={shouldShowLeadConnectorChat({ page, role: currentUser?.role })}
+        liftForNav={page === "homeowner-dashboard" || page === "contractor-dashboard"}
+      />
     </div>
   );
 }

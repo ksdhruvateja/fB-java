@@ -190,3 +190,12 @@
     line-height: 1.5;
   }
 }
+
+/* Temporary HighLevel launcher: lift above mobile bottom nav. Do not restyle widget internals. */
+@media (max-width: 1023px) {
+  html[data-fb-chat="portal"] iframe[src*="leadconnectorhq.com"],
+  html[data-fb-chat="portal"] [id*="chat-widget"],
+  html[data-fb-chat="portal"] [class*="lc_text-widget"] {
+    bottom: calc(5.5rem + env(safe-area-inset-bottom)) !important;
+  }
+}
