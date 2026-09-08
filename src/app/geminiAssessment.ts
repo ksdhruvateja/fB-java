@@ -104,9 +104,12 @@ export async function refreshAiStatus(): Promise<boolean> {
       cachedProvider = null;
       return false;
     }
-    const data = (await response.json()) as AiStatus;
-    cachedConfigured = Boolean(data.configured);
-    cachedProvider = data.provider ?? null;
+    const data = (await response.json()) as AiStatus & {
+      provider?: string | { name?: string; configured?: boolean; healthy?: boolean };
+    };
+    const providerName = typeof data.provider === "string" ? data.provider : data.provider?.name;
+    cachedConfigured = Boolean(data.configured ?? (typeof data.provider === "object" ? data.provider?.configured : false));
+    cachedProvider = providerName ?? null;
     return cachedConfigured;
   } catch {
     cachedConfigured = false;

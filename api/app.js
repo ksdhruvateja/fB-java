@@ -2920,8 +2920,18 @@ app.post('/api/chat/:jobId', requireAuth, async (req, res) => {
 });
 
 // ── Fixa — central assistant. Features never call a vendor SDK directly. ──
-function sendFixaStatus(_req, res) {
-  return res.json(getFixaPublicStatus());
+async function sendFixaStatus(_req, res) {
+  try {
+    return res.json(await getFixaPublicStatus());
+  } catch (e) {
+    console.error('fixa status:', e);
+    return res.status(500).json({
+      assistant: 'Fixa',
+      status: 'degraded',
+      provider: { name: 'Experiential Labs', configured: false, healthy: false },
+      model: 'gpt-6-astra',
+    });
+  }
 }
 
 app.get('/api/ai/status', requireAuth, sendFixaStatus);
