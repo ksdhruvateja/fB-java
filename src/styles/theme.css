@@ -224,14 +224,38 @@
   animation: fixera-scan 2.8s ease-in-out infinite;
 }
 
+.fixera-buffer {
+  position: relative;
+  overflow: hidden;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(44, 41, 38, 0.08);
+}
+
+.fixera-buffer::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 38%;
+  border-radius: inherit;
+  background: var(--fixbridge-orange);
+  animation: fixera-buffer 1.15s ease-in-out infinite;
+}
+
 @keyframes fixera-scan {
   0% { transform: translateY(8%); opacity: 0.2; }
   50% { opacity: 0.9; }
   100% { transform: translateY(78%); opacity: 0.2; }
 }
 
+@keyframes fixera-buffer {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(280%); }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .fixera-scan { animation: none; }
+  .fixera-scan,
+  .fixera-buffer::after { animation: none; }
 }
 
 /* Temporary HighLevel launcher: lift above mobile bottom nav. Do not restyle widget internals. */

@@ -3393,15 +3393,29 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  ) : null}
  </div>
  {!activeJob ? (
- <p className="flex items-center gap-2 text-sm text-muted-foreground">
- <Loader2 className="h-4 w-4 animate-spin" /> Creating your service request...
+ <div className="rounded-xl border border-border/70 px-4 py-3 text-sm">
+ <p className="flex items-center gap-2 font-medium">
+ <Loader2 className="h-4 w-4 animate-spin text-[#FF4D1C]" /> Creating your service request
  </p>
+ <div className="fixera-buffer mt-2" role="progressbar" aria-label="Creating your service request" />
+ <p className="mt-2 text-muted-foreground">Please wait. This step is still buffering.</p>
+ </div>
  ) : (
  <>
  {(assessLoadingStep != null || (isAssessmentProcessing(activeJob) && !hasRenderableAssessment(activeJob))) ? (
  <div className="rounded-xl border border-border/70 px-4 py-3 text-sm">
- <p className="font-medium">AI recommendation</p>
- <p className="mt-1 text-muted-foreground">Preparing recommendation... You can continue scheduling.</p>
+ <p className="flex items-center justify-between gap-2 font-medium">
+ AI recommendation
+ <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#FF4D1C]">
+ <Loader2 className="h-3.5 w-3.5 animate-spin" /> Buffering
+ </span>
+ </p>
+ <div className="fixera-buffer mt-2" role="progressbar" aria-label="Preparing recommendation" />
+ <div className="mt-2 max-h-24 space-y-1.5 overflow-y-auto pr-1 text-muted-foreground [scrollbar-width:thin]">
+ <p>Preparing recommendation. Please wait.</p>
+ <p>You can stay on this screen. Scheduling stays available while this buffers.</p>
+ <p>The safety result and estimate appear when this step finishes.</p>
+ </div>
  </div>
  ) : hasRenderableAssessment(activeJob) ? (
  <p className="text-sm leading-relaxed">{activeJob.aiAssessment?.summary || "Assessment saved."}</p>
