@@ -7,7 +7,7 @@ import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
 import { analyzeRepairStructured, chatWithCustomer, getAiStatus } from './ai.js';
-import { initManagedSchema } from './schema-managed.js';
+import { initManagedSchema, ensureReferralCodeColumns } from './schema-managed.js';
 import { initSupportTicketSchema, registerSupportTicketRoutes } from './support-tickets.js';
 import { initInAppNotificationSchema, registerInAppNotificationRoutes } from './in-app-notifications.js';
 import { initMessagingSchema, registerMessagingRoutes } from './messaging.js';
@@ -421,7 +421,7 @@ async function ensureDemoUsers() {
   }
 }
 
-const SCHEMA_READY_VERSION = 20260907;
+const SCHEMA_READY_VERSION = 20260908;
 
 async function readSchemaReadyVersion() {
   try {
@@ -450,6 +450,11 @@ async function writeSchemaReadyVersion() {
 
 export async function initDb() {
   if (initDb._done) return;
+  try {
+    await ensureReferralCodeColumns(pool);
+  } catch (e) {
+    console.warn('[schema] referral code columns:', e.message);
+  }
   // Cold Netlify isolates used to run hundreds of sequential DDL statements
   // before any save, upload, or navigation request could start.
   if ((await readSchemaReadyVersion()) >= SCHEMA_READY_VERSION) {

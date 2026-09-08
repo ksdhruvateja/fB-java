@@ -6162,6 +6162,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
       res.json({ ok: true, partner: null });
     } catch (e) {
+      console.error('partner lookup:', e);
       res.status(500).json({ ok: false, message: 'Server error' });
     }
   });

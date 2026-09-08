@@ -3,6 +3,15 @@ import { DEFAULT_PRICING_RULES } from './pricing.js';
 /**
  * Additive Managed MVP schema for Neon / pg-mem.
  */
+export async function ensureReferralCodeColumns(pool) {
+  await pool.query(`ALTER TABLE partners ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE partners ADD COLUMN IF NOT EXISTS notes TEXT`);
+  await pool.query(`ALTER TABLE discount_codes ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE discount_codes ADD COLUMN IF NOT EXISTS starts_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE discount_codes ADD COLUMN IF NOT EXISTS notes TEXT`);
+  await pool.query(`ALTER TABLE discount_codes ADD COLUMN IF NOT EXISTS per_user_limit INT`);
+}
+
 export async function initManagedSchema(pool) {
   // Contractor compliance extensions on users
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS compliance_status TEXT DEFAULT 'draft'`);
