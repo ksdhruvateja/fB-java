@@ -130,7 +130,7 @@ Production readiness release: navigation system, address entry (USPS verificatio
 - `STRIPE_PUBLISHABLE_KEY` (or `VITE_STRIPE_PUBLISHABLE_KEY` at build)
 
 **Optional**
-- `GEMINI_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` / `AI_API_KEY` + `AI_BASE_URL`
+- `EXPLABS_API_KEY` (Experiential Labs GPT-6 Astra, server-side only)
 - `VITE_GEMINI_API_KEY`
 - `VITE_GOOGLE_MAPS_API_KEY`
 - `CORS_ORIGINS`

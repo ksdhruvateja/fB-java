@@ -934,7 +934,7 @@ async function analyzeWithOpenAiCompatible(config, input) {
       payload = await client.chat.completions.create({
         model,
         temperature: 0.15,
-        max_tokens: mode === 'detail' ? 900 : 700,
+        max_tokens: mode === 'detail' ? 2800 : 2400,
         messages,
         ...(useJsonFormat ? { response_format: { type: 'json_object' } } : {}),
       });
