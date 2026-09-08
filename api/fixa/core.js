@@ -59,6 +59,12 @@ export async function getFixaHealth() {
     code: health.code,
     ...(health.providerStatus ? { providerStatus: health.providerStatus, httpStatus: health.providerStatus } : {}),
     ...(health.providerCode ? { providerCode: health.providerCode } : {}),
+    ...(health.modelsHttpStatus != null ? { modelsHttpStatus: health.modelsHttpStatus } : {}),
+    ...(health.modelListed != null ? { modelListed: health.modelListed } : {}),
+    ...(health.returnedModel ? { returnedModel: health.returnedModel } : {}),
+    ...(health.latencyMs != null ? { latencyMs: health.latencyMs } : {}),
+    ...(health.usage ? { usage: health.usage } : {}),
+    ...(health.text ? { text: health.text } : {}),
   };
 }
 

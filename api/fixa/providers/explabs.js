@@ -91,7 +91,8 @@ export const explabsProvider = {
     return createCompletion(input);
   },
   async healthCheck() {
-    const configured = Boolean(readExplabsKey());
+    const apiKey = readExplabsKey();
+    const configured = Boolean(apiKey);
     const report = {
       assistant: 'Fixa',
       provider: 'experiential-labs',
@@ -102,16 +103,96 @@ export const explabsProvider = {
       healthy: false,
       code: configured ? 'unverified' : 'not_configured',
     };
-    if (!configured) return report;
+    if (!configured) {
+      console.error('[fixa] health check skipped', { keyPresent: false, provider: 'experiential-labs', model: MODEL });
+      return report;
+    }
+
+    console.info('[fixa] health check started', { keyPresent: true, provider: 'experiential-labs', model: MODEL });
+    const modelsStarted = Date.now();
+    let modelsStatus = 0;
+    let modelsCode = null;
+    let listed = [];
+    try {
+      const modelsRes = await fetch(`${BASE_URL}/models`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      modelsStatus = modelsRes.status;
+      const modelsBody = await modelsRes.json().catch(() => null);
+      modelsCode = sanitizedProviderCode(
+        { error: modelsBody?.error, code: modelsBody?.error?.code, status: modelsRes.status },
+        modelsRes.status
+      );
+      listed = Array.isArray(modelsBody?.data)
+        ? modelsBody.data.map((row) => String(row?.id || '')).filter(Boolean)
+        : [];
+    } catch (err) {
+      modelsCode = sanitizedProviderCode(err, 0);
+      console.error('[fixa] models list failed', {
+        keyPresent: true,
+        provider: 'experiential-labs',
+        model: MODEL,
+        status: 'network',
+        code: modelsCode,
+      });
+      return {
+        ...report,
+        code: modelsCode || 'provider_unavailable',
+        modelsHttpStatus: 0,
+        modelsLatencyMs: Date.now() - modelsStarted,
+        modelListed: false,
+      };
+    }
+
+    const modelListed = listed.includes(MODEL);
+    if (modelsStatus === 401 || modelsStatus === 403) {
+      console.error('[fixa] models list rejected', {
+        keyPresent: true,
+        provider: 'experiential-labs',
+        model: MODEL,
+        status: modelsStatus,
+        code: modelsCode,
+      });
+      return {
+        ...report,
+        authenticated: false,
+        modelReachable: false,
+        healthy: false,
+        code: modelsCode || 'provider_rejected',
+        providerStatus: modelsStatus,
+        providerCode: modelsCode,
+        modelsHttpStatus: modelsStatus,
+        modelsLatencyMs: Date.now() - modelsStarted,
+        modelListed: false,
+      };
+    }
+
+    if (modelsStatus !== 200) {
+      return {
+        ...report,
+        authenticated: false,
+        modelReachable: false,
+        healthy: false,
+        code: modelsCode || `provider_http_${modelsStatus || 0}`,
+        providerStatus: modelsStatus || undefined,
+        providerCode: modelsCode,
+        modelsHttpStatus: modelsStatus,
+        modelsLatencyMs: Date.now() - modelsStarted,
+        modelListed,
+      };
+    }
 
     const client = clientOrNull();
     try {
+      const started = Date.now();
       const payload = await client.chat.completions.create({
         model: MODEL,
         temperature: 0,
         max_tokens: 8,
         messages: [{ role: 'user', content: 'Reply with the single word OK.' }],
       });
+      const latencyMs = Date.now() - started;
       const message = payload?.choices?.[0]?.message;
       const content = message?.content;
       const text = typeof content === 'string'
@@ -119,13 +200,20 @@ export const explabsProvider = {
         : Array.isArray(content)
           ? content.map((part) => (typeof part === 'string' ? part : part?.text || '')).join('')
           : '';
-      const healthy = Boolean(String(text || '').trim());
+      const healthy = /ok/i.test(String(text || '').trim());
       return {
         ...report,
-        authenticated: true,
-        modelReachable: true,
-        healthy,
+        authenticated: modelsStatus === 200,
+        modelReachable: modelListed && healthy,
+        healthy: modelsStatus === 200 && modelListed && healthy,
         code: healthy ? 'ok' : 'empty_response',
+        returnedModel: payload?.model || null,
+        latencyMs,
+        usage: payload?.usage || null,
+        text,
+        modelsHttpStatus: modelsStatus,
+        modelsLatencyMs: Date.now() - modelsStarted,
+        modelListed,
       };
     } catch (err) {
       const status = Number(err?.status || err?.statusCode || 0);
@@ -141,13 +229,16 @@ export const explabsProvider = {
       });
       return {
         ...report,
-        authenticated: Boolean(status) && !rejected,
+        authenticated: modelsStatus === 200 && !rejected,
         modelReachable: false,
         healthy: false,
         code: modelMissing ? 'model_unreachable' : code,
         providerStatus: status || undefined,
         providerCode: code,
         httpStatus: status || undefined,
+        modelsHttpStatus: modelsStatus,
+        modelsLatencyMs: Date.now() - modelsStarted,
+        modelListed,
       };
     }
   },
