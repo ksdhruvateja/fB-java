@@ -179,26 +179,33 @@ export default function HomeownerServicesPage({
           </button>
         ))}
       </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-2 items-stretch gap-3 lg:grid-cols-3">
         {visible.map((item) => (
-          <article key={item.id} className="rounded-2xl border border-border/70 bg-card p-4 shadow-sm transition hover:-translate-y-0.5">
-            <img src={serviceImageFor(item.name)} alt="" className="mb-3 h-16 w-16 rounded-2xl object-cover" />
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <h2 className="text-sm font-semibold">{item.name}</h2>
-                <p className="mt-1 text-xs text-muted-foreground">{item.description}</p>
-              </div>
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => {
+              setSetup(false);
+              setSelectedId(item.id);
+            }}
+            className={`flex h-full min-h-[220px] flex-col rounded-2xl border bg-card p-3 text-left shadow-sm transition ${
+              selectedId === item.id ? "border-primary" : "border-border/70"
+            }`}
+          >
+            <img src={serviceImageFor(item.name)} alt="" className="h-24 w-full rounded-xl object-cover" />
+            <h2 className="mt-3 line-clamp-2 min-h-10 text-sm font-semibold leading-5">{item.name}</h2>
+            <p className="mt-1 line-clamp-2 min-h-8 text-xs leading-4 text-muted-foreground">{item.description}</p>
+            <div className="mt-auto flex items-center justify-between gap-2 pt-3">
               {item.subscriptionEligible ? (
-                <span className="shrink-0 rounded-full bg-primary/10 px-2 py-1 text-[10px] font-semibold text-primary">Subscription Eligible</span>
-              ) : null}
+                <span className="rounded-full bg-primary/10 px-2 py-1 text-[10px] font-semibold text-primary">Recurring</span>
+              ) : (
+                <span className="text-[10px] text-muted-foreground">Request</span>
+              )}
+              <span className="inline-flex items-center gap-1 text-xs font-semibold text-primary">
+                View <ArrowRight className="h-3.5 w-3.5" />
+              </span>
             </div>
-            {item.recommendedFrequency ? (
-              <p className="mt-2 text-[11px] text-muted-foreground">Recommended: {frequencyLabel(item.recommendedFrequency)}</p>
-            ) : null}
-            <button type="button" onClick={() => setSelectedId(item.id)} className="mt-3 inline-flex min-h-11 items-center gap-1 text-xs font-semibold text-primary">
-              View Service <ArrowRight className="h-3.5 w-3.5" />
-            </button>
-          </article>
+          </button>
         ))}
       </div>
       {selected && !setup ? (

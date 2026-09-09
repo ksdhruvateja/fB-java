@@ -207,16 +207,16 @@ export default function HomeownerOverview({
             </button>
           ) : null}
         </div>
-        <div className="flex gap-2 overflow-x-auto pb-1">
+        <div className="grid grid-cols-2 items-stretch gap-3 lg:grid-cols-3">
           {popular.map((item) => (
             <button
               key={item.id}
               type="button"
               onClick={() => onOpenServices?.(item.id)}
-              className="w-[148px] shrink-0 rounded-2xl border border-border/70 bg-card p-3 text-left shadow-sm"
+              className="flex h-full min-h-[168px] flex-col rounded-2xl border border-border/70 bg-card p-3 text-left shadow-sm"
             >
-              <img src={serviceImageFor(item.name)} alt="" className="mb-2 h-12 w-12 rounded-xl object-cover" />
-              <p className="text-sm font-semibold">{item.name}</p>
+              <img src={serviceImageFor(item.name)} alt="" className="h-20 w-full rounded-xl object-cover" />
+              <p className="mt-2 line-clamp-1 text-sm font-semibold">{item.name}</p>
               <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{item.description}</p>
             </button>
           ))}
