@@ -68,6 +68,7 @@ import {
  type PropertyHealthProfile,
 } from "./homeownerPropertyHealth";
 import HomeownerOverview from "./HomeownerOverview";
+import HomeownerServicesPage from "./HomeownerServicesPage";
 import HomeownerHomeUpdates from "./HomeownerHomeUpdates";
 import HomeownerPropertyCare from "./HomeownerPropertyCare";
 import HomeownerHomeProtection from "./HomeownerHomeProtection";
@@ -1551,9 +1552,9 @@ export default function HomeownerDashboard({
  Boolean(job.paymentCompletedAt) ||
  ["paid_for_dispatch", "awaiting_contractor"].includes(String(job.status)));
  if (paid) {
- setDispatchSuccessMsg(
- "Payment Successful - Your request has been submitted to FixBridge. An admin will review it shortly."
- );
+ setDispatchSuccessMsg("Service booked. Your professional request is on Home.");
+ navigateTab("overview");
+ setSelectedJobId(confirmJobId);
  return;
  }
  } catch {
@@ -2682,6 +2683,11 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  onOpenPropertyPicker={() => setPropertyPickerOpen(true)}
  onOpenQuotes={() => openJobsSegment("quotes")}
  onOpenHomeUpdates={() => openPropertyCare("recommendations")}
+ onOpenServices={(offeringId) => {
+ if (offeringId) window.sessionStorage.setItem("fixbridge.serviceOffering", offeringId);
+ else window.sessionStorage.removeItem("fixbridge.serviceOffering");
+ navigateTab("services");
+ }}
  />
  <div className="mx-auto max-w-5xl">
  <HomeownerHomeUpdates
@@ -2699,6 +2705,20 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  />
  </div>
  </div>
+ )}
+
+ {tab === "services" && (
+ <HomeownerServicesPage
+ property={primaryProperty}
+ initialOfferingId={typeof window !== "undefined" ? window.sessionStorage.getItem("fixbridge.serviceOffering") : null}
+ onRequestService={(prefill) =>
+ openRequestService({
+ service: prefill?.service as HomeownerService | undefined,
+ description: prefill?.description,
+ })
+ }
+ onOpenHomeCare={() => navigateTab("go-pro")}
+ />
  )}
 
  {tab === "property-care" && (
@@ -3456,8 +3476,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  setSelectedJobId(updated.id);
  }}
  onPaid={async () => {
- setDispatchSuccessMsg("Dispatch fee authorized - FixBridge has been notified.");
- setTab("jobs");
+ setDispatchSuccessMsg("Service booked. Your professional request is on Home.");
+ navigateTab("overview");
  setSelectedJobId(activeJob.id);
  await refresh();
  }}
@@ -3683,8 +3703,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  setSelectedJobId(updated.id);
  }}
  onPaid={async () => {
- setDispatchSuccessMsg("Dispatch fee authorized - FixBridge has been notified.");
- setTab("jobs");
+ setDispatchSuccessMsg("Service booked. Your professional request is on Home.");
+ navigateTab("overview");
  setSelectedJobId(activeJob.id);
  await refresh();
  }}

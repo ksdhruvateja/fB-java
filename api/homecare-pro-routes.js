@@ -17,6 +17,9 @@ import {
 import { buildPropertyAIContext, sanitizeQuoteForSecondOpinion } from './property-ai-context.js';
 import { complete } from './fixa/index.js';
 import { upsertServiceReminderEligibility } from './service-reminders.js';
+import { activationFeeCentsFor, mergeActivationFee, mergeOfferings, offeringById, recurringTypeForOffering } from './service-offerings.js';
+import { createRecurringAdminJob, fulfillRecurringActivation } from './recurring-activation.js';
+import { createCheckoutSession, stripeConfigured } from './stripe.js';
 
 function addRecurrenceDays(dateStr, recurrence) {
   const d = new Date(dateStr || Date.now());
@@ -389,6 +392,167 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, message: 'Could not create service visit request.' });
+    }
+  });
+
+  app.get('/api/home-services', requireAuth, async (req, res) => {
+    try {
+      const config = await getHomeCareConfig(pool);
+      res.json({
+        ok: true,
+        offerings: mergeOfferings(config.serviceCatalog?.offerings).filter((row) => row.active && row.homeownerVisible),
+        activationFee: mergeActivationFee(config.recurring?.activationFee),
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Could not load services.' });
+    }
+  });
+
+  app.post('/api/recurring-services/setup', requireAuth, async (req, res) => {
+    try {
+      const config = await getHomeCareConfig(pool);
+      const b = req.body || {};
+      const offering = offeringById(config, b.offeringId);
+      if (!offering?.active || !offering.subscriptionEligible) {
+        return res.status(400).json({ ok: false, message: 'This service is not available for recurring setup.' });
+      }
+      const recurrence = String(b.recurrence || '').trim();
+      if (!offering.frequencies.includes(recurrence)) {
+        return res.status(400).json({ ok: false, message: 'Choose an available frequency for this service.' });
+      }
+      const propertyId = Number(b.propertyId);
+      if (!propertyId || !(await assertPropertyOwner(pool, propertyId, req.authUser.id))) {
+        return res.status(404).json({ ok: false, message: 'Property not found.' });
+      }
+      const serviceType = recurringTypeForOffering(offering);
+      const featureId = serviceType === 'recurring_landscaping' ? 'recurring_landscaping' : 'recurring_cleaning';
+      const gate = await resolveFeatureEntitlement(pool, { user: req.authUser, feature: featureId });
+      if (!gate.allowed) return res.status(403).json(entitlementDeniedPayload(gate));
+      const fee = mergeActivationFee(config.recurring?.activationFee);
+      const feeCents = activationFeeCentsFor(offering, fee);
+      const startDate = String(b.startDate || new Date().toISOString().slice(0, 10)).slice(0, 10);
+      const metadata = {
+        offeringId: offering.id,
+        serviceName: offering.name,
+        category: offering.category,
+        frequencyLabel: String(b.frequencyLabel || recurrence),
+        commitment: String(b.commitment || 'month_to_month').slice(0, 40),
+        commitmentLabel: String(b.commitmentLabel || 'Month-to-Month').slice(0, 40),
+        activationFeeStatus: feeCents > 0 ? 'awaiting' : 'waived',
+        activationFeeAmountCents: feeCents,
+        pipelineStatus: feeCents > 0 ? 'awaiting_activation_fee' : 'pricing_required',
+        details: b.details ? String(b.details).slice(0, 800) : null,
+      };
+      const status = feeCents > 0 ? 'awaiting_activation_fee' : 'pricing_required';
+      const { rows } = await pool.query(
+        `INSERT INTO recurring_services
+          (owner_user_id, property_id, service_type, recurrence, preferred_day, preferred_time_window,
+           start_date, status, next_service_date, notes, metadata)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$7,$9,$10)
+         RETURNING *`,
+        [
+          req.authUser.id,
+          propertyId,
+          serviceType,
+          recurrence,
+          b.preferredDay ? String(b.preferredDay).slice(0, 40) : 'Flexible',
+          b.preferredTimeWindow ? String(b.preferredTimeWindow).slice(0, 40) : 'Flexible',
+          startDate,
+          status,
+          [b.notes, metadata.details].filter(Boolean).join('\n').slice(0, 500) || null,
+          JSON.stringify(metadata),
+        ]
+      );
+      const created = rows[0];
+      if (feeCents <= 0) {
+        const job = await createRecurringAdminJob(pool, { recurring: created, homeowner: req.authUser });
+        return res.json({
+          ok: true,
+          service: serializeRecurring(created),
+          jobId: job.jobId,
+          activationFeeCents: 0,
+          message: 'Your recurring service request is confirmed. FixBridge is reviewing pricing.',
+        });
+      }
+      if (!stripeConfigured()) {
+        return res.status(503).json({
+          ok: false,
+          serviceId: Number(created.id),
+          message: 'Payment is not available right now. Your request was saved. Try the activation fee again.',
+        });
+      }
+      const origin = req.headers.origin || undefined;
+      const session = await createCheckoutSession({
+        amountCents: feeCents,
+        currency: 'usd',
+        customerEmail: req.authUser.email,
+        successPath: `/?tab=services&recurringSetup=${created.id}`,
+        cancelPath: `/?tab=services&recurringSetup=${created.id}&pay=cancel`,
+        description: fee.label,
+        metadata: {
+          paymentType: 'recurring_activation_fee',
+          recurringServiceId: String(created.id),
+          userId: String(req.authUser.id),
+        },
+        origin,
+      });
+      await pool.query(
+        `INSERT INTO payments (user_id, payment_type, amount, currency, status, stripe_session_id, meta)
+         VALUES ($1,'recurring_activation_fee',$2,'usd','pending',$3,$4)`,
+        [
+          req.authUser.id,
+          feeCents / 100,
+          session.sessionId,
+          JSON.stringify({
+            feeType: 'recurring_activation_fee',
+            recurringServiceId: Number(created.id),
+            offeringId: offering.id,
+            amountCents: feeCents,
+          }),
+        ]
+      );
+      res.json({
+        ok: true,
+        service: serializeRecurring(created),
+        checkoutUrl: session.url,
+        activationFeeCents: feeCents,
+        activationFeeLabel: fee.label,
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: e.message || 'Could not start recurring service setup.' });
+    }
+  });
+
+  app.post('/api/recurring-services/:id/confirm-activation', requireAuth, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { rows } = await pool.query(`SELECT * FROM recurring_services WHERE id=$1 AND owner_user_id=$2`, [
+        id,
+        req.authUser.id,
+      ]);
+      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Recurring service not found.' });
+      const { rows: paid } = await pool.query(
+        `SELECT id, status, amount FROM payments
+         WHERE user_id=$1 AND payment_type='recurring_activation_fee' AND status IN ('succeeded','paid')
+           AND meta->>'recurringServiceId' = $2
+         ORDER BY id DESC LIMIT 1`,
+        [req.authUser.id, String(id)]
+      );
+      if (!paid[0]) {
+        return res.json({ ok: true, pending: true, service: serializeRecurring(rows[0]) });
+      }
+      const result = await fulfillRecurringActivation(pool, {
+        recurringServiceId: id,
+        paymentId: paid[0].id,
+        amountCents: Math.round(Number(paid[0].amount) * 100),
+      });
+      const fresh = (await pool.query(`SELECT * FROM recurring_services WHERE id=$1`, [id])).rows[0];
+      res.json({ ok: true, pending: false, service: serializeRecurring(fresh), jobId: result.jobId });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, message: 'Could not confirm activation.' });
     }
   });
 

@@ -25,8 +25,8 @@ import JobReviewForm from "./JobReviewForm";
 import HomeownerJobCompletionPanel from "./HomeownerJobCompletionPanel";
 import HomeownerQuoteOptionsPanel from "./HomeownerQuoteOptionsPanel";
 import { fetchJobDispute } from "./disputesApi";
-import HomeownerCancelServiceModal from "./HomeownerCancelServiceModal";
-import { canHomeownerCancelJob, cancelServiceLabel, homeownerCancelledLabel } from "./jobCancellation";
+import DeleteServiceRequestMenu from "./DeleteServiceRequestMenu";
+import { homeownerCancelledLabel } from "./jobCancellation";
 import { useProFeature } from "./ProFeatureProvider";
 import { requestQuoteSecondOpinion, type QuoteSecondOpinion } from "./homecareProApi";
 import { setPreferredProvider } from "./homeAssistantApi";
@@ -175,8 +175,6 @@ export default function HomeownerJobDetailPanel({
   const { isPro, requestFeature } = useProFeature();
   const [secondOpinion, setSecondOpinion] = useState<QuoteSecondOpinion | null>(null);
   const [secondOpinionBusy, setSecondOpinionBusy] = useState(false);
-  const [cancelOpen, setCancelOpen] = useState(false);
-  const [moreActionsOpen, setMoreActionsOpen] = useState(false);
   const [quoteConsents, setQuoteConsents] = useState<ConsentState>({
     HOMEOWNER_SERVICE_AGREEMENT: false,
     VISIT_CANCELLATION_POLICY: false,
@@ -266,7 +264,6 @@ export default function HomeownerJobDetailPanel({
     isMobile && showQuote && proposal != null && proposal.status !== "approved";
 
   const cancelledLabel = homeownerCancelledLabel(job);
-  const showCancelAction = canHomeownerCancelJob(job);
 
   const dateChips = [
     { label: "Today", value: addDaysFromToday(0) },
@@ -1239,31 +1236,6 @@ export default function HomeownerJobDetailPanel({
         </DetailSection>
       ) : null}
 
-      {showCancelAction ? (
-        <div className="border-t border-border pt-4">
-          <button
-            type="button"
-            onClick={() => setMoreActionsOpen((v) => !v)}
-            className="text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
-          >
-            More actions
-          </button>
-          {moreActionsOpen ? (
-            <div className="mt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setMoreActionsOpen(false);
-                  setCancelOpen(true);
-                }}
-                className="rounded-xl border border-red-500/30 px-4 py-2.5 text-sm font-semibold text-red-700 hover:bg-red-500/5 dark:text-red-300"
-              >
-                {cancelServiceLabel(job)}
-              </button>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
       {ackGate.modal}
     </>
   );
@@ -1317,83 +1289,63 @@ export default function HomeownerJobDetailPanel({
       </div>
     ) : null;
 
+  const deleteMenu = (
+    <DeleteServiceRequestMenu
+      job={job}
+      busy={busy}
+      onBusy={onBusy}
+      onDeleted={() => void onRefresh()}
+    />
+  );
+
   if (isMobile) {
     return (
       <>
-        <div className={`space-y-2 ${showAcceptQuoteFooter ? "pb-28" : "pb-2"}`}>{inner}</div>
+        <div className={`space-y-2 ${showAcceptQuoteFooter ? "pb-28" : "pb-2"}`}>
+          <div className="flex items-center justify-between gap-2">
+            <p className="min-w-0 truncate text-sm font-semibold">Request details</p>
+            {deleteMenu}
+          </div>
+          {inner}
+        </div>
         {acceptQuoteFooter}
-        <HomeownerCancelServiceModal
-          open={cancelOpen}
-          job={job}
-          busy={busy}
-          onBusy={onBusy}
-          onClose={() => setCancelOpen(false)}
-          onCancelled={() => void onRefresh()}
-          onReschedule={() => {
-            setEditingSchedule(true);
-            onEditScheduleConsumed?.();
-          }}
-          onEditRequest={() => setEditingDetails(true)}
-          onReviewQuote={() => {
-            document.getElementById(`job-quote-section-${job.id}`)?.scrollIntoView({ behavior: "smooth" });
-          }}
-          canEditRequest={editable}
-          hasQuote={showQuote}
-        />
       </>
     );
   }
 
   return (
-    <>
-      <div className="space-y-3 rounded-[1.5rem] border border-border bg-card p-4 sm:p-5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Request details</h2>
-        {editable ? (
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setEditingSchedule(true);
-                setEditingDetails(false);
-              }}
-              className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:bg-muted/40"
-            >
-              <CalendarDays className="h-3.5 w-3.5" /> Schedule
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setEditingDetails(true);
-                setEditingSchedule(false);
-              }}
-              className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:bg-muted/40"
-            >
-              <Pencil className="h-3.5 w-3.5" /> Edit details
-            </button>
-          </div>
-        ) : null}
+    <div className="space-y-3 rounded-[1.5rem] border border-border bg-card p-4 sm:p-5">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="min-w-0 text-sm font-semibold uppercase tracking-wide text-muted-foreground">Request details</h2>
+        <div className="flex shrink-0 items-center gap-2">
+          {editable ? (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingSchedule(true);
+                  setEditingDetails(false);
+                }}
+                className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:bg-muted/40"
+              >
+                <CalendarDays className="h-3.5 w-3.5" /> Schedule
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingDetails(true);
+                  setEditingSchedule(false);
+                }}
+                className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:bg-muted/40"
+              >
+                <Pencil className="h-3.5 w-3.5" /> Edit details
+              </button>
+            </>
+          ) : null}
+          {deleteMenu}
+        </div>
       </div>
       {inner}
     </div>
-      <HomeownerCancelServiceModal
-        open={cancelOpen}
-        job={job}
-        busy={busy}
-        onBusy={onBusy}
-        onClose={() => setCancelOpen(false)}
-        onCancelled={() => void onRefresh()}
-        onReschedule={() => {
-          setEditingSchedule(true);
-          onEditScheduleConsumed?.();
-        }}
-        onEditRequest={() => setEditingDetails(true)}
-        onReviewQuote={() => {
-          document.getElementById(`job-quote-section-${job.id}`)?.scrollIntoView({ behavior: "smooth" });
-        }}
-        canEditRequest={editable}
-        hasQuote={showQuote}
-      />
-    </>
   );
 }

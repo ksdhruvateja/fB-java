@@ -33,6 +33,12 @@ export type HomeCareAdminConfig = {
     fulfillmentMode: "manual" | "automatic";
     schedulerAvailable: boolean;
     leadTimeDays: number;
+    activationFee?: {
+      enabled: boolean;
+      amountCents: number;
+      label: string;
+      description: string;
+    };
   };
   maintenance: Record<string, unknown>;
   documents: Record<string, unknown>;
@@ -41,6 +47,16 @@ export type HomeCareAdminConfig = {
   quoteSecondOpinion: Record<string, unknown>;
   propertyAwareAi: Record<string, unknown>;
   upgrade: { headline: string; cta: string; description: string };
+  serviceCatalog?: {
+    offerings: Array<{
+      id: string;
+      name: string;
+      popular?: boolean;
+      subscriptionEligible?: boolean;
+      active?: boolean;
+      homeownerVisible?: boolean;
+    }>;
+  };
 };
 
 export type HomeCarePricingConfig = {

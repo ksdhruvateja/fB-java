@@ -5,7 +5,6 @@ import {
   CalendarDays,
   Home,
   Plus,
-  Sparkles,
   Wind,
   Droplets,
   Zap,
@@ -16,7 +15,6 @@ import {
 import type { ManagedJob, Property } from "./managedJobs";
 import { formatMoney } from "./managedJobs";
 import {
-  activeServiceJob,
   formatPropertyLine,
   healthHeadline,
   healthScore,
@@ -29,7 +27,10 @@ import {
   type SystemHealthStatus,
 } from "./homeownerPropertyHealth";
 import { buildHomeUpdatesSnapshot } from "./homeUpdates";
-import ServiceTrackingCard from "./ServiceTrackingCard";
+import ActiveServiceCards, { activeJobsForHome } from "./ActiveServiceCards";
+import { defaultServiceOfferings, frequencyLabel, visibleOfferings } from "./serviceOfferings";
+import { serviceImageFor } from "./serviceVisuals";
+import BookedServiceNotice from "./BookedServiceNotice";
 
 function greetingForNow() {
   const h = new Date().getHours();
@@ -85,6 +86,7 @@ export default function HomeownerOverview({
   onOpenPropertyPicker,
   onOpenQuotes,
   onOpenHomeUpdates,
+  onOpenServices,
   quotesWaiting = 0,
 }: {
   userName: string;
@@ -98,6 +100,7 @@ export default function HomeownerOverview({
   onOpenPropertyPicker?: () => void;
   onOpenQuotes?: () => void;
   onOpenHomeUpdates?: () => void;
+  onOpenServices?: (offeringId?: string) => void;
   quotesWaiting?: number;
 }) {
   const propertyJobs = useMemo(
@@ -111,7 +114,12 @@ export default function HomeownerOverview({
   const merged = mergeHealthWithJobs(health, propertyJobs, property?.id);
   const score = healthScore(merged);
   const stats = jobStats(propertyJobs);
-  const active = activeServiceJob(propertyJobs);
+  const activeJobs = activeJobsForHome(propertyJobs);
+  const booked = activeJobs.find((job) =>
+    ["paid_for_dispatch", "awaiting_contractor", "contractor_invited"].includes(job.status)
+  );
+  const popular = visibleOfferings(defaultServiceOfferings()).filter((item) => item.popular).slice(0, 6);
+  const recurring = visibleOfferings(defaultServiceOfferings()).filter((item) => item.subscriptionEligible).slice(0, 4);
   const firstName = String(userName || "there").split(" ")[0];
   const ring = scoreRingColor(score);
   const radius = 54;
@@ -137,6 +145,19 @@ export default function HomeownerOverview({
 
   return (
     <section className="mx-auto max-w-5xl space-y-5">
+      <div className="flex items-center gap-3 rounded-[1.5rem] border border-border/70 bg-card p-3 shadow-sm sm:p-4">
+        <img
+          src="/brand/homeowner-welcome.png"
+          alt=""
+          className="h-16 w-16 shrink-0 rounded-2xl bg-[#111] object-contain sm:h-20 sm:w-20"
+        />
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">You&apos;re in</p>
+          <p className="text-sm font-semibold tracking-tight">FixBridge is ready to look after your home.</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">Request help, track a service, or set up recurring care.</p>
+        </div>
+      </div>
+
       {/* Mobile-first header */}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
@@ -163,6 +184,68 @@ export default function HomeownerOverview({
         </button>
       </div>
 
+      {onOpenServices ? (
+        <button
+          type="button"
+          onClick={() => onOpenServices()}
+          className="w-full rounded-2xl border border-border/70 bg-card px-4 py-3 text-left text-sm text-muted-foreground"
+        >
+          What does your home need?
+        </button>
+      ) : null}
+
+      {booked ? <BookedServiceNotice job={booked} onOpenJob={onOpenJob} /> : null}
+
+      <ActiveServiceCards jobs={activeJobs} onOpenJob={onOpenJob} onRequestService={onRequestService} />
+
+      <div>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Popular Services</p>
+          {onOpenServices ? (
+            <button type="button" onClick={() => onOpenServices()} className="text-xs font-semibold text-primary">
+              View All Services →
+            </button>
+          ) : null}
+        </div>
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {popular.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onOpenServices?.(item.id)}
+              className="w-[148px] shrink-0 rounded-2xl border border-border/70 bg-card p-3 text-left shadow-sm"
+            >
+              <img src={serviceImageFor(item.name)} alt="" className="mb-2 h-12 w-12 rounded-xl object-cover" />
+              <p className="text-sm font-semibold">{item.name}</p>
+              <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{item.description}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">HomeCare / Recurring Services</p>
+        <p className="mt-1 text-xs text-muted-foreground">Set it once. FixBridge helps keep your home maintained.</p>
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {recurring.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onOpenServices?.(item.id)}
+              className="flex items-center gap-3 rounded-2xl border border-border/70 bg-card p-3 text-left"
+            >
+              <img src={serviceImageFor(item.name)} alt="" className="h-12 w-12 shrink-0 rounded-xl object-cover" />
+              <div>
+              <p className="text-sm font-semibold">{item.name}</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {item.recommendedFrequency ? `Recommended: ${frequencyLabel(item.recommendedFrequency)}` : "Recurring Service"}
+              </p>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
       {onOpenHomeUpdates ? (
         <button
           type="button"
@@ -184,27 +267,6 @@ export default function HomeownerOverview({
         </button>
       ) : null}
 
-      {/* Mobile order: active → quotes → upcoming → health → stats */}
-      <div className="order-1 lg:order-none">
-        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-          Active Service
-        </p>
-        {active ? (
-          <ServiceTrackingCard
-            job={active}
-            compact
-            onOpenDetails={() => onOpenJob(active.id)}
-            onMessage={() => onOpenJob(active.id)}
-            onChangeSchedule={() => onOpenJob(active.id)}
-          />
-        ) : (
-          <div className="rounded-[1.5rem] border border-dashed border-border bg-card px-4 py-8 text-center shadow-sm">
-            <Sparkles className="mx-auto h-6 w-6 text-primary" />
-            <p className="mt-2 text-sm font-medium">No active service right now</p>
-            <p className="mt-1 text-xs text-muted-foreground">Request help when something needs attention.</p>
-          </div>
-        )}
-      </div>
 
       {quotesWaiting > 0 && onOpenQuotes && (
         <button
@@ -365,33 +427,6 @@ export default function HomeownerOverview({
         ))}
       </div>
 
-      <div className="hidden lg:block">
-        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-          Active Service
-        </p>
-        {active ? (
-          <ServiceTrackingCard
-            job={active}
-            compact
-            onOpenDetails={() => onOpenJob(active.id)}
-            onMessage={() => onOpenJob(active.id)}
-            onChangeSchedule={() => onOpenJob(active.id)}
-          />
-        ) : (
-          <div className="rounded-[1.5rem] border border-dashed border-border bg-card px-4 py-8 text-center shadow-sm">
-            <Sparkles className="mx-auto h-6 w-6 text-primary" />
-            <p className="mt-2 text-sm font-medium">No active service right now</p>
-            <p className="mt-1 text-xs text-muted-foreground">Request help when something needs attention.</p>
-            <button
-              type="button"
-              onClick={onRequestService}
-              className="mt-4 inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white"
-            >
-              <Plus size={14} /> Request Service
-            </button>
-          </div>
-        )}
-      </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-[1.5rem] border border-border/70 bg-card p-5 shadow-sm">

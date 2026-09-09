@@ -40,7 +40,8 @@ export type DashTab =
   | "inbox"
   | "more"
   | "go-pro"
-  | "legal";
+  | "legal"
+  | "services";
 
 export type PropertyCareSection =
   | "passport"
@@ -68,6 +69,7 @@ export const NAV_SECTIONS: {
   {
     label: "Home",
     items: [
+      { id: "services", label: "Services", icon: Wrench },
       { id: "property", label: "My Property", icon: Home },
       { id: "jobs", label: "Service Requests", icon: Wrench },
       { id: "property-care", label: "Property Passport", icon: Sparkles },
@@ -181,6 +183,7 @@ export const MORE_MENU_SECTIONS: {
   {
     title: "My Home",
     items: [
+      { tab: "services", label: "Services", description: "Browse and set up home services" },
       { tab: "properties", label: "My Property", description: "Addresses & systems" },
       { tab: "property-care", label: "Property Passport", description: "Home details, systems & maintenance" },
       { tab: "protection", label: "Home Protection" },
@@ -244,6 +247,7 @@ export const HOMEOWNER_RENDER_TABS = new Set<DashTab>([
   "properties",
   "profile",
   "legal",
+  "services",
 ]);
 
 export function sanitizeDashTab(value: unknown): DashTab {
@@ -275,6 +279,8 @@ export function mobileHeaderTitle(tab: DashTab): string {
   switch (tab) {
     case "overview":
       return "Home";
+    case "services":
+      return "Services";
     case "jobs":
       return "Requests";
     case "report":

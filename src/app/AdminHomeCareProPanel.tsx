@@ -372,6 +372,127 @@ export default function AdminHomeCareProPanel({
             External cron may call <code className="text-[11px]">POST /api/internal/service-reminders/process</code> with{" "}
             <code className="text-[11px]">X-Service-Reminder-Secret</code>.
           </p>
+          <div className="space-y-2 border-t border-border pt-3">
+            <p className="text-sm font-medium">Recurring Service Activation Fee</p>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                disabled={!canManage}
+                checked={Boolean((config.recurring as { activationFee?: { enabled?: boolean } }).activationFee?.enabled)}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    recurring: {
+                      ...config.recurring,
+                      activationFee: {
+                        enabled: e.target.checked,
+                        amountCents: Number((config.recurring as { activationFee?: { amountCents?: number } }).activationFee?.amountCents ?? 4900),
+                        label: (config.recurring as { activationFee?: { label?: string } }).activationFee?.label || "FixBridge One-Time Activation Fee",
+                        description:
+                          (config.recurring as { activationFee?: { description?: string } }).activationFee?.description ||
+                          "One-time coordination and setup fee for recurring service activation.",
+                      },
+                    },
+                  })
+                }
+              />
+              Enabled
+            </label>
+            <label className="block text-sm">
+              Amount (dollars)
+              <input
+                className={`${fieldClass} mt-1`}
+                disabled={!canManage}
+                type="number"
+                min={0}
+                step="0.01"
+                value={(Number((config.recurring as { activationFee?: { amountCents?: number } }).activationFee?.amountCents ?? 4900) / 100).toFixed(2)}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    recurring: {
+                      ...config.recurring,
+                      activationFee: {
+                        enabled: (config.recurring as { activationFee?: { enabled?: boolean } }).activationFee?.enabled !== false,
+                        amountCents: Math.round(Number(e.target.value || 0) * 100),
+                        label: (config.recurring as { activationFee?: { label?: string } }).activationFee?.label || "FixBridge One-Time Activation Fee",
+                        description:
+                          (config.recurring as { activationFee?: { description?: string } }).activationFee?.description ||
+                          "One-time coordination and setup fee for recurring service activation.",
+                      },
+                    },
+                  })
+                }
+              />
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Paid once when a homeowner submits a recurring service. It does not cover the contractor visit price.
+            </p>
+          </div>
+          <div className="space-y-2 border-t border-border pt-3">
+            <p className="text-sm font-medium">Service visibility</p>
+            {(config.serviceCatalog?.offerings || []).map((item) => (
+              <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span>{item.name}</span>
+                <span className="flex gap-3">
+                  <label className="flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      disabled={!canManage}
+                      checked={Boolean(item.popular)}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          serviceCatalog: {
+                            offerings: (config.serviceCatalog?.offerings || []).map((row) =>
+                              row.id === item.id ? { ...row, popular: e.target.checked } : row
+                            ),
+                          },
+                        })
+                      }
+                    />
+                    Popular
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      disabled={!canManage}
+                      checked={Boolean(item.subscriptionEligible)}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          serviceCatalog: {
+                            offerings: (config.serviceCatalog?.offerings || []).map((row) =>
+                              row.id === item.id ? { ...row, subscriptionEligible: e.target.checked } : row
+                            ),
+                          },
+                        })
+                      }
+                    />
+                    Subscription
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      disabled={!canManage}
+                      checked={item.active !== false}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          serviceCatalog: {
+                            offerings: (config.serviceCatalog?.offerings || []).map((row) =>
+                              row.id === item.id ? { ...row, active: e.target.checked } : row
+                            ),
+                          },
+                        })
+                      }
+                    />
+                    Active
+                  </label>
+                </span>
+              </div>
+            ))}
+          </div>
           {canManage && (
             <button type="button" className="inline-flex items-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-2 text-sm font-medium text-white" disabled={busy} onClick={() => void saveConfig()}>
               Save recurring settings

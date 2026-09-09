@@ -29,6 +29,7 @@ import {
   relativeTime,
 } from "./adminOpsHelpers";
 import type { AuthUser } from "./auth";
+import DeleteServiceRequestMenu from "./DeleteServiceRequestMenu";
 
 type DrawerTab = "overview" | "quotes" | "dispatch" | "invoice" | "evidence";
 type QuoteSubMode = "document" | "build";
@@ -153,9 +154,22 @@ export default function AdminJobDrawer({
                 </p>
               ) : null}
             </div>
-            <button type="button" onClick={onClose} className="rounded-lg p-2 hover:bg-muted" aria-label="Close">
-              <X className="h-4 w-4" />
-            </button>
+            <div className="flex shrink-0 items-center gap-1">
+              {!readOnly ? (
+                <DeleteServiceRequestMenu
+                  job={job}
+                  busy={busy}
+                  onBusy={() => undefined}
+                  onDeleted={() => {
+                    void onRefresh();
+                    onClose();
+                  }}
+                />
+              ) : null}
+              <button type="button" onClick={onClose} className="rounded-lg p-2 hover:bg-muted" aria-label="Close">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
 
           <div className="overflow-x-auto border-b border-border bg-muted/30 px-4 py-3">

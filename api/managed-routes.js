@@ -7229,6 +7229,27 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         const session = event.data?.object || {};
         const jobId = Number(session.metadata?.jobId);
         const paymentType = session.metadata?.paymentType;
+        if (paymentType === 'recurring_activation_fee') {
+          const recurringServiceId = Number(session.metadata?.recurringServiceId);
+          const paidAmt = session.amount_total != null ? Number(session.amount_total) / 100 : null;
+          const payUpdate = await pool.query(
+            `UPDATE payments SET status='succeeded', stripe_payment_intent=$2,
+               public_id=COALESCE(public_id, 'TXN-' || LPAD(id::text, 5, '0')),
+               provider=COALESCE(provider, 'stripe')
+             WHERE stripe_session_id=$1
+             RETURNING id`,
+            [session.id, session.payment_intent || null]
+          );
+          if (recurringServiceId) {
+            const { fulfillRecurringActivation } = await import('./recurring-activation.js');
+            await fulfillRecurringActivation(pool, {
+              recurringServiceId,
+              paymentId: payUpdate.rows[0]?.id || null,
+              amountCents: session.amount_total != null ? Number(session.amount_total) : paidAmt != null ? Math.round(paidAmt * 100) : null,
+            });
+          }
+          return res.json({ ok: true });
+        }
         const userId = Number(session.metadata?.userId || session.metadata?.homeownerId);
         const planCode = session.metadata?.planCode;
         if (jobId && paymentType) {

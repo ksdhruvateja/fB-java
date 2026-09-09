@@ -3,6 +3,7 @@
  * Security invariants (auth, ownership, IDOR) stay in route handlers; this module owns business rules.
  */
 import { isPaidHomeCarePlan, FREE_PLAN_CODE, PAID_HOME_CARE_PLAN_CODE } from './subscription-catalog.js';
+import { FREQUENCY_IDS, mergeActivationFee, mergeOfferings, offeringById } from './service-offerings.js';
 
 export const FEATURE_DISABLED = 'FEATURE_DISABLED';
 export const PRO_SUBSCRIPTION_REQUIRED = 'PRO_SUBSCRIPTION_REQUIRED';
@@ -97,6 +98,15 @@ export const DEFAULT_HOMECARE_CONFIG = {
     leadTimeDays: 7,
     remindersEnabled: true,
     reminderLeadHours: 24,
+    activationFee: {
+      enabled: true,
+      amountCents: 4900,
+      label: 'FixBridge One-Time Activation Fee',
+      description: 'One-time coordination and setup fee for recurring service activation.',
+    },
+  },
+  serviceCatalog: {
+    offerings: [],
   },
   maintenance: {
     enabled: true,
@@ -241,6 +251,10 @@ export function mergeHomeCareConfig(raw) {
       leadTimeDays: clampInt(rec.leadTimeDays, 1, 90, d.recurring.leadTimeDays),
       remindersEnabled: rec.remindersEnabled !== false,
       reminderLeadHours: clampInt(rec.reminderLeadHours, 1, 168, d.recurring.reminderLeadHours),
+      activationFee: mergeActivationFee(rec.activationFee),
+    },
+    serviceCatalog: {
+      offerings: mergeOfferings(src.serviceCatalog?.offerings),
     },
     maintenance: {
       enabled: maint.enabled !== false,
@@ -354,13 +368,20 @@ export function prioritySortWeight(tier) {
 
 export function isRecurrenceAllowed(config, recurrence) {
   const key = String(recurrence || '').trim();
+  if (FREQUENCY_IDS.includes(key)) {
+    if (config?.recurring?.frequencies && Object.prototype.hasOwnProperty.call(config.recurring.frequencies, key)) {
+      return Boolean(config.recurring.frequencies[key]);
+    }
+    return true;
+  }
   return Boolean(config?.recurring?.frequencies?.[key]);
 }
 
 export function isRecurringServiceTypeAllowed(config, serviceType) {
   if (serviceType === 'recurring_cleaning') return Boolean(config?.recurring?.cleaningEnabled);
   if (serviceType === 'recurring_landscaping') return Boolean(config?.recurring?.landscapingEnabled);
-  return false;
+  const offering = offeringById(config, String(serviceType || '').replace(/^recurring_/, ''));
+  return Boolean(offering?.active && offering?.subscriptionEligible);
 }
 
 export function reportEligibilityMs(config) {
