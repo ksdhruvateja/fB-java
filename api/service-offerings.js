@@ -46,6 +46,36 @@ const NAMES = [
 
 const POPULAR = new Set(["HVAC & Heating/Cooling", "Plumbing", "Electrical", "Appliances", "Cleaning", "Landscaping"]);
 
+const DESCRIPTIONS = {
+  "HVAC & Heating/Cooling": "Heating, cooling, AC repair and maintenance",
+  Plumbing: "Leaks, drains, and fixtures",
+  Electrical: "Outlets, lighting, and electrical issues",
+  Appliances: "Kitchen and home appliances",
+  Cleaning: "Professional home cleaning for routine, deep, and recurring needs.",
+  Landscaping: "Outdoor maintenance and lawn care",
+  "Pest Control": "Prevention and treatment for common pests",
+  "Snow Removal": "Driveways, walkways, and seasonal snow care",
+  "Roofing & Gutters": "Roof leaks, gutters, and seasonal checks",
+};
+
+const HELPS = {
+  Cleaning: ["Standard cleaning", "Deep cleaning", "Recurring cleaning", "Move-in cleaning", "Move-out cleaning", "Kitchen cleaning", "Bathroom cleaning", "Other cleaning needs"],
+  Plumbing: ["Leaks", "Clogged drains", "Faucets", "Toilets", "Water pressure", "Water heater issues", "Pipe problems", "Other plumbing problems"],
+  "HVAC & Heating/Cooling": ["AC repair", "Heating repair", "HVAC inspection", "HVAC maintenance", "Thermostat", "Air filter", "Other"],
+  Electrical: ["Outlets", "Lighting", "Breakers", "Switches", "Other electrical issues"],
+  Appliances: ["Refrigerator", "Washer", "Dryer", "Oven", "Dishwasher", "Other appliances"],
+};
+
+const SEARCH = {
+  Cleaning: ["house cleaner", "maid", "deep clean", "move out"],
+  Plumbing: ["leaking faucet", "clogged drain", "toilet", "pipe leak"],
+  "HVAC & Heating/Cooling": ["ac not cooling", "no heat", "thermostat", "air conditioner"],
+  Electrical: ["outlet", "breaker", "spark", "no power"],
+  Appliances: ["fridge", "washer", "oven", "dishwasher"],
+};
+
+const NO_DIY = /clean|landscap|pest|snow|concrete|roof|siding/i;
+
 const SUBSCRIPTION = {
   Cleaning: { frequencies: ["weekly", "biweekly", "monthly"], recommended: "biweekly" },
   Landscaping: { frequencies: ["weekly", "biweekly", "monthly", "seasonal"], recommended: "biweekly" },
@@ -67,7 +97,7 @@ export function defaultServiceOfferings() {
       id: slug(name),
       name,
       category: name,
-      description: "Request diagnosis, guidance, or a local professional.",
+      description: DESCRIPTIONS[name] || "Request diagnosis, guidance, or a local professional.",
       popular: POPULAR.has(name),
       subscriptionEligible: Boolean(sub),
       active: true,
@@ -75,7 +105,12 @@ export function defaultServiceOfferings() {
       sortOrder: (index + 1) * 10,
       recommendedFrequency: sub?.recommended || "",
       frequencies: sub?.frequencies || [],
-      helpsWith: [],
+      helpsWith: HELPS[name] || [],
+      searchTerms: SEARCH[name] || [],
+      oneTimeAvailable: true,
+      professionalAvailable: true,
+      diyAvailable: !NO_DIY.test(name),
+      aiAssessmentAvailable: true,
       activationFeeCents: null,
     };
   });
@@ -114,6 +149,12 @@ export function mergeOfferings(stored) {
         sortOrder: Number.isFinite(Number(patch.sortOrder)) ? Number(patch.sortOrder) : base.sortOrder,
         frequencies,
         recommendedFrequency: FREQUENCY_IDS.includes(patch.recommendedFrequency) ? patch.recommendedFrequency : base.recommendedFrequency,
+        helpsWith: Array.isArray(patch.helpsWith) ? patch.helpsWith.map(String).slice(0, 12) : base.helpsWith,
+        searchTerms: Array.isArray(patch.searchTerms) ? patch.searchTerms.map(String) : base.searchTerms,
+        oneTimeAvailable: patch.oneTimeAvailable !== false,
+        professionalAvailable: patch.professionalAvailable !== false,
+        diyAvailable: patch.diyAvailable != null ? Boolean(patch.diyAvailable) : base.diyAvailable,
+        aiAssessmentAvailable: patch.aiAssessmentAvailable !== false,
         activationFeeCents:
           patch.activationFeeCents == null || patch.activationFeeCents === ""
             ? null

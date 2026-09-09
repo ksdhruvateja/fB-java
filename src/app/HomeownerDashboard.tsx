@@ -1152,9 +1152,12 @@ export default function HomeownerDashboard({
  } else {
  setAssistantHandoffIntent(null);
  if (prefill?.systemId) setRequestSystemId(prefill.systemId);
+ else if (prefill?.service) setRequestSystemId(categoryToTradeId(prefill.service));
  if (prefill?.area) setIssueArea(prefill.area);
  if (prefill?.service) setCategory(prefill.service);
- if (prefill?.description) setDescription(prefill.description);
+ setDescription(prefill?.description || "");
+ setMediaDataUrl(null);
+ setMediaType(null);
  }
  navigateTo({
  role: "homeowner",
@@ -2711,12 +2714,21 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  <HomeownerServicesPage
  property={primaryProperty}
  initialOfferingId={typeof window !== "undefined" ? window.sessionStorage.getItem("fixbridge.serviceOffering") : null}
- onRequestService={(prefill) =>
+ onRequestService={(prefill) => {
+ const service = prefill?.service as HomeownerService | undefined;
  openRequestService({
- service: prefill?.service as HomeownerService | undefined,
+ service,
  description: prefill?.description,
- })
+ });
+ if (prefill?.intent === "hire") {
+ setAssessmentMode("expert");
+ setIntakePhase("describe");
+ } else if (prefill?.intent === "diy") {
+ setReportPath("ai");
+ setAssessmentMode("diy");
+ setIntakePhase("describe");
  }
+ }}
  onOpenHomeCare={() => navigateTab("go-pro")}
  />
  )}
@@ -2954,6 +2966,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
  onBack={goBackOneReportStep}
  onSubmitAi={() => requestAiAssessment()}
  onHirePro={goToExperts}
+ preferHire={assessmentMode === "expert"}
  onClearMedia={() => {
  setMediaDataUrl(null);
  setMediaType(null);

@@ -1,4 +1,4 @@
-import { BOOKING_CONFIRMED_IMAGE, serviceImageFor } from "./serviceVisuals";
+import { BOOKING_CONFIRMED_IMAGE, ServiceThumb } from "./serviceVisuals";
 import type { ManagedJob } from "./managedJobs";
 import { STATUS_LABELS } from "./managedJobs";
 
@@ -21,11 +21,7 @@ export default function BookedServiceNotice({
         </div>
       </div>
       <div className="flex gap-3 px-4 py-3">
-        <img
-          src={serviceImageFor(job.category || job.title)}
-          alt=""
-          className="h-16 w-16 shrink-0 rounded-2xl object-cover"
-        />
+        <ServiceThumb name={job.category || job.title} className="h-16 w-20" />
         <dl className="min-w-0 flex-1 space-y-1 text-sm">
           <div>
             <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Service</dt>

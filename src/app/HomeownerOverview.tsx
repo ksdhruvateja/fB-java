@@ -1,4 +1,4 @@
-import { motion } from "motion/react";
+﻿import { motion } from "motion/react";
 import { useMemo } from "react";
 import {
   ArrowRight,
@@ -29,7 +29,7 @@ import {
 import { buildHomeUpdatesSnapshot } from "./homeUpdates";
 import ActiveServiceCards, { activeJobsForHome } from "./ActiveServiceCards";
 import { defaultServiceOfferings, frequencyLabel, visibleOfferings } from "./serviceOfferings";
-import { serviceImageFor } from "./serviceVisuals";
+import { ServiceThumb } from "./serviceVisuals";
 import BookedServiceNotice from "./BookedServiceNotice";
 
 function greetingForNow() {
@@ -143,106 +143,165 @@ export default function HomeownerOverview({
     [property, health, propertyJobs]
   );
 
+  const homeTiles = sortedSystems.slice(0, 4);
+  const tileTones = ["bg-[#FF4D1C] text-white", "bg-[#FFF1EB] text-[#2C2926]", "bg-white text-[#2C2926]", "bg-[#F7F2EB] text-[#2C2926]"];
+
   return (
-    <section className="mx-auto max-w-5xl space-y-5">
-      <div className="flex items-center gap-3 rounded-[1.5rem] border border-border/70 bg-card p-3 shadow-sm sm:p-4">
-        <img
-          src="/brand/homeowner-welcome.png"
-          alt=""
-          className="h-16 w-16 shrink-0 rounded-2xl bg-[#111] object-contain sm:h-20 sm:w-20"
-        />
-        <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">You&apos;re in</p>
-          <p className="text-sm font-semibold tracking-tight">FixBridge is ready to look after your home.</p>
-          <p className="mt-0.5 text-xs text-muted-foreground">Request help, track a service, or set up recurring care.</p>
-        </div>
-      </div>
-
-      {/* Mobile-first header */}
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0">
-          <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight sm:text-4xl">
-            {greetingForNow()}, {firstName}
-          </h1>
-          <button
-            type="button"
-            onClick={onOpenPropertyPicker || onOpenProperty}
-            className="mt-1 inline-flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground lg:pointer-events-none lg:cursor-default"
-          >
-            <span className="truncate">{formatPropertyLine(property)}</span>
-            {onOpenPropertyPicker ? (
-              <span className="text-xs text-primary lg:hidden">▼</span>
-            ) : null}
-          </button>
-        </div>
-        <button
-          type="button"
-          onClick={onRequestService}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3.5 text-sm font-semibold text-white shadow-[0_12px_28px_rgba(255,77,28,0.25)] transition hover:bg-primary/90 lg:w-auto lg:py-3"
-        >
-          <Plus size={16} /> Request Service
-        </button>
-      </div>
-
+    <section className="mx-auto max-w-6xl space-y-4">
       {onOpenServices ? (
         <button
           type="button"
           onClick={() => onOpenServices()}
-          className="w-full rounded-2xl border border-border/70 bg-card px-4 py-3 text-left text-sm text-muted-foreground"
+          className="w-full rounded-2xl border border-border/70 bg-card px-4 py-3 text-left text-sm text-muted-foreground shadow-sm"
         >
-          What does your home need?
+          Search services...
         </button>
       ) : null}
 
-      {booked ? <BookedServiceNotice job={booked} onOpenJob={onOpenJob} /> : null}
-
-      <ActiveServiceCards jobs={activeJobs} onOpenJob={onOpenJob} onRequestService={onRequestService} />
-
-      <div>
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Popular Services</p>
-          {onOpenServices ? (
-            <button type="button" onClick={() => onOpenServices()} className="text-xs font-semibold text-primary">
-              View All Services →
-            </button>
-          ) : null}
-        </div>
-        <div className="grid grid-cols-2 items-stretch gap-3 lg:grid-cols-3">
-          {popular.map((item) => (
+      <div className="overflow-hidden rounded-[1.75rem] bg-[#FFF4EE] shadow-sm">
+        <div className="flex items-center justify-between gap-4 p-5 sm:p-6">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight text-[#2C2926] sm:text-3xl">
+              {greetingForNow()}, {firstName}!
+            </h1>
+            <p className="mt-1 max-w-md text-sm text-[#7A746C]">
+              Welcome home. FixBridge can diagnose, guide, or connect you with a professional.
+            </p>
             <button
-              key={item.id}
               type="button"
-              onClick={() => onOpenServices?.(item.id)}
-              className="flex h-full min-h-[168px] flex-col rounded-2xl border border-border/70 bg-card p-3 text-left shadow-sm"
+              onClick={onOpenPropertyPicker || onOpenProperty}
+              className="mt-3 inline-flex max-w-full items-center gap-1 text-sm font-medium text-[#2C2926]"
             >
-              <img src={serviceImageFor(item.name)} alt="" className="h-20 w-full rounded-xl object-cover" />
-              <p className="mt-2 line-clamp-1 text-sm font-semibold">{item.name}</p>
-              <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{item.description}</p>
+              <Home className="h-4 w-4 text-[#FF4D1C]" />
+              <span className="truncate">{formatPropertyLine(property)}</span>
             </button>
-          ))}
+            <button
+              type="button"
+              onClick={onRequestService}
+              className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-[#FF4D1C] px-4 py-2.5 text-sm font-semibold text-white"
+            >
+              <Plus size={16} /> Request Service
+            </button>
+          </div>
+          <img
+            src="/brand/homeowner-welcome.png"
+            alt=""
+            className="hidden h-28 w-28 shrink-0 rounded-3xl bg-[#111] object-contain sm:block sm:h-36 sm:w-36"
+          />
         </div>
       </div>
 
-      <div>
-        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">HomeCare / Recurring Services</p>
-        <p className="mt-1 text-xs text-muted-foreground">Set it once. FixBridge helps keep your home maintained.</p>
-        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {recurring.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onOpenServices?.(item.id)}
-              className="flex items-center gap-3 rounded-2xl border border-border/70 bg-card p-3 text-left"
-            >
-              <img src={serviceImageFor(item.name)} alt="" className="h-12 w-12 shrink-0 rounded-xl object-cover" />
-              <div>
-              <p className="text-sm font-semibold">{item.name}</p>
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                {item.recommendedFrequency ? `Recommended: ${frequencyLabel(item.recommendedFrequency)}` : "Recurring Service"}
-              </p>
+      {booked ? <BookedServiceNotice job={booked} onOpenJob={onOpenJob} /> : null}
+
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.8fr)]">
+        <div className="space-y-4">
+          <div className="rounded-[1.75rem] border border-border/60 bg-card p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-base font-semibold">{firstName}&apos;s Home</p>
+              <button type="button" onClick={onOpenHealth} className="text-xs font-semibold text-[#FF4D1C]">
+                View systems
+              </button>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {homeTiles.map((system, index) => {
+                const Icon = SYSTEM_ICONS[system.system] || Home;
+                return (
+                  <button
+                    key={system.system}
+                    type="button"
+                    onClick={onOpenHealth}
+                    className={`min-h-[92px] rounded-2xl p-3 text-left ${tileTones[index % tileTones.length]}`}
+                  >
+                    <Icon size={16} />
+                    <p className="mt-3 text-sm font-semibold">{system.system}</p>
+                    <p className="mt-0.5 text-[11px] opacity-80">{statusLabel(system.status)}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <button type="button" onClick={onOpenHealth} className="flex w-full items-center gap-4 rounded-[1.75rem] border border-border/60 bg-card p-4 text-left shadow-sm">
+            <div className="relative h-24 w-24 shrink-0">
+              <svg viewBox="0 0 128 128" className="h-full w-full -rotate-90">
+                <circle cx="64" cy="64" r={radius} fill="none" stroke="currentColor" strokeWidth="10" className="text-[#F3EBE3]" />
+                <motion.circle
+                  cx="64"
+                  cy="64"
+                  r={radius}
+                  fill="none"
+                  stroke={ring.stroke}
+                  strokeWidth="10"
+                  strokeLinecap="round"
+                  strokeDasharray={circumference}
+                  initial={{ strokeDashoffset: circumference }}
+                  animate={{ strokeDashoffset: circumference * (1 - progress) }}
+                  transition={{ duration: 0.8 }}
+                />
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <p className="text-2xl font-semibold" style={{ color: ring.stroke }}>{score}</p>
+                <p className="text-[10px] text-muted-foreground">Health</p>
               </div>
-            </button>
-          ))}
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold">{healthHeadline(score)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {attention.length === 0 ? "All major systems look good." : `${attention.length} system${attention.length === 1 ? "" : "s"} need attention.`}
+              </p>
+            </div>
+          </button>
+
+          <ActiveServiceCards jobs={activeJobs} onOpenJob={onOpenJob} onRequestService={onRequestService} />
+        </div>
+
+        <div className="space-y-4">
+          <div className="rounded-[1.75rem] border border-border/60 bg-card p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-base font-semibold">Popular Services</p>
+              {onOpenServices ? (
+                <button type="button" onClick={() => onOpenServices()} className="text-xs font-semibold text-[#FF4D1C]">
+                  View all
+                </button>
+              ) : null}
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {popular.slice(0, 4).map((item, index) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onOpenServices?.(item.id)}
+                  className={`flex min-h-[72px] items-center gap-2 rounded-2xl p-2 text-left ${tileTones[index % tileTones.length]}`}
+                >
+                  <ServiceThumb name={item.name} className="h-12 w-14 bg-white/70" />
+                  <p className="line-clamp-2 text-sm font-semibold">{item.name}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-[1.75rem] border border-border/60 bg-card p-4 shadow-sm">
+            <p className="text-base font-semibold">Recurring care</p>
+            <p className="mt-1 text-xs text-muted-foreground">Set it once. FixBridge helps keep your home maintained.</p>
+            <div className="mt-3 space-y-2">
+              {recurring.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onOpenServices?.(item.id)}
+                  className="flex w-full items-center gap-3 rounded-2xl bg-[#F7F2EB] p-3 text-left"
+                >
+                  <ServiceThumb name={item.name} className="h-11 w-14" />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold">{item.name}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {item.recommendedFrequency ? frequencyLabel(item.recommendedFrequency) : "Recurring"}
+                    </p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -259,11 +318,11 @@ export default function HomeownerOverview({
               {homeUpdates.summary.trackedSystems === 1 ? "" : "s"}.
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {homeUpdates.summary.needsAttention} may need attention · {homeUpdates.summary.upToDate} up to date ·{" "}
+              {homeUpdates.summary.needsAttention} may need attention Â· {homeUpdates.summary.upToDate} up to date Â·{" "}
               {homeUpdates.summary.needsInfo} need more information
             </p>
           </div>
-          <span className="shrink-0 text-sm font-semibold text-primary">Open Property Passport →</span>
+          <span className="shrink-0 text-sm font-semibold text-primary">Open Property Passport</span>
         </button>
       ) : null}
 
@@ -280,7 +339,7 @@ export default function HomeownerOverview({
               {quotesWaiting} quote{quotesWaiting === 1 ? "" : "s"} waiting for approval
             </p>
           </div>
-          <span className="text-sm font-semibold text-primary">Review →</span>
+          <span className="text-sm font-semibold text-primary">Review</span>
         </button>
       )}
 
@@ -297,119 +356,6 @@ export default function HomeownerOverview({
           </ul>
         </div>
       )}
-
-      <motion.button
-        type="button"
-        onClick={onOpenHealth}
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4 }}
-        whileHover={{ y: -2 }}
-        className="group relative w-full overflow-hidden rounded-[1.75rem] border border-border/60 bg-card text-left shadow-[0_18px_50px_rgba(10,10,10,0.06)] lg:block"
-      >
-        <div
-          className="pointer-events-none absolute inset-0 opacity-90"
-          style={{
-            background: `radial-gradient(ellipse at top right, ${ring.soft}, transparent 55%), radial-gradient(ellipse at bottom left, rgba(255,77,28,0.08), transparent 50%)`,
-          }}
-          aria-hidden
-        />
-        <div className="relative grid gap-6 p-5 sm:grid-cols-[auto_1fr] sm:items-center sm:p-6 lg:gap-8 lg:p-7">
-          <div className="mx-auto flex flex-col items-center sm:mx-0">
-            <div className="relative h-[132px] w-[132px]">
-              <svg viewBox="0 0 128 128" className="h-full w-full -rotate-90">
-                <circle
-                  cx="64"
-                  cy="64"
-                  r={radius}
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="10"
-                  className="text-muted/60"
-                />
-                <motion.circle
-                  cx="64"
-                  cy="64"
-                  r={radius}
-                  fill="none"
-                  stroke={ring.stroke}
-                  strokeWidth="10"
-                  strokeLinecap="round"
-                  strokeDasharray={circumference}
-                  initial={{ strokeDashoffset: circumference }}
-                  animate={{ strokeDashoffset: circumference * (1 - progress) }}
-                  transition={{ duration: 1, ease: [0.22, 1, 0.36, 1] }}
-                />
-              </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <motion.p
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: 0.15, duration: 0.35 }}
-                  className="[font-family:'Barlow_Condensed',sans-serif] text-4xl font-black leading-none"
-                  style={{ color: ring.stroke }}
-                >
-                  {score}
-                </motion.p>
-                <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                  / 100
-                </p>
-              </div>
-            </div>
-            <p className="mt-3 text-center text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-              Home Health
-            </p>
-          </div>
-
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <p className="text-xl font-semibold tracking-tight sm:text-2xl">{healthHeadline(score)}</p>
-                <p className="mt-1.5 text-sm text-muted-foreground">
-                  {attention.length === 0
-                    ? "All major systems are in good shape."
-                    : attention.length === 1
-                      ? `${attention[0].system} needs a look soon.`
-                      : `${attention.length} systems need attention.`}
-                </p>
-              </div>
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-foreground px-3 py-1.5 text-xs font-semibold text-background transition group-hover:bg-primary">
-                View systems <ArrowRight size={13} className="transition-transform group-hover:translate-x-0.5" />
-              </span>
-            </div>
-
-            <ul className="mt-5 divide-y divide-border/70 overflow-hidden rounded-2xl border border-border/60 bg-background/70 backdrop-blur-sm">
-              {sortedSystems.map((s, i) => {
-                const Icon = SYSTEM_ICONS[s.system] || Home;
-                return (
-                  <motion.li
-                    key={s.system}
-                    initial={{ opacity: 0, x: 8 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: 0.08 + i * 0.04 }}
-                    className="flex items-center gap-3 px-3.5 py-2.5"
-                  >
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-muted text-foreground">
-                      <Icon size={16} />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-sm font-semibold">{s.system}</p>
-                        <span
-                          className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${statusChip(s.status)}`}
-                        >
-                          {statusLabel(s.status)}
-                        </span>
-                      </div>
-                      <p className="mt-0.5 truncate text-xs text-muted-foreground">{s.nextAction}</p>
-                    </div>
-                  </motion.li>
-                );
-              })}
-            </ul>
-          </div>
-        </div>
-      </motion.button>
 
       <div className="hidden grid-cols-2 gap-3 lg:grid lg:grid-cols-4">
         {[
@@ -466,7 +412,7 @@ export default function HomeownerOverview({
               merged.sqft != null ? `${merged.sqft.toLocaleString()} sq ft` : null,
             ]
               .filter(Boolean)
-              .join(" · ") || "Add details in Property Health"}
+              .join(" Â· ") || "Add details in Property Health"}
           </p>
         </button>
       </div>

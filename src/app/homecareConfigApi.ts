@@ -55,6 +55,11 @@ export type HomeCareAdminConfig = {
       subscriptionEligible?: boolean;
       active?: boolean;
       homeownerVisible?: boolean;
+      oneTimeAvailable?: boolean;
+      professionalAvailable?: boolean;
+      diyAvailable?: boolean;
+      aiAssessmentAvailable?: boolean;
+      description?: string;
     }>;
   };
 };

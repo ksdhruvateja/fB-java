@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ChevronDown, MessageSquare, Plus } from "lucide-react";
 import type { ManagedJob } from "./managedJobs";
 import { STATUS_LABELS } from "./managedJobs";
-import { serviceImageFor } from "./serviceVisuals";
+import { ServiceThumb } from "./serviceVisuals";
 
 function nextStep(job: ManagedJob) {
   const label = job.homeownerStatusLabel || STATUS_LABELS[job.status] || job.status;
@@ -100,7 +100,7 @@ export default function ActiveServiceCards({
               return (
                 <article key={job.id} className="rounded-xl border border-border/70 bg-background p-3">
                   <div className="flex items-center gap-3">
-                    <img src={serviceImageFor(job.category || title)} alt="" className="h-12 w-12 shrink-0 rounded-xl object-cover" />
+                    <ServiceThumb name={job.category || title} className="h-12 w-14" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-semibold">{title}</p>
                       <p className="mt-0.5 truncate text-xs text-muted-foreground">

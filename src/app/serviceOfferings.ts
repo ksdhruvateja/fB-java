@@ -33,6 +33,11 @@ export type ServiceOffering = {
   recommendedFrequency: FrequencyId | "";
   frequencies: FrequencyId[];
   helpsWith: string[];
+  searchTerms: string[];
+  oneTimeAvailable: boolean;
+  professionalAvailable: boolean;
+  diyAvailable: boolean;
+  aiAssessmentAvailable: boolean;
   activationFeeCents: number | null;
 };
 
@@ -63,6 +68,24 @@ const POPULAR = new Set([
   "Cleaning",
   "Landscaping",
 ]);
+
+const HELPS: Record<string, string[]> = {
+  Cleaning: ["Standard cleaning", "Deep cleaning", "Recurring cleaning", "Move-in cleaning", "Move-out cleaning", "Kitchen cleaning", "Bathroom cleaning", "Other cleaning needs"],
+  Plumbing: ["Leaks", "Clogged drains", "Faucets", "Toilets", "Water pressure", "Water heater issues", "Pipe problems", "Other plumbing problems"],
+  "HVAC & Heating/Cooling": ["AC repair", "Heating repair", "HVAC inspection", "HVAC maintenance", "Thermostat", "Air filter", "Other"],
+  Electrical: ["Outlets", "Lighting", "Breakers", "Switches", "Other electrical issues"],
+  Appliances: ["Refrigerator", "Washer", "Dryer", "Oven", "Dishwasher", "Other appliances"],
+};
+
+const SEARCH: Record<string, string[]> = {
+  Cleaning: ["house cleaner", "maid", "deep clean", "move out"],
+  Plumbing: ["leaking faucet", "clogged drain", "toilet", "pipe leak"],
+  "HVAC & Heating/Cooling": ["ac not cooling", "ac repair", "no heat", "thermostat", "air conditioner"],
+  Electrical: ["outlet", "breaker", "spark", "no power"],
+  Appliances: ["fridge", "washer", "oven", "dishwasher"],
+};
+
+const NO_DIY = /clean|landscap|pest|snow|concrete|roof|siding/i;
 
 const SUBSCRIPTION: Record<string, { frequencies: FrequencyId[]; recommended: FrequencyId; place: ServicePlace; kind: ServiceKind; helps: string[] }> = {
   Cleaning: {
@@ -138,7 +161,12 @@ export function defaultServiceOfferings(): ServiceOffering[] {
       kind: sub?.kind || "repair",
       recommendedFrequency: sub?.recommended || "",
       frequencies: sub?.frequencies || [],
-      helpsWith: sub?.helps || [],
+      helpsWith: HELPS[name] || sub?.helps || [],
+      searchTerms: SEARCH[name] || [],
+      oneTimeAvailable: true,
+      professionalAvailable: true,
+      diyAvailable: !NO_DIY.test(name),
+      aiAssessmentAvailable: true,
       activationFeeCents: null,
     };
   });
@@ -180,7 +208,12 @@ export function mergeOfferings(stored: unknown): ServiceOffering[] {
       sortOrder: Number.isFinite(Number(patch.sortOrder)) ? Number(patch.sortOrder) : base.sortOrder,
       frequencies,
       recommendedFrequency: (patch.recommendedFrequency as FrequencyId) || base.recommendedFrequency,
-      helpsWith: Array.isArray(patch.helpsWith) ? patch.helpsWith.map(String).slice(0, 8) : base.helpsWith,
+      helpsWith: Array.isArray(patch.helpsWith) ? patch.helpsWith.map(String).slice(0, 12) : base.helpsWith,
+      searchTerms: Array.isArray(patch.searchTerms) ? patch.searchTerms.map(String) : base.searchTerms,
+      oneTimeAvailable: patch.oneTimeAvailable !== false,
+      professionalAvailable: patch.professionalAvailable !== false,
+      diyAvailable: patch.diyAvailable != null ? Boolean(patch.diyAvailable) : base.diyAvailable,
+      aiAssessmentAvailable: patch.aiAssessmentAvailable !== false,
       activationFeeCents: patch.activationFeeCents == null || patch.activationFeeCents === "" ? null : Number(patch.activationFeeCents),
     };
   });

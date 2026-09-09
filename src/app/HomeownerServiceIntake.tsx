@@ -1,4 +1,4 @@
-import { type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -29,35 +29,61 @@ function IntakeActionButtons({
   description,
   onSubmitAi,
   onHirePro,
+  preferHire,
 }: {
   busy: boolean;
   description: string;
   onSubmitAi: () => void;
   onHirePro: () => void;
+  preferHire?: boolean;
 }) {
   const canAssess = Boolean(description.trim());
   return (
     <div className="space-y-2 border-t border-border/70 pt-5">
-      <p className="text-sm font-semibold">What would you like to do next?</p>
+      <p className="text-sm font-semibold">{preferHire ? "Request a professional" : "What would you like to do next?"}</p>
       <div className="grid gap-3 sm:grid-cols-2">
-        <button
-          type="button"
-          disabled={busy || !canAssess}
-          onClick={onSubmitAi}
-          className="inline-flex items-center justify-center gap-2 rounded-md bg-[#FF4D1C] px-4 py-3.5 text-sm font-medium text-white disabled:opacity-60"
-        >
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-          Get AI assessment
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={onHirePro}
-          className="inline-flex items-center justify-center gap-2 rounded-md border-2 border-[#FF4D1C] px-4 py-3.5 text-sm font-medium text-[#FF4D1C] disabled:opacity-60"
-        >
-          <HardHat className="h-4 w-4" />
-          Hire a Professional
-        </button>
+        {preferHire ? (
+          <button
+            type="button"
+            disabled={busy || !canAssess}
+            onClick={onHirePro}
+            className="inline-flex items-center justify-center gap-2 rounded-md bg-[#FF4D1C] px-4 py-3.5 text-sm font-medium text-white disabled:opacity-60"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <HardHat className="h-4 w-4" />}
+            Request Professional
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={busy || !canAssess}
+            onClick={onSubmitAi}
+            className="inline-flex items-center justify-center gap-2 rounded-md bg-[#FF4D1C] px-4 py-3.5 text-sm font-medium text-white disabled:opacity-60"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            Get AI assessment
+          </button>
+        )}
+        {preferHire ? (
+          <button
+            type="button"
+            disabled={busy || !canAssess}
+            onClick={onSubmitAi}
+            className="inline-flex items-center justify-center gap-2 rounded-md border-2 border-[#FF4D1C] px-4 py-3.5 text-sm font-medium text-[#FF4D1C] disabled:opacity-60"
+          >
+            <Sparkles className="h-4 w-4" />
+            Get AI assessment
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onHirePro}
+            className="inline-flex items-center justify-center gap-2 rounded-md border-2 border-[#FF4D1C] px-4 py-3.5 text-sm font-medium text-[#FF4D1C] disabled:opacity-60"
+          >
+            <HardHat className="h-4 w-4" />
+            Hire a Professional
+          </button>
+        )}
       </div>
       {!canAssess ? <p className="text-xs text-muted-foreground">{AI_ASSESSMENT_DESCRIBE_FIRST}</p> : null}
     </div>
@@ -116,6 +142,7 @@ type Props = {
   onBack: () => void;
   onSubmitAi: () => void;
   onHirePro: () => void;
+  preferHire?: boolean;
   onClearMedia?: () => void;
   draftSavedAt?: string | null;
 };
@@ -240,14 +267,33 @@ export default function HomeownerServiceIntake(props: Props) {
     onBack,
     onSubmitAi,
     onHirePro,
+    preferHire,
     onClearMedia,
     draftSavedAt,
   } = props;
 
   const isMobile = useIsMobile();
+  const cameraRef = useRef<HTMLInputElement | null>(null);
+  const [uploadState, setUploadState] = useState<"idle" | "adding" | "added">("idle");
+  const [previewOpen, setPreviewOpen] = useState(false);
   const safeIntakePhase = normalizeIntakePhase(intakePhase);
   const stepMeta = INTAKE_STEP_META[safeIntakePhase];
   const resolvedTradeId = resolveRequestTradeId(requestSystemId, description);
+
+  useEffect(() => {
+    if (!mediaDataUrl) {
+      setUploadState("idle");
+      setPreviewOpen(false);
+      return;
+    }
+    setUploadState("added");
+  }, [mediaDataUrl]);
+
+  function addMedia(file: File | null) {
+    if (!file) return;
+    setUploadState("adding");
+    onFile(file);
+  }
 
   function goNextFromLocation() {
     if (!issueArea) {
@@ -310,6 +356,9 @@ export default function HomeownerServiceIntake(props: Props) {
             <p className="mt-1 text-sm text-muted-foreground">
               Type, speak, or upload photos or video. AI identifies the exact service and asks only what&apos;s missing.
             </p>
+            {requestSystemId ? (
+              <p className="mt-2 text-sm font-semibold">Selected service: {tradeToCategory(resolvedTradeId)}</p>
+            ) : null}
           </div>
           <label className="grid gap-1.5 text-sm">
             <span className="font-semibold">What&apos;s going on?</span>
@@ -323,71 +372,98 @@ export default function HomeownerServiceIntake(props: Props) {
               placeholder={'e.g. "Water is leaking under the kitchen sink."'}
             />
           </label>
-          <div className="grid grid-cols-3 gap-2.5">
-            <button
-              type="button"
-              onClick={() =>
-                startVoiceInput(
-                  description,
-                  voiceRecRef,
-                  voiceBaseRef,
-                  setDescription,
-                  setVoiceListening,
-                  setError,
-                  voiceListening
-                )
-              }
-              className={`inline-flex flex-col items-center gap-2 rounded-2xl border px-3 py-4 text-xs font-semibold ${
-                voiceListening ? "border-primary bg-primary/10 text-primary" : "border-border bg-muted/20"
-              }`}
-            >
-              <Mic className="h-5 w-5 text-primary" />
-              {voiceListening ? "Listening…" : "Speak"}
-            </button>
-            <button
-              type="button"
-              onClick={() => fileRef.current?.click()}
-              className="inline-flex flex-col items-center gap-2 rounded-2xl border border-border bg-muted/20 px-3 py-4 text-xs font-semibold"
-            >
-              <Camera className="h-5 w-5 text-primary" />
-              Photos
-            </button>
-            <button
-              type="button"
-              onClick={() => videoRef.current?.click()}
-              className="inline-flex flex-col items-center gap-2 rounded-2xl border border-border bg-muted/20 px-3 py-4 text-xs font-semibold"
-            >
-              <Camera className="h-5 w-5 text-primary" />
-              Video
-            </button>
+          <button
+            type="button"
+            onClick={() =>
+              startVoiceInput(
+                description,
+                voiceRecRef,
+                voiceBaseRef,
+                setDescription,
+                setVoiceListening,
+                setError,
+                voiceListening
+              )
+            }
+            className={`inline-flex min-h-11 items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold ${
+              voiceListening ? "border-primary bg-primary/10 text-primary" : "border-border bg-muted/20"
+            }`}
+          >
+            <Mic className="h-4 w-4 text-primary" />
+            {voiceListening ? "Listening…" : "Speak"}
+          </button>
+          <div className="space-y-2">
+            <p className="text-sm font-semibold">Add photos or videos</p>
+            <p className="text-sm text-muted-foreground">Help us understand what&apos;s happening.</p>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <button type="button" onClick={() => cameraRef.current?.click()} className="min-h-24 rounded-2xl border border-dashed border-primary/40 bg-primary/5 px-3 py-4 text-sm font-semibold">
+                <Camera className="mx-auto mb-1 h-5 w-5 text-primary" />
+                Take a photo
+              </button>
+              <button type="button" onClick={() => fileRef.current?.click()} className="min-h-24 rounded-2xl border border-dashed border-border px-3 py-4 text-sm font-semibold">
+                Photo library
+              </button>
+              <button type="button" onClick={() => videoRef.current?.click()} className="min-h-24 rounded-2xl border border-dashed border-border px-3 py-4 text-sm font-semibold">
+                Add video
+              </button>
+            </div>
           </div>
-          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(e) => onFile(e.target.files?.[0] || null)} />
+          <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="sr-only" onChange={(e) => addMedia(e.target.files?.[0] || null)} />
+          <input ref={fileRef} type="file" accept="image/*" className="sr-only" onChange={(e) => addMedia(e.target.files?.[0] || null)} />
           <input
             ref={videoRef}
             type="file"
             accept="video/*"
-            className="hidden"
-            onChange={(e) => onFile(e.target.files?.[0] || null)}
+            className="sr-only"
+            onChange={(e) => addMedia(e.target.files?.[0] || null)}
           />
+          {uploadState === "adding" ? <p className="text-sm text-muted-foreground">Adding photo…</p> : null}
           {mediaDataUrl ? (
-            <div className="rounded-xl border border-border bg-muted/20 p-3">
+            <div className="rounded-xl border border-border bg-muted/20 p-3 motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <p className="text-xs font-medium text-muted-foreground">Preview</p>
-                {onClearMedia ? (
-                  <button
-                    type="button"
-                    onClick={onClearMedia}
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-muted-foreground hover:text-foreground"
-                  >
-                    <X size={12} /> Remove
+                <p className="text-xs font-medium text-emerald-700">Photo added</p>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setPreviewOpen(true)} className="text-xs font-semibold text-primary">
+                    View
                   </button>
-                ) : null}
+                  <button type="button" onClick={() => fileRef.current?.click()} className="text-xs font-semibold">
+                    Replace
+                  </button>
+                  {onClearMedia ? (
+                    <button type="button" onClick={onClearMedia} className="inline-flex items-center gap-1 text-xs font-semibold text-muted-foreground hover:text-foreground">
+                      <X size={12} /> Remove
+                    </button>
+                  ) : null}
+                </div>
               </div>
-              {mediaType === "image" ? (
-                <img src={mediaDataUrl} alt="" className="max-h-48 w-full rounded-xl border object-contain" />
-              ) : mediaType?.startsWith("video") ? (
-                <video src={mediaDataUrl} controls className="max-h-48 w-full rounded-xl border" />
-              ) : null}
+              <button type="button" onClick={() => setPreviewOpen(true)} className="block w-full">
+                {mediaType === "image" ? (
+                  <img src={mediaDataUrl} alt="Uploaded issue photo" className="max-h-48 w-full rounded-xl border object-contain" />
+                ) : mediaType?.startsWith("video") ? (
+                  <span className="flex min-h-24 items-center justify-center rounded-xl border text-sm font-semibold">Video attached</span>
+                ) : null}
+              </button>
+            </div>
+          ) : null}
+          {previewOpen && mediaDataUrl ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Attachment preview">
+              <div className="w-full max-w-lg rounded-2xl bg-card p-3">
+                {mediaType === "image" ? (
+                  <img src={mediaDataUrl} alt="Uploaded issue photo" className="max-h-[70vh] w-full object-contain" />
+                ) : (
+                  <video src={mediaDataUrl} controls className="max-h-[70vh] w-full" />
+                )}
+                <div className="mt-3 flex justify-end gap-2">
+                  {onClearMedia ? (
+                    <button type="button" onClick={() => { onClearMedia(); setPreviewOpen(false); }} className="min-h-11 rounded-xl border px-3 text-sm font-semibold">
+                      Remove
+                    </button>
+                  ) : null}
+                  <button type="button" onClick={() => setPreviewOpen(false)} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-semibold text-white">
+                    Close
+                  </button>
+                </div>
+              </div>
             </div>
           ) : null}
           <IntakeActionButtons
@@ -395,6 +471,7 @@ export default function HomeownerServiceIntake(props: Props) {
             description={description}
             onSubmitAi={onSubmitAi}
             onHirePro={onHirePro}
+            preferHire={preferHire}
           />
           <div className="hidden justify-end sm:flex">
             <button
@@ -442,6 +519,7 @@ export default function HomeownerServiceIntake(props: Props) {
             description={description}
             onSubmitAi={onSubmitAi}
             onHirePro={onHirePro}
+            preferHire={preferHire}
           />
           <div className="hidden justify-end sm:flex">
             <button
@@ -527,6 +605,7 @@ export default function HomeownerServiceIntake(props: Props) {
             description={description}
             onSubmitAi={onSubmitAi}
             onHirePro={onHirePro}
+            preferHire={preferHire}
           />
         </div>
       )}

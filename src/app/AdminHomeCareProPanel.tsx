@@ -489,6 +489,96 @@ export default function AdminHomeCareProPanel({
                     />
                     Active
                   </label>
+                  <label className="flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      disabled={!canManage}
+                      checked={item.homeownerVisible !== false}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          serviceCatalog: {
+                            offerings: (config.serviceCatalog?.offerings || []).map((row) =>
+                              row.id === item.id ? { ...row, homeownerVisible: e.target.checked } : row
+                            ),
+                          },
+                        })
+                      }
+                    />
+                    Visible
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      disabled={!canManage}
+                      checked={item.oneTimeAvailable !== false}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          serviceCatalog: {
+                            offerings: (config.serviceCatalog?.offerings || []).map((row) =>
+                              row.id === item.id ? { ...row, oneTimeAvailable: e.target.checked } : row
+                            ),
+                          },
+                        })
+                      }
+                    />
+                    One-Time
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      disabled={!canManage}
+                      checked={item.professionalAvailable !== false}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          serviceCatalog: {
+                            offerings: (config.serviceCatalog?.offerings || []).map((row) =>
+                              row.id === item.id ? { ...row, professionalAvailable: e.target.checked } : row
+                            ),
+                          },
+                        })
+                      }
+                    />
+                    Professional
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      disabled={!canManage}
+                      checked={Boolean(item.diyAvailable)}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          serviceCatalog: {
+                            offerings: (config.serviceCatalog?.offerings || []).map((row) =>
+                              row.id === item.id ? { ...row, diyAvailable: e.target.checked } : row
+                            ),
+                          },
+                        })
+                      }
+                    />
+                    DIY
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      disabled={!canManage}
+                      checked={item.aiAssessmentAvailable !== false}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          serviceCatalog: {
+                            offerings: (config.serviceCatalog?.offerings || []).map((row) =>
+                              row.id === item.id ? { ...row, aiAssessmentAvailable: e.target.checked } : row
+                            ),
+                          },
+                        })
+                      }
+                    />
+                    AI
+                  </label>
                 </span>
               </div>
             ))}
