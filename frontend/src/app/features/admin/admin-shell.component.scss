@@ -1,0 +1,193 @@
+.ad {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  background: var(--fixbridge-background);
+}
+
+.ad__side {
+  padding: 1.25rem 0.75rem;
+  border-right: 1px solid var(--border);
+  background: var(--card);
+}
+
+.ad__brand {
+  display: block;
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 1.35rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--primary);
+  padding: 0 0.75rem;
+}
+
+.ad__role {
+  margin: 0.25rem 0 1rem;
+  padding: 0 0.75rem;
+  font-size: 0.7rem;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.ad__group {
+  margin-bottom: 1rem;
+}
+
+.ad__group > p {
+  margin: 0 0 0.35rem;
+  padding: 0 0.75rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.ad__link {
+  display: block;
+  padding: 0.65rem 0.75rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.ad__link--active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.ad__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.9rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.ad__top h1 {
+  text-transform: uppercase;
+  font-size: 1.25rem;
+}
+
+.ad__tools {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.ad__search {
+  position: relative;
+  min-width: min(100%, 18rem);
+}
+
+.ad__search input {
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--input-background);
+  border-radius: 0.4rem;
+  font-size: 0.875rem;
+}
+
+.ad__search-panel {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  width: min(22rem, 90vw);
+  max-height: 22rem;
+  overflow: auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
+  z-index: 40;
+  padding: 0.5rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.ad__search-label {
+  margin: 0.45rem 0.35rem 0.15rem;
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.ad__search-meta,
+.ad__search-err {
+  margin: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted-foreground);
+}
+
+.ad__search-err {
+  color: var(--destructive);
+}
+
+.ad__search-hit {
+  display: grid;
+  gap: 0.1rem;
+  text-align: left;
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 0.35rem;
+}
+
+.ad__search-hit:hover {
+  background: var(--secondary);
+}
+
+.ad__search-hit span {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.ad__search-close {
+  margin-top: 0.35rem;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.4rem;
+}
+
+.ad__body {
+  padding: 1.25rem;
+  max-width: 1100px;
+}
+
+@media (max-width: 900px) {
+  .ad {
+    grid-template-columns: 1fr;
+  }
+
+  .ad__side {
+    display: flex;
+    gap: 0.35rem;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .ad__brand,
+  .ad__role,
+  .ad__group > p {
+    display: none;
+  }
+
+  .ad__group {
+    display: contents;
+  }
+
+  .ad__link {
+    white-space: nowrap;
+    border: 1px solid var(--border);
+  }
+}

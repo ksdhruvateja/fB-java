@@ -1,0 +1,77 @@
+spring:
+  application:
+    name: fixbridge-api
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  jackson:
+    property-naming-strategy: LOWER_CAMEL_CASE
+    serialization:
+      write-dates-as-timestamps: false
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 20MB
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+        format_sql: true
+  flyway:
+    enabled: false
+    baseline-on-migrate: true
+    baseline-version: 0
+
+server:
+  port: ${API_PORT:3001}
+  error:
+    include-message: always
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+fixbridge:
+  jwt:
+    secret: ${SESSION_SECRET:local-dev-only-change-me-please-use-long-secret}
+    expiration: 7d
+    mfa-pending-expiration: 15m
+  cors:
+    origins: ${CORS_ORIGINS:}
+  app-url: ${APP_URL:http://localhost:5000}
+  json-body-limit: ${JSON_BODY_LIMIT:20mb}
+  rate-limit:
+    api-max: ${API_RATE_LIMIT_MAX:400}
+    signin-max: ${SIGNIN_RATE_LIMIT_MAX:30}
+  stripe:
+    secret-key: ${STRIPE_SECRET_KEY:}
+    webhook-secret: ${STRIPE_WEBHOOK_SECRET:}
+    publishable-key: ${STRIPE_PUBLISHABLE_KEY:${VITE_STRIPE_PUBLISHABLE_KEY:}}
+  google:
+    client-id: ${GOOGLE_CLIENT_ID:${VITE_GOOGLE_CLIENT_ID:}}
+    maps-api-key: ${GOOGLE_MAPS_API_KEY:}
+  geoapify:
+    api-key: ${GEOAPIFY_API_KEY:}
+    country-filter: ${GEOAPIFY_COUNTRY_FILTER:countrycode:us}
+  ai:
+    explabs-api-key: ${EXPLABS_API_KEY:}
+    openrouter-api-key: ${OPENROUTER_API_KEY:}
+    openrouter-model: ${OPENROUTER_MODEL:openai/gpt-4o-mini}
+    openrouter-base-url: ${OPENROUTER_BASE_URL:https://openrouter.ai/api/v1}
+    fetch-timeout-ms: ${AI_FETCH_TIMEOUT_MS:60000}
+  mail:
+    disabled: ${DISABLE_OUTBOUND_EMAIL:false}
+    from-email: ${FIXBRIDGE_FROM_EMAIL:${FROM_EMAIL:support@fixbridge.us}}
+    from-name: ${FIXBRIDGE_FROM_NAME:FixBridge Support}
+    reply-to: ${FIXBRIDGE_REPLY_TO_EMAIL:support@fixbridge.us}
+  admin:
+    primary-email: ${PRIMARY_ADMIN_EMAIL:}
+  media:
+    max-attachment-size-mb: ${MAX_ATTACHMENT_SIZE_MB:2.5}
+    max-attachments-per-message: ${MAX_ATTACHMENTS_PER_MESSAGE:5}
+    storage-provider: ${ATTACHMENT_STORAGE_PROVIDER:database}

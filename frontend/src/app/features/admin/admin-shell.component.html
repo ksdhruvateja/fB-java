@@ -1,0 +1,69 @@
+<div class="ad">
+  <aside class="ad__side">
+    <a routerLink="/" class="ad__brand">FixBridge</a>
+    <p class="ad__role">Admin</p>
+    @for (group of groups; track group.label || 'root') {
+      <div class="ad__group">
+        @if (group.label) {
+          <p>{{ group.label }}</p>
+        }
+        @for (item of group.items; track item.id) {
+          <a
+            [routerLink]="['/admin', item.id]"
+            class="ad__link"
+            [class.ad__link--active]="tab === item.id"
+          >{{ item.label }}</a>
+        }
+      </div>
+    }
+  </aside>
+
+  <div class="ad__main">
+    <header class="ad__top">
+      <h1>{{ tab }}</h1>
+      <div class="ad__tools">
+        <div class="ad__search">
+          <input
+            type="search"
+            [(ngModel)]="searchQ"
+            (ngModelChange)="onSearchInput()"
+            (focus)="searchQ.trim().length >= 2 && (searchOpen = true)"
+            placeholder="Search jobs, people, invoices…"
+            aria-label="Admin search"
+          />
+          @if (searchOpen) {
+            <div class="ad__search-panel" role="listbox">
+              @if (searchBusy) {
+                <p class="ad__search-meta">Searching…</p>
+              } @else if (searchError) {
+                <p class="ad__search-err">{{ searchError }}</p>
+              } @else if (!hitGroups().length) {
+                <p class="ad__search-meta">No matches.</p>
+              } @else {
+                @for (group of hitGroups(); track group.key) {
+                  <p class="ad__search-label">{{ group.label }}</p>
+                  @for (hit of group.hits; track hit.id) {
+                    <button type="button" class="ad__search-hit" (click)="openHit(hit)">
+                      <strong>{{ hit.label }}</strong>
+                      @if (hit.subtitle) {
+                        <span>{{ hit.subtitle }}</span>
+                      }
+                    </button>
+                  }
+                }
+              }
+              <button type="button" class="ad__search-close" (click)="closeSearch()">Close</button>
+            </div>
+          }
+        </div>
+        <app-notification-bell
+          [unreadCount]="comms.unreadNotifications()"
+          (refreshCounts)="refreshCounts()"
+        />
+      </div>
+    </header>
+    <div class="ad__body">
+      <router-outlet />
+    </div>
+  </div>
+</div>

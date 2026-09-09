@@ -1,0 +1,43 @@
+<div class="bell">
+  <button type="button" class="bell__btn" aria-label="Notifications" (click)="toggle()">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+    </svg>
+    @if (badge) {
+      <span class="bell__badge">{{ badge }}</span>
+    }
+  </button>
+
+  @if (open) {
+    <button type="button" class="bell__scrim" aria-label="Close" (click)="close()"></button>
+    <div class="bell__panel">
+      <div class="bell__head">
+        <p>Notifications</p>
+        <button type="button" (click)="close()">Close</button>
+      </div>
+      @if (loading) {
+        <p class="bell__empty">Loading…</p>
+      } @else if (items.length === 0) {
+        <p class="bell__empty">You're all caught up.</p>
+      } @else {
+        <ul>
+          @for (n of items; track n.id) {
+            <li>
+              <button type="button" class="bell__item" [class.bell__item--unread]="!n.read" (click)="onItem(n)">
+                <span class="bell__title">{{ n.title }}</span>
+                <span class="bell__msg">{{ n.message }}</span>
+                <span class="bell__time">{{ relative(n.createdAt) }}</span>
+              </button>
+            </li>
+          }
+        </ul>
+      }
+      <div class="bell__foot">
+        <button type="button" class="bell__link" (click)="markAll()">Mark all as read</button>
+        <button type="button" class="bell__muted" (click)="archiveRead()">Archive read</button>
+        <button type="button" class="bell__link" (click)="openMessages()">Open messages</button>
+      </div>
+    </div>
+  }
+</div>

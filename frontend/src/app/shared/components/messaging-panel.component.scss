@@ -1,0 +1,141 @@
+.msg__scrim {
+  position: fixed;
+  inset: 0;
+  border: 0;
+  background: rgba(0, 0, 0, 0.28);
+  z-index: 40;
+}
+
+.msg__panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: min(26rem, 100vw);
+  height: 100vh;
+  background: var(--card);
+  border-left: 1px solid var(--border);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+}
+
+.msg__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.msg__head p {
+  flex: 1;
+  margin: 0;
+  font-weight: 700;
+  text-transform: uppercase;
+  font-family: var(--font-display);
+}
+
+.msg__head button,
+.msg__back {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.msg__empty {
+  padding: 1.25rem;
+  color: var(--muted-foreground);
+  margin: 0;
+}
+
+.msg__err {
+  color: var(--destructive);
+}
+
+ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  flex: 1;
+}
+
+.msg__item {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  cursor: pointer;
+}
+
+.msg__item--unread .msg__title {
+  color: var(--primary);
+}
+
+.msg__title {
+  font-weight: 600;
+}
+
+.msg__preview,
+.msg__time {
+  font-size: 0.8rem;
+  color: var(--muted-foreground);
+}
+
+.msg__thread {
+  flex: 1;
+  overflow: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.msg__bubble {
+  padding: 0.75rem;
+  background: var(--secondary);
+  border: 1px solid var(--border);
+}
+
+.msg__bubble--me {
+  background: #fff4ef;
+  border-color: rgba(255, 77, 28, 0.25);
+}
+
+.msg__bubble strong {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
+.msg__bubble p {
+  margin: 0.35rem 0;
+  white-space: pre-wrap;
+}
+
+.msg__bubble em {
+  font-size: 0.7rem;
+  color: var(--muted-foreground);
+  font-style: normal;
+}
+
+.msg__compose {
+  padding: 0.75rem 1rem 1rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.msg__compose textarea {
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--input-background);
+  resize: vertical;
+}

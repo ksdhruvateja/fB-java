@@ -1,0 +1,68 @@
+.inbox h2 {
+  text-transform: uppercase;
+  font-size: 1.75rem;
+}
+
+.inbox__lead,
+.inbox__state {
+  color: var(--muted-foreground);
+}
+
+.inbox__tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.inbox__tabs button {
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  padding: 0.55rem 0.9rem;
+  cursor: pointer;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+}
+
+.inbox__tabs button.active {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--primary);
+}
+
+ul {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+}
+
+li {
+  border: 1px solid var(--border);
+  background: var(--card);
+  margin-bottom: 0.5rem;
+}
+
+li.unread {
+  background: rgba(255, 77, 28, 0.05);
+}
+
+li button {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.9rem 1rem;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+li span,
+li em {
+  font-size: 0.8rem;
+  color: var(--muted-foreground);
+  font-style: normal;
+}

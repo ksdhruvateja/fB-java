@@ -1,0 +1,14 @@
+<section class="dash fb-card">
+  <p class="dash__eyebrow">FixBridge portal</p>
+  <h1>{{ titleFor(displayRole()) }}</h1>
+  <p class="dash__lead">
+    Signed in as <strong>{{ displayName() }}</strong>
+    @if (displayEmail()) {
+      <span>({{ displayEmail() }})</span>
+    }
+  </p>
+  <p class="dash__note">
+    Role: <code>{{ displayRole() }}</code>. Full panels will land here in later migration steps.
+  </p>
+  <button type="button" class="fb-btn fb-btn-ghost" (click)="logout()">Log out</button>
+</section>

@@ -1,0 +1,59 @@
+<section class="inbox">
+  <h2>Inbox</h2>
+  <p class="inbox__lead">Messages and notifications for your account.</p>
+
+  <div class="inbox__tabs">
+    <button
+      type="button"
+      [class.active]="tab === 'messages'"
+      (click)="setTab('messages')"
+    >
+      Messages
+    </button>
+    <button
+      type="button"
+      [class.active]="tab === 'notifications'"
+      (click)="setTab('notifications')"
+    >
+      Notifications
+    </button>
+  </div>
+
+  @if (loading) {
+    <p class="inbox__state">Loading…</p>
+  } @else if (error) {
+    <p class="fb-error" role="alert">{{ error }}</p>
+  } @else if (tab === 'messages') {
+    @if (conversations.length === 0) {
+      <p class="inbox__state">No conversations yet.</p>
+    } @else {
+      <ul>
+        @for (c of conversations; track c.id) {
+          <li [class.unread]="c.unreadCount > 0">
+            <button type="button" (click)="openConversation(c)">
+              <strong>{{ c.subject || c.counterpartyName || ('Conversation #' + c.id) }}</strong>
+              <span>{{ c.lastMessagePreview || c.status }}</span>
+              <em>{{ relative(c.lastMessageAt || c.updatedAt) }}</em>
+            </button>
+          </li>
+        }
+      </ul>
+    }
+  } @else {
+    @if (items.length === 0) {
+      <p class="inbox__state">You're all caught up.</p>
+    } @else {
+      <ul>
+        @for (n of items; track n.id) {
+          <li [class.unread]="!n.read">
+            <button type="button" (click)="markRead(n)">
+              <strong>{{ n.title }}</strong>
+              <span>{{ n.message }}</span>
+              <em>{{ relative(n.createdAt) }}</em>
+            </button>
+          </li>
+        }
+      </ul>
+    }
+  }
+</section>

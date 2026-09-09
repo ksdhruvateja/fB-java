@@ -1,0 +1,35 @@
+.profile h2 {
+  text-transform: uppercase;
+  font-size: 1.75rem;
+}
+
+.profile__lead,
+.profile__state {
+  color: var(--muted-foreground);
+}
+
+dl {
+  margin: 1rem 0 1.25rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+dl div {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.85rem 1rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+}
+
+dt {
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+dd {
+  margin: 0;
+  font-weight: 500;
+}

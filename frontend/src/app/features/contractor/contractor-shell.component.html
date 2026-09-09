@@ -1,0 +1,36 @@
+<div class="co">
+  <aside class="co__side">
+    <a routerLink="/" class="co__brand">FixBridge</a>
+    <p class="co__role">Contractor</p>
+    @for (group of groups; track group) {
+      <div class="co__group">
+        <p>{{ group }}</p>
+        @for (item of tabsFor(group); track item.id) {
+          <a
+            [routerLink]="['/contractor', item.id]"
+            class="co__link"
+            [class.co__link--active]="tab === item.id"
+          >
+            {{ item.label }}
+            @if (item.id === 'messages' && messageBadge) {
+              <span class="co__badge">{{ messageBadge }}</span>
+            }
+          </a>
+        }
+      </div>
+    }
+  </aside>
+
+  <div class="co__main">
+    <header class="co__top">
+      <h1>{{ tab }}</h1>
+      <app-notification-bell
+        [unreadCount]="comms.unreadNotifications()"
+        (refreshCounts)="refreshCounts()"
+      />
+    </header>
+    <div class="co__body">
+      <router-outlet />
+    </div>
+  </div>
+</div>

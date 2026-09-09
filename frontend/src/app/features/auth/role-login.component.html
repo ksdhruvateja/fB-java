@@ -1,0 +1,136 @@
+<section class="login">
+  <div class="login__panel fb-card">
+    <a [routerLink]="homeLink" class="login__back">← Back</a>
+    <p class="login__eyebrow">FixBridge</p>
+    <h1>{{ title }}</h1>
+    <p class="login__sub">
+      @if (phase === 'mfa') {
+        Verify your identity
+      } @else if (phase === 'forgot') {
+        Reset your password
+      } @else {
+        {{ mode === 'signup' ? 'Create your account' : subtitle }}
+      }
+    </p>
+
+    @if (phase === 'credentials') {
+      <form class="login__form" [formGroup]="form" (ngSubmit)="submit()">
+        @if (mode === 'signup') {
+          <div class="fb-field">
+            <label for="name">Full name</label>
+            <input id="name" type="text" formControlName="name" autocomplete="name" />
+          </div>
+          @if (role === 'contractor') {
+            <div class="fb-field">
+              <label for="companyName">Company</label>
+              <input id="companyName" type="text" formControlName="companyName" />
+            </div>
+            <div class="fb-field">
+              <label for="trade">Primary trade</label>
+              <input id="trade" type="text" formControlName="trade" placeholder="Plumbing, HVAC…" />
+            </div>
+          }
+        }
+        <div class="fb-field">
+          <label for="email">Email</label>
+          <input id="email" type="email" formControlName="email" autocomplete="email" />
+        </div>
+        <div class="fb-field">
+          <label for="password">Password</label>
+          <input
+            id="password"
+            type="password"
+            formControlName="password"
+            [attr.autocomplete]="mode === 'signup' ? 'new-password' : 'current-password'"
+          />
+          @if (mode === 'signup' && form.controls.password.touched && form.controls.password.invalid) {
+            <p class="fb-error" role="alert">Password must be at least 6 characters.</p>
+          }
+        </div>
+
+        @if (error) {
+          <p class="fb-error" role="alert">{{ error }}</p>
+        }
+        @if (info) {
+          <p class="login__info">{{ info }}</p>
+        }
+
+        <button class="fb-btn fb-btn-primary" type="submit" [disabled]="loading">
+          @if (loading) {
+            {{ mode === 'signup' ? 'Creating…' : 'Signing in…' }}
+          } @else {
+            {{ mode === 'signup' ? 'Create account' : 'Sign in' }}
+          }
+        </button>
+      </form>
+
+      @if (mode === 'signin') {
+        <div class="login__divider"><span>or</span></div>
+        <app-google-sign-in
+          [disabled]="loading"
+          text="continue_with"
+          (credential)="onGoogleCredential($event)"
+          (failed)="onGoogleError($event)"
+        />
+      }
+
+      <p class="login__hint">
+        @if (allowSignup) {
+          <button type="button" class="login__linkbtn" (click)="toggleMode()">
+            {{ mode === 'signin' ? 'Need an account? Sign up' : 'Already have an account? Sign in' }}
+          </button>
+          <span aria-hidden="true"> · </span>
+        }
+        @if (mode === 'signin') {
+          <button type="button" class="login__linkbtn" (click)="openForgot()">Forgot password?</button>
+        }
+      </p>
+    }
+
+    @if (phase === 'mfa') {
+      <form class="login__form" [formGroup]="mfaForm" (ngSubmit)="verifyMfa()">
+        <div class="fb-field">
+          <label for="mfaCode">Verification code</label>
+          <input id="mfaCode" type="text" inputmode="numeric" formControlName="code" autocomplete="one-time-code" />
+        </div>
+        @if (mfaHint) {
+          <p class="login__info">{{ mfaHint }}</p>
+        }
+        @if (error) {
+          <p class="fb-error" role="alert">{{ error }}</p>
+        }
+        @if (info) {
+          <p class="login__info">{{ info }}</p>
+        }
+        <button class="fb-btn fb-btn-primary" type="submit" [disabled]="loading">
+          {{ loading ? 'Verifying…' : 'Verify & continue' }}
+        </button>
+        <div class="login__row">
+          <button type="button" class="login__linkbtn" [disabled]="loading" (click)="resendMfa()">
+            Resend code
+          </button>
+          <button type="button" class="login__linkbtn" (click)="backToCredentials()">Back</button>
+        </div>
+      </form>
+    }
+
+    @if (phase === 'forgot') {
+      <form class="login__form" [formGroup]="forgotForm" (ngSubmit)="submitForgot()">
+        <div class="fb-field">
+          <label for="forgotEmail">Email</label>
+          <input id="forgotEmail" type="email" formControlName="email" autocomplete="email" />
+        </div>
+        @if (error) {
+          <p class="fb-error" role="alert">{{ error }}</p>
+        }
+        @if (info) {
+          <p class="login__info">{{ info }}</p>
+        }
+        <button class="fb-btn fb-btn-primary" type="submit" [disabled]="loading">
+          {{ loading ? 'Sending…' : 'Send reset link' }}
+        </button>
+        <button type="button" class="login__linkbtn" (click)="backToCredentials()">Back to sign in</button>
+      </form>
+    }
+  </div>
+</section>

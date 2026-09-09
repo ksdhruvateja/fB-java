@@ -1,0 +1,65 @@
+@if (open) {
+  <button type="button" class="msg__scrim" aria-label="Close messages" (click)="close()"></button>
+  <aside class="msg__panel" role="dialog" aria-label="Messages">
+    <div class="msg__head">
+      @if (active) {
+        <button type="button" class="msg__back" (click)="backToList()">←</button>
+        <p>{{ active.subject || active.counterpartyName || 'Conversation' }}</p>
+      } @else {
+        <p>Messages</p>
+      }
+      <button type="button" (click)="close()">Close</button>
+    </div>
+
+    @if (!active) {
+      @if (loading) {
+        <p class="msg__empty">Loading conversations…</p>
+      } @else if (error) {
+        <p class="msg__empty msg__err">{{ error }}</p>
+      } @else if (conversations.length === 0) {
+        <p class="msg__empty">No conversations yet.</p>
+      } @else {
+        <ul>
+          @for (c of conversations; track c.id) {
+            <li>
+              <button type="button" class="msg__item" [class.msg__item--unread]="c.unreadCount > 0" (click)="openThread(c)">
+                <span class="msg__title">{{ c.subject || c.counterpartyName || ('Conversation #' + c.id) }}</span>
+                <span class="msg__preview">{{ c.lastMessagePreview || c.status }}</span>
+                <span class="msg__time">{{ relative(c.lastMessageAt || c.updatedAt) }}</span>
+              </button>
+            </li>
+          }
+        </ul>
+      }
+    } @else {
+      @if (threadLoading) {
+        <p class="msg__empty">Loading thread…</p>
+      } @else {
+        <div class="msg__thread">
+          @if (messages.length === 0) {
+            <p class="msg__empty">No messages yet.</p>
+          } @else {
+            @for (m of messages; track m.id) {
+              <div class="msg__bubble" [class.msg__bubble--me]="m.senderRole === 'homeowner'">
+                <strong>{{ m.senderDisplayName || m.senderRole }}</strong>
+                <p>{{ m.body }}</p>
+                <em>{{ relative(m.createdAt) }}</em>
+              </div>
+            }
+          }
+        </div>
+        <div class="msg__compose">
+          <textarea
+            rows="2"
+            [value]="draft"
+            (input)="onDraft($event)"
+            placeholder="Write a message…"
+          ></textarea>
+          <button type="button" class="fb-btn fb-btn-primary" [disabled]="sending || !draft.trim()" (click)="send()">
+            {{ sending ? 'Sending…' : 'Send' }}
+          </button>
+        </div>
+      }
+    }
+  </aside>
+}

@@ -29,3 +29,10 @@ scripts/apply-p0-managed-patch.mjs
 scripts/p0-apply-remaining.mjs
 scripts/p0-patch-webhook.mjs
 scripts/p0-remaining-fixes.mjs
+
+# Migration targets
+frontend/dist/
+frontend/node_modules/
+backend/target/
+backend/.mvn/wrapper/
+

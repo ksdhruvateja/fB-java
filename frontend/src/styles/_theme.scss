@@ -1,0 +1,167 @@
+/* FixBridge design tokens — ported from React src/styles/theme.css */
+
+:root {
+  --font-size: 16px;
+  --font-display: 'Barlow Condensed', sans-serif;
+  --font-body: 'DM Sans', sans-serif;
+  --font-mono: 'DM Mono', monospace;
+
+  --background: #ffffff;
+  --foreground: #0a0a0a;
+  --card: #ffffff;
+  --card-foreground: #0a0a0a;
+  --popover: #ffffff;
+  --popover-foreground: #0a0a0a;
+  --primary: #ff4d1c;
+  --primary-foreground: #ffffff;
+  --secondary: #f3f3f3;
+  --secondary-foreground: #0a0a0a;
+  --muted: #f3f3f3;
+  --muted-foreground: #5c5c5c;
+  --accent: #f3f3f3;
+  --accent-foreground: #0a0a0a;
+  --destructive: #d4183d;
+  --destructive-foreground: #ffffff;
+  --border: rgba(0, 0, 0, 0.09);
+  --input: transparent;
+  --input-background: #f3f3f3;
+  --switch-background: #bdbdbd;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: rgba(255, 77, 28, 0.35);
+  --chart-1: #ff4d1c;
+  --chart-2: #0a0a0a;
+  --chart-3: #5c5c5c;
+  --chart-4: #f3f3f3;
+  --chart-5: #ffffff;
+  --radius: 0rem;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #0a0a0a;
+  --sidebar-primary: #ff4d1c;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f3f3f3;
+  --sidebar-accent-foreground: #0a0a0a;
+  --sidebar-border: rgba(0, 0, 0, 0.09);
+  --sidebar-ring: rgba(255, 77, 28, 0.35);
+
+  --fixbridge-orange: #ff4d1c;
+  --fixbridge-orange-light: #ff8a62;
+  --fixbridge-orange-dark: #e23d10;
+  --fixbridge-cream: #faf6f1;
+  --fixbridge-sage: #dce8dc;
+  --fixbridge-blue: #dce8f6;
+  --fixbridge-yellow: #f8efd2;
+  --fixbridge-purple: #ebe4f4;
+  --fixbridge-red: #d4183d;
+  --fixbridge-charcoal: #2c2926;
+  --fixbridge-muted-text: #7a746c;
+  --fixbridge-card: #ffffff;
+  --fixbridge-background: #f7f2eb;
+}
+
+.dark {
+  --background: #0c0c0c;
+  --foreground: #f0ebe3;
+  --card: #141414;
+  --card-foreground: #f0ebe3;
+  --popover: #141414;
+  --popover-foreground: #f0ebe3;
+  --primary: #ff4d1c;
+  --primary-foreground: #ffffff;
+  --secondary: #1c1c1c;
+  --secondary-foreground: #f0ebe3;
+  --muted: #1a1a1a;
+  --muted-foreground: #7a7169;
+  --accent: #1e1e1e;
+  --accent-foreground: #f0ebe3;
+  --destructive: #d4183d;
+  --destructive-foreground: #ffffff;
+  --border: rgba(240, 235, 227, 0.08);
+  --input: transparent;
+  --input-background: #1c1c1c;
+  --switch-background: #333333;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: rgba(255, 77, 28, 0.4);
+  --chart-1: #ff4d1c;
+  --chart-2: #f0ebe3;
+  --chart-3: #7a7169;
+  --chart-4: #1c1c1c;
+  --chart-5: #2a2a2a;
+  --sidebar: #141414;
+  --sidebar-foreground: #f0ebe3;
+  --sidebar-primary: #ff4d1c;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #1c1c1c;
+  --sidebar-accent-foreground: #f0ebe3;
+  --sidebar-border: rgba(240, 235, 227, 0.08);
+  --sidebar-ring: rgba(255, 77, 28, 0.4);
+
+  --fixbridge-card: #141414;
+  --fixbridge-background: #0c0c0c;
+  --fixbridge-charcoal: #f0ebe3;
+  --fixbridge-muted-text: #7a7169;
+}
+
+@keyframes marquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-33.333%);
+  }
+}
+
+.animate-marquee {
+  animation: marquee 30s linear infinite;
+  width: max-content;
+}
+
+@keyframes float-a {
+  0%,
+  100% {
+    transform: translateY(0) rotate(3deg);
+  }
+  50% {
+    transform: translateY(-12px) rotate(3deg);
+  }
+}
+
+@keyframes float-b {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-2deg);
+  }
+  50% {
+    transform: translateY(-8px) rotate(-2deg);
+  }
+}
+
+@keyframes float-c {
+  0%,
+  100% {
+    transform: translateY(0) rotate(1.5deg);
+  }
+  50% {
+    transform: translateY(-14px) rotate(1.5deg);
+  }
+}
+
+.float-a {
+  animation: float-a 6s ease-in-out infinite;
+}
+.float-b {
+  animation: float-b 7s ease-in-out infinite 1s;
+}
+.float-c {
+  animation: float-c 5.5s ease-in-out infinite 0.5s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-marquee,
+  .float-a,
+  .float-b,
+  .float-c {
+    animation: none;
+  }
+}

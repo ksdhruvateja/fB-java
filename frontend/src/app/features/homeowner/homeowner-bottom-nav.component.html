@@ -1,0 +1,38 @@
+<nav class="bnav" aria-label="Main navigation">
+  <ul>
+    <li>
+      <button type="button" [class.active]="active === 'home'" (click)="on('home')">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        Home
+      </button>
+    </li>
+    <li>
+      <button type="button" [class.active]="active === 'jobs'" (click)="on('jobs')">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="14" x="2" y="7" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
+        Requests
+      </button>
+    </li>
+    <li class="bnav__center">
+      <button type="button" class="bnav__plus" aria-label="Request service" [attr.aria-current]="active === 'request' ? 'page' : null" (click)="on('request')">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+      </button>
+    </li>
+    <li>
+      <button type="button" [class.active]="active === 'inbox'" (click)="on('inbox')">
+        <span class="bnav__icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+          @if (inboxBadge) {
+            <span class="bnav__badge">{{ inboxBadge }}</span>
+          }
+        </span>
+        Messages
+      </button>
+    </li>
+    <li>
+      <button type="button" [class.active]="active === 'more'" (click)="on('more')">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+        More
+      </button>
+    </li>
+  </ul>
+</nav>

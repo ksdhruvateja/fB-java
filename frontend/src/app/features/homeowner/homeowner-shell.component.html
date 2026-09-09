@@ -1,0 +1,66 @@
+<div class="ho">
+  <aside class="ho__side">
+    <a routerLink="/" class="ho__brand">FixBridge</a>
+    <p class="ho__who">{{ userName() }}</p>
+    <nav>
+      @for (link of sideLinks; track link.id) {
+        <a
+          [routerLink]="['/homeowner', link.id]"
+          class="ho__link"
+          [class.ho__link--active]="isActive(link.id)"
+        >{{ link.label }}</a>
+      }
+    </nav>
+  </aside>
+
+  <div class="ho__main">
+    <header class="ho__top">
+      <div>
+        <p class="ho__eyebrow">FixBridge</p>
+        <h1>{{ title }}</h1>
+      </div>
+      <div class="ho__actions">
+        <label class="ho__prop">
+          <span>Property</span>
+          <select [(ngModel)]="selectedPropertyId">
+            <option value="">All properties</option>
+            @for (p of propertyCtx.properties(); track p.id) {
+              <option [value]="p.id">{{ p.label || p.addressLine1 }}</option>
+            }
+          </select>
+        </label>
+        <button type="button" class="ho__msg-btn" (click)="openMessages()">
+          Messages
+          @if (comms.unreadMessages() > 0) {
+            <span class="ho__msg-badge">{{ comms.unreadMessages() }}</span>
+          }
+        </button>
+        <app-notification-bell
+          [unreadCount]="comms.unreadNotifications()"
+          (refreshCounts)="refreshCounts()"
+          (openMessagesPanel)="openMessages()"
+        />
+      </div>
+    </header>
+
+    <div class="ho__body">
+      <router-outlet />
+    </div>
+  </div>
+
+  <app-messaging-panel
+    [open]="messagesOpen"
+    (closed)="closeMessages()"
+    (refreshCounts)="refreshCounts()"
+  />
+
+  <app-homeowner-bottom-nav
+    [tab]="tab"
+    [inboxBadge]="inboxBadge"
+    (home)="go('overview')"
+    (jobs)="go('jobs')"
+    (request)="go('report')"
+    (inbox)="go('inbox')"
+    (more)="go('more')"
+  />
+</div>

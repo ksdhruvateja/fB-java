@@ -1,0 +1,88 @@
+.bnav {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 40;
+  border-top: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(8px);
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
+ul {
+  list-style: none;
+  margin: 0 auto;
+  padding: 0.25rem 0.25rem 0;
+  max-width: 32rem;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  align-items: end;
+}
+
+li button {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.5rem 0.25rem;
+  border: 0;
+  background: transparent;
+  font-size: 0.625rem;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+li button.active {
+  color: var(--primary);
+}
+
+.bnav__center {
+  display: flex;
+  justify-content: center;
+  padding-bottom: 0.25rem;
+}
+
+.bnav__plus {
+  margin-top: -1.25rem;
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 999px;
+  background: var(--primary);
+  color: #fff;
+  border: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 12px 28px rgba(255, 77, 28, 0.35);
+  cursor: pointer;
+}
+
+.bnav__icon {
+  position: relative;
+  display: inline-flex;
+}
+
+.bnav__badge {
+  position: absolute;
+  top: -0.25rem;
+  right: -0.5rem;
+  min-width: 0.875rem;
+  height: 0.875rem;
+  padding: 0 0.15rem;
+  border-radius: 999px;
+  background: #ff4d1c;
+  color: #fff;
+  font-size: 0.5rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (min-width: 1024px) {
+  .bnav {
+    display: none;
+  }
+}

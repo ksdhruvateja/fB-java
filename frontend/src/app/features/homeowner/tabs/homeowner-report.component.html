@@ -1,0 +1,181 @@
+<section class="report">
+  <h2>Request service</h2>
+  <p class="report__lead">Describe the issue, then choose AI analysis or hire a pro.</p>
+
+  @if (phase !== 'assessing' && phase !== 'summary') {
+    <p class="report__step">Step {{ stepIndex }} of 5</p>
+  }
+
+  @if (error) {
+    <p class="fb-error" role="alert">{{ error }}</p>
+  }
+
+  @if (phase === 'category') {
+    <div class="report__block">
+      <h3>What kind of work?</h3>
+      <div class="report__cats">
+        @for (c of categories; track c.id) {
+          <button type="button" class="report__cat" (click)="selectCategory(c.id)">
+            {{ c.label }}
+          </button>
+        }
+      </div>
+    </div>
+  }
+
+  @if (phase === 'details') {
+    <div class="report__block" [formGroup]="form">
+      <h3>Describe the problem</h3>
+      <div class="fb-field">
+        <label for="title">Title</label>
+        <input id="title" formControlName="title" placeholder="e.g. Kitchen sink leaking" />
+      </div>
+      <div class="fb-field">
+        <label for="description">Description</label>
+        <textarea
+          id="description"
+          formControlName="description"
+          rows="5"
+          placeholder="What happened? When did it start?"
+        ></textarea>
+      </div>
+      <div class="report__actions">
+        <button type="button" class="fb-btn fb-btn-ghost" (click)="back()">Back</button>
+        <button type="button" class="fb-btn fb-btn-primary" (click)="nextFromDetails()">Continue</button>
+      </div>
+    </div>
+  }
+
+  @if (phase === 'property') {
+    <div class="report__block" [formGroup]="form">
+      <h3>Which property?</h3>
+      @if (loadingProps) {
+        <p class="report__state">Loading properties…</p>
+      } @else if (properties.length === 0) {
+        <p class="report__state">
+          No properties yet.
+          <a routerLink="/homeowner/properties">Add one</a>, or continue without selecting.
+        </p>
+      } @else {
+        <div class="fb-field">
+          <label for="propertyId">Property</label>
+          <select id="propertyId" formControlName="propertyId">
+            <option value="">Skip for now</option>
+            @for (p of properties; track p.id) {
+              <option [value]="p.id">{{ p.label || p.addressLine1 }}</option>
+            }
+          </select>
+        </div>
+      }
+      <div class="report__actions">
+        <button type="button" class="fb-btn fb-btn-ghost" (click)="back()">Back</button>
+        <button type="button" class="fb-btn fb-btn-primary" (click)="nextFromProperty()">Continue</button>
+      </div>
+    </div>
+  }
+
+  @if (phase === 'media') {
+    <div class="report__block">
+      <h3>Add a photo (optional)</h3>
+      <div class="fb-field">
+        <label for="media">Photo or video</label>
+        <input id="media" type="file" accept="image/*,video/*" (change)="onFile($event)" />
+      </div>
+      @if (mediaName) {
+        <p class="report__state">Attached: {{ mediaName }}</p>
+      }
+      <div class="report__actions">
+        <button type="button" class="fb-btn fb-btn-ghost" (click)="back()" [disabled]="submitting">Back</button>
+        <button type="button" class="fb-btn fb-btn-primary" (click)="nextFromMedia()" [disabled]="submitting">
+          Continue
+        </button>
+      </div>
+    </div>
+  }
+
+  @if (phase === 'path') {
+    <div class="report__block">
+      <h3>How do you want to proceed?</h3>
+      <p class="report__state">Choose AI analysis for DIY-friendly guidance, or go straight to hiring a pro.</p>
+      <div class="report__actions report__actions--stack">
+        <button type="button" class="fb-btn fb-btn-primary" [disabled]="submitting" (click)="chooseAiPath()">
+          Get AI assessment
+        </button>
+        <button type="button" class="fb-btn fb-btn-ghost" [disabled]="submitting" (click)="chooseHirePath()">
+          Hire a professional
+        </button>
+        <button type="button" class="fb-btn fb-btn-ghost" (click)="back()" [disabled]="submitting">Back</button>
+      </div>
+    </div>
+  }
+
+  <div #analysisAnchor></div>
+
+  @if (phase === 'assessing') {
+    <div class="report__block report__block--center report__analyzing">
+      <p class="report__pulse">Analyzing with Fixera…</p>
+      <p class="report__state">{{ assessHint }}</p>
+      <p class="report__state">Analysis may take 1–5 minutes. Keep this page open.</p>
+      <div class="fb-progress" aria-hidden="true"><span [style.width.%]="progressPct"></span></div>
+    </div>
+  }
+
+  @if (phase === 'summary') {
+    <div class="report__block">
+      <h3>Assessment summary</h3>
+      @if (job) {
+        <p class="report__meta">Request #{{ job.id }} · {{ job.status }}</p>
+      }
+      @if (assessment) {
+        <p class="report__summary">{{ assessment.summary || 'Assessment ready.' }}</p>
+        <dl class="report__facts">
+          @if (assessment.urgency) {
+            <div><dt>Urgency</dt><dd>{{ assessment.urgency }}</dd></div>
+          }
+          @if (assessment.recommended_trade) {
+            <div><dt>Trade</dt><dd>{{ assessment.recommended_trade }}</dd></div>
+          }
+          @if (assessment.safe_diy_allowed != null) {
+            <div>
+              <dt>DIY</dt>
+              <dd>{{ assessment.safe_diy_allowed ? 'May be DIY-friendly' : 'Professional recommended' }}</dd>
+            </div>
+          }
+          @if (assessment.complexity) {
+            <div><dt>Complexity</dt><dd>{{ assessment.complexity }}</dd></div>
+          }
+        </dl>
+        @if (assessment.immediate_safety_steps?.length) {
+          <div class="report__list">
+            <h4>Safety first</h4>
+            <ul>
+              @for (s of assessment.immediate_safety_steps; track s) {
+                <li>{{ s }}</li>
+              }
+            </ul>
+          </div>
+        }
+      } @else {
+        <p class="report__state">No assessment details yet. You can still hire a professional.</p>
+      }
+
+      <div class="report__actions report__actions--stack">
+        @if (assessment?.safe_diy_allowed !== false) {
+          <button type="button" class="fb-btn fb-btn-primary" (click)="goDiy()">Start DIY guide</button>
+        }
+        <button type="button" class="fb-btn fb-btn-ghost" (click)="goHire()">Hire a professional</button>
+        <button type="button" class="fb-btn fb-btn-ghost" (click)="reset()">New request</button>
+      </div>
+    </div>
+  }
+</section>
+
+<app-ai-assessment-ack-modal
+  [open]="ackOpen"
+  [busy]="submitting"
+  [checked]="ackChecked"
+  [error]="ackError"
+  (checkedChange)="ackChecked = $event"
+  (closed)="cancelAck()"
+  (continued)="confirmAck()"
+/>

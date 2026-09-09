@@ -1,0 +1,25 @@
+spring:
+  datasource:
+    url: ${NEON_DATABASE_URL}
+    username: ${DB_USER:}
+    password: ${DB_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+  flyway:
+    enabled: false
+
+server:
+  error:
+    include-stacktrace: never
+    include-message: always
+
+logging:
+  level:
+    root: WARN
+    com.fixbridge: INFO

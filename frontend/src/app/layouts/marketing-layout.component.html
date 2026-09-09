@@ -1,0 +1,18 @@
+<div class="mkt">
+  <header class="mkt__header">
+    <a routerLink="/" class="mkt__brand">FixBridge</a>
+    <nav class="mkt__nav" aria-label="Marketing">
+      <a routerLink="/contractors">For contractors</a>
+      <a routerLink="/about">About</a>
+      <a routerLink="/go-pro">Go Pro</a>
+      <a routerLink="/auth/homeowner" class="mkt__cta">Sign in</a>
+    </nav>
+  </header>
+  <main class="mkt__main">
+    <router-outlet />
+  </main>
+  <footer class="mkt__footer">
+    <span>© {{ year }} FixBridge</span>
+    <a routerLink="/legal">Legal</a>
+  </footer>
+</div>

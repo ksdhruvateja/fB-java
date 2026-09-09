@@ -1,0 +1,69 @@
+<section class="jobs">
+  <div class="jobs__head">
+    <div>
+      <h2>Service requests</h2>
+      <p class="jobs__lead">Track active and past FixBridge jobs for the selected property.</p>
+    </div>
+  </div>
+
+  <div class="fb-seg" role="tablist">
+    @for (s of segments; track s.id) {
+      <button
+        type="button"
+        role="tab"
+        [class.active]="segment === s.id"
+        (click)="setSegment(s.id)"
+      >
+        {{ s.label }}
+      </button>
+    }
+  </div>
+
+  @if (loading) {
+    <app-loading-skeleton [count]="5" />
+  } @else if (error) {
+    <p class="jobs__error" role="alert">{{ error }}</p>
+  } @else if (jobs.length === 0) {
+    <app-empty-state
+      title="No requests here"
+      body="Nothing in this segment for the selected property."
+      ctaLink="/homeowner/report"
+      ctaLabel="Request service"
+    />
+  } @else {
+    <ul>
+      @for (job of jobs; track job.id) {
+        <li class="jobs__item">
+          @if (canDelete(job)) {
+            <button
+              type="button"
+              class="jobs__delete"
+              title="Delete"
+              [disabled]="deletingId === job.id"
+              (click)="deleteJob(job, $event)"
+            >
+              {{ deletingId === job.id ? '…' : '×' }}
+            </button>
+          }
+          <a class="jobs__link" [routerLink]="['/homeowner/jobs', job.id]">
+            <strong>{{ job.title || job.category || ('Job #' + job.id) }}</strong>
+            <span>{{ job.homeownerStatusLabel || job.status }}</span>
+            @if (job.fullAddress) {
+              <span>{{ job.fullAddress }}</span>
+            }
+          </a>
+          @if (canCancel(job)) {
+            <button
+              type="button"
+              class="fb-btn fb-btn-ghost"
+              [disabled]="cancellingId === job.id"
+              (click)="cancel(job)"
+            >
+              {{ cancellingId === job.id ? 'Cancelling…' : 'Cancel' }}
+            </button>
+          }
+        </li>
+      }
+    </ul>
+  }
+</section>

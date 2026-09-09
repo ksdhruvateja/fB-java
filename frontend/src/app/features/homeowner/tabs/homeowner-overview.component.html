@@ -1,0 +1,56 @@
+<section class="ov">
+  <header class="ov__intro">
+    <h2>Overview</h2>
+    <p>Your properties and recent service requests in one place.</p>
+  </header>
+
+  @if (loading) {
+    <app-loading-skeleton [count]="6" />
+  } @else {
+    @if (error) {
+      <p class="ov__error" role="alert">{{ error }}</p>
+    }
+
+    <div class="ov__grid">
+      <section>
+        <div class="ov__row">
+          <h3>Properties</h3>
+          <a routerLink="/homeowner/properties">Manage</a>
+        </div>
+        @if (properties.length === 0) {
+          <p class="ov__empty">No properties yet. <a routerLink="/homeowner/properties">Add one</a>.</p>
+        } @else {
+          <ul>
+            @for (p of properties; track p.id) {
+              <li>
+                <strong>{{ p.label || p.addressLine1 }}</strong>
+                <span>{{ p.city }}{{ p.city && p.state ? ', ' : '' }}{{ p.state }} {{ p.zip }}</span>
+              </li>
+            }
+          </ul>
+        }
+      </section>
+
+      <section>
+        <div class="ov__row">
+          <h3>Recent requests</h3>
+          <a routerLink="/homeowner/jobs">View all</a>
+        </div>
+        @if (jobs.length === 0) {
+          <p class="ov__empty">No service requests yet. <a routerLink="/homeowner/report">Report an issue</a>.</p>
+        } @else {
+          <ul>
+            @for (j of jobs; track j.id) {
+              <li>
+                <strong>{{ j.title || j.category || ('Job #' + j.id) }}</strong>
+                <span class="ov__status">{{ j.status }}</span>
+              </li>
+            }
+          </ul>
+        }
+      </section>
+    </div>
+
+    <a routerLink="/homeowner/report" class="fb-btn fb-btn-primary ov__cta">Request service</a>
+  }
+</section>

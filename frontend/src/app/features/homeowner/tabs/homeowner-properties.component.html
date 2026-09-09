@@ -1,0 +1,73 @@
+<section class="props">
+  <div class="props__head">
+    <div>
+      <h2>My Property</h2>
+      <p>Addresses linked to your FixBridge account.</p>
+    </div>
+    <button type="button" class="fb-btn fb-btn-primary" (click)="showForm = !showForm">
+      {{ showForm ? 'Close' : 'Add property' }}
+    </button>
+  </div>
+
+  @if (showForm) {
+    <form class="props__form fb-card" [formGroup]="form" (ngSubmit)="submit()">
+      <div class="fb-field">
+        <label for="label">Label</label>
+        <input id="label" formControlName="label" placeholder="Home, Rental…" />
+      </div>
+      <div class="fb-field">
+        <label for="addressLine1">Street address</label>
+        <input id="addressLine1" formControlName="addressLine1" />
+      </div>
+      <div class="fb-field">
+        <label for="addressLine2">Apt / suite</label>
+        <input id="addressLine2" formControlName="addressLine2" />
+      </div>
+      <div class="props__row">
+        <div class="fb-field">
+          <label for="city">City</label>
+          <input id="city" formControlName="city" />
+        </div>
+        <div class="fb-field">
+          <label for="state">State</label>
+          <input id="state" formControlName="state" />
+        </div>
+        <div class="fb-field">
+          <label for="zip">ZIP</label>
+          <input id="zip" formControlName="zip" />
+        </div>
+      </div>
+      @if (error) {
+        <p class="fb-error">{{ error }}</p>
+      }
+      <button class="fb-btn fb-btn-primary" type="submit" [disabled]="saving">
+        {{ saving ? 'Saving…' : 'Save property' }}
+      </button>
+    </form>
+  }
+
+  @if (message) {
+    <p class="props__ok">{{ message }}</p>
+  }
+
+  @if (loading) {
+    <p class="props__state">Loading properties…</p>
+  } @else if (error && !showForm) {
+    <p class="fb-error" role="alert">{{ error }}</p>
+  } @else if (properties.length === 0) {
+    <p class="props__state">No properties yet. Add your first address.</p>
+  } @else {
+    <ul>
+      @for (p of properties; track p.id) {
+        <li>
+          <strong>{{ p.label || p.addressLine1 }}</strong>
+          <span>{{ p.addressLine1 }}</span>
+          @if (p.addressLine2) {
+            <span>{{ p.addressLine2 }}</span>
+          }
+          <span>{{ p.city }}{{ p.city && p.state ? ', ' : '' }}{{ p.state }} {{ p.zip }}</span>
+        </li>
+      }
+    </ul>
+  }
+</section>

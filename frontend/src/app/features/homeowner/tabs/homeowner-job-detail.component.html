@@ -1,0 +1,188 @@
+<section class="detail">
+  <div class="detail__head">
+    <h2>Request detail</h2>
+    <a routerLink="/homeowner/jobs">All requests</a>
+  </div>
+
+  @if (loading) {
+    <app-loading-skeleton [count]="6" />
+  } @else if (error && !job) {
+    <p class="fb-error" role="alert">{{ error }}</p>
+  } @else if (job) {
+    @if (error) {
+      <p class="fb-error" role="alert">{{ error }}</p>
+    }
+    @if (message) {
+      <p class="detail__ok">{{ message }}</p>
+    }
+    @if (hireHint) {
+      <p class="detail__hire">Hire path — review dispatch pricing and pay when ready.</p>
+    }
+
+    <div class="detail__card">
+      <strong>{{ job.title || job.category || ('Job #' + job.id) }}</strong>
+      <span>Status: {{ job.homeownerStatusLabel || job.status }}</span>
+      @if (job.fullAddress) {
+        <span>{{ job.fullAddress }}</span>
+      }
+      @if (job.description) {
+        <p>{{ job.description }}</p>
+      }
+    </div>
+
+    <div class="detail__card">
+      <h3>Dispatch pricing</h3>
+      @if (pricing?.amount != null) {
+        <p class="detail__amount">{{ money(pricing?.amount) }}</p>
+        <p class="detail__state">Service dispatch fee to request a professional visit.</p>
+      } @else {
+        <p class="detail__state">{{ pricing?.message || 'Pricing loads after request-professional.' }}</p>
+      }
+
+      @if (canPayDispatch() || hireHint) {
+        <div class="detail__coupon">
+          <label for="coupon">Coupon code</label>
+          <div class="detail__coupon-row">
+            <input
+              id="coupon"
+              type="text"
+              [(ngModel)]="couponCode"
+              placeholder="Enter code"
+              autocomplete="off"
+            />
+            <button type="button" class="fb-btn fb-btn-ghost" [disabled]="busy" (click)="applyCoupon()">
+              Apply
+            </button>
+            <button type="button" class="fb-btn fb-btn-ghost" [disabled]="busy" (click)="clearCoupon()">
+              Clear
+            </button>
+          </div>
+          @if (job.discountLabel || job.discountCode) {
+            <p class="detail__state">
+              Applied: {{ job.discountLabel || job.discountCode }}
+              @if (job.couponDiscountAmount) {
+                (−{{ money(job.couponDiscountAmount) }})
+              }
+            </p>
+          }
+        </div>
+      }
+
+      @if (canPayDispatch()) {
+        <button
+          type="button"
+          class="fb-btn fb-btn-primary"
+          [disabled]="busy"
+          (click)="payDispatch()"
+        >
+          {{ busy ? 'Working…' : 'Pay dispatch fee' }}
+        </button>
+      }
+    </div>
+
+    <div class="detail__card">
+      <h3>Proposal</h3>
+      @if (!proposal) {
+        <p class="detail__state">No proposal yet.</p>
+      } @else {
+        <p>{{ proposal.scopeSummary || proposal.quoteOptionTitle || 'Proposal #' + proposal.id }}</p>
+        <p class="detail__amount">{{ money(proposal.retailAmount ?? proposal.total) }}</p>
+        <p class="detail__state">Status: {{ proposal.status }}</p>
+        @if (canApproveProposal()) {
+          <button
+            type="button"
+            class="fb-btn fb-btn-primary"
+            [disabled]="busy"
+            (click)="approve()"
+          >
+            {{ busy ? 'Working…' : 'Approve proposal' }}
+          </button>
+        }
+      }
+    </div>
+
+    @if (hasAlternatives && activeQuoteOptions().length >= 2) {
+      <div class="detail__card">
+        <h3>Quote options</h3>
+        <ul class="detail__list">
+          @for (opt of activeQuoteOptions(); track opt.id) {
+            <li>
+              <div>
+                <strong>{{ opt.quoteOptionLabel || opt.quoteOptionTitle || ('Option #' + opt.id) }}</strong>
+                <span>{{ money(opt.retailAmount ?? opt.total) }}</span>
+              </div>
+              <button
+                type="button"
+                class="fb-btn fb-btn-ghost"
+                [disabled]="busy"
+                (click)="approve(opt.id)"
+              >
+                Select
+              </button>
+            </li>
+          }
+        </ul>
+      </div>
+    }
+
+    <div class="detail__card">
+      <h3>Change orders</h3>
+      @if (changeOrders.length === 0) {
+        <p class="detail__state">No change orders.</p>
+      } @else {
+        <ul class="detail__list">
+          @for (co of changeOrders; track co.id) {
+            <li>
+              <div>
+                <strong>{{ co.description }}</strong>
+                <span>{{ co.status }} · {{ money(co.retailAmount ?? co.contractorNet) }}</span>
+              </div>
+              @if (['pending', 'priced', 'awaiting_approval'].includes(co.status)) {
+                <button
+                  type="button"
+                  class="fb-btn fb-btn-ghost"
+                  [disabled]="busy"
+                  (click)="approveChangeOrder(co)"
+                >
+                  Approve
+                </button>
+              }
+            </li>
+          }
+        </ul>
+      }
+    </div>
+
+    @if (canTip()) {
+      <div class="detail__card">
+        <h3>Tip your contractor</h3>
+        <p class="detail__state">100% of your tip goes to your contractor.</p>
+        @if (job.invoiceNumber) {
+          <p class="detail__state">Invoice {{ job.invoiceNumber }}</p>
+        }
+        @if (job.invoiceAmountDue != null) {
+          <p class="detail__state">Amount due: {{ money(job.invoiceAmountDue) }}</p>
+        }
+        <div class="detail__coupon-row">
+          <label class="sr-only" for="tipAmount">Tip amount</label>
+          <input
+            id="tipAmount"
+            type="number"
+            min="0"
+            step="1"
+            [(ngModel)]="tipAmount"
+            placeholder="Tip $"
+          />
+          <button type="button" class="fb-btn fb-btn-primary" [disabled]="busy" (click)="sendTip()">
+            {{ busy ? 'Working…' : 'Add tip & pay' }}
+          </button>
+        </div>
+      </div>
+    }
+
+    <p>
+      Prefer DIY?
+      <a [routerLink]="['/homeowner/diy']" [queryParams]="{ jobId: job.id }">Open DIY guide</a>
+    </p>
+  }
+</section>

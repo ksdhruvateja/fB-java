@@ -1,0 +1,126 @@
+.co {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  background: var(--fixbridge-background);
+}
+
+.co__side {
+  padding: 1.25rem 0.75rem;
+  border-right: 1px solid var(--border);
+  background: var(--card);
+}
+
+.co__brand {
+  display: block;
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 1.35rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--primary);
+  padding: 0 0.75rem;
+}
+
+.co__role {
+  margin: 0.25rem 0 1rem;
+  padding: 0 0.75rem;
+  font-size: 0.7rem;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.co__group {
+  margin-bottom: 1rem;
+}
+
+.co__group > p {
+  margin: 0 0 0.35rem;
+  padding: 0 0.75rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.co__link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.co__link--active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.co__badge {
+  min-width: 1.1rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 999px;
+  background: #ff4d1c;
+  color: #fff;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.co__link--active .co__badge {
+  background: #fff;
+  color: var(--primary);
+}
+
+.co__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.9rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.co__top h1 {
+  text-transform: uppercase;
+  font-size: 1.25rem;
+}
+
+.co__body {
+  padding: 1.25rem;
+  max-width: 960px;
+}
+
+@media (max-width: 900px) {
+  .co {
+    grid-template-columns: 1fr;
+  }
+
+  .co__side {
+    display: flex;
+    gap: 0.35rem;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 0.75rem;
+  }
+
+  .co__brand,
+  .co__role,
+  .co__group > p {
+    display: none;
+  }
+
+  .co__group {
+    display: contents;
+  }
+
+  .co__link {
+    white-space: nowrap;
+    border: 1px solid var(--border);
+  }
+}

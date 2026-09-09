@@ -1,0 +1,99 @@
+<section class="diy">
+  <div class="diy__head">
+    <h2>DIY guide</h2>
+    <a routerLink="/homeowner/jobs" class="diy__back">Back to requests</a>
+  </div>
+
+  @if (loading) {
+    <p class="diy__state">Loading DIY session…</p>
+  } @else if (!jobId && candidates.length) {
+    <p class="diy__state">Pick a DIY guide for the selected property.</p>
+    <ul class="diy__candidates">
+      @for (c of candidates; track c.id) {
+        <li>
+          <button type="button" class="diy__pick" (click)="openCandidate(c)">
+            <strong>{{ c.title || c.category || ('Job #' + c.id) }}</strong>
+            <span>{{ c.homeownerStatusLabel || c.status }}</span>
+          </button>
+        </li>
+      }
+    </ul>
+  } @else if (error && !job) {
+    <p class="fb-error" role="alert">{{ error }}</p>
+    <a routerLink="/homeowner/report" class="fb-btn fb-btn-primary">Request service</a>
+  } @else {
+    @if (error) {
+      <p class="fb-error" role="alert">{{ error }}</p>
+    }
+    @if (message) {
+      <p class="diy__ok">{{ message }}</p>
+    }
+
+    <p class="diy__meta">
+      {{ job?.title || ('Job #' + jobId) }}
+      @if (assessment?.diy_difficulty) {
+        · Difficulty: {{ assessment?.diy_difficulty }}
+      }
+    </p>
+
+    @if (!sessionStarted) {
+      <div class="diy__gate">
+        <h3>Safety acknowledgment</h3>
+        <p>
+          DIY guidance is informational only. Stop immediately if you feel unsafe, encounter gas,
+          exposed wiring, structural damage, or anything beyond your skill level.
+        </p>
+        <label class="diy__check">
+          <input
+            type="checkbox"
+            [checked]="safetyAccepted"
+            (change)="safetyAccepted = $any($event.target).checked"
+          />
+          I understand the risks and will stop and hire a pro if needed.
+        </label>
+        <button
+          type="button"
+          class="fb-btn fb-btn-primary"
+          [disabled]="!safetyAccepted || starting"
+          (click)="startSession()"
+        >
+          {{ starting ? 'Starting…' : 'Start DIY session' }}
+        </button>
+      </div>
+    } @else {
+      <div class="diy__steps">
+        <h3>Steps</h3>
+        @if (steps.length === 0) {
+          <p class="diy__state">No guided steps in this assessment. Use caution and escalate if unsure.</p>
+        } @else {
+          <ol>
+            @for (s of steps; track $index) {
+              <li>
+                <strong>{{ s.title }}</strong>
+                <p>{{ s.body }}</p>
+              </li>
+            }
+          </ol>
+        }
+        @if (assessment?.stop_conditions?.length) {
+          <div class="diy__stop">
+            <h4>Stop if</h4>
+            <ul>
+              @for (c of assessment?.stop_conditions; track c) {
+                <li>{{ c }}</li>
+              }
+            </ul>
+          </div>
+        }
+        <button
+          type="button"
+          class="fb-btn fb-btn-ghost"
+          [disabled]="stopping"
+          (click)="stopEscalate()"
+        >
+          {{ stopping ? 'Escalating…' : 'Stop & hire a professional' }}
+        </button>
+      </div>
+    }
+  }
+</section>

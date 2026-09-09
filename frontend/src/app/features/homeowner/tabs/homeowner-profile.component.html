@@ -1,0 +1,18 @@
+<section class="profile">
+  <h2>Profile</h2>
+  <p class="profile__lead">Account details for your homeowner session.</p>
+
+  @if (!user()) {
+    <p class="profile__state">Not signed in. <a routerLink="/auth/homeowner">Sign in</a>.</p>
+  } @else {
+    <dl>
+      @for (f of fields(); track f.label) {
+        <div>
+          <dt>{{ f.label }}</dt>
+          <dd>{{ f.value }}</dd>
+        </div>
+      }
+    </dl>
+    <button type="button" class="fb-btn fb-btn-primary" (click)="logout()">Log out</button>
+  }
+</section>

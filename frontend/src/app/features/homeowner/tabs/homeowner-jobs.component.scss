@@ -1,0 +1,86 @@
+.jobs h2 {
+  text-transform: uppercase;
+  font-size: 1.75rem;
+}
+
+.jobs__lead,
+.jobs__state {
+  color: var(--muted-foreground);
+}
+
+.jobs__error {
+  color: var(--destructive);
+}
+
+ul {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  position: relative;
+}
+
+.jobs__item {
+  padding-top: 1.35rem;
+}
+
+.jobs__delete {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.45rem;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: 1px solid var(--border);
+  background: var(--card);
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--muted-foreground);
+}
+
+.jobs__delete:hover:not(:disabled) {
+  color: var(--destructive);
+  border-color: var(--destructive);
+}
+
+.jobs__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.jobs__link {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.jobs__link:hover strong {
+  color: var(--primary);
+}
+
+li span {
+  font-size: 0.8rem;
+  color: var(--muted-foreground);
+  text-transform: capitalize;
+}
+
+.fb-btn-ghost {
+  padding: 0.45rem 0.75rem;
+  font-size: 0.75rem;
+}
