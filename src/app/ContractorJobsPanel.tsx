@@ -1,0 +1,580 @@
+import { useMemo, useRef, useState, useEffect } from "react";
+import AppBackButton from "./AppBackButton";
+import { useIsMobile } from "./components/ui/use-mobile";
+import {
+  Camera,
+  CheckCircle2,
+  ClipboardList,
+  FileText,
+  HardHat,
+  ImagePlus,
+  Loader2,
+  MapPin,
+  Navigation,
+  Truck,
+  User,
+} from "lucide-react";
+import {
+  STATUS_LABELS,
+  assignJobTechnician,
+  completeJob,
+  contractorMarkArrived,
+  contractorMarkStarted,
+  contractorMarkTravel,
+  fetchContractorEmployees,
+  type ContractorEmployee,
+  type ManagedJob,
+  type ContractorPayout,
+  type PayoutAccount,
+} from "./managedJobs";
+import StaleItemNotice from "./StaleItemNotice";
+import ChangeOrderPanel from "./ChangeOrderPanel";
+import JobTimelinePanel from "./JobTimelinePanel";
+import { JobEarningsCard } from "./ContractorPayoutsPanel";
+import {
+  buildStructuredEquipmentPayload,
+  equipmentDraftHasData,
+  equipmentFieldsForJob,
+  type EquipmentDraft,
+} from "./contractorEquipmentFields";
+
+type JobFilter = "all" | "active" | "scheduled" | "awaiting" | "completed" | "cancelled";
+
+function matchesFilter(job: ManagedJob, filter: JobFilter) {
+  const s = job.status;
+  if (filter === "all") return true;
+  if (filter === "active") {
+    return ["contractor_en_route", "work_started", "approved", "awaiting_bid", "bid_received"].includes(s);
+  }
+  if (filter === "scheduled") return s === "scheduled" || s === "proposal_sent";
+  if (filter === "awaiting") {
+    return ["awaiting_customer_approval", "customer_review_pending", "admin_review_pending"].includes(s);
+  }
+  if (filter === "completed") {
+    return ["work_completed", "paid_out", "payout_pending", "closed"].includes(s);
+  }
+  if (filter === "cancelled") return s === "canceled" || s === "refunded" || s === "disputed";
+  return true;
+}
+
+function statusDot(status: string) {
+  if (["work_started", "contractor_en_route"].includes(status)) return "bg-amber-500";
+  if (["scheduled", "approved"].includes(status)) return "bg-sky-500";
+  if (["work_completed", "paid_out", "closed"].includes(status)) return "bg-emerald-500";
+  if (status === "canceled") return "bg-muted-foreground";
+  return "bg-primary";
+}
+
+export default function ContractorJobsPanel({
+  jobs,
+  busy,
+  onRefresh,
+  onError,
+  onBid,
+  payoutByJobId,
+  payoutAccount,
+  onViewPayouts,
+  initialJobId = null,
+}: {
+  jobs: ManagedJob[];
+  busy: boolean;
+  onRefresh: () => Promise<void>;
+  onError: (msg: string | null) => void;
+  onBid: (jobId: number) => void;
+  payoutByJobId?: Map<number, ContractorPayout>;
+  payoutAccount?: PayoutAccount | null;
+  onViewPayouts?: () => void;
+  initialJobId?: number | null;
+}) {
+  const [filter, setFilter] = useState<JobFilter>("all");
+  const [employees, setEmployees] = useState<ContractorEmployee[]>([]);
+  const [assignTechId, setAssignTechId] = useState<number | "">("");
+
+  useEffect(() => {
+    void fetchContractorEmployees().then((r) => {
+      if (r.ok) setEmployees((r.employees || []).filter((e) => e.active));
+    });
+  }, []);
+  const [selectedId, setSelectedId] = useState<number | null>(initialJobId);
+  const [dismissedStale, setDismissedStale] = useState(false);
+
+  useEffect(() => {
+    if (initialJobId) {
+      setSelectedId(initialJobId);
+      setDismissedStale(false);
+    }
+  }, [initialJobId]);
+  const [completeOpen, setCompleteOpen] = useState(false);
+  const [completeSummary, setCompleteSummary] = useState("");
+  const [healthSystem, setHealthSystem] = useState("HVAC");
+  const [healthStatus, setHealthStatus] = useState("good");
+  const [healthNextAction, setHealthNextAction] = useState("");
+  const [beforePhotoUrl, setBeforePhotoUrl] = useState<string | null>(null);
+  const [afterPhotoUrl, setAfterPhotoUrl] = useState<string | null>(null);
+  const [equipmentLabelPhotoUrl, setEquipmentLabelPhotoUrl] = useState<string | null>(null);
+  const [equipmentDraft, setEquipmentDraft] = useState<EquipmentDraft>({});
+  const [notes, setNotes] = useState("");
+  const beforePhotoRef = useRef<HTMLInputElement>(null);
+  const afterPhotoRef = useRef<HTMLInputElement>(null);
+  const labelPhotoRef = useRef<HTMLInputElement>(null);
+  const isMobile = useIsMobile();
+
+  const filtered = useMemo(() => jobs.filter((j) => matchesFilter(j, filter)), [jobs, filter]);
+  const requestedMissing =
+    !dismissedStale && Boolean(initialJobId) && jobs.length > 0 && !jobs.some((j) => j.id === initialJobId);
+  const selected = useMemo(() => {
+    if (selectedId) {
+      return jobs.find((j) => j.id === selectedId) || filtered.find((j) => j.id === selectedId) || null;
+    }
+    return requestedMissing ? null : filtered[0] || null;
+  }, [filtered, selectedId, jobs, requestedMissing]);
+
+  const filters: { id: JobFilter; label: string }[] = [
+    { id: "all", label: "All Jobs" },
+    { id: "active", label: "Active" },
+    { id: "scheduled", label: "Scheduled" },
+    { id: "awaiting", label: "Awaiting Approval" },
+    { id: "completed", label: "Completed" },
+    { id: "cancelled", label: "Cancelled" },
+  ];
+
+  return (
+    <section className="mx-auto max-w-6xl space-y-5">
+      <div>
+        <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase">Jobs</h1>
+        <p className="mt-1 text-sm text-muted-foreground">Filter, open a workspace, and run the job from start to complete.</p>
+      </div>
+
+      {requestedMissing ? (
+        <StaleItemNotice
+          onBack={() => {
+            setDismissedStale(true);
+            setSelectedId(null);
+          }}
+        />
+      ) : null}
+
+      <div className="flex flex-wrap gap-2">
+        {filters.map((f) => (
+          <button
+            key={f.id}
+            type="button"
+            onClick={() => setFilter(f.id)}
+            className={`rounded-full px-3.5 py-2 text-xs font-semibold transition ${
+              filter === f.id ? "bg-primary text-white" : "border border-border bg-card hover:border-primary/40"
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {jobs.length === 0 ? (
+        <p className="rounded-2xl border border-dashed border-border bg-card px-6 py-12 text-center text-sm text-muted-foreground">
+          No assigned jobs yet. Accept an invitation to start.
+        </p>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
+          <div className={`space-y-2 ${isMobile && selectedId ? "hidden" : ""}`}>
+            {filtered.length === 0 && (
+              <p className="text-sm text-muted-foreground px-1">No jobs in this filter.</p>
+            )}
+            {filtered.map((job) => {
+              const active = selected?.id === job.id;
+              return (
+                <button
+                  key={job.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedId(job.id);
+                    setCompleteOpen(false);
+                  }}
+                  className={`w-full rounded-2xl border p-3.5 text-left transition ${
+                    active ? "border-primary bg-primary/5" : "border-border bg-card hover:border-primary/30"
+                  }`}
+                >
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    {job.bookingId || `FB-${job.id}`}
+                  </p>
+                  <p className="mt-0.5 font-semibold truncate">{job.title || job.category}</p>
+                  <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <span className={`h-1.5 w-1.5 rounded-full ${statusDot(job.status)}`} />
+                    {STATUS_LABELS[job.status] || job.status}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+
+          {selected && (
+            <div className={`space-y-4 rounded-[1.5rem] border border-border bg-card p-5 sm:p-6 ${isMobile && !selectedId ? "hidden" : ""}`}>
+              {isMobile && selectedId && (
+                <AppBackButton
+                  onBack={() => {
+                    setSelectedId(null);
+                    setCompleteOpen(false);
+                  }}
+                  label="Back to Jobs"
+                  className="-ml-1"
+                />
+              )}
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  Job workspace · {selected.bookingId || `FB-${selected.id}`}
+                </p>
+                <h2 className="mt-1 text-2xl font-semibold">{selected.title || selected.category}</h2>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Status</p>
+                  <p className="mt-1 inline-flex items-center gap-2 text-sm font-semibold">
+                    <span className={`h-2 w-2 rounded-full ${statusDot(selected.status)}`} />
+                    {STATUS_LABELS[selected.status] || selected.status}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Customer</p>
+                  <p className="mt-1 text-sm font-semibold flex items-center gap-1.5">
+                    <User className="h-3.5 w-3.5" />
+                    {selected.contactName || "Homeowner"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{selected.cityStateZip || selected.fullAddress || "—"}</p>
+                </div>
+                <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Property</p>
+                  <p className="mt-1 text-sm font-semibold">Residential</p>
+                  <p className="text-xs text-muted-foreground">Single Family Home</p>
+                </div>
+                <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5 sm:col-span-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Issue</p>
+                  <p className="mt-1 text-sm text-muted-foreground line-clamp-3">
+                    {selected.description || selected.title || "See work order details."}
+                  </p>
+                </div>
+              </div>
+
+              {selected.status === "canceled" ? (
+                <div className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-sm">
+                  <p className="font-semibold">Cancelled by customer</p>
+                  {selected.cancellationReason ? (
+                    <p className="mt-1 text-muted-foreground">{selected.cancellationReason}</p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {selected &&
+                payoutByJobId?.get(selected.id) &&
+                ["work_completed", "customer_review_pending", "admin_review_pending", "payout_pending", "paid_out", "closed"].includes(
+                  selected.status
+                ) && (
+                  <JobEarningsCard
+                    payout={payoutByJobId.get(selected.id)!}
+                    account={payoutAccount || null}
+                    onViewPayouts={() => onViewPayouts?.()}
+                    onInstant={() => onViewPayouts?.()}
+                  />
+                )}
+
+              {(selected.mediaDataUrl || selected.mediaType) && (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">Attachments</p>
+                  <div className="flex flex-wrap gap-2">
+                    {selected.mediaDataUrl && String(selected.mediaDataUrl).startsWith("data:image") ? (
+                      <img src={selected.mediaDataUrl} alt="" className="h-20 w-28 rounded-lg object-cover border border-border" />
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs">
+                        <Camera className="h-3.5 w-3.5" /> Customer media
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-xl border border-border p-4 space-y-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Work order</p>
+                <div className="grid gap-2 text-sm sm:grid-cols-2">
+                  <p>
+                    <span className="text-muted-foreground">Category · </span>
+                    {selected.category || "—"}
+                  </p>
+                  <p>
+                    <span className="text-muted-foreground">Location · </span>
+                    <span className="inline-flex items-center gap-1">
+                      <MapPin className="h-3.5 w-3.5" />
+                      {selected.fullAddress || selected.cityStateZip || "Released after accept"}
+                    </span>
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {employees.length > 0 && selected.assignedContractorUserId ? (
+                    <div className="flex w-full flex-wrap items-center gap-2 pb-2">
+                      <label className="text-xs font-semibold text-muted-foreground">Assign technician</label>
+                      <select
+                        className="rounded-xl border border-border bg-background px-3 py-2 text-sm"
+                        value={assignTechId || selected.assignedEmployeeId || ""}
+                        onChange={(e) => setAssignTechId(e.target.value ? Number(e.target.value) : "")}
+                      >
+                        <option value="">Select technician</option>
+                        {employees.map((e) => (
+                          <option key={e.id} value={e.id}>
+                            {e.fullName}
+                            {e.jobTitle ? ` · ${e.jobTitle}` : ""}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="rounded-xl border border-border px-3 py-2 text-sm font-semibold"
+                        disabled={!assignTechId && !selected.assignedEmployeeId}
+                        onClick={async () => {
+                          const id = Number(assignTechId || selected.assignedEmployeeId);
+                          if (!id) return;
+                          const r = await assignJobTechnician(selected.id, id);
+                          if (!r.ok) onError(r.message || "Could not assign technician.");
+                          else await onRefresh();
+                        }}
+                      >
+                        Save technician
+                      </button>
+                    </div>
+                  ) : null}
+                  {selected.status !== "canceled" && ["scheduled", "approved"].includes(selected.status) && (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold"
+                      onClick={async () => {
+                        const r = await contractorMarkTravel(selected.id);
+                        if (!r.ok) onError(r.message || "Could not start travel.");
+                        else await onRefresh();
+                      }}
+                    >
+                      <Truck className="h-4 w-4" /> Start Travel
+                    </button>
+                  )}
+                  {selected.status !== "canceled" && selected.status === "contractor_en_route" && (
+                    <>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold"
+                        onClick={async () => {
+                          const r = await contractorMarkArrived(selected.id);
+                          if (!r.ok) onError(r.message || "Could not mark arrived.");
+                          else await onRefresh();
+                        }}
+                      >
+                        <MapPin className="h-4 w-4" /> Arrived
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold"
+                        onClick={async () => {
+                          const r = await contractorMarkStarted(selected.id);
+                          if (!r.ok) onError(r.message || "Could not start job.");
+                          else await onRefresh();
+                        }}
+                      >
+                        <Navigation className="h-4 w-4" /> Start Job
+                      </button>
+                    </>
+                  )}
+                  {selected.status !== "canceled" && ["awaiting_bid", "contractor_accepted"].includes(selected.status) && (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-sm font-semibold text-white"
+                      onClick={() => onBid(selected.id)}
+                    >
+                      Create Estimate
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {selected.status !== "canceled" &&
+              ["work_started", "change_order_pending", "contractor_en_route"].includes(selected.status) ? (
+                <ChangeOrderPanel jobId={selected.id} role="contractor" onChanged={onRefresh} />
+              ) : null}
+
+              <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Job timeline</p>
+                <div className="mt-3">
+                  <JobTimelinePanel jobId={selected.id} />
+                </div>
+              </div>
+
+              {selected.status !== "canceled" ? (
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground mb-2">Job actions</p>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { label: "Upload Photos", icon: ImagePlus, action: () => beforePhotoRef.current?.click() },
+                    { label: "Add Notes", icon: ClipboardList, action: () => setNotes((n) => n || " ") },
+                    { label: "Add Materials", icon: FileText, action: () => onBid(selected.id) },
+                    { label: "Request Approval", icon: CheckCircle2, action: () => onBid(selected.id) },
+                    { label: "Create Estimate", icon: FileText, action: () => onBid(selected.id) },
+                    { label: "Create Invoice", icon: FileText, action: () => onBid(selected.id) },
+                    {
+                      label: "Mark Complete",
+                      icon: HardHat,
+                      action: () => setCompleteOpen(true),
+                      primary: true,
+                    },
+                  ].map((a) => (
+                    <button
+                      key={a.label}
+                      type="button"
+                      onClick={a.action}
+                      className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold ${
+                        a.primary ? "bg-primary text-white" : "border border-border hover:border-primary/40"
+                      }`}
+                    >
+                      <a.icon className="h-3.5 w-3.5" />
+                      {a.label}
+                    </button>
+                  ))}
+                </div>
+                {notes !== "" && (
+                  <textarea
+                    className="mt-3 w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
+                    rows={3}
+                    placeholder="Job notes…"
+                    value={notes.trim() ? notes : ""}
+                    onChange={(e) => setNotes(e.target.value)}
+                  />
+                )}
+              </div>
+              ) : null}
+
+              {completeOpen && selected.status !== "canceled" && (
+                <div className="space-y-3 rounded-xl border border-border p-4">
+                  <p className="text-sm font-semibold">Mark complete + proof</p>
+                  <textarea
+                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm"
+                    rows={3}
+                    placeholder="Work summary, materials used, warranty notes"
+                    value={completeSummary}
+                    onChange={(e) => setCompleteSummary(e.target.value)}
+                  />
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <select className="rounded-xl border border-border bg-background px-3 py-2 text-sm" value={healthSystem} onChange={(e) => setHealthSystem(e.target.value)}>
+                      {["HVAC", "Plumbing", "Electrical", "Roof", "Appliances", "Pest", "Safety"].map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                    <select className="rounded-xl border border-border bg-background px-3 py-2 text-sm" value={healthStatus} onChange={(e) => setHealthStatus(e.target.value)}>
+                      <option value="good">Good</option>
+                      <option value="due_soon">Due Soon</option>
+                      <option value="attention">Attention</option>
+                      <option value="critical">Critical</option>
+                    </select>
+                    <input
+                      className="rounded-xl border border-border bg-background px-3 py-2 text-sm"
+                      value={healthNextAction}
+                      onChange={(e) => setHealthNextAction(e.target.value)}
+                      placeholder="Next action for homeowner"
+                    />
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <input ref={beforePhotoRef} type="file" accept="image/*" className="hidden" onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = () => setBeforePhotoUrl(String(reader.result));
+                        reader.readAsDataURL(file);
+                      }} />
+                      <button type="button" className="w-full rounded-xl border border-dashed border-border px-3 py-6 text-sm" onClick={() => beforePhotoRef.current?.click()}>
+                        {beforePhotoUrl ? "Replace before photo" : "Upload before photo"}
+                      </button>
+                      {beforePhotoUrl && <img src={beforePhotoUrl} alt="" className="mt-2 h-24 w-full rounded-lg object-cover" />}
+                    </div>
+                    <div>
+                      <input ref={afterPhotoRef} type="file" accept="image/*" className="hidden" onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = () => setAfterPhotoUrl(String(reader.result));
+                        reader.readAsDataURL(file);
+                      }} />
+                      <button type="button" className="w-full rounded-xl border border-dashed border-border px-3 py-6 text-sm" onClick={() => afterPhotoRef.current?.click()}>
+                        {afterPhotoUrl ? "Replace after photo" : "Upload after photo"}
+                      </button>
+                      {afterPhotoUrl && <img src={afterPhotoUrl} alt="" className="mt-2 h-24 w-full rounded-lg object-cover" />}
+                    </div>
+                  </div>
+                  <div>
+                    <input ref={labelPhotoRef} type="file" accept="image/*" className="hidden" onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = () => setEquipmentLabelPhotoUrl(String(reader.result));
+                      reader.readAsDataURL(file);
+                    }} />
+                    <button type="button" className="w-full rounded-xl border border-dashed border-border px-3 py-3 text-sm" onClick={() => labelPhotoRef.current?.click()}>
+                      {equipmentLabelPhotoUrl ? "Replace equipment label photo" : "Upload equipment label photo (optional)"}
+                    </button>
+                    {equipmentLabelPhotoUrl ? <img src={equipmentLabelPhotoUrl} alt="" className="mt-2 h-24 w-full rounded-lg object-cover" /> : null}
+                  </div>
+                  <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Equipment details (optional)</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Homeowner will confirm before this updates Property Passport.</p>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      {equipmentFieldsForJob(selected).map((field) => (
+                        <label key={field.key} className="grid gap-1 text-xs">
+                          {field.label}
+                          <input
+                            className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                            placeholder={field.placeholder}
+                            value={equipmentDraft[field.key] || ""}
+                            onChange={(e) => setEquipmentDraft((prev) => ({ ...prev, [field.key]: e.target.value }))}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={busy || !completeSummary.trim()}
+                    className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+                    onClick={async () => {
+                      onError(null);
+                      const structuredEquipment = buildStructuredEquipmentPayload(selected, equipmentDraft);
+                      const r = await completeJob(selected.id, {
+                        summary: completeSummary.trim(),
+                        beforePhotoUrl,
+                        afterPhotoUrl,
+                        equipmentLabelPhotoUrl,
+                        structuredEquipment: equipmentDraftHasData(equipmentDraft) ? structuredEquipment : undefined,
+                        notes: notes.trim() || undefined,
+                        healthUpdate: {
+                          system: healthSystem,
+                          status: healthStatus,
+                          nextAction: healthNextAction || "Service completed",
+                          notes: completeSummary.trim(),
+                        },
+                      });
+                      if (!r.ok) {
+                        onError("Could not complete job.");
+                        return;
+                      }
+                      setCompleteOpen(false);
+                      setCompleteSummary("");
+                      setBeforePhotoUrl(null);
+                      setAfterPhotoUrl(null);
+                      setEquipmentLabelPhotoUrl(null);
+                      setEquipmentDraft({});
+                      await onRefresh();
+                    }}
+                  >
+                    {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <HardHat className="h-4 w-4" />}
+                    Submit completion proof
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}

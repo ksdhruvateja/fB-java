@@ -1,0 +1,268 @@
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ── Light mode (default) ─────────────────────────────────────── */
+:root {
+  --font-size: 16px;
+  --background: #FFFFFF;
+  --foreground: #0A0A0A;
+  --card: #FFFFFF;
+  --card-foreground: #0A0A0A;
+  --popover: #FFFFFF;
+  --popover-foreground: #0A0A0A;
+  --primary: #FF4D1C;
+  --primary-foreground: #ffffff;
+  --secondary: #F3F3F3;
+  --secondary-foreground: #0A0A0A;
+  --muted: #F3F3F3;
+  --muted-foreground: #5C5C5C;
+  --accent: #F3F3F3;
+  --accent-foreground: #0A0A0A;
+  --destructive: #d4183d;
+  --destructive-foreground: #ffffff;
+  --border: rgba(0, 0, 0, 0.09);
+  --input: transparent;
+  --input-background: #F3F3F3;
+  --switch-background: #BDBDBD;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: rgba(255, 77, 28, 0.35);
+  --chart-1: #FF4D1C;
+  --chart-2: #0A0A0A;
+  --chart-3: #5C5C5C;
+  --chart-4: #F3F3F3;
+  --chart-5: #FFFFFF;
+  --radius: 0rem;
+  --sidebar: #FFFFFF;
+  --sidebar-foreground: #0A0A0A;
+  --sidebar-primary: #FF4D1C;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #F3F3F3;
+  --sidebar-accent-foreground: #0A0A0A;
+  --sidebar-border: rgba(0, 0, 0, 0.09);
+  --sidebar-ring: rgba(255, 77, 28, 0.35);
+}
+
+/* ── Dark mode ────────────────────────────────────────────────── */
+.dark {
+  --background: #0C0C0C;
+  --foreground: #F0EBE3;
+  --card: #141414;
+  --card-foreground: #F0EBE3;
+  --popover: #141414;
+  --popover-foreground: #F0EBE3;
+  --primary: #FF4D1C;
+  --primary-foreground: #ffffff;
+  --secondary: #1C1C1C;
+  --secondary-foreground: #F0EBE3;
+  --muted: #1A1A1A;
+  --muted-foreground: #7A7169;
+  --accent: #1E1E1E;
+  --accent-foreground: #F0EBE3;
+  --destructive: #d4183d;
+  --destructive-foreground: #ffffff;
+  --border: rgba(240, 235, 227, 0.08);
+  --input: transparent;
+  --input-background: #1C1C1C;
+  --switch-background: #333333;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: rgba(255, 77, 28, 0.4);
+  --chart-1: #FF4D1C;
+  --chart-2: #F0EBE3;
+  --chart-3: #7A7169;
+  --chart-4: #1C1C1C;
+  --chart-5: #2A2A2A;
+  --sidebar: #141414;
+  --sidebar-foreground: #F0EBE3;
+  --sidebar-primary: #FF4D1C;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #1C1C1C;
+  --sidebar-accent-foreground: #F0EBE3;
+  --sidebar-border: rgba(240, 235, 227, 0.08);
+  --sidebar-ring: rgba(255, 77, 28, 0.4);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-input-background: var(--input-background);
+  --color-switch-background: var(--switch-background);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    word-break: break-word;
+    overflow-wrap: break-word;
+  }
+
+  html, body {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  /**
+  * Default typography styles for HTML elements (h1-h4, p, label, button, input).
+  * These are in @layer base, so Tailwind utility classes (like text-sm, text-lg) automatically override them.
+  */
+
+  html {
+    font-size: var(--font-size);
+  }
+
+  h1 {
+    font-size: var(--text-2xl);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  h2 {
+    font-size: var(--text-xl);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  h3 {
+    font-size: var(--text-lg);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  h4 {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  label {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  button {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  input {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-normal);
+    line-height: 1.5;
+  }
+}
+
+:root {
+  --fixbridge-orange: #ff4d1c;
+  --fixbridge-orange-light: #ff8a62;
+  --fixbridge-orange-dark: #e23d10;
+  --fixbridge-cream: #faf6f1;
+  --fixbridge-sage: #dce8dc;
+  --fixbridge-blue: #dce8f6;
+  --fixbridge-yellow: #f8efd2;
+  --fixbridge-purple: #ebe4f4;
+  --fixbridge-red: #d4183d;
+  --fixbridge-charcoal: #2c2926;
+  --fixbridge-muted-text: #7a746c;
+  --fixbridge-card: #ffffff;
+  --fixbridge-background: #f7f2eb;
+}
+
+.fixera-shell {
+  color: var(--fixbridge-charcoal);
+  background: var(--fixbridge-background);
+  border-radius: 28px;
+  box-shadow: 0 8px 30px rgba(30, 40, 50, 0.06), 0 2px 8px rgba(30, 40, 50, 0.04);
+}
+
+.fixera-card {
+  border-radius: 24px;
+  background: var(--fixbridge-card);
+  box-shadow: 0 8px 30px rgba(30, 40, 50, 0.06), 0 2px 8px rgba(30, 40, 50, 0.04);
+}
+
+.fixera-scan {
+  animation: fixera-scan 2.8s ease-in-out infinite;
+}
+
+.fixera-buffer {
+  position: relative;
+  overflow: hidden;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(44, 41, 38, 0.08);
+}
+
+.fixera-buffer::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 38%;
+  border-radius: inherit;
+  background: var(--fixbridge-orange);
+  animation: fixera-buffer 1.15s ease-in-out infinite;
+}
+
+@keyframes fixera-scan {
+  0% { transform: translateY(8%); opacity: 0.2; }
+  50% { opacity: 0.9; }
+  100% { transform: translateY(78%); opacity: 0.2; }
+}
+
+@keyframes fixera-buffer {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(280%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fixera-scan,
+  .fixera-buffer::after { animation: none; }
+}
+
+/* Temporary HighLevel launcher: lift above mobile bottom nav. Do not restyle widget internals. */
+@media (max-width: 1023px) {
+  html[data-fb-chat="portal"] iframe[src*="leadconnectorhq.com"],
+  html[data-fb-chat="portal"] [id*="chat-widget"],
+  html[data-fb-chat="portal"] [class*="lc_text-widget"] {
+    bottom: calc(5.5rem + env(safe-area-inset-bottom)) !important;
+  }
+}
