@@ -4,7 +4,7 @@ import pg from 'pg';
 import { newDb } from 'pg-mem';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import crypto from 'crypto';
 import { assessRepair, complete, reassessRepair, prepareProfessionalHandoff, getFixeraPublicStatus, getFixeraHealth, getFixeraAdminProviders } from './fixera/index.js';
 import { persistFixeraInteraction, recordFixeraFeedback, recordFixeraInteraction, trainingOverview, exportApprovedTraining, listRecentExperiences } from './fixera/experience/store.js';
@@ -180,14 +180,14 @@ function formatBookingId(id, createdAt = new Date()) {
 }
 
 const REQUIREMENTS_MAP = {
-  Plumbing:   ['Licensed plumber', 'Leak diagnosis tools', 'Pipe repair experience'],
+  Plumbing: ['Licensed plumber', 'Leak diagnosis tools', 'Pipe repair experience'],
   Electrical: ['Licensed electrician', 'Panel/circuit safety knowledge', 'Code-compliant wiring'],
-  HVAC:       ['HVAC certification', 'Troubleshooting equipment', 'Heating/cooling repair experience'],
-  Painting:   ['Surface prep experience', 'Interior/exterior painting tools', 'Finish quality references'],
-  Roofing:    ['Roof safety gear', 'Shingle/flashings expertise', 'Weatherproofing experience'],
-  Flooring:   ['Floor leveling skills', 'Cutting/installation tools', 'Material-specific installation knowledge'],
-  Carpentry:  ['Framing/finish carpentry skills', 'Measurement/cutting precision', 'Structural repair experience'],
-  Others:     ['General contractor capability', 'Problem diagnosis ability', 'Willingness to scope unfamiliar jobs'],
+  HVAC: ['HVAC certification', 'Troubleshooting equipment', 'Heating/cooling repair experience'],
+  Painting: ['Surface prep experience', 'Interior/exterior painting tools', 'Finish quality references'],
+  Roofing: ['Roof safety gear', 'Shingle/flashings expertise', 'Weatherproofing experience'],
+  Flooring: ['Floor leveling skills', 'Cutting/installation tools', 'Material-specific installation knowledge'],
+  Carpentry: ['Framing/finish carpentry skills', 'Measurement/cutting precision', 'Structural repair experience'],
+  Others: ['General contractor capability', 'Problem diagnosis ability', 'Willingness to scope unfamiliar jobs'],
 };
 
 const TRADE_MATCH_TERMS = {
@@ -244,9 +244,9 @@ const PRIMARY_ADMIN_EMAIL = process.env.PRIMARY_ADMIN_EMAIL?.trim() || 'admin@fi
 const LEGACY_ADMIN_EMAILS = ['admin@fixbridge.local', 'admin@fixbridge.com', 'ksdt2702@gmail.com'];
 
 const DEMO_USERS = [
-  { role: 'homeowner',   name: 'Maria Santos', email: 'maria@example.com',       plainPassword: 'demo123',  is_admin: false, trade: null,             license_number: null },
-  { role: 'contractor',  name: 'James Park',   email: 'james@yourcompany.com',   plainPassword: 'demo123',  is_admin: false, trade: 'Master Plumber', license_number: 'NY-00231847' },
-  { role: 'admin',       name: 'Ops Admin',    email: PRIMARY_ADMIN_EMAIL,       plainPassword: 'admin123', is_admin: true,  trade: null,             license_number: null },
+  { role: 'homeowner', name: 'Maria Santos', email: 'maria@example.com', plainPassword: 'demo123', is_admin: false, trade: null, license_number: null },
+  { role: 'contractor', name: 'James Park', email: 'james@yourcompany.com', plainPassword: 'demo123', is_admin: false, trade: 'Master Plumber', license_number: 'NY-00231847' },
+  { role: 'admin', name: 'Ops Admin', email: PRIMARY_ADMIN_EMAIL, plainPassword: 'admin123', is_admin: true, trade: null, license_number: null },
 ];
 
 /** Move legacy demo admin email to PRIMARY_ADMIN_EMAIL and ensure super_admin access. */
@@ -908,8 +908,8 @@ function rowToUser(r, { includeDocumentData = true, homeCareSubscription = null 
     id: r.id != null ? Number(r.id) : undefined,
     role: r.role, name: r.name, email: r.email,
     // Never send the password hash to the client
-    ...(r.trade                    && { trade: r.trade }),
-    ...(r.license_number           && { licenseNumber: r.license_number }),
+    ...(r.trade && { trade: r.trade }),
+    ...(r.license_number && { licenseNumber: r.license_number }),
     ...(r.license_expires_at && {
       licenseExpiresAt:
         r.license_expires_at instanceof Date
@@ -922,35 +922,35 @@ function rowToUser(r, { includeDocumentData = true, homeCareSubscription = null 
           ? r.insurance_expires_at.toISOString().slice(0, 10)
           : String(r.insurance_expires_at).slice(0, 10),
     }),
-    ...(r.license_document_name    && { licenseDocumentName: r.license_document_name }),
-    ...(r.insurance_document_name  && { insuranceDocumentName: r.insurance_document_name }),
-    ...(r.id_document_name         && { idDocumentName: r.id_document_name }),
-    ...(includeDocumentData && r.license_document_data   && { licenseDocumentData: r.license_document_data }),
+    ...(r.license_document_name && { licenseDocumentName: r.license_document_name }),
+    ...(r.insurance_document_name && { insuranceDocumentName: r.insurance_document_name }),
+    ...(r.id_document_name && { idDocumentName: r.id_document_name }),
+    ...(includeDocumentData && r.license_document_data && { licenseDocumentData: r.license_document_data }),
     ...(includeDocumentData && r.insurance_document_data && { insuranceDocumentData: r.insurance_document_data }),
-    ...(includeDocumentData && r.id_document_data        && { idDocumentData: r.id_document_data }),
-    ...(r.photo_data_url           && { photoDataUrl: r.photo_data_url }),
-    ...(r.phone                    && { phone: r.phone }),
-    ...(r.address                  && { address: r.address }),
+    ...(includeDocumentData && r.id_document_data && { idDocumentData: r.id_document_data }),
+    ...(r.photo_data_url && { photoDataUrl: r.photo_data_url }),
+    ...(r.phone && { phone: r.phone }),
+    ...(r.address && { address: r.address }),
     addressVerified: r.address_verified === true,
     ...(r.address_verified_at && { addressVerifiedAt: r.address_verified_at }),
     ...(r.address_verification_provider && { addressVerificationProvider: r.address_verification_provider }),
     ...(r.postal_code_plus4 && { postalCodePlus4: r.postal_code_plus4 }),
-    ...(r.contact_email            && { contactEmail: r.contact_email }),
-    ...(r.company_name             && { companyName: r.company_name }),
-    ...(r.company_details          && { companyDetails: r.company_details }),
-    ...(r.insurance_details        && { insuranceDetails: r.insurance_details }),
-    ...(r.compliance_status        && { complianceStatus: r.compliance_status }),
+    ...(r.contact_email && { contactEmail: r.contact_email }),
+    ...(r.company_name && { companyName: r.company_name }),
+    ...(r.company_details && { companyDetails: r.company_details }),
+    ...(r.insurance_details && { insuranceDetails: r.insurance_details }),
+    ...(r.compliance_status && { complianceStatus: r.compliance_status }),
     dispatchEligible: r.dispatch_eligible === true,
     level1Eligible: r.level1_eligible === true,
     level2Eligible: r.level2_eligible === true,
     ...(r.overall_compliance_status && { overallComplianceStatus: r.overall_compliance_status }),
-    ...(r.w9_document_name         && { w9DocumentName: r.w9_document_name }),
+    ...(r.w9_document_name && { w9DocumentName: r.w9_document_name }),
     ...(includeDocumentData && r.w9_document_data && { w9DocumentData: r.w9_document_data }),
     ...(r.business_registration_name && { businessRegistrationName: r.business_registration_name }),
     ...(includeDocumentData && r.business_registration_data && { businessRegistrationData: r.business_registration_data }),
-    ...(r.business_license_name    && { businessLicenseName: r.business_license_name }),
+    ...(r.business_license_name && { businessLicenseName: r.business_license_name }),
     ...(includeDocumentData && r.business_license_data && { businessLicenseData: r.business_license_data }),
-    ...(r.diversity_document_name  && { diversityDocumentName: r.diversity_document_name }),
+    ...(r.diversity_document_name && { diversityDocumentName: r.diversity_document_name }),
     ...(includeDocumentData && r.diversity_document_data && { diversityDocumentData: r.diversity_document_data }),
     ...(r.contractor_application != null && {
       contractorApplication:
@@ -990,10 +990,10 @@ function rowToUser(r, { includeDocumentData = true, homeCareSubscription = null 
     }),
     permissions: r.role === 'admin'
       ? [...permissionsForUser({
-          role: 'admin',
-          adminAccessLevel: r.admin_access_level,
-          adminRolePreset: r.admin_role_preset,
-        })]
+        role: 'admin',
+        adminAccessLevel: r.admin_access_level,
+        adminRolePreset: r.admin_role_preset,
+      })]
       : undefined,
   };
 }
@@ -1001,10 +1001,10 @@ function rowToUser(r, { includeDocumentData = true, homeCareSubscription = null 
 function rowToJob(r) {
   return {
     id: Number(r.id), bookingId: r.booking_id, category: r.category, tag: r.tag, title: r.title,
-    ...(r.description    && { description: r.description }),
+    ...(r.description && { description: r.description }),
     ...(r.media_data_url && { mediaDataUrl: r.media_data_url }),
-    ...(r.media_type     && { mediaType: r.media_type }),
-    ...(r.ai_assessment  && { aiAssessment: r.ai_assessment }),
+    ...(r.media_type && { mediaType: r.media_type }),
+    ...(r.ai_assessment && { aiAssessment: r.ai_assessment }),
     cityStateZip: r.city_state_zip, fullAddress: r.full_address,
     contactName: r.contact_name, contactPhone: r.contact_phone,
     ...(r.scheduled_date && { scheduledDate: r.scheduled_date }),
@@ -1068,15 +1068,15 @@ async function notifyAdminsOfDocumentChange({ contractorName, contractorEmail, c
 function rowToLifecycle(r) {
   return {
     jobId: Number(r.job_id), status: r.status,
-    ...(r.contractor_name   && { contractorName: r.contractor_name }),
-    ...(r.contractor_email  && { contractorEmail: r.contractor_email }),
+    ...(r.contractor_name && { contractorName: r.contractor_name }),
+    ...(r.contractor_email && { contractorEmail: r.contractor_email }),
     ...(r.invoice_amount != null && { invoiceAmount: Number(r.invoice_amount) }),
     ...(r.invoice_file_name && { invoiceFileName: r.invoice_file_name }),
     ...(r.invoice_file_data && { invoiceFileData: r.invoice_file_data }),
-    ...(r.rating != null    && { rating: Number(r.rating) }),
-    ...(r.review            && { review: r.review }),
-    ...(r.accepted_at       && { acceptedAt: r.accepted_at instanceof Date ? r.accepted_at.toISOString() : r.accepted_at }),
-    ...(r.completed_at      && { completedAt: r.completed_at instanceof Date ? r.completed_at.toISOString() : r.completed_at }),
+    ...(r.rating != null && { rating: Number(r.rating) }),
+    ...(r.review && { review: r.review }),
+    ...(r.accepted_at && { acceptedAt: r.accepted_at instanceof Date ? r.accepted_at.toISOString() : r.accepted_at }),
+    ...(r.completed_at && { completedAt: r.completed_at instanceof Date ? r.completed_at.toISOString() : r.completed_at }),
   };
 }
 
@@ -1090,18 +1090,48 @@ function rowToMessage(r) {
 
 // ── Express app ───────────────────────────────────────────────────────────────
 
+// const app = express();
+// // Required behind Netlify / other reverse proxies so express-rate-limit trusts X-Forwarded-For.
+// app.set('trust proxy', 1);
+// app.disable('x-powered-by');
+// app.use(securityHeaders);
+// app.use((req, res, next) => {
+//   if (!req.path.startsWith('/api/')) return next();
+//   const started = Date.now();
+//   res.on('finish', () => {
+//     const route = `${req.method} ${req.path}`;
+//     console.log(JSON.stringify({
+//       requestId: req.headers['x-nf-request-id'] || null,
+//       route,
+//       status: res.statusCode,
+//       durationMs: Date.now() - started,
+//     }));
+//   });
+//   next();
+// });
+import { randomUUID } from 'crypto'; // Ensure crypto is imported at the very top of api/app.js
+
+// ── Express app ───────────────────────────────────────────────────────────────
 const app = express();
-// Required behind Netlify / other reverse proxies so express-rate-limit trusts X-Forwarded-For.
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
 app.use(securityHeaders);
+
+// 🔥 GLOBAL MIDDLWARE HOTFIX: Runs first for ALL endpoints across the application stack
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api/')) return next();
+  
+  // Set req.id globally across all development and production reverse-proxy channels
+  req.id = req.headers['x-nf-request-id'] || req.headers['x-request-id'] || req.headers['X-Request-ID'] || randomUUID();
+  
+  // Also pass it back to the client response headers for tracking consistency
+  res.setHeader('X-Request-Id', req.id);
+  
   const started = Date.now();
   res.on('finish', () => {
     const route = `${req.method} ${req.path}`;
     console.log(JSON.stringify({
-      requestId: req.headers['x-nf-request-id'] || null,
+      requestId: req.id, // 🎯 It will now perfectly print the generated ID hash instead of null!
       route,
       status: res.statusCode,
       durationMs: Date.now() - started,
@@ -1109,6 +1139,7 @@ app.use((req, res, next) => {
   });
   next();
 });
+
 app.use(
   cors({
     origin: corsOriginDelegate,
@@ -1141,7 +1172,8 @@ function rateLimitKey(req) {
     ? forwarded[0]
     : String(forwarded || '').split(',')[0].trim();
   const nfIp = String(req.headers['x-nf-client-connection-ip'] || '').trim();
-  return req.ip || fromHeader || nfIp || 'unknown';
+  const clientIp = req.ip || fromHeader || nfIp || 'unknown';
+  return clientIp === 'unknown' ? 'unknown' : ipKeyGenerator(clientIp);
 }
 
 const rateLimitBase = {
@@ -1410,16 +1442,16 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
        ) RETURNING *`,
       [
         role, name.trim(), email.trim().toLowerCase(), hashed,
-        trade?.trim()||null, licenseNumber?.trim()||null,
-        licenseDocumentName||null, insuranceDocumentName||null, idDocumentName||null,
-        licenseDocumentData||null, insuranceDocumentData||null, idDocumentData||null,
-        w9DocumentName||null, w9DocumentData||null,
-        businessRegistrationName||null, businessRegistrationData||null,
-        businessLicenseName||null, businessLicenseData||null,
-        diversityDocumentName||null, diversityDocumentData||null,
+        trade?.trim() || null, licenseNumber?.trim() || null,
+        licenseDocumentName || null, insuranceDocumentName || null, idDocumentName || null,
+        licenseDocumentData || null, insuranceDocumentData || null, idDocumentData || null,
+        w9DocumentName || null, w9DocumentData || null,
+        businessRegistrationName || null, businessRegistrationData || null,
+        businessLicenseName || null, businessLicenseData || null,
+        diversityDocumentName || null, diversityDocumentData || null,
         appJson,
-        phone?.trim()||null, address?.trim()||null, contactEmail?.trim()||null,
-        companyName?.trim()||null, companyDetails?.trim()||null, insuranceDetails?.trim()||null,
+        phone?.trim() || null, address?.trim() || null, contactEmail?.trim() || null,
+        companyName?.trim() || null, companyDetails?.trim() || null, insuranceDetails?.trim() || null,
         zipsJson,
         travelRadiusMiles != null && travelRadiusMiles !== '' ? Number(travelRadiusMiles) : null,
         visitFee != null && visitFee !== '' ? Number(visitFee) : null,
@@ -1522,9 +1554,9 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
     const syncCheckout = req.query.sync === 'checkout';
     const { rows: pendingPayments } = syncCheckout
       ? await pool.query(
-          `SELECT * FROM payments WHERE user_id=$1 AND status='pending' AND stripe_session_id IS NOT NULL`,
-          [req.authUser.id]
-        )
+        `SELECT * FROM payments WHERE user_id=$1 AND status='pending' AND stripe_session_id IS NOT NULL`,
+        [req.authUser.id]
+      )
       : { rows: [] };
     for (const payment of pendingPayments) {
       try {
@@ -1835,33 +1867,33 @@ app.put('/api/auth/profile', requireAuth, async (req, res) => {
           body.contractorApplication !== undefined,
           body.contractorApplication !== undefined
             ? JSON.stringify((() => {
-                const existing =
-                  before.contractor_application == null
-                    ? {}
-                    : typeof before.contractor_application === 'string'
-                      ? (() => {
-                          try {
-                            return JSON.parse(before.contractor_application) || {};
-                          } catch {
-                            return {};
-                          }
-                        })()
-                      : before.contractor_application;
-                const incoming =
-                  body.contractorApplication && typeof body.contractorApplication === 'object'
-                    ? body.contractorApplication
-                    : {};
-                return {
-                  ...existing,
-                  ...incoming,
-                  primaryServices: Array.isArray(incoming.primaryServices)
-                    ? incoming.primaryServices
-                    : existing.primaryServices || [],
-                  serviceStates: Array.isArray(incoming.serviceStates)
-                    ? incoming.serviceStates
-                    : existing.serviceStates || [],
-                };
-              })())
+              const existing =
+                before.contractor_application == null
+                  ? {}
+                  : typeof before.contractor_application === 'string'
+                    ? (() => {
+                      try {
+                        return JSON.parse(before.contractor_application) || {};
+                      } catch {
+                        return {};
+                      }
+                    })()
+                    : before.contractor_application;
+              const incoming =
+                body.contractorApplication && typeof body.contractorApplication === 'object'
+                  ? body.contractorApplication
+                  : {};
+              return {
+                ...existing,
+                ...incoming,
+                primaryServices: Array.isArray(incoming.primaryServices)
+                  ? incoming.primaryServices
+                  : existing.primaryServices || [],
+                serviceStates: Array.isArray(incoming.serviceStates)
+                  ? incoming.serviceStates
+                  : existing.serviceStates || [],
+              };
+            })())
             : null,
           Boolean(w9Doc.provided),
           Boolean(w9Doc.clear),
@@ -2451,18 +2483,18 @@ app.post('/api/jobs', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'Homeowner access required' });
     }
     const { category, tag, title, description, mediaDataUrl, mediaType, aiAssessment,
-            cityStateZip, fullAddress, contactName, contactPhone, dist, est, bids, urgent, ai, requirements,
-            scheduledDate, timeSlot, serviceTiming } = req.body;
+      cityStateZip, fullAddress, contactName, contactPhone, dist, est, bids, urgent, ai, requirements,
+      scheduledDate, timeSlot, serviceTiming } = req.body;
     const id = Date.now();
     const bookingId = formatBookingId(id);
     await pool.query(
       `INSERT INTO jobs (id,booking_id,category,tag,title,description,media_data_url,media_type,ai_assessment,city_state_zip,full_address,contact_name,contact_phone,homeowner_email,scheduled_date,time_slot,service_timing,dist,posted,est,bids,urgent,ai,requirements)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
       [id, bookingId, category, tag, title, description || null, mediaDataUrl || null, mediaType || null,
-       aiAssessment ? JSON.stringify(aiAssessment) : null,
-       cityStateZip, fullAddress, contactName, contactPhone, req.authUser.email,
-       scheduledDate || null, timeSlot || null, serviceTiming || null, dist || null,
-       'Just now', est || '', bids || 0, urgent || false, ai || false, JSON.stringify(requirements || [])]
+        aiAssessment ? JSON.stringify(aiAssessment) : null,
+        cityStateZip, fullAddress, contactName, contactPhone, req.authUser.email,
+        scheduledDate || null, timeSlot || null, serviceTiming || null, dist || null,
+        'Just now', est || '', bids || 0, urgent || false, ai || false, JSON.stringify(requirements || [])]
     );
     const { rows } = await pool.query('SELECT * FROM jobs WHERE id=$1', [id]);
     const job = rows[0];
@@ -3085,24 +3117,24 @@ async function handleFixaAssessment(req, res) {
     return res.json({
       assessment: a
         ? {
-            overview: a.summary,
-            imageObservations: a.visual_findings,
-            diagnosis: a.summary,
-            likelyRootCause: '',
-            professionalSteps: [],
-            partsNeeded: a.materials_needed || [],
-            workScope: [],
-            toolsRequired: a.tools_required || [],
-            diySteps: a.diy_steps || [],
-            diyGuideImages: [],
-            suggestions: a.immediate_safety_steps || [],
-            estimatedCost: '',
-            estimatedDuration: `${a.estimated_labor_hours_min}-${a.estimated_labor_hours_max} hours`,
-            urgency: a.urgency,
-            safetyNotes: (a.immediate_safety_steps || []).join(' '),
-            professionalRecommended: a.professional_required,
-            ...a,
-          }
+          overview: a.summary,
+          imageObservations: a.visual_findings,
+          diagnosis: a.summary,
+          likelyRootCause: '',
+          professionalSteps: [],
+          partsNeeded: a.materials_needed || [],
+          workScope: [],
+          toolsRequired: a.tools_required || [],
+          diySteps: a.diy_steps || [],
+          diyGuideImages: [],
+          suggestions: a.immediate_safety_steps || [],
+          estimatedCost: '',
+          estimatedDuration: `${a.estimated_labor_hours_min}-${a.estimated_labor_hours_max} hours`,
+          urgency: a.urgency,
+          safetyNotes: (a.immediate_safety_steps || []).join(' '),
+          professionalRecommended: a.professional_required,
+          ...a,
+        }
         : null,
       source: structured.source || 'fixera',
       assistant: 'Fixera',
@@ -3183,15 +3215,15 @@ function handleFixeraProfessionalHandoff(req, res) {
 app.post('/api/fixera/professional-handoff', requireAuth, handleFixeraProfessionalHandoff);
 app.post('/api/fixa/professional-handoff', requireAuth, handleFixeraProfessionalHandoff);
 
-  registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser });
-  registerMarketingRoutes(app, { pool, requireAuth, requireAdmin, requirePermission });
-  registerGoogleAuthRoutes(app, { pool, makeToken, rowToUser, bcrypt, signupLimiter: signInLimiter, requireAuth });
-  registerAssessmentProcessor(processManagedJobAssessmentTask);
-  registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin });
-  registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdmin });
-  registerHomeAssistantRoutes(app, { pool, requireAuth });
-  registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
-  registerContractorEmployeeRoutes(app, { pool, requireAuth, requireAdmin });
+registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser });
+registerMarketingRoutes(app, { pool, requireAuth, requireAdmin, requirePermission });
+registerGoogleAuthRoutes(app, { pool, makeToken, rowToUser, bcrypt, signupLimiter: signInLimiter, requireAuth });
+registerAssessmentProcessor(processManagedJobAssessmentTask);
+registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin });
+registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdmin });
+registerHomeAssistantRoutes(app, { pool, requireAuth });
+registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
+registerContractorEmployeeRoutes(app, { pool, requireAuth, requireAdmin });
 registerSupportTicketRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerHomeownerAdminRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerFinanceRoutes(app, { pool, requireAuth, requireAdmin });
@@ -3247,104 +3279,104 @@ async function handleFixaChat(req, res) {
       if (!ackOk) return;
 
       assessment = typeof job.ai_assessment === 'string' ? JSON.parse(job.ai_assessment) : job.ai_assessment;
-        const lastUser = normalized.filter((m) => m.role === 'user').pop()?.content || '';
-        const {
-          classifyDiyRiskLevel,
-          detectUserDiyStopRequest,
-          detectPromptInjection,
-          redSafetyReply,
-          yellowStopReply,
-          isEmergencyHazard,
-        } = await import('./diy-safety.js');
-        const { recordDiySafetyEvent } = await import('./diy-safety-events.js');
+      const lastUser = normalized.filter((m) => m.role === 'user').pop()?.content || '';
+      const {
+        classifyDiyRiskLevel,
+        detectUserDiyStopRequest,
+        detectPromptInjection,
+        redSafetyReply,
+        yellowStopReply,
+        isEmergencyHazard,
+      } = await import('./diy-safety.js');
+      const { recordDiySafetyEvent } = await import('./diy-safety-events.js');
 
-        if (detectPromptInjection(lastUser)) {
+      if (detectPromptInjection(lastUser)) {
+        await recordDiySafetyEvent(pool, {
+          userId: req.authUser.id,
+          jobId: jobIdNum,
+          eventType: 'prompt_injection_blocked',
+          riskLevel: 'red',
+          previousRiskLevel: job.diy_risk_level,
+          riskReasonCodes: ['PROMPT_INJECTION'],
+          metadata: { excerpt: lastUser.slice(0, 200) },
+          req,
+        });
+        await pool.query(`UPDATE managed_jobs SET diy_risk_level='red', updated_at=NOW() WHERE id=$1`, [jobIdNum]);
+        return res.json({
+          ok: true,
+          reply: redSafetyReply(),
+          source: 'safety_policy',
+          riskLevel: 'red',
+          promptInjectionBlocked: true,
+          emergencyRecommended: true,
+        });
+      }
+
+      const classified = classifyDiyRiskLevel(`${lastUser} ${job.description || ''}`, assessment);
+      riskLevel = classified.level;
+
+      if (detectUserDiyStopRequest(lastUser) || classified.userStopRequested) {
+        await recordDiySafetyEvent(pool, {
+          userId: req.authUser.id,
+          jobId: jobIdNum,
+          eventType: 'user_stop',
+          riskLevel: 'yellow',
+          previousRiskLevel: job.diy_risk_level,
+          riskReasonCodes: classified.reasonCodes,
+          req,
+        });
+        return res.json({
+          ok: true,
+          reply: yellowStopReply(),
+          source: 'safety_policy',
+          riskLevel: 'yellow',
+          userStopRequested: true,
+        });
+      }
+
+      if (riskLevel === 'red') {
+        const escalated = job.diy_risk_level !== 'red';
+        await pool.query(`UPDATE managed_jobs SET diy_risk_level='red', updated_at=NOW() WHERE id=$1`, [jobIdNum]);
+        if (escalated) {
           await recordDiySafetyEvent(pool, {
             userId: req.authUser.id,
             jobId: jobIdNum,
-            eventType: 'prompt_injection_blocked',
+            eventType: 'risk_escalation',
             riskLevel: 'red',
             previousRiskLevel: job.diy_risk_level,
-            riskReasonCodes: ['PROMPT_INJECTION'],
-            metadata: { excerpt: lastUser.slice(0, 200) },
+            riskReasonCodes: classified.reasonCodes,
+            metadata: { emergencyRecommended: isEmergencyHazard(classified) },
             req,
           });
-          await pool.query(`UPDATE managed_jobs SET diy_risk_level='red', updated_at=NOW() WHERE id=$1`, [jobIdNum]);
-          return res.json({
-            ok: true,
-            reply: redSafetyReply(),
-            source: 'safety_policy',
-            riskLevel: 'red',
-            promptInjectionBlocked: true,
-            emergencyRecommended: true,
-          });
         }
+        return res.json({
+          ok: true,
+          reply: redSafetyReply(),
+          source: 'safety_policy',
+          riskLevel,
+          escalated,
+          emergencyRecommended: isEmergencyHazard(classified),
+          reasonCodes: classified.reasonCodes,
+        });
+      }
 
-        const classified = classifyDiyRiskLevel(`${lastUser} ${job.description || ''}`, assessment);
-        riskLevel = classified.level;
-
-        if (detectUserDiyStopRequest(lastUser) || classified.userStopRequested) {
+      if (classified.level !== job.diy_risk_level) {
+        await pool.query(`UPDATE managed_jobs SET diy_risk_level=$2, updated_at=NOW() WHERE id=$1`, [
+          jobIdNum,
+          classified.level,
+        ]);
+        if (classified.level === 'yellow' && job.diy_risk_level === 'green') {
           await recordDiySafetyEvent(pool, {
             userId: req.authUser.id,
             jobId: jobIdNum,
-            eventType: 'user_stop',
+            eventType: 'risk_escalation',
             riskLevel: 'yellow',
             previousRiskLevel: job.diy_risk_level,
             riskReasonCodes: classified.reasonCodes,
             req,
           });
-          return res.json({
-            ok: true,
-            reply: yellowStopReply(),
-            source: 'safety_policy',
-            riskLevel: 'yellow',
-            userStopRequested: true,
-          });
         }
-
-        if (riskLevel === 'red') {
-          const escalated = job.diy_risk_level !== 'red';
-          await pool.query(`UPDATE managed_jobs SET diy_risk_level='red', updated_at=NOW() WHERE id=$1`, [jobIdNum]);
-          if (escalated) {
-            await recordDiySafetyEvent(pool, {
-              userId: req.authUser.id,
-              jobId: jobIdNum,
-              eventType: 'risk_escalation',
-              riskLevel: 'red',
-              previousRiskLevel: job.diy_risk_level,
-              riskReasonCodes: classified.reasonCodes,
-              metadata: { emergencyRecommended: isEmergencyHazard(classified) },
-              req,
-            });
-          }
-          return res.json({
-            ok: true,
-            reply: redSafetyReply(),
-            source: 'safety_policy',
-            riskLevel,
-            escalated,
-            emergencyRecommended: isEmergencyHazard(classified),
-            reasonCodes: classified.reasonCodes,
-          });
-        }
-
-        if (classified.level !== job.diy_risk_level) {
-          await pool.query(`UPDATE managed_jobs SET diy_risk_level=$2, updated_at=NOW() WHERE id=$1`, [
-            jobIdNum,
-            classified.level,
-          ]);
-          if (classified.level === 'yellow' && job.diy_risk_level === 'green') {
-            await recordDiySafetyEvent(pool, {
-              userId: req.authUser.id,
-              jobId: jobIdNum,
-              eventType: 'risk_escalation',
-              riskLevel: 'yellow',
-              previousRiskLevel: job.diy_risk_level,
-              riskReasonCodes: classified.reasonCodes,
-              req,
-            });
-          }
-        }
+      }
     }
 
     const result = await complete({ messages: normalized, riskLevel, assessment, task: 'diy_guidance' });

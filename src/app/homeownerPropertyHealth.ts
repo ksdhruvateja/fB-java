@@ -1,5 +1,6 @@
 import type { ManagedJob, Property } from "./managedJobs";
 import type { HomeownerArea, HomeownerService } from "./homeownerCategories";
+import type { HomeUpdateLevel, HomeUpdatePreference } from "./homeUpdates";
 
 export const PROPERTY_SYSTEMS = [
   "HVAC",
@@ -54,16 +55,11 @@ export type PropertyHealthProfile = {
   aiSuggestions?: AiServiceSuggestion[];
   onboardingComplete?: boolean;
   /** Dismiss / snooze state for Home Updates recommendations */
-  homeUpdateState?: {
-    dismissed?: Record<string, string>;
-    snoozedUntil?: Record<string, string>;
-    history?: Array<Record<string, unknown>>;
-  };
+  homeUpdateState?: HomeUpdatePreference;
   /** Property Passport structured data (locations, warranties, extended home details) */
   passport?: import("./propertyPassport").PropertyPassportData;
 };
 
-import type { HomeownerArea, HomeownerService } from "./homeownerCategories";
 import { SERVICE_TRADE_OPTIONS } from "./serviceRequestFlow";
 
 export const REQUEST_SYSTEM_OPTIONS: {
@@ -170,6 +166,43 @@ export function normalizeHealthProfile(raw?: Partial<PropertyHealthProfile> | nu
           accepted: s.accepted === true,
         }))
     : [];
+
+  const history: HomeUpdatePreference["history"] = Array.isArray(raw.homeUpdateState?.history)
+    ? raw.homeUpdateState.history
+        .filter((entry) => entry && typeof entry === "object")
+        .map((entry) => {
+          const obj = entry as Record<string, unknown>;
+          const level = typeof obj.level === "string" && [
+            "informational",
+            "upcoming",
+            "due",
+            "attention",
+            "high_priority",
+          ].includes(obj.level)
+            ? obj.level
+            : "informational";
+          const status = typeof obj.status === "string" && [
+            "generated",
+            "scheduled",
+            "dismissed",
+            "snoozed",
+            "resolved",
+          ].includes(obj.status)
+            ? obj.status
+            : "generated";
+          return {
+            id: typeof obj.id === "string" ? obj.id : String(obj.id || `history_${Math.random().toString(36).slice(2, 9)}`),
+            systemLabel: typeof obj.systemLabel === "string" ? obj.systemLabel : "",
+            title: typeof obj.title === "string" ? obj.title : "",
+            level: level as HomeUpdateLevel,
+            status: status as HomeUpdatePreference["history"] extends Array<infer H> ? H extends { status: infer S } ? S : never : never,
+            generatedAt: typeof obj.generatedAt === "string" ? obj.generatedAt : new Date().toISOString(),
+            basedOn: typeof obj.basedOn === "string" ? obj.basedOn : undefined,
+            relatedJobId: typeof obj.relatedJobId === "number" ? obj.relatedJobId : null,
+          };
+        })
+    : [];
+
   return {
     beds: raw.beds != null && Number.isFinite(Number(raw.beds)) ? Number(raw.beds) : null,
     baths: raw.baths != null && Number.isFinite(Number(raw.baths)) ? Number(raw.baths) : null,
@@ -203,7 +236,7 @@ export function normalizeHealthProfile(raw?: Partial<PropertyHealthProfile> | nu
               raw.homeUpdateState.snoozedUntil && typeof raw.homeUpdateState.snoozedUntil === "object"
                 ? raw.homeUpdateState.snoozedUntil
                 : {},
-            history: Array.isArray(raw.homeUpdateState.history) ? raw.homeUpdateState.history : [],
+            history,
           }
         : undefined,
   };

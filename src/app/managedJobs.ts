@@ -6,6 +6,7 @@ import {
   assessmentUnavailableMessage,
   sanitizeApiErrorMessage,
 } from "./apiErrors";
+import { HomeUpdatePreference } from "./homeUpdates";
 
 
 export type CheckoutBreakdown = {
@@ -87,10 +88,17 @@ export type StructuredAssessment = {
   service_subcategory?: string;
   problem_classification?: string;
   questions_needed: string[];
+  observed_evidence?: string[];
+  likely_causes?: string[];
+  needs_confirmation?: string[];
+  completion_checks?: string[];
   diy_difficulty?: string;
+  diyRiskReasonCodes?: string[];
+  diy_risk_reason_codes?: string[];
   tools_required?: string[];
   materials_needed?: string[];
   diy_steps?: string[];
+  diy_risk_level?:string;
   diy_guide_steps?: Array<{
     step_number: number;
     title: string;
@@ -188,6 +196,8 @@ export type ManagedJob = {
   visitFeeCaptured?: boolean;
   visitFeeAmount?: number | null;
   diyRiskLevel?: string;
+  diyRiskReasonCodes?: string[];
+  diy_risk_reason_codes?: string[];
   cancellationReason?: string | null;
   cancellationReasonCode?: string | null;
   cancellationDetails?: Record<string, unknown> | null;
@@ -212,11 +222,7 @@ export type PropertyHealthProfilePayload = {
   previousServices?: Array<Record<string, unknown>>;
   aiSuggestions?: Array<Record<string, unknown>>;
   onboardingComplete?: boolean;
-  homeUpdateState?: {
-    dismissed?: Record<string, string>;
-    snoozedUntil?: Record<string, string>;
-    history?: Array<Record<string, unknown>>;
-  };
+  homeUpdateState?: HomeUpdatePreference;
 };
 
 export type PropertyDocumentCategory =

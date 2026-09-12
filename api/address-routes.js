@@ -1,4 +1,4 @@
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { validateAddressFormat, zip5 } from './address-utils.js';
 import { autocompleteAddress, geoapifyConfigured, geoapifyCountryFilter } from './geoapify-address.js';
 
@@ -8,7 +8,8 @@ function addressRateLimitKey(req) {
     ? forwarded[0]
     : String(forwarded || '').split(',')[0].trim();
   const nfIp = String(req.headers['x-nf-client-connection-ip'] || '').trim();
-  return req.ip || fromHeader || nfIp || 'unknown';
+  const clientIp = req.ip || fromHeader || nfIp || 'unknown';
+  return clientIp === 'unknown' ? 'unknown' : ipKeyGenerator(clientIp);
 }
 
 const addressLimiter = rateLimit({

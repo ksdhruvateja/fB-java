@@ -107,4 +107,13 @@ export function getConnectedProvider(id = 'explabs') {
   return listFixaProviders().find((provider) => provider.id === id && provider.status === 'configured') || null;
 }
 
+
 export const FIXA_MODEL = EXPLABS_MODEL;
+
+export function getProviderConfig(task) {
+  return {
+    primary: 'explabs',
+    fallback: 'explabs',
+    model: EXPLABS_MODEL
+  };
+}

@@ -1,9 +1,16 @@
 // Replit dev server — runs the Express API on port 3001
+import { randomUUID } from 'crypto'; // Imported to generate unique structural request tracking IDs
 import app, { initDb, pool } from './api/app.js';
 import { processDueServiceReminders } from './api/service-reminders.js';
 import { processComplianceExpirationAlerts } from './api/contractor-compliance-alerts.js';
 
 const PORT = process.env.API_PORT || 3001;
+
+// 🔥 HOTFIX MIDDLWARE: Intercepts public incoming route requests and assigns a unique ID string
+app.use((req, res, next) => {
+  req.id = req.headers['x-request-id'] || req.headers['X-Request-ID'] || randomUUID();
+  next();
+});
 
 initDb()
   .then(() => {

@@ -8,7 +8,7 @@ import HomeownerPropertyPassport from "./HomeownerPropertyPassport";
 import HomeownerHomeUpdates from "./HomeownerHomeUpdates";
 import HomeownerMaintenanceTimeline from "./HomeownerMaintenanceTimeline";
 import HomeCareProHub from "./HomeCareProHub";
-import { buildHomeUpdatesSnapshot } from "./homeUpdates";
+import { buildHomeUpdatesSnapshot, type HomeUpdateItem } from "./homeUpdates";
 import { useProFeature } from "./ProFeatureProvider";
 import LockedProBadge from "./LockedProBadge";
 import ProLockedShell from "./ProLockedShell";
@@ -74,7 +74,7 @@ export default function HomeownerPropertyCare({
     postalCodePlus4?: string;
   }) => Promise<Property | null>;
   onPropertySelect?: (propertyId: number) => void;
-  onRequestService: (prefill?: { category?: string; title?: string; area?: string }) => void;
+  onRequestService: (prefill?: HomeUpdateItem["requestPrefill"]) => void;
   onOpenJob: (jobId: number) => void;
   onRefresh: () => Promise<void>;
 }) {
