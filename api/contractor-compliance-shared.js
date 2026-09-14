@@ -176,9 +176,22 @@ export function computeApplicability(user, options = {}) {
 
   const map = {};
   map.W9 = APPLICABILITY.REQUIRED;
-  map.TRADE_LICENSE = requiresTradeLicense(app, user)
-    ? APPLICABILITY.REQUIRED
-    : APPLICABILITY.OPTIONAL;
+  // un comment this line to force Level 2 compliance for all contractors file name contractor-compliance-matrix.js and contractor-compliance-shared.js
+  // TODO: Re-enable the original trade license requirement when Level 1 trade-license enforcement is introduced.
+  // Previous implementation:
+  // map.TRADE_LICENSE = requiresTradeLicense(app, user)
+  //   ? APPLICABILITY.REQUIRED
+  //   : APPLICABILITY.OPTIONAL;
+
+  // Temporary business rule:
+  // Trade license is optional for Level 1 jobs but the existing requirement remains active for Level 2 jobs.
+  map.TRADE_LICENSE =
+    options.jobTier === 'level_1'
+      ? APPLICABILITY.OPTIONAL
+      : requiresTradeLicense(app, user)
+        ? APPLICABILITY.REQUIRED
+        : APPLICABILITY.OPTIONAL;
+
   map.GENERAL_LIABILITY_COI = gl ? APPLICABILITY.REQUIRED : APPLICABILITY.NOT_APPLICABLE;
   map.AI_ONGOING_OPS = gl
     ? requireFixbridgeAdditionalInsured()

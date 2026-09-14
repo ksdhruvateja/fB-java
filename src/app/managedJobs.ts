@@ -978,12 +978,27 @@ export async function adminListJobs() {
   return api<{ ok: boolean; jobs: ManagedJob[] }>("/api/admin/managed/jobs");
 }
 
+// export async function adminInvite(
+//   jobId: number,
+//   contractorUserId: number,
+//   opts?: { message?: string; requestType?: "remote_quote" | "site_visit"; siteVisitWindow?: string },
+// ) {
+//   return api<{ ok: boolean; message?: string; job?: ManagedJob }>(`/api/admin/managed/jobs/${jobId}/invite`, {
+//     method: "POST",
+//     body: JSON.stringify({
+//       contractorUserId,
+//       message: opts?.message,
+//       requestType: opts?.requestType,
+//       siteVisitWindow: opts?.siteVisitWindow,
+//     }),
+//   });
+// }
 export async function adminInvite(
   jobId: number,
   contractorUserId: number,
   opts?: { message?: string; requestType?: "remote_quote" | "site_visit"; siteVisitWindow?: string },
 ) {
-  return api<{ ok: boolean; message?: string; job?: ManagedJob }>(`/api/admin/managed/jobs/${jobId}/invite`, {
+  const result = await api<{ ok: boolean; message?: string; job?: ManagedJob }>(`/api/admin/managed/jobs/${jobId}/invite`, {
     method: "POST",
     body: JSON.stringify({
       contractorUserId,
@@ -992,6 +1007,8 @@ export async function adminInvite(
       siteVisitWindow: opts?.siteVisitWindow,
     }),
   });
+  // console.log("ADMIN INVITE RESPONSE:", result);
+  return result;
 }
 
 export async function adminQuoteBuilderPreview(

@@ -119,28 +119,42 @@ export default function AdminJobDrawer({
       .finally(() => setProposalLoading(false));
   }, [open, job?.id, job?.activeProposalId, bids.length]);
 
+  useEffect(() => {
+  if (!open || !job) return;
+
+  setTab("overview");
+  setSelectedBidId(null);
+}, [open, job?.id]);
+
+if (!open || !job) return null;
   if (!open || !job) return null;
 
-  const wide = tab === "quotes";
 
   return (
     <AnimatePresence>
       <motion.div
-        className="fixed inset-0 z-[60] flex justify-end"
+        // className="fixed inset-0 z-[60] flex justify-end"
+        className="fixed inset-0 z-[60] flex items-center justify-center p-6"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
       >
-        <button type="button" className="absolute inset-0 bg-black/40" aria-label="Close drawer" onClick={onClose} />
-        <motion.aside
+        {/* <button type="button" className="absolute inset-0 bg-black/40" aria-label="Close drawer" onClick={onClose} /> */}
+        <button type="button" className="absolute inset-0 bg-black/50" aria-label="Close popup" onClick={onClose} />
+        {/* <motion.aside
           initial={{ x: 40, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
           exit={{ x: 40, opacity: 0 }}
           transition={{ type: "spring", stiffness: 320, damping: 32 }}
           className={`relative flex h-full w-full flex-col border-l border-border bg-background shadow-2xl ${
             wide ? "max-w-4xl" : "max-w-xl"
-          }`}
-        >
+          }`} */}
+        <motion.aside
+      initial={{ opacity: 0, scale: 0.96 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.96 }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
+      className=" relative z-10 flex h-[90vh] w-[90vw] max-w-[1200px] min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-background shadow-2xl">
           <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
             <div className="min-w-0">
               <p className="font-mono text-xs font-semibold tracking-wide text-[#FF4D1C]">{jobBookingLabel(job)}</p>
@@ -177,13 +191,12 @@ export default function AdminJobDrawer({
               {lifecycle.map((step, i) => (
                 <div key={step.id} className="flex items-center gap-1">
                   <div
-                    className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${
-                      step.state === "done"
+                    className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${step.state === "done"
                         ? "bg-emerald-500/15 text-emerald-800 dark:text-emerald-300"
                         : step.state === "current"
                           ? "bg-[#FF4D1C]/15 text-[#FF4D1C]"
                           : "bg-muted text-muted-foreground"
-                    }`}
+                      }`}
                   >
                     {step.state === "done" ? (
                       <Check className="h-3 w-3" />
@@ -212,9 +225,8 @@ export default function AdminJobDrawer({
                 key={id}
                 type="button"
                 onClick={() => setTab(id)}
-                className={`rounded-t-lg px-3 py-2 text-sm font-medium transition ${
-                  tab === id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                }`}
+                className={`rounded-t-lg px-3 py-2 text-sm font-medium transition ${tab === id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  }`}
               >
                 {label}
               </button>
@@ -385,11 +397,10 @@ export default function AdminJobDrawer({
                       type="button"
                       disabled={!proposalId}
                       onClick={() => setQuoteMode("document")}
-                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition disabled:opacity-40 ${
-                        quoteMode === "document"
+                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition disabled:opacity-40 ${quoteMode === "document"
                           ? "bg-background text-foreground shadow-sm"
                           : "text-muted-foreground hover:text-foreground"
-                      }`}
+                        }`}
                     >
                       Edit quote
                     </button>
@@ -397,11 +408,10 @@ export default function AdminJobDrawer({
                       type="button"
                       disabled={bids.length === 0}
                       onClick={() => setQuoteMode("build")}
-                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition disabled:opacity-40 ${
-                        quoteMode === "build"
+                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition disabled:opacity-40 ${quoteMode === "build"
                           ? "bg-background text-foreground shadow-sm"
                           : "text-muted-foreground hover:text-foreground"
-                      }`}
+                        }`}
                     >
                       {proposalId ? "Build new from bid" : "Build from bid"}
                     </button>
@@ -436,11 +446,10 @@ export default function AdminJobDrawer({
                           key={b.id}
                           type="button"
                           onClick={() => setSelectedBidId(b.id)}
-                          className={`flex w-full items-center justify-between rounded-xl border px-3 py-2.5 text-left text-sm transition ${
-                            activeBid?.id === b.id
+                          className={`flex w-full items-center justify-between rounded-xl border px-3 py-2.5 text-left text-sm transition ${activeBid?.id === b.id
                               ? "border-[#FF4D1C]/40 bg-[#FF4D1C]/5"
                               : "border-border hover:bg-muted/40"
-                          }`}
+                            }`}
                         >
                           <span>Bid #{b.id}</span>
                           <span className="font-semibold tabular-nums">{formatMoney(b.netTotal)}</span>
@@ -512,11 +521,10 @@ export default function AdminJobDrawer({
                       key={id}
                       type="button"
                       onClick={() => onInviteRequestType(id)}
-                      className={`rounded-xl border p-3 text-left text-sm transition ${
-                        inviteRequestType === id
+                      className={`rounded-xl border p-3 text-left text-sm transition ${inviteRequestType === id
                           ? "border-[#FF4D1C] bg-[#FF4D1C]/5 ring-1 ring-[#FF4D1C]/30"
                           : "border-border hover:bg-muted/40"
-                      }`}
+                        }`}
                     >
                       <p className="font-semibold">{title}</p>
                       <p className="mt-1 text-xs text-muted-foreground">{hint}</p>

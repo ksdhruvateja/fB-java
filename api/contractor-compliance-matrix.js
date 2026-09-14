@@ -284,10 +284,14 @@ export function buildComplianceEvaluation(user, documentRows = [], options = {})
   const applicability = computeApplicability(user, options);
   const byType = new Map((documentRows || []).map((r) => [r.document_type, r]));
   const documents = Object.keys(DOCUMENT_TYPES).map((type) =>
-    serializeComplianceDocument(byType.get(type) || null, applicability[type] || APPLICABILITY.OPTIONAL, type)
+    serializeComplianceDocument(
+      byType.get(type) || null,
+      applicability[type] || APPLICABILITY.OPTIONAL,
+      type
+    )
   );
 
-  // Enrich documents with policy metadata from DB rows
+  // Enrich documents with policy metadata from DB rows.
   for (const doc of documents) {
     const row = byType.get(doc.documentType);
     if (row) {
@@ -297,31 +301,64 @@ export function buildComplianceEvaluation(user, documentRows = [], options = {})
   }
 
   const complianceRaw = String(user?.compliance_status || 'draft').toLowerCase();
+
   const applicationStatus = (() => {
-    if (['approved'].includes(complianceRaw)) return 'APPROVED';
+    if (complianceRaw === 'approved') return 'APPROVED';
     if (['under_review', 'pending'].includes(complianceRaw)) return 'PENDING';
-    if (['suspended', 'rejected', 'blocked'].includes(complianceRaw)) return complianceRaw.toUpperCase();
+    if (['suspended', 'rejected', 'blocked'].includes(complianceRaw)) {
+      return complianceRaw.toUpperCase();
+    }
     if (user?.contractor_application) return 'PENDING';
     return 'DRAFT';
   })();
 
   const blockedAccount =
-    user?.is_blocked === true || ['suspended', 'rejected', 'blocked'].includes(complianceRaw);
+    user?.is_blocked === true ||
+    ['suspended', 'rejected', 'blocked'].includes(complianceRaw);
 
+  // un comment this line to force Level 2 compliance for all contractors file name contractor-compliance-matrix.js and contractor-compliance-shared.js
+  // Contractor Agreement remains part of the compliance system.
+  // Level 1 dispatch is temporarily allowed without blocking on Agreement acceptance.
+  // Level 2 continues to enforce the current Contractor Agreement.
   const agreement = options.agreement || null;
-  const agreementBlocksDispatch = agreement && agreement.acceptedCurrent !== true;
-  const managedAddendumBlocksL2 =
-    agreement?.managedAddendumRequired === true && agreement.managedAddendumAccepted !== true;
 
-  let level1Eligible = !blockedAccount && level1.eligible && !agreementBlocksDispatch;
-  let level2Eligible = !blockedAccount && level2.eligible && !agreementBlocksDispatch && !managedAddendumBlocksL2;
+  // Previous implementation:
+  // const agreementBlocksDispatch = agreement && agreement.acceptedCurrent !== true;
+
+  // Current temporary business rule:
+  // Do not block Level 1 residential/network dispatch because of Agreement acceptance.
+  // Agreement acceptance remains enforced for Level 2 managed/facility/emergency dispatch.
+  const agreementBlocksDispatchLevel1 = false;
+
+  const agreementBlocksDispatchLevel2 =
+    agreement && agreement.acceptedCurrent !== true;
+
+  const managedAddendumBlocksL2 =
+    agreement?.managedAddendumRequired === true &&
+    agreement.managedAddendumAccepted !== true;
+
+  let level1Eligible =
+    !blockedAccount &&
+    level1.eligible &&
+    !agreementBlocksDispatchLevel1;
+
+  let level2Eligible =
+    !blockedAccount &&
+    level2.eligible &&
+    !agreementBlocksDispatchLevel2 &&
+    !managedAddendumBlocksL2;
 
   let missingRequirements = [...level1.missingRequirements];
-  if (agreementBlocksDispatch) {
-    missingRequirements.push(
-      `FixBridge Contractor Agreement Package v${agreement?.currentVersion || '4'}`
-    );
+
+  // Agreement is intentionally not added to Level 1 missing requirements
+  // because Level 1 dispatch is temporarily allowed without Agreement acceptance.
+  if (agreementBlocksDispatchLevel2) {
+    level2.missingRequirements = [
+      ...level2.missingRequirements,
+      `FixBridge Contractor Agreement Package v${agreement?.currentVersion || '4'}`,
+    ];
   }
+
   if (managedAddendumBlocksL2) {
     level2.missingRequirements = [
       ...level2.missingRequirements,
@@ -332,14 +369,21 @@ export function buildComplianceEvaluation(user, documentRows = [], options = {})
   const providerLevel = String(user?.provider_level || 'level_1').toLowerCase();
 
   const overallComplianceStatus = (() => {
-    if (blockedAccount || level1.overallStatus === OVERALL_STATUS.RED) return OVERALL_STATUS.RED;
-    if (level1.overallStatus === OVERALL_STATUS.YELLOW || level2.overallStatus !== OVERALL_STATUS.GREEN) {
+    if (blockedAccount || level1.overallStatus === OVERALL_STATUS.RED) {
+      return OVERALL_STATUS.RED;
+    }
+
+    if (
+      level1.overallStatus === OVERALL_STATUS.YELLOW ||
+      level2.overallStatus !== OVERALL_STATUS.GREEN
+    ) {
       return level2.overallStatus === OVERALL_STATUS.RED
         ? OVERALL_STATUS.YELLOW
         : level1.overallStatus === OVERALL_STATUS.YELLOW
           ? OVERALL_STATUS.YELLOW
           : level2.overallStatus;
     }
+
     return OVERALL_STATUS.GREEN;
   })();
 
@@ -353,27 +397,40 @@ export function buildComplianceEvaluation(user, documentRows = [], options = {})
     applicationStatus,
     complianceStatus,
     overallComplianceStatus,
+
     overallLabel:
       overallComplianceStatus === OVERALL_STATUS.GREEN
         ? '✓ GREEN — Dispatch Eligible'
         : overallComplianceStatus === OVERALL_STATUS.YELLOW
           ? '⚠ YELLOW — Admin Review Required'
           : '✕ RED — No Dispatch',
+
     dispatchEligible: level1Eligible,
     level1Eligible,
     level2Eligible,
+
     level1,
     level2,
+
     documents,
+
     requiredCount: level1.requiredCount,
     verifiedCount: level1.verifiedCount,
+
     missingRequirements,
-    providerLevel: providerLevel === 'level_2' || providerLevel === 'level2' ? 'level_2' : 'level_1',
+
+    providerLevel:
+      providerLevel === 'level_2' || providerLevel === 'level2'
+        ? 'level_2'
+        : 'level_1',
+
     agreement: agreement || undefined,
+
     certificateHolder: COI_CERTIFICATE_HOLDER,
     legalNoticeAddress: COI_LEGAL_NOTICE_ADDRESS,
   };
 }
+
 
 export function assertDispatchEligibleForJob(user, documentRows, job = null, options = {}) {
   const tier = getJobComplianceTier(job || {});
