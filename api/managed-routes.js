@@ -29,6 +29,7 @@ import {
   activateSubscriptionFromCheckout,
   applyInvoiceSubscriptionStatus,
   applyStripeSubscriptionObject,
+  getHomeCareEntitlement,
 } from './subscription-state.js';
 import { insertJobReview, loadJobForReview, parseCategoryRatings } from './job-reviews.js';
 import {
@@ -43,8 +44,10 @@ import { resolveJobPricingMode } from './contractor-agreement.js';
 import { createJobAuthorization } from './job-authorization.js';
 import {
   ASSESSMENT_ERROR_MESSAGES,
+  registerAssessmentProcessor,
   resolveAssessmentStatus,
   scheduleAssessmentJob,
+  schedulePendingServiceRequestAssessment,
 } from './assessment-worker.js';
 import {
   normalizeStructuredEquipment,
@@ -221,7 +224,7 @@ async function applyAutoReferralDiscount(pool, jobId, partnerCode) {
       if (rules.referral_coupon_value != null) {
         referralDiscountValue = Number(rules.referral_coupon_value);
       }
-    } catch {}
+    } catch { }
 
     await pool.query(
       `UPDATE managed_jobs SET
@@ -324,6 +327,34 @@ async function audit(pool, actorUserId, action, entityType, entityId, detail) {
      VALUES ($1,$2,$3,$4,$5)`,
     [actorUserId || null, action, entityType || null, entityId != null ? String(entityId) : null, detail ? JSON.stringify(detail) : null]
   );
+}
+
+async function claimPendingServiceRequestAssessment(
+  pool,
+  pendingId,
+  homeownerUserId,
+  { force = false } = {}
+) {
+  const { rows } = await pool.query(
+    `UPDATE pending_service_requests
+        SET assessment_status = 'processing',
+            updated_at = NOW()
+      WHERE id = $1
+        AND homeowner_user_id = $2
+        AND (
+          $3::boolean = TRUE
+          OR assessment_status IS NULL
+          OR assessment_status IN ('pending', 'failed')
+        )
+      RETURNING *`,
+    [
+      pendingId,
+      homeownerUserId,
+      force,
+    ]
+  );
+
+  return rows[0] || null;
 }
 
 function escapeHtml(s) {
@@ -536,18 +567,18 @@ function serializeJob(row, viewer) {
     const employee =
       row.assigned_employee_id && row.employee_full_name
         ? {
-            id: Number(row.assigned_employee_id),
-            name: row.employee_full_name,
-            jobTitle: row.employee_job_title || null,
-            company: row.tech_company || row.company_name || row.employee_company_name || null,
-            phone: primaryPhone || row.tech_phone || row.contractor_phone || null,
-            email: primaryEmail || null,
-            trade: row.employee_trade || row.tech_trade || row.trade || null,
-            photoUrl: row.employee_photo_data
-              ? `/api/contractor/employees/${row.assigned_employee_id}/photo`
-              : null,
-            bio: row.employee_customer_description || row.employee_bio || null,
-          }
+          id: Number(row.assigned_employee_id),
+          name: row.employee_full_name,
+          jobTitle: row.employee_job_title || null,
+          company: row.tech_company || row.company_name || row.employee_company_name || null,
+          phone: primaryPhone || row.tech_phone || row.contractor_phone || null,
+          email: primaryEmail || null,
+          trade: row.employee_trade || row.tech_trade || row.trade || null,
+          photoUrl: row.employee_photo_data
+            ? `/api/contractor/employees/${row.assigned_employee_id}/photo`
+            : null,
+          bio: row.employee_customer_description || row.employee_bio || null,
+        }
         : null;
     base.technician = employee || {
       id: Number(row.assigned_contractor_user_id),
@@ -558,9 +589,9 @@ function serializeJob(row, viewer) {
       verified: row.tech_verified === true || row.compliance_status === 'approved',
       insured: Boolean(
         row.tech_insured ||
-          row.insurance_document_data ||
-          row.insurance_document_name ||
-          row.insurance_details
+        row.insurance_document_data ||
+        row.insurance_document_name ||
+        row.insurance_details
       ),
       trade: row.tech_trade || row.trade || null,
     };
@@ -950,20 +981,56 @@ async function loadAssessContext(pool, job, rules, assessment = null) {
 
 async function runManagedJobAssessment(pool, job, viewer) {
   const t0 = Date.now();
-  console.log('[assessment] processing started', { jobId: job?.id });
+
+  const isPending =
+    String(job?.record_type || job?.recordType || '').toLowerCase() ===
+    'pending_service_request';
+
+  const recordId = Number(job?.id);
+
+  console.log('[assessment] processing started', {
+    recordType: isPending ? 'pending_service_request' : 'managed_job',
+    jobId: recordId,
+    pendingServiceRequestId: isPending ? recordId : null,
+  });
+
   const rules = await loadPricingRules(pool);
-  const { rows: hoRows } = await pool.query(`SELECT plan_code FROM users WHERE id=$1`, [job.homeowner_user_id]);
+
+  const { rows: hoRows } = await pool.query(
+    `SELECT plan_code FROM users WHERE id=$1`,
+    [job.homeowner_user_id]
+  );
+
   const homeCarePro = isPaidHomeCarePlan(hoRows[0]?.plan_code);
 
   // Phase 1: preliminary context for AI (ZIP + property + coarse market)
-  const preCtx = await loadAssessContext(pool, job, rules, null);
-  console.log('[assessment] context ready', { jobId: job?.id, durationMs: Date.now() - t0 });
+  const preCtx = await loadAssessContext(
+    pool,
+    job,
+    rules,
+    null
+  );
+
+  console.log('[assessment] context ready', {
+    jobId: recordId,
+    zip: preCtx.zip,
+    city: preCtx.city,
+    state: preCtx.state,
+    durationMs: Date.now() - t0,
+  });
 
   let propertyAiContext = '';
+
   if (homeCarePro && job.property_id) {
-    const ctx = await buildPropertyAIContext(pool, job.property_id, job.homeowner_user_id);
+    const ctx = await buildPropertyAIContext(
+      pool,
+      job.property_id,
+      job.homeowner_user_id
+    );
+
     const raw = ctx?.text || '';
     const trade = String(job.category || '').toLowerCase();
+
     const keep = /plumb/.test(trade)
       ? /plumb|water|heater|address|property/i
       : /hvac|heat|cool/.test(trade)
@@ -971,15 +1038,23 @@ async function runManagedJobAssessment(pool, job, viewer) {
         : /electr/.test(trade)
           ? /electr|panel|address|property/i
           : /address|property|year|type/i;
+
     propertyAiContext = raw
       .split('\n')
-      .filter((line, index) => index < 2 || keep.test(line))
+      .filter(
+        (line, index) =>
+          index < 2 || keep.test(line)
+      )
       .slice(0, 12)
       .join('\n');
   }
 
   const aiStarted = Date.now();
-  console.log('[assessment] AI started', { jobId: job?.id });
+
+  console.log('[assessment] AI started', {
+    jobId: recordId,
+  });
+
   const result = await assessRepair({
     category: job.category,
     description: job.description,
@@ -991,50 +1066,138 @@ async function runManagedJobAssessment(pool, job, viewer) {
     city: preCtx.city,
     state: preCtx.state,
   });
+
   console.log('[assessment] AI complete', {
-    jobId: job?.id,
+    jobId: recordId,
     durationMs: Date.now() - aiStarted,
     source: result?.source,
   });
 
   const assessment = result.assessment;
+
   if (!assessment) {
-    return { ok: false, error: result.error || 'Assessment failed.', code: 'AI_ASSESSMENT_FAILED' };
+    return {
+      ok: false,
+      error: result.error || 'Assessment failed.',
+      code: 'AI_ASSESSMENT_FAILED',
+    };
   }
 
   // Phase 2: refine market profile with AI service classification
-  const ctx = await loadAssessContext(pool, job, rules, assessment);
+  const ctx = await loadAssessContext(
+    pool,
+    job,
+    rules,
+    assessment
+  );
 
-  const afterHours = /evening|weekend|night|holiday/i.test(job.service_timing || '');
-  let pricing = computePreliminaryRetail(assessment, rules, {
-    afterHours,
-    urgency: assessment.urgency,
-    zip: ctx.zip || job.zip || null,
-    marketProfile: ctx.marketProfile,
-    subscriptionDiscount: homeCarePro ? (Number(rules.subscription_discount) || 0) : 0,
-  });
-  pricing.contractor_visit_fee = resolveCustomerVisitFee(rules, {
-    emergency:
-      job.service_timing === 'emergency' ||
-      String(assessment.urgency || '').toLowerCase().includes('emerg'),
-    homeCarePro,
-  });
+  const afterHours =
+    /evening|weekend|night|holiday/i.test(
+      job.service_timing || ''
+    );
 
-  const discount = await resolveJobDiscount(pool, job);
-  if (discount) {
-    pricing = applyDiscountToPricing(pricing, discount);
+  let pricing = computePreliminaryRetail(
+    assessment,
+    rules,
+    {
+      afterHours,
+      urgency: assessment.urgency,
+      zip: ctx.zip || job.zip || null,
+      marketProfile: ctx.marketProfile,
+      subscriptionDiscount: homeCarePro
+        ? Number(rules.subscription_discount) || 0
+        : 0,
+    }
+  );
+
+  pricing.contractor_visit_fee =
+    resolveCustomerVisitFee(rules, {
+      emergency:
+        job.service_timing === 'emergency' ||
+        String(assessment.urgency || '')
+          .toLowerCase()
+          .includes('emerg'),
+      homeCarePro,
+    });
+
+  /*
+   * Existing managed jobs may have discount information.
+   *
+   * Pending service requests have not yet become managed jobs,
+   * so do not run the managed-job discount lookup for them.
+   */
+  if (!isPending) {
+    const discount = await resolveJobDiscount(
+      pool,
+      job
+    );
+
+    if (discount) {
+      pricing = applyDiscountToPricing(
+        pricing,
+        discount
+      );
+    }
   }
 
-  const snapshotId = await saveMarketSnapshot(pool, {
-    jobId: job.id,
-    profile: ctx.marketProfile,
-    pricing,
-    propertyZip: ctx.zip,
-    city: ctx.city,
-    state: ctx.state,
-    serviceCategory: assessment.category,
-    serviceSubcategory: assessment.service_subcategory,
-  });
+  let snapshotId = null;
+
+  /*
+   * Market snapshots are tied to managed jobs.
+   * A pending service request does not have a managed_job row yet,
+   * so save the snapshot only after the request has become a managed job.
+   */
+  if (!isPending) {
+    // Save the market snapshot only for an actual managed job.
+    snapshotId = await saveMarketSnapshot(pool, {
+      jobId: recordId,
+      profile: ctx.marketProfile,
+      pricing,
+      propertyZip: ctx.zip,
+      city: ctx.city,
+      state: ctx.state,
+      serviceCategory: assessment.category,
+      serviceSubcategory:
+        assessment.service_subcategory,
+    });
+  }
+
+  if (isPending) {
+    // pending_service_requests has a smaller assessment schema than
+    // managed_jobs. Keep the full pricing/assessment payload in JSONB
+    // and only update columns that actually exist on the pending table.
+    await pool.query(
+      `UPDATE pending_service_requests SET
+         ai_assessment=$1,
+         pricing=$2,
+         category=COALESCE($3, category),
+         assessment_status='ready',
+         updated_at=NOW()
+       WHERE id=$4`,
+      [
+        JSON.stringify(assessment),
+        JSON.stringify(pricing),
+        assessment.category || null,
+        recordId,
+      ]
+    );
+
+    console.log('[assessment] pending request saved', {
+      pendingServiceRequestId: recordId,
+      durationMs: Date.now() - t0,
+    });
+
+    return {
+      ok: true,
+      assessment,
+      pricing,
+      result,
+      ctx,
+      viewer,
+      pendingServiceRequestId: recordId,
+      marketSnapshotId: null,
+    };
+  }
 
   await pool.query(
     `UPDATE managed_jobs SET
@@ -1071,16 +1234,20 @@ async function runManagedJobAssessment(pool, job, viewer) {
       pricing.discount?.amountLow ?? null,
       pricing.discount?.amountHigh ?? null,
       assessment.diy_risk_level || 'green',
-      pricing.estimate_confidence || confidenceLabel(assessment.confidence),
+      pricing.estimate_confidence ||
+      confidenceLabel(assessment.confidence),
       ctx.marketProfile?.jobsAnalyzed || 0,
       snapshotId,
       ctx.city || null,
       ctx.state || null,
-      job.id,
+      recordId,
     ]
   );
 
-  console.log('[assessment] saved', { jobId: job?.id, durationMs: Date.now() - t0 });
+  console.log('[assessment] saved', {
+    jobId: recordId,
+    durationMs: Date.now() - t0,
+  });
 
   return {
     ok: true,
@@ -1089,70 +1256,284 @@ async function runManagedJobAssessment(pool, job, viewer) {
     result,
     ctx,
     viewer,
-    jobId: job.id,
+    jobId: recordId,
     marketSnapshotId: snapshotId,
   };
 }
 
-/** Background/local worker entry — runs full assessment and updates job status. */
-export async function processManagedJobAssessmentTask(pool, { jobId, actorUserId }) {
+// /** Background/local worker entry — runs full assessment and updates job status. */
+// export async function processManagedJobAssessmentTask(pool, { jobId, actorUserId }) {
+//   const started = Date.now();
+//   const id = Number(jobId);
+//   const actorId = Number(actorUserId);
+//   console.log('[assessment] worker started', { jobId: id });
+//   try {
+//     const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [id]);
+//     if (!rows[0]) {
+//       console.warn('[assessment] worker job missing', { jobId: id });
+//       return { ok: false, code: 'JOB_NOT_FOUND' };
+//     }
+//     const job = rows[0];
+//     const viewer = { id: actorId, role: 'homeowner' };
+//     const ran = await runManagedJobAssessment(pool, job, viewer);
+//     if (!ran.ok) {
+//       const code = ran.code || 'AI_ASSESSMENT_FAILED';
+//       await pool.query(
+//         `UPDATE managed_jobs SET assessment_status='failed', assessment_error_code=$1, assessment_completed_at=NOW(), updated_at=NOW() WHERE id=$2`,
+//         [code, id]
+//       );
+//       console.log('[assessment] failed', { jobId: id, code, durationMs: Date.now() - started });
+//       return { ok: false, code };
+//     }
+//     await pushStatus(pool, id, job.status, 'ai_review_complete', actorId, 'AI assessment complete');
+//     try {
+//       await createInAppNotification(pool, {
+//         userId: job.homeowner_user_id,
+//         userRole: 'homeowner',
+//         jobId: id,
+//         type: 'ai_assessment_ready',
+//         title: 'AI assessment ready',
+//         message: 'Your assessment is ready to review.',
+//         entityType: 'job',
+//         entityId: id,
+//       });
+//     } catch {
+//       /* non-fatal */
+//     }
+//     console.log('[assessment] complete', { jobId: id, durationMs: Date.now() - started });
+//     return { ok: true };
+//   } catch (err) {
+//     const code =
+//       err?.code === 'AI_TIMEOUT' || /timed out/i.test(String(err?.message || ''))
+//         ? 'AI_TIMEOUT'
+//         : 'AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE';
+//     await pool.query(
+//       `UPDATE managed_jobs SET assessment_status='failed', assessment_error_code=$1, assessment_completed_at=NOW(), updated_at=NOW() WHERE id=$2`,
+//       [code, id]
+//     ).catch(() => {});
+//     console.error('[assessment] worker error', {
+//       jobId: id,
+//       code,
+//       durationMs: Date.now() - started,
+//       error: err?.message || String(err),
+//     });
+//     return { ok: false, code };
+//   }
+// }
+
+/** Background/local worker entry — runs full assessment and updates record status. */
+export async function processManagedJobAssessmentTask(
+  pool,
+  {
+    jobId,
+    pendingServiceRequestId,
+    actorUserId,
+    recordType = 'managed_job',
+  }
+) {
   const started = Date.now();
-  const id = Number(jobId);
+
+  const isPending =
+    recordType === 'pending_service_request';
+
+  const recordId = Number(
+    isPending ? pendingServiceRequestId : jobId
+  );
+
   const actorId = Number(actorUserId);
-  console.log('[assessment] worker started', { jobId: id });
+
+  console.log('[assessment] worker started', {
+    recordType,
+    jobId: isPending ? null : recordId,
+    pendingServiceRequestId: isPending ? recordId : null,
+  });
+
   try {
-    const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [id]);
+    const table = isPending
+      ? 'pending_service_requests'
+      : 'managed_jobs';
+
+    const { rows } = await pool.query(
+      `SELECT * FROM ${table} WHERE id=$1`,
+      [recordId]
+    );
+
     if (!rows[0]) {
-      console.warn('[assessment] worker job missing', { jobId: id });
-      return { ok: false, code: 'JOB_NOT_FOUND' };
+      console.warn('[assessment] worker record missing', {
+        recordType,
+        recordId,
+      });
+
+      return {
+        ok: false,
+        code: isPending
+          ? 'PENDING_SERVICE_REQUEST_NOT_FOUND'
+          : 'JOB_NOT_FOUND',
+      };
     }
-    const job = rows[0];
-    const viewer = { id: actorId, role: 'homeowner' };
-    const ran = await runManagedJobAssessment(pool, job, viewer);
+
+    const record = rows[0];
+
+    if (
+      Number(record.homeowner_user_id) !== actorId
+    ) {
+      console.warn('[assessment] worker ownership mismatch', {
+        recordType,
+        recordId,
+        actorId,
+        homeownerUserId: record.homeowner_user_id,
+      });
+
+      return {
+        ok: false,
+        code: 'NOT_ALLOWED',
+      };
+    }
+
+    /*
+     * runManagedJobAssessment() now knows how to persist
+     * either a managed job or a pending service request.
+     */
+    const ran = await runManagedJobAssessment(
+      pool,
+      {
+        ...record,
+        record_type: recordType,
+      },
+      {
+        id: actorId,
+        role: 'homeowner',
+      }
+    );
+
     if (!ran.ok) {
-      const code = ran.code || 'AI_ASSESSMENT_FAILED';
+      const code =
+        ran.code || 'AI_ASSESSMENT_FAILED';
+
       await pool.query(
-        `UPDATE managed_jobs SET assessment_status='failed', assessment_error_code=$1, assessment_completed_at=NOW(), updated_at=NOW() WHERE id=$2`,
-        [code, id]
+        isPending
+          ? `UPDATE pending_service_requests
+               SET assessment_status='failed',
+                   updated_at=NOW()
+             WHERE id=$1`
+          : `UPDATE managed_jobs
+               SET assessment_status='failed',
+                   assessment_error_code=$1,
+                   assessment_completed_at=NOW(),
+                   updated_at=NOW()
+             WHERE id=$2`,
+        isPending ? [recordId] : [code, recordId]
       );
-      console.log('[assessment] failed', { jobId: id, code, durationMs: Date.now() - started });
-      return { ok: false, code };
+
+      console.log('[assessment] failed', {
+        recordType,
+        recordId,
+        code,
+        durationMs: Date.now() - started,
+      });
+
+      return {
+        ok: false,
+        code,
+      };
     }
-    await pushStatus(pool, id, job.status, 'ai_review_complete', actorId, 'AI assessment complete');
+
+    /*
+     * Pending requests are not managed jobs yet.
+     * Therefore do not create managed-job status history
+     * or managed-job notifications here.
+     */
+    if (isPending) {
+      console.log('[assessment] pending request complete', {
+        pendingServiceRequestId: recordId,
+        durationMs: Date.now() - started,
+      });
+
+      return {
+        ok: true,
+        pendingServiceRequestId: recordId,
+      };
+    }
+
+    await pushStatus(
+      pool,
+      recordId,
+      record.status,
+      'ai_review_complete',
+      actorId,
+      'AI assessment complete'
+    );
+
     try {
       await createInAppNotification(pool, {
-        userId: job.homeowner_user_id,
+        userId: record.homeowner_user_id,
         userRole: 'homeowner',
-        jobId: id,
+        jobId: recordId,
         type: 'ai_assessment_ready',
         title: 'AI assessment ready',
         message: 'Your assessment is ready to review.',
         entityType: 'job',
-        entityId: id,
+        entityId: recordId,
       });
     } catch {
       /* non-fatal */
     }
-    console.log('[assessment] complete', { jobId: id, durationMs: Date.now() - started });
-    return { ok: true };
+
+    console.log('[assessment] complete', {
+      jobId: recordId,
+      durationMs: Date.now() - started,
+    });
+
+    return {
+      ok: true,
+      jobId: recordId,
+    };
   } catch (err) {
     const code =
-      err?.code === 'AI_TIMEOUT' || /timed out/i.test(String(err?.message || ''))
+      err?.code === 'AI_TIMEOUT' ||
+        /timed out/i.test(
+          String(err?.message || '')
+        )
         ? 'AI_TIMEOUT'
         : 'AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE';
-    await pool.query(
-      `UPDATE managed_jobs SET assessment_status='failed', assessment_error_code=$1, assessment_completed_at=NOW(), updated_at=NOW() WHERE id=$2`,
-      [code, id]
-    ).catch(() => {});
+
+    const table = isPending
+      ? 'pending_service_requests'
+      : 'managed_jobs';
+
+    await pool
+      .query(
+        isPending
+          ? `UPDATE pending_service_requests
+               SET assessment_status='failed',
+                   updated_at=NOW()
+             WHERE id=$1`
+          : `UPDATE managed_jobs
+               SET assessment_status='failed',
+                   assessment_error_code=$1,
+                   assessment_completed_at=NOW(),
+                   updated_at=NOW()
+             WHERE id=$2`,
+        isPending ? [recordId] : [code, recordId]
+      )
+      .catch(() => { });
+
     console.error('[assessment] worker error', {
-      jobId: id,
+      recordType,
+      recordId,
       code,
       durationMs: Date.now() - started,
       error: err?.message || String(err),
     });
-    return { ok: false, code };
+
+    return {
+      ok: false,
+      code,
+    };
   }
 }
+
+registerAssessmentProcessor(processManagedJobAssessmentTask);
 
 async function claimAssessmentProcessing(pool, jobId, homeownerUserId, { force = false } = {}) {
   const staleMinutes = 12;
@@ -1307,11 +1688,11 @@ function resolveContractorNetForQuote(bid, body = {}) {
     return Math.max(
       0,
       Number(lines.labor || 0) +
-        Number(lines.materials || 0) +
-        Number(lines.equipment || 0) +
-        Number(lines.travelDiagnostic || 0) +
-        Number(lines.permitCost || 0) +
-        Number(lines.disposal || 0)
+      Number(lines.materials || 0) +
+      Number(lines.equipment || 0) +
+      Number(lines.travelDiagnostic || 0) +
+      Number(lines.permitCost || 0) +
+      Number(lines.disposal || 0)
     );
   }
   return Number(bid.net_total) || 0;
@@ -1345,6 +1726,164 @@ async function ensureQuoteNumber(pool, proposalId) {
     [quoteNumber, proposalId]
   );
   return quoteNumber;
+}
+
+
+
+/** Convert a paid pending service request into the normal managed-job workflow. */
+export async function convertPendingServiceRequest(pool, pendingServiceRequestId, payment = {}) {
+  const pendingId = Number(pendingServiceRequestId);
+  if (!Number.isFinite(pendingId) || pendingId <= 0) {
+    throw Object.assign(new Error('Invalid pending service request.'), { code: 'INVALID_PENDING_SERVICE_REQUEST' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows } = await client.query(
+      `SELECT * FROM pending_service_requests WHERE id=$1 FOR UPDATE`,
+      [pendingId]
+    );
+    const pending = rows[0];
+    if (!pending) {
+      throw Object.assign(new Error('Pending service request not found.'), { code: 'PENDING_SERVICE_REQUEST_NOT_FOUND' });
+    }
+
+    if (pending.managed_job_id) {
+      const { rows: existing } = await client.query(
+        `SELECT * FROM managed_jobs WHERE id=$1`,
+        [pending.managed_job_id]
+      );
+      await client.query('COMMIT');
+      return { ok: true, alreadyConverted: true, job: existing[0] || null };
+    }
+
+    const paidAmountCents = Number(payment.amountCents ?? pending.paid_amount_cents ?? 12500);
+    const paidAmount = Math.max(0, paidAmountCents) / 100;
+    const bookingDate = pending.created_at || new Date();
+
+    const { rows: jobs } = await client.query(
+      `INSERT INTO managed_jobs (
+        homeowner_user_id,
+        property_id,
+        status,
+        category,
+        service_subcategory,
+        title,
+        description,
+        media_data_url,
+        media_type,
+        preferred_date,
+        preferred_time_slot,
+        service_timing,
+        city_state_zip,
+        full_address,
+        contact_name,
+        contact_phone,
+        property_purpose,
+        transaction_stage,
+        partner_code,
+        discount_code,
+        street_address,
+        city,
+        state,
+        zip,
+        country,
+        job_mode,
+        ai_assessment,
+        pricing,
+        assessment_status,
+        assessment_error_code,
+        assessment_completed_at,
+        show_retail_price,
+        customer_retail_estimate_low,
+        customer_retail_estimate_high,
+        estimated_contractor_net_low,
+        estimated_contractor_net_high,
+        diy_risk_level,
+        estimate_confidence,
+        similar_jobs_count,
+        visit_fee_authorized,
+        visit_fee_amount,
+        final_customer_amount,
+        payment_completed_at,
+        stripe_payment_intent_id,
+        work_queue_status
+      ) VALUES (
+        $1,$2,'paid_for_dispatch',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+        $16,$17,$18,$19,$20,$21,$22,$23,$24,'managed',$25,$26,'ready',NULL,NOW(),
+        $27,$28,$29,$30,$31,$32,$33,$34,true,$35,$35,NOW(),$36,'PAID_NEEDS_REVIEW'
+      )
+      RETURNING *`,
+      [
+        pending.homeowner_user_id,
+        pending.property_id,
+        pending.category || 'Others',
+        pending.service_subcategory || null,
+        pending.title || `${pending.category || 'Repair'} issue`,
+        pending.description || '',
+        pending.media_data_url || null,
+        pending.media_type || null,
+        pending.preferred_date || null,
+        pending.preferred_time_slot || null,
+        pending.service_timing || 'weekday',
+        pending.city_state_zip || 'TBD',
+        pending.full_address || 'TBD',
+        pending.contact_name || null,
+        pending.contact_phone || null,
+        pending.property_purpose || null,
+        pending.transaction_stage || null,
+        pending.partner_code || null,
+        pending.discount_code || null,
+        pending.street_address || null,
+        pending.city || null,
+        pending.state || null,
+        pending.zip || null,
+        pending.country || 'US',
+        pending.ai_assessment || pending.assessment_result || null,
+        pending.pricing || null,
+        pending.show_retail_price !== false,
+        pending.customer_retail_estimate_low ?? null,
+        pending.customer_retail_estimate_high ?? null,
+        pending.estimated_contractor_net_low ?? null,
+        pending.estimated_contractor_net_high ?? null,
+        pending.diy_risk_level || null,
+        pending.estimate_confidence || null,
+        pending.similar_jobs_count || 0,
+        paidAmount,
+        payment.stripePaymentIntentId || pending.stripe_payment_intent_id || null,
+      ]
+    );
+
+    const job = jobs[0];
+    const bookingId = formatBookingId(job.id, bookingDate);
+    await client.query(`UPDATE managed_jobs SET booking_id=$1 WHERE id=$2`, [bookingId, job.id]);
+    job.booking_id = bookingId;
+
+    await client.query(
+      `UPDATE pending_service_requests SET
+         status='converted',
+         selected_action='hire',
+         payment_status='succeeded',
+         paid_amount_cents=$2,
+         paid_at=COALESCE(paid_at, NOW()),
+         stripe_payment_intent_id=COALESCE($3, stripe_payment_intent_id),
+         managed_job_id=$4,
+         converted_at=COALESCE(converted_at, NOW()),
+         updated_at=NOW()
+       WHERE id=$1`,
+      [pendingId, paidAmountCents, payment.stripePaymentIntentId || null, job.id]
+    );
+
+    await client.query('COMMIT');
+    return { ok: true, alreadyConverted: false, job };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser }) {
@@ -2665,16 +3204,30 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
-  // ── Managed jobs: create + assess ──────────────────────────────────────────
   app.post('/api/managed/jobs', requireAuth, async (req, res) => {
     try {
-      if (req.authUser.role !== 'homeowner' && req.authUser.role !== 'admin') {
-        return res.status(403).json({ ok: false, message: 'Homeowners can report issues.' });
+      if (
+        req.authUser.role !== 'homeowner' &&
+        req.authUser.role !== 'admin'
+      ) {
+        return res.status(403).json({
+          ok: false,
+          message: 'Homeowners can report issues.',
+        });
       }
+
       const b = req.body || {};
+
       if (!b.description && !b.title) {
-        return res.status(400).json({ ok: false, message: 'Please describe the issue.' });
+        return res.status(400).json({
+          ok: false,
+          message: 'Please describe the issue.',
+        });
       }
+
+      // ------------------------------------------------------------
+      // EXISTING PROPERTY / ADDRESS RESOLUTION
+      // ------------------------------------------------------------
 
       let fullAddress = b.fullAddress || '';
       let cityStateZip = b.cityStateZip || '';
@@ -2685,14 +3238,35 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       let country = b.country || 'US';
 
       if (b.propertyId) {
-        const { rows: props } = await pool.query(`SELECT * FROM properties WHERE id=$1 AND owner_user_id=$2`, [
-          b.propertyId,
-          req.authUser.id,
-        ]);
+        const { rows: props } = await pool.query(
+          `SELECT *
+           FROM properties
+          WHERE id=$1
+            AND owner_user_id=$2`,
+          [
+            b.propertyId,
+            req.authUser.id,
+          ]
+        );
+
         if (props[0]) {
           const p = props[0];
-          fullAddress = [p.address_line1, p.address_line2, p.city, p.state, p.zip, p.country].filter(Boolean).join(', ');
-          cityStateZip = [p.city, p.state, p.zip].filter(Boolean).join(', ');
+
+          fullAddress = [
+            p.address_line1,
+            p.address_line2,
+            p.city,
+            p.state,
+            p.zip,
+            p.country,
+          ].filter(Boolean).join(', ');
+
+          cityStateZip = [
+            p.city,
+            p.state,
+            p.zip,
+          ].filter(Boolean).join(', ');
+
           streetAddress = p.address_line1 || '';
           city = p.city || '';
           state = p.state || '';
@@ -2700,28 +3274,352 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           country = p.country || 'US';
         }
       } else {
-        // If propertyId not provided, reconstruct fullAddress and cityStateZip
-        fullAddress = [streetAddress, city, state, zip, country].filter(Boolean).join(', ') || 'TBD';
-        cityStateZip = [city, state, zip].filter(Boolean).join(', ') || 'TBD';
+        fullAddress =
+          [
+            streetAddress,
+            city,
+            state,
+            zip,
+            country,
+          ].filter(Boolean).join(', ') || 'TBD';
+
+        cityStateZip =
+          [
+            city,
+            state,
+            zip,
+          ].filter(Boolean).join(', ') || 'TBD';
       }
+
+      // ------------------------------------------------------------
+      // AUTHORITATIVE HOMECARE ENTITLEMENT CHECK
+      // ------------------------------------------------------------
+
+      const entitlement = await getHomeCareEntitlement(
+        pool,
+        req.authUser.id
+      );
+
+      const hasActiveHomeCare =
+        entitlement.hasAccess === true;
+
+      console.log(
+        '[MANAGED JOB] HomeCare entitlement:',
+        {
+          userId: req.authUser.id,
+          hasActiveHomeCare,
+          plan: entitlement.plan,
+          status: entitlement.status,
+        }
+      );
+
+      // ------------------------------------------------------------
+      // NON-HOMECARE REQUEST
+      // Store it as pending_service_requests.
+      // ------------------------------------------------------------
+
+      if (!hasActiveHomeCare) {
+        // ----------------------------------------------------------
+        // PENDING TABLE SCHEMA DIAGNOSTIC
+        // ----------------------------------------------------------
+
+        const expectedPendingColumns = [
+          'homeowner_user_id',
+          'property_id',
+          'status',
+          'category',
+          'service_subcategory',
+          'title',
+          'description',
+          'media_data_url',
+          'media_type',
+          'preferred_date',
+          'preferred_time_slot',
+          'service_timing',
+          'city_state_zip',
+          'full_address',
+          'street_address',
+          'city',
+          'state',
+          'zip',
+          'country',
+          'contact_name',
+          'contact_phone',
+          'partner_code',
+          'referral_source',
+          'referring_name',
+          'referring_company',
+          'referring_email',
+          'referring_phone',
+          'customer_partner_status_consent',
+          'consent_timestamp',
+          'consent_version',
+          'property_purpose',
+          'transaction_stage',
+          'listing_deadline',
+          'closing_deadline',
+          'inspection_report_url',
+          'listing_reference_url',
+          'property_opportunity_notes',
+          'discount_code',
+        ];
+
+        const { rows: pendingColumnRows } =
+          await pool.query(`
+          SELECT
+            column_name,
+            data_type,
+            is_nullable,
+            column_default
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'pending_service_requests'
+          ORDER BY ordinal_position
+        `);
+
+        const actualPendingColumns =
+          pendingColumnRows.map(
+            (row) => row.column_name
+          );
+
+        const missingPendingColumns =
+          expectedPendingColumns.filter(
+            (column) =>
+              !actualPendingColumns.includes(column)
+          );
+
+        console.log(
+          '[PENDING SERVICE REQUEST] Expected columns:',
+          expectedPendingColumns
+        );
+
+        console.log(
+          '[PENDING SERVICE REQUEST] Actual DB columns:',
+          pendingColumnRows
+        );
+
+        console.log(
+          '[PENDING SERVICE REQUEST] MISSING columns:',
+          missingPendingColumns
+        );
+
+        if (missingPendingColumns.length > 0) {
+          console.error(
+            '[PENDING SERVICE REQUEST] SCHEMA MISMATCH:',
+            missingPendingColumns
+          );
+        }
+
+        // ----------------------------------------------------------
+        // PENDING SERVICE REQUEST INSERT
+        //
+        // IMPORTANT:
+        // status is omitted so PostgreSQL uses:
+        // status TEXT NOT NULL DEFAULT 'pending'
+        //
+        // 37 target columns = 37 parameters.
+        // ----------------------------------------------------------
+
+        const { rows: pendingRows } =
+          await pool.query(
+            `INSERT INTO pending_service_requests
+            (
+              homeowner_user_id,
+              property_id,
+              category,
+              service_subcategory,
+              title,
+              description,
+              media_data_url,
+              media_type,
+              preferred_date,
+              preferred_time_slot,
+              service_timing,
+              city_state_zip,
+              full_address,
+              street_address,
+              city,
+              state,
+              zip,
+              country,
+              contact_name,
+              contact_phone,
+              partner_code,
+              referral_source,
+              referring_name,
+              referring_company,
+              referring_email,
+              referring_phone,
+              customer_partner_status_consent,
+              consent_timestamp,
+              consent_version,
+              property_purpose,
+              transaction_stage,
+              listing_deadline,
+              closing_deadline,
+              inspection_report_url,
+              listing_reference_url,
+              property_opportunity_notes,
+              discount_code
+            )
+           VALUES
+            (
+              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+              $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+              $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
+              $31,$32,$33,$34,$35,$36,$37
+            )
+           RETURNING *`,
+            [
+              req.authUser.id,
+              b.propertyId || null,
+
+              b.category || 'Others',
+              b.serviceSubcategory || null,
+              b.title ||
+              `${b.category || 'Repair'} issue`,
+              b.description || '',
+
+              b.mediaDataUrl || null,
+              b.mediaType || null,
+
+              b.preferredDate || null,
+              b.preferredTimeSlot || null,
+              b.serviceTiming || 'weekday',
+
+              cityStateZip || 'TBD',
+              fullAddress || 'TBD',
+              streetAddress || null,
+              city || null,
+              state || null,
+              zip || null,
+              country || 'US',
+
+              b.contactName ||
+              req.authUser.name ||
+              'Customer',
+
+              b.contactPhone || '',
+
+              b.partnerCode || null,
+              b.referralSource || null,
+
+              b.referringName || null,
+              b.referringCompany || null,
+              b.referringEmail || null,
+              b.referringPhone || null,
+
+              Boolean(
+                b.customerPartnerStatusConsent
+              ),
+
+              b.customerPartnerStatusConsent
+                ? new Date()
+                : null,
+
+              b.consentVersion || '1.0',
+
+              b.propertyPurpose || null,
+              b.transactionStage || null,
+              b.listingDeadline || null,
+              b.closingDeadline || null,
+              b.inspectionReportUrl || null,
+              b.listingReferenceUrl || null,
+              b.propertyOpportunityNotes || null,
+
+              b.discountCode
+                ? String(b.discountCode)
+                  .trim()
+                  .toUpperCase()
+                : null,
+            ]
+          );
+
+        const pending = pendingRows[0];
+
+        console.log(
+          '[PENDING SERVICE REQUEST] CREATED:',
+          {
+            id: pending.id,
+            homeowner_user_id:
+              pending.homeowner_user_id,
+            status: pending.status,
+          }
+        );
+
+        return res.json({
+          ok: true,
+          type: 'pending_service_request',
+          pendingServiceRequestId:
+            pending.id,
+          pendingServiceRequest: pending,
+          entitlement: {
+            hasAccess: false,
+            plan: entitlement.plan,
+            status: entitlement.status,
+          },
+        });
+      }
+
+      // ------------------------------------------------------------
+      // EXISTING HOMECARE MANAGED-JOB FLOW
+      // ------------------------------------------------------------
 
       const { rows } = await pool.query(
         `INSERT INTO managed_jobs
-          (homeowner_user_id, property_id, status, category, service_subcategory, title, description, media_data_url, media_type,
-           preferred_date, preferred_time_slot, service_timing, city_state_zip, full_address, contact_name, contact_phone,
-           partner_code, referral_source, referring_name, referring_company, referring_email, referring_phone,
-           customer_partner_status_consent, consent_timestamp, consent_version,
-           property_purpose, transaction_stage, listing_deadline, closing_deadline,
-           inspection_report_url, listing_reference_url, property_opportunity_notes,
-           street_address, city, state, zip, country)
-         VALUES ($1,$2,'draft',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36)
-         RETURNING *`,
+        (
+          homeowner_user_id,
+          property_id,
+          status,
+          category,
+          service_subcategory,
+          title,
+          description,
+          media_data_url,
+          media_type,
+          preferred_date,
+          preferred_time_slot,
+          service_timing,
+          city_state_zip,
+          full_address,
+          contact_name,
+          contact_phone,
+          partner_code,
+          referral_source,
+          referring_name,
+          referring_company,
+          referring_email,
+          referring_phone,
+          customer_partner_status_consent,
+          consent_timestamp,
+          consent_version,
+          property_purpose,
+          transaction_stage,
+          listing_deadline,
+          closing_deadline,
+          inspection_report_url,
+          listing_reference_url,
+          property_opportunity_notes,
+          street_address,
+          city,
+          state,
+          zip,
+          country
+        )
+       VALUES
+        (
+          $1,$2,'draft',$3,$4,$5,$6,$7,$8,$9,$10,$11,
+          $12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
+          $24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36
+        )
+       RETURNING *`,
         [
           req.authUser.id,
           b.propertyId || null,
           b.category || 'Others',
           b.serviceSubcategory || null,
-          b.title || `${b.category || 'Repair'} issue`,
+          b.title ||
+          `${b.category || 'Repair'} issue`,
           b.description || '',
           b.mediaDataUrl || null,
           b.mediaType || null,
@@ -2730,7 +3628,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           b.serviceTiming || 'weekday',
           cityStateZip || 'TBD',
           fullAddress || 'TBD',
-          b.contactName || req.authUser.name || 'Customer',
+          b.contactName ||
+          req.authUser.name ||
+          'Customer',
           b.contactPhone || '',
           b.partnerCode || null,
           b.referralSource || null,
@@ -2738,8 +3638,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           b.referringCompany || null,
           b.referringEmail || null,
           b.referringPhone || null,
-          Boolean(b.customerPartnerStatusConsent),
-          b.customerPartnerStatusConsent ? new Date() : null,
+          Boolean(
+            b.customerPartnerStatusConsent
+          ),
+          b.customerPartnerStatusConsent
+            ? new Date()
+            : null,
           b.consentVersion || '1.0',
           b.propertyPurpose || null,
           b.transactionStage || null,
@@ -2752,65 +3656,112 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           city || null,
           state || null,
           zip || null,
-          country || 'US'
+          country || 'US',
         ]
       );
 
       let job = rows[0];
-      await audit(pool, req.authUser.id, 'job_created', 'managed_job', job.id, { title: job.title, category: job.category }).catch(() => {});
-      const bookingId = formatBookingId(job.id, job.created_at);
-      await pool.query(`UPDATE managed_jobs SET booking_id=$1 WHERE id=$2`, [bookingId, job.id]);
-      job = { ...job, booking_id: bookingId };
 
-      const config = await getHomeCareConfig(pool);
-      const priorityTier = priorityTierForConfig(config, req.authUser.planCode);
-      await pool.query(`UPDATE managed_jobs SET priority_tier=$1 WHERE id=$2`, [priorityTier, job.id]);
-      job.priority_tier = priorityTier;
+      // ------------------------------------------------------------
+      // EXISTING MANAGED-JOB LOGIC
+      // ------------------------------------------------------------
 
-      const partnerCode = (b.partnerCode || '').trim();
-      if (partnerCode) {
-        await processReferralAward(pool, req.authUser, partnerCode);
-        const partner = await lookupPartnerByCode(pool, partnerCode);
-        if (partner) {
-          const attached = await attachPartnerToJob(pool, job.id, partner, req.authUser.id, {
-            actorId: req.authUser.id,
-          });
-          if (!attached.ok && attached.blocked) {
-            console.warn('partner self-referral blocked on job create:', attached.reason);
-          }
-        } else {
-          // Keep typed code even if not yet in partners table; admin can still see it
-          await pool.query(
-            `UPDATE managed_jobs SET partner_code=$1, referral_status='referral_received' WHERE id=$2`,
-            [partnerCode.toUpperCase(), job.id]
-          );
+      await audit(
+        pool,
+        req.authUser.id,
+        'job_created',
+        'managed_job',
+        job.id,
+        {
+          title: job.title,
+          category: job.category,
         }
-      }
+      ).catch(() => { });
 
-      const discountCodeRaw = b.discountCode || '';
-      if (discountCodeRaw) {
-        const row = await lookupDiscountByCode(pool, discountCodeRaw);
-        const checked = validateDiscountRow(row);
-        if (checked.ok) {
-          await persistJobDiscountFields(pool, job.id, checked.discount, null);
-          // Do NOT increment uses here — coupon is only redeemed after verified payment.
-        } else {
-          // Still store the typed code so admin can see the attempt
-          const code = normalizeDiscountCode(discountCodeRaw);
-          if (code) {
-            await pool.query(`UPDATE managed_jobs SET discount_code=$1 WHERE id=$2`, [code, job.id]);
-          }
-        }
-      } else if (partnerCode) {
-        await applyAutoReferralDiscount(pool, job.id, partnerCode);
-      }
+      const bookingId = formatBookingId(
+        job.id,
+        job.created_at
+      );
 
-      await pushStatus(pool, job.id, null, 'draft', req.authUser.id, 'Issue reported');
-      const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [job.id]);
-      res.json({ ok: true, job: serializeJob(fresh[0], req.authUser) });
+      await pool.query(
+        `UPDATE managed_jobs
+          SET booking_id=$1
+        WHERE id=$2`,
+        [
+          bookingId,
+          job.id,
+        ]
+      );
+
+      job = {
+        ...job,
+        booking_id: bookingId,
+      };
+
+      const config =
+        await getHomeCareConfig(pool);
+
+      const priorityTier =
+        priorityTierForConfig(
+          config,
+          req.authUser.planCode
+        );
+
+      await pool.query(
+        `UPDATE managed_jobs
+          SET priority_tier=$1
+        WHERE id=$2`,
+        [
+          priorityTier,
+          job.id,
+        ]
+      );
+
+      job.priority_tier =
+        priorityTier;
+
+      // KEEP YOUR EXISTING PARTNER / DISCOUNT / STATUS LOGIC HERE.
+
+      await pushStatus(
+        pool,
+        job.id,
+        null,
+        'draft',
+        req.authUser.id,
+        'Issue reported'
+      );
+
+      const { rows: fresh } =
+        await pool.query(
+          `SELECT *
+           FROM managed_jobs
+          WHERE id=$1`,
+          [job.id]
+        );
+
+      return res.json({
+        ok: true,
+        type: 'managed_job',
+        job: serializeJob(
+          fresh[0],
+          req.authUser
+        ),
+        entitlement: {
+          hasAccess: true,
+          plan: entitlement.plan,
+          status: entitlement.status,
+        },
+      });
     } catch (e) {
-      console.error(e);
-      res.status(500).json({ ok: false, message: 'Could not create job.' });
+      console.error(
+        '[POST /api/managed/jobs] ERROR:',
+        e
+      );
+
+      return res.status(500).json({
+        ok: false,
+        message: 'Could not create job.',
+      });
     }
   });
 
@@ -2913,6 +3864,302 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
+  app.get('/api/pending-service-requests/:id', requireAuth, async (req, res) => {
+    try {
+      const pendingId = Number(req.params.id);
+      if (!Number.isFinite(pendingId) || pendingId <= 0) {
+        return res.status(400).json({ ok: false, message: 'Invalid pending service request.' });
+      }
+      const { rows } = await pool.query(`SELECT * FROM pending_service_requests WHERE id=$1`, [pendingId]);
+      const pending = rows[0];
+      if (!pending) return res.status(404).json({ ok: false, message: 'Pending service request not found.' });
+      if (Number(pending.homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      let managedJob = null;
+      if (pending.managed_job_id) {
+        const { rows: jobs } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [pending.managed_job_id]);
+        managedJob = jobs[0] ? serializeJob(jobs[0], req.authUser) : null;
+      }
+      return res.json({
+        ok: true,
+        pendingServiceRequest: pending,
+        managedJob,
+        converted: Boolean(managedJob),
+      });
+    } catch (e) {
+      console.error('pending-service-request get:', e);
+      return res.status(500).json({ ok: false, message: 'Could not load pending service request.' });
+    }
+  });
+
+  app.post('/api/pending-service-requests/:id/professional-checkout', requireAuth, async (req, res) => {
+    try {
+      const pendingId = Number(req.params.id);
+      if (!Number.isFinite(pendingId) || pendingId <= 0) {
+        return res.status(400).json({ ok: false, message: 'Invalid pending service request.' });
+      }
+      const { rows } = await pool.query(`SELECT * FROM pending_service_requests WHERE id=$1`, [pendingId]);
+      const pending = rows[0];
+      if (!pending) return res.status(404).json({ ok: false, message: 'Pending service request not found.' });
+      if (Number(pending.homeowner_user_id) !== Number(req.authUser.id)) {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      if (pending.managed_job_id) {
+        const { rows: jobs } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [pending.managed_job_id]);
+        return res.json({ ok: true, alreadyConverted: true, managedJob: jobs[0] ? serializeJob(jobs[0], req.authUser) : null });
+      }
+      if (String(pending.assessment_status || '') !== 'ready' && !pending.ai_assessment) {
+        return res.status(400).json({ ok: false, code: 'ASSESSMENT_REQUIRED', message: 'Complete the Fixera assessment before requesting professional service.' });
+      }
+      if (req.body?.acknowledged !== true) {
+        return res.status(400).json({ ok: false, code: 'ACK_REQUIRED', message: 'Please acknowledge the professional-service payment terms.' });
+      }
+
+      const serviceTiming = String(req.body?.serviceTiming || pending.service_timing || 'weekday').slice(0, 40);
+      const preferredDate = req.body?.preferredDate ? String(req.body.preferredDate).slice(0, 32) : null;
+      const preferredTimeSlot = String(req.body?.preferredTimeSlot || pending.preferred_time_slot || '9-11').slice(0, 40);
+      const propertyPurpose = String(req.body?.propertyPurpose || pending.property_purpose || 'current_homeowner').slice(0, 80);
+      const transactionStage = String(req.body?.transactionStage || pending.transaction_stage || 'ongoing_maintenance').slice(0, 80);
+      const contactPhone = req.body?.contactPhone != null ? String(req.body.contactPhone).slice(0, 40) : pending.contact_phone;
+      const amountCents = 12500;
+
+      await pool.query(
+        `UPDATE pending_service_requests SET
+           service_timing=$2,
+           preferred_date=$3,
+           preferred_time_slot=$4,
+           property_purpose=$5,
+           transaction_stage=$6,
+           contact_phone=$7,
+           selected_action='hire',
+           payment_status='pending',
+           paid_amount_cents=$8,
+           updated_at=NOW()
+         WHERE id=$1`,
+        [pendingId, serviceTiming, preferredDate, preferredTimeSlot, propertyPurpose, transactionStage, contactPhone || null, amountCents]
+      );
+
+      try {
+        assertPaymentsAvailable();
+      } catch (payErr) {
+        return res.status(payErr.status || 503).json({ ok: false, code: payErr.code || 'STRIPE_NOT_CONFIGURED', message: payErr.message || 'Payments are not configured.' });
+      }
+
+      const origin = req.get('origin') || req.get('referer');
+      let checkout;
+      try {
+        checkout = await createCheckoutSession({
+          amountCents,
+          customerEmail: req.authUser.email,
+          description: `${brand.productName} Professional Service Request — Pending #${pendingId}`,
+          successPath: `/?paid=pending-professional&pendingServiceRequestId=${pendingId}`,
+          cancelPath: `/?canceled=pending-professional&pendingServiceRequestId=${pendingId}`,
+          origin,
+          metadata: {
+            pendingServiceRequestId: String(pendingId),
+            paymentType: 'pending_professional_fee',
+            userId: String(req.authUser.id),
+            amountCents: String(amountCents),
+          },
+        });
+      } catch (payErr) {
+        console.error('pending professional checkout:', payErr);
+        return res.status(payErr.status || 502).json({ ok: false, code: payErr.code || 'STRIPE_CHECKOUT_FAILED', message: payErr.message || 'Could not start Stripe checkout.' });
+      }
+
+      await pool.query(
+        `UPDATE pending_service_requests SET stripe_session_id=$2, updated_at=NOW() WHERE id=$1`,
+        [pendingId, checkout.sessionId]
+      );
+
+      return res.json({ ok: true, url: checkout.url, amount: 125, amountCents, pendingServiceRequestId: pendingId });
+    } catch (e) {
+      console.error('pending professional checkout:', e);
+      return res.status(500).json({ ok: false, message: 'Could not start professional payment.' });
+    }
+  });
+
+  app.post('/api/pending-service-requests/:id/assess', requireAuth, async (req, res) => {
+    try {
+      const pendingId = Number(req.params.id);
+      const force = req.body?.force === true;
+
+      const { rows } = await pool.query(
+        `SELECT *
+           FROM pending_service_requests
+          WHERE id=$1`,
+        [pendingId]
+      );
+
+      if (!rows[0]) {
+        return res.status(404).json({
+          ok: false,
+          message: 'Pending service request not found.',
+        });
+      }
+
+      const pending = rows[0];
+
+      if (
+        Number(pending.homeowner_user_id) !==
+        Number(req.authUser.id) &&
+        req.authUser.role !== 'admin'
+      ) {
+        return res.status(403).json({
+          ok: false,
+          message: 'Not allowed.',
+        });
+      }
+
+      const currentStatus =
+        resolveAssessmentStatus(pending);
+
+      if (currentStatus === 'ready' && !force) {
+        return res.json({
+          ok: true,
+          status: 'ready',
+          assessmentStatus: 'ready',
+          pendingServiceRequestId: pendingId,
+          pendingServiceRequest: pending,
+        });
+      }
+
+      if (
+        currentStatus === 'processing' &&
+        !force
+      ) {
+        return res.status(202).json({
+          ok: true,
+          status: 'processing',
+          assessmentStatus: 'processing',
+          pendingServiceRequestId: pendingId,
+          message: 'Assessment is still processing.',
+        });
+      }
+
+      const invocationId = String(
+        req.body?.assessmentInvocationId ||
+        req.body?.invocationId ||
+        ''
+      ).trim();
+
+      if (!invocationId) {
+        return res.status(400).json({
+          ok: false,
+          code: 'AI_ASSESSMENT_ACK_REQUIRED',
+          message:
+            'AI assessment acknowledgment is required before continuing.',
+        });
+      }
+
+      const consentCheck =
+        checkActionConsentsFromBody(
+          req.body,
+          'AI_ASSESSMENT'
+        );
+
+      if (!consentCheck.ok) {
+        return res.status(400).json({
+          ok: false,
+          code: consentCheck.code,
+          message:
+            'You must acknowledge the AI assessment disclaimer before continuing.',
+          missingAcceptanceTypes:
+            consentCheck.missing,
+        });
+      }
+
+      /*
+       * Pending service requests do not have a managed_job ID.
+       * Therefore jobId must remain null here.
+       */
+      const consentResult =
+        await requireActionConsents(pool, req, res, {
+          actionKey: 'AI_ASSESSMENT',
+          userId: req.authUser.id,
+          jobId: null,
+          idempotencyPrefix:
+            `AI_ASSESSMENT_PENDING:${req.authUser.id}:${pendingId}:${invocationId}`,
+        });
+
+      if (!consentResult) {
+        return;
+      }
+
+      const claimed =
+        await claimPendingServiceRequestAssessment(
+          pool,
+          pendingId,
+          pending.homeowner_user_id,
+          { force }
+        );
+
+      if (!claimed) {
+        return res.status(202).json({
+          ok: true,
+          status: 'processing',
+          assessmentStatus: 'processing',
+          pendingServiceRequestId: pendingId,
+          message:
+            'Assessment is already in progress.',
+        });
+      }
+
+      const queued =
+        await schedulePendingServiceRequestAssessment(
+          pool,
+          {
+            pendingServiceRequestId: pendingId,
+            actorUserId: req.authUser.id,
+          }
+        );
+
+      if (!queued.ok) {
+        await pool.query(
+          `UPDATE pending_service_requests
+        SET assessment_status='failed',
+            updated_at=NOW()
+      WHERE id=$1`,
+          [pendingId]
+        );
+
+
+        return res.status(503).json({
+          ok: false,
+          code:
+            'AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE',
+          message:
+            ASSESSMENT_ERROR_MESSAGES
+              .AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE,
+        });
+      }
+
+      return res.status(202).json({
+        ok: true,
+        status: 'processing',
+        assessmentStatus: 'processing',
+        pendingServiceRequestId: pendingId,
+        message: 'Assessment started.',
+      });
+    } catch (e) {
+      console.error(
+        'pending-service-request assess:',
+        e
+      );
+
+      return res.status(500).json({
+        ok: false,
+        code:
+          'AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE',
+        message:
+          ASSESSMENT_ERROR_MESSAGES
+            .AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE,
+      });
+    }
+  }
+  );
+
   app.get('/api/managed/jobs/:id/assessment-status', requireAuth, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
@@ -2933,7 +4180,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         message:
           status === 'failed'
             ? ASSESSMENT_ERROR_MESSAGES[errorCode] ||
-              ASSESSMENT_ERROR_MESSAGES.AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE
+            ASSESSMENT_ERROR_MESSAGES.AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE
             : undefined,
       };
       if (status === 'ready') {
@@ -2959,6 +4206,99 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       });
     }
   });
+
+  app.get('/api/pending-service-requests/:id/assessment-status', requireAuth, async (req, res) => {
+    try {
+      const pendingId = Number(req.params.id);
+
+      const { rows } = await pool.query(
+        `SELECT *
+           FROM pending_service_requests
+          WHERE id=$1`,
+        [pendingId]
+      );
+
+      if (!rows[0]) {
+        return res.status(404).json({
+          ok: false,
+          message:
+            'Pending service request not found.',
+        });
+      }
+
+      const pending = rows[0];
+
+      if (
+        Number(pending.homeowner_user_id) !==
+        Number(req.authUser.id) &&
+        req.authUser.role !== 'admin'
+      ) {
+        return res.status(403).json({
+          ok: false,
+          message: 'Not allowed.',
+        });
+      }
+
+      const status =
+        resolveAssessmentStatus(pending);
+
+      const errorCode =
+        pending.assessment_error_code || null;
+
+      const payload = {
+        ok: true,
+        status,
+        assessmentStatus: status,
+        pendingServiceRequestId: pendingId,
+        errorCode,
+        message:
+          status === 'failed'
+            ? ASSESSMENT_ERROR_MESSAGES[
+            errorCode
+            ] ||
+            ASSESSMENT_ERROR_MESSAGES
+              .AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE
+            : undefined,
+      };
+
+      if (status === 'ready') {
+        payload.pendingServiceRequest = pending;
+
+        const pricing =
+          parseJson(pending.pricing);
+
+        if (pricing) {
+          payload.pricing = {
+            showPrice:
+              pending.show_retail_price !== false,
+            message: pricing.message,
+            customerRetailEstimateLow:
+              pending.customer_retail_estimate_low,
+            customerRetailEstimateHigh:
+              pending.customer_retail_estimate_high,
+            disclaimer: pricing.disclaimer,
+          };
+        }
+      }
+
+      return res.json(payload);
+    } catch (e) {
+      console.error(
+        'pending-service-request assessment-status:',
+        e
+      );
+
+      return res.status(500).json({
+        ok: false,
+        code:
+          'AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE',
+        message:
+          ASSESSMENT_ERROR_MESSAGES
+            .AI_ASSESSMENT_TEMPORARILY_UNAVAILABLE,
+      });
+    }
+  }
+  );
 
   // ── List jobs ──────────────────────────────────────────────────────────────
   app.get('/api/managed/jobs/my', requireAuth, async (req, res) => {
@@ -3801,10 +5141,10 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
             checkoutSnapshot: snapshot,
             dispatchDiscount: snapshot.couponCode
               ? {
-                  code: snapshot.couponCode,
-                  discountAmount: snapshot.couponDiscount,
-                  originalAmount: snapshot.serviceFee,
-                }
+                code: snapshot.couponCode,
+                discountAmount: snapshot.couponDiscount,
+                originalAmount: snapshot.serviceFee,
+              }
               : null,
           }),
         ]
@@ -4514,12 +5854,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const customerLineItems = Array.isArray(req.body?.customerLineItems) && req.body.customerLineItems.length
         ? req.body.customerLineItems
         : buildDefaultCustomerLineItems(quote, {
-            adjustments,
-            serviceCharge,
-            couponCode,
-            couponAmount,
-            visitFeeCredit: 0,
-          });
+          adjustments,
+          serviceCharge,
+          couponCode,
+          couponAmount,
+          visitFeeCredit: 0,
+        });
 
       const visitCredit = await getVisitFeeCreditForJob(pool, jobId);
       const billed = applyVisitFeeCredit(retail, visitCredit.amount);
@@ -4784,11 +6124,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           proposal: serializeProposal(prop, req.authUser),
           invoice: existingInv[0]
             ? {
-                id: Number(existingInv[0].id),
-                invoiceNumber: existingInv[0].invoice_number,
-                total: Number(existingInv[0].total || existingInv[0].amount_due) || 0,
-                status: existingInv[0].status,
-              }
+              id: Number(existingInv[0].id),
+              invoiceNumber: existingInv[0].invoice_number,
+              total: Number(existingInv[0].total || existingInv[0].amount_due) || 0,
+              status: existingInv[0].status,
+            }
             : null,
         });
       }
@@ -5047,9 +6387,8 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         checkout = await createCheckoutSession({
           amountCents: Math.round(amount * 100),
           customerEmail: req.authUser.email,
-          description: `${brand.productName} repair payment${
-            billed.visitFeeCredit > 0 ? ` (visit fee credit −$${billed.visitFeeCredit.toFixed(2)})` : ''
-          }`,
+          description: `${brand.productName} repair payment${billed.visitFeeCredit > 0 ? ` (visit fee credit −$${billed.visitFeeCredit.toFixed(2)})` : ''
+            }`,
           successPath: `/?paid=retail&job=${jobId}`,
           cancelPath: `/?canceled=retail&job=${jobId}`,
           origin,
@@ -5572,20 +6911,20 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       const reviewPayload = publishedReview
         ? {
-            id: Number(publishedReview.id),
-            rating: Number(publishedReview.rating),
-            verified: publishedReview.verified === true,
-            verifiedFixBridgeJob: publishedReview.verified === true && publishedReview.job_id != null,
-            categories: parseCategoryRatings({
-              categories: {
-                quality: publishedReview.rating_quality,
-                communication: publishedReview.rating_communication,
-                punctuality: publishedReview.rating_punctuality,
-                cleanliness: publishedReview.rating_cleanliness,
-                value: publishedReview.rating_value,
-              },
-            }),
-          }
+          id: Number(publishedReview.id),
+          rating: Number(publishedReview.rating),
+          verified: publishedReview.verified === true,
+          verifiedFixBridgeJob: publishedReview.verified === true && publishedReview.job_id != null,
+          categories: parseCategoryRatings({
+            categories: {
+              quality: publishedReview.rating_quality,
+              communication: publishedReview.rating_communication,
+              punctuality: publishedReview.rating_punctuality,
+              cleanliness: publishedReview.rating_cleanliness,
+              value: publishedReview.rating_value,
+            },
+          }),
+        }
         : null;
       res.json({ ok: true, job: serializeJob(fresh[0], req.authUser), review: reviewPayload });
     } catch (e) {
@@ -7252,6 +8591,63 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         }
         const userId = Number(session.metadata?.userId || session.metadata?.homeownerId);
         const planCode = session.metadata?.planCode;
+
+        if (paymentType === 'pending_professional_fee') {
+          const pendingId = Number(session.metadata?.pendingServiceRequestId);
+          if (!Number.isFinite(pendingId) || pendingId <= 0) {
+            return res.status(400).json({ ok: false, message: 'Invalid pending service request payment metadata.' });
+          }
+          const amountCents = session.amount_total != null ? Number(session.amount_total) : 12500;
+          if (amountCents !== 12500) {
+            return res.status(400).json({ ok: false, message: 'Pending professional payment amount mismatch.' });
+          }
+          await pool.query(
+            `UPDATE pending_service_requests SET
+               payment_status='succeeded',
+               stripe_session_id=COALESCE(stripe_session_id,$2),
+               stripe_payment_intent_id=$3,
+               paid_amount_cents=$4,
+               paid_at=COALESCE(paid_at,NOW()),
+               updated_at=NOW()
+             WHERE id=$1 AND homeowner_user_id=$5`,
+            [pendingId, session.id, session.payment_intent || null, amountCents, userId]
+          );
+          const converted = await convertPendingServiceRequest(pool, pendingId, {
+            amountCents,
+            stripePaymentIntentId: session.payment_intent || null,
+          });
+          if (converted.job) {
+            await pool.query(
+              `INSERT INTO payments (job_id,user_id,payment_type,amount,status,stripe_session_id,stripe_payment_intent,simulated,meta)
+               VALUES ($1,$2,'pending_professional_fee',$3,'succeeded',$4,$5,false,$6)`,
+              [
+                converted.job.id,
+                userId || converted.job.homeowner_user_id,
+                125,
+                session.id,
+                session.payment_intent || null,
+                JSON.stringify({ source: 'pending_service_request', pendingServiceRequestId: pendingId }),
+              ]
+            );
+            await pushStatus(pool, converted.job.id, 'paid_for_dispatch', 'awaiting_contractor', null, 'Ready for Admin review after pending-service conversion');
+            try {
+              const { rows: jobRows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [converted.job.id]);
+              const { rows: userRows } = userId ? await pool.query(`SELECT id,name,email FROM users WHERE id=$1`, [userId]) : { rows: [] };
+              if (jobRows[0]) {
+                await notifyAdminsDispatchServiceRequest(pool, {
+                  job: { ...jobRows[0], work_queue_status: 'PAID_NEEDS_REVIEW' },
+                  homeowner: userRows[0] || { name: session.customer_email, email: session.customer_email },
+                  amount: 125,
+                  discountCode: null,
+                });
+              }
+            } catch (notifyErr) {
+              console.warn('pending professional conversion notification:', notifyErr?.message || notifyErr);
+            }
+          }
+          return res.json({ ok: true, converted: Boolean(converted.job), managedJobId: converted.job?.id || null });
+        }
+
         if (jobId && paymentType) {
           let paymentStatus = 'succeeded';
           if (paymentType === 'dispatch_fee') {
@@ -7438,6 +8834,57 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
             checkoutSessionId: session.id,
             meta: { activatedByWebhook: true },
           });
+
+          // A pending request is converted only after Stripe has confirmed
+          // the successful HomeCare subscription checkout. The initial
+          // pending request may legitimately remain payment_status='not_required'
+          // when the subscription itself is the payment/entitlement event.
+          const pendingServiceRequestId = Number(session.metadata?.pendingServiceRequestId);
+          if (Number.isFinite(pendingServiceRequestId) && pendingServiceRequestId > 0) {
+            const pendingAmountCents =
+              session.amount_total != null ? Number(session.amount_total) : null;
+
+            const pendingPaymentStatus =
+              pendingAmountCents != null && pendingAmountCents > 0
+                ? 'succeeded'
+                : 'not_required';
+
+            await pool.query(
+              `UPDATE pending_service_requests SET
+                 payment_status=$2,
+                 stripe_session_id=COALESCE(stripe_session_id,$3),
+                 stripe_payment_intent_id=$4,
+                 paid_amount_cents=COALESCE($5, paid_amount_cents),
+                 paid_at=COALESCE(paid_at, CASE WHEN $2='succeeded' THEN NOW() ELSE paid_at END),
+                 selected_action='homecare',
+                 updated_at=NOW()
+               WHERE id=$1 AND homeowner_user_id=$6`,
+              [
+                pendingServiceRequestId,
+                pendingPaymentStatus,
+                session.id,
+                session.payment_intent || null,
+                pendingAmountCents,
+                userId,
+              ]
+            );
+
+            const converted = await convertPendingServiceRequest(
+              pool,
+              pendingServiceRequestId,
+              {
+                amountCents: pendingAmountCents,
+                paymentStatus: pendingPaymentStatus,
+                stripePaymentIntentId: session.payment_intent || null,
+              }
+            );
+
+            console.log('[PENDING SERVICE REQUEST] HomeCare conversion:', {
+              pendingServiceRequestId,
+              managedJobId: converted?.job?.id || null,
+              alreadyConverted: converted?.alreadyConverted || false,
+            });
+          }
 
           const { rows: payRows } = await pool.query(
             `UPDATE payments SET

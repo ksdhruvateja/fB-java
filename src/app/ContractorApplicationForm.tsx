@@ -31,6 +31,7 @@ import {
   LEGAL_ROUTES,
 } from "./legalDocuments";
 import { fetchPublicLegalDocument } from "./legalApi";
+import { isValidPhoneNumber } from "libphonenumber-js";
 
 const inputClass =
   "w-full rounded-xl border border-border bg-background px-3.5 py-2.5 text-sm outline-none transition focus:border-primary/50 focus:ring-2 focus:ring-primary/15";
@@ -382,11 +383,12 @@ export default function ContractorApplicationForm({
           <Field label="Years in business" required>
             <input
               className={inputClass}
-              type="number"
+              type="text"
+              inputMode="numeric"
               min={0}
               placeholder="Years"
               value={value.yearsInBusiness}
-              onChange={(e) => set("yearsInBusiness", e.target.value)}
+              onChange={(e) => set("yearsInBusiness", e.target.value.replace(/\D/g, ""))}
               required
             />
           </Field>
@@ -530,11 +532,19 @@ export default function ContractorApplicationForm({
           </Field>
           <Field label="Phone" required>
             <input
-              className={inputClass}
-              type="tel"
-              value={value.contactPhone}
-              onChange={(e) => set("contactPhone", e.target.value)}
-              required
+               className={inputClass}
+               type="tel"
+               inputMode="tel"
+               placeholder="+1 123 456 7890"
+               value={value.contactPhone}
+               onChange={(e) => {
+                 const cleaned = e.target.value
+                   .replace(/[^\d+ ]/g, "")
+                   .replace(/(?!^)\+/g, "");
+               
+                 set("contactPhone", cleaned);
+               }}
+               required
             />
           </Field>
           <Field label="Type" required>

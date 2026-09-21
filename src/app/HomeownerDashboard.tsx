@@ -35,8 +35,10 @@ import {
   updateProperty,
   type HomeSystemRecord,
   type ManagedJob,
+  type PendingProfessionalRequest,
   type Property,
   type Proposal,
+  assessPendingServiceRequest,
 } from "./managedJobs";
 import { cancelHomeCareSubscription, openHomeCareBillingPortal, resumeHomeCareSubscription, startSubscription } from "./platformApi";
 import { listGoProPlans } from "./subscriptionPlansApi";
@@ -296,6 +298,11 @@ function moneyRange(job: ManagedJob) {
   return retailRangeLabel(job);
 }
 
+type PendingAssessmentSuccess = Extract<
+  Awaited<ReturnType<typeof assessPendingServiceRequest>>,
+  { ok: true }
+>;
+
 function toDateInputValue(d: Date) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -416,6 +423,8 @@ export default function HomeownerDashboard({
   const [propertiesLoading, setPropertiesLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
+  const [pendingServiceRequestId, setPendingServiceRequestId] = useState<number | null>(null);
+  const [pendingAssessment, setPendingAssessment] = useState<PendingAssessmentSuccess | null>(null);
   const [jobFocus, setJobFocus] = useState<"quote" | "invoice" | "tracking" | "completion" | "dispute" | null>(null);
   const [inboxConversationId, setInboxConversationId] = useState<number | null>(null);
   const [staleNotice, setStaleNotice] = useState<string | null>(null);
@@ -1187,6 +1196,8 @@ export default function HomeownerDashboard({
     setAssessLoadingStep(null);
     setAssessLoadingZip(null);
     setAssessmentMsg(null);
+    setPendingAssessment(null);
+    setPendingServiceRequestId(null);
     const handoff = readAssistantHandoff();
     if (handoff) {
       if (handoff.propertyId) setPropertyId(handoff.propertyId);
@@ -1735,7 +1746,7 @@ export default function HomeownerDashboard({
       } catch {
         /* ignore */
       }
-      const r = await startSubscription(planCode, jobId, returnTo);
+      const r = await startSubscription(planCode, jobId, returnTo, pendingServiceRequestId ?? undefined);
       if (r.alreadySubscribed) {
         const me = await validateToken({ syncCheckout: true });
         if (me.ok) onUserUpdated?.(me.user);
@@ -1901,14 +1912,14 @@ export default function HomeownerDashboard({
 
   useEffect(() => {
     if (tab !== "report") return;
-    if (step === "assessment" && !activeJob && assessLoadingStep == null && !hireScreenOpen) {
+    if (step === "assessment" && !activeJob && pendingServiceRequestId == null && !pendingAssessment && assessLoadingStep == null && !hireScreenOpen) {
       setStep("intake");
       setIntakePhase("describe");
     }
     if (step === "intake") {
       setIntakePhase((phase) => normalizeIntakePhase(phase));
     }
-  }, [tab, step, activeJob, assessLoadingStep, hireScreenOpen]);
+  }, [tab, step, activeJob, pendingServiceRequestId, pendingAssessment, assessLoadingStep, hireScreenOpen]);
 
   useEffect(() => {
     if (tab !== "report" || step !== "intake") return;
@@ -2059,20 +2070,32 @@ export default function HomeownerDashboard({
   //  }
 
   async function runAssessWithProgress(
-    jobId: number,
+    recordId: number,
     zip?: string | null,
-    { force = false }: { force?: boolean } = {}
+    {
+      force = false,
+      recordType = "managed_job",
+    }: {
+      force?: boolean;
+      recordType?: "managed_job" | "pending_service_request";
+    } = {}
   ) {
     const startedAt = Date.now();
 
-    // console.log("========================================");
-    // console.log("[Fixera] 🚀 Assessment START");
-    // console.log("[Fixera] Job ID:", jobId);
-    // console.log("[Fixera] ZIP:", zip);
-    // console.log("[Fixera] Force:", force);
+    const isPending =
+      recordType === "pending_service_request";
 
-    if (!force && assessInFlightRef.current === jobId) {
-      console.warn("[Fixera] ⚠️ Assessment already in progress:", jobId);
+    if (
+      !force &&
+      assessInFlightRef.current === recordId
+    ) {
+      console.warn(
+        "[Fixera] Assessment already in progress:",
+        {
+          recordId,
+          recordType,
+        }
+      );
 
       return {
         ok: false as const,
@@ -2081,9 +2104,18 @@ export default function HomeownerDashboard({
       };
     }
 
-    assessInFlightRef.current = jobId;
+    assessInFlightRef.current = recordId;
 
-    console.log("[Fixera] 🔵 Setting buffering step = 0");
+    console.log(
+      "[Fixera] 🚀 Assessment START",
+      {
+        recordId,
+        recordType,
+        zip,
+        force,
+        isPending,
+      }
+    );
 
     setAssessLoadingStep(0);
     setAssessLoadingZip(
@@ -2094,67 +2126,171 @@ export default function HomeownerDashboard({
       setAssessLoadingStep((s) => {
         const nextStep =
           s == null ? 0 : Math.min(6, s + 1);
-        console.log("[Fixera] Buffering step:", nextStep, "| elapsed:", `${Date.now() - startedAt}ms`);
+
+        console.log(
+          "[Fixera] Buffering step:",
+          nextStep,
+          "| elapsed:",
+          `${Date.now() - startedAt}ms`
+        );
+
         return nextStep;
       });
     }, 900);
 
     try {
-      console.log("[Fixera] BEFORE assessManagedJob()");
-      console.log("[Fixera] Request details:", {
-        jobId,
-        force,
-        hasConsent: Boolean(aiAssessmentConsentRef.current),
-      });
+      // ============================================================
+      // PENDING SERVICE REQUEST
+      // ============================================================
+      if (isPending) {
+        console.log(
+          "[Fixera] BEFORE assessPendingServiceRequest()",
+          {
+            pendingServiceRequestId: recordId,
+            force,
+            hasConsent:
+              Boolean(aiAssessmentConsentRef.current),
+          }
+        );
+
+        const apiStartedAt = Date.now();
+
+        const result =
+          await assessPendingServiceRequest(
+            recordId,
+            {
+              force,
+              aiAssessmentConsent:
+                (aiAssessmentConsentRef.current as any) ??
+                undefined,
+            }
+          );
+
+        console.log(
+          "[Fixera] AFTER assessPendingServiceRequest()",
+          {
+            elapsed:
+              `${Date.now() - apiStartedAt}ms`,
+            result,
+          }
+        );
+
+        if (!result.ok) {
+          console.error(
+            "[Fixera] Pending assessment failed:",
+            result
+          );
+
+          return result;
+        }
+
+        /*
+         * Pending requests do not have a managed job yet.
+         *
+         * The assessment result belongs to:
+         *
+         * pending_service_requests.id
+         *
+         * so return the pending record rather than trying
+         * to put it into activeJob.
+         */
+        return {
+          ok: true as const,
+          pendingServiceRequest:
+            result.pendingServiceRequest,
+          assessment:
+            result.pendingServiceRequest?.aiAssessment,
+          pricing:
+            result.pricing ??
+            result.pendingServiceRequest?.pricing,
+          warning:
+            result.warning ?? null,
+          pendingServiceRequestId:
+            recordId,
+        };
+      }
+
+      // ============================================================
+      // MANAGED JOB
+      // ============================================================
+      console.log(
+        "[Fixera] BEFORE assessManagedJob()",
+        {
+          jobId: recordId,
+          force,
+          hasConsent:
+            Boolean(aiAssessmentConsentRef.current),
+        }
+      );
 
       const apiStartedAt = Date.now();
 
-      const result = await assessManagedJob(jobId, {
-        force,
-        aiAssessmentConsent: (aiAssessmentConsentRef.current as any) ?? undefined,
-      });
-      console.log("[Fixera] AFTER assessManagedJob()");
-      console.log("[Fixera] API response time:", `${Date.now() - apiStartedAt}ms`);
-      console.log("[Fixera] Full result:", result);
-      console.log("[Fixera] Result summary:",
+      const result = await assessManagedJob(
+        recordId,
         {
-          ok: result?.ok,
-          message: result?.message,
-          warning: result?.warning,
-          hasJob: Boolean(result?.job),
-          assessmentStatus:
-            result?.job?.assessmentStatus,
-          hasAiAssessment:
-            Boolean(result?.job?.aiAssessment),
+          force,
+          aiAssessmentConsent:
+            (aiAssessmentConsentRef.current as any) ??
+            undefined,
+        }
+      );
+
+      console.log(
+        "[Fixera] AFTER assessManagedJob()",
+        {
+          elapsed:
+            `${Date.now() - apiStartedAt}ms`,
+          result,
         }
       );
 
       return result;
     } catch (error) {
-      console.error("[Fixera] assessManagedJob() ERROR");
-      console.error("[Fixera] Error object:", error);
-      console.error("[Fixera] Error message:", error instanceof Error ? error.message : String(error));
-      throw error;
+      console.error(
+        "[Fixera] Assessment ERROR:",
+        {
+          recordId,
+          recordType,
+          error,
+        }
+      );
+
+      return {
+        ok: false as const,
+        code: "ASSESSMENT_UNAVAILABLE",
+        message:
+          error instanceof Error
+            ? error.message
+            : "We could not complete the assessment. Please try again.",
+      };
     } finally {
-      console.log("[Fixera] Entering FINALLY");
+      console.log(
+        "[Fixera] Assessment FINALLY:",
+        {
+          recordId,
+          recordType,
+        }
+      );
+
       window.clearInterval(timer);
-      console.log("[Fixera] Buffering timer stopped");
+
       setAssessLoadingStep(4);
+
       window.setTimeout(() => {
-        console.log("[Fixera] Clearing loading UI");
         setAssessLoadingStep(null);
         setAssessLoadingZip(null);
       }, 350);
 
-      if (assessInFlightRef.current === jobId) {
+      if (
+        assessInFlightRef.current === recordId
+      ) {
         assessInFlightRef.current = null;
       }
+
       aiAssessmentConsentRef.current = null;
-      console.log("[Fixera] Assessment FINISHED");
-      console.log("[Fixera] Total time:", `${Date.now() - startedAt}ms`);
-      console.log("========================================");
     }
   }
+
 
   function cancelAiAssessmentAck() {
     if (aiAckBusy) return;
@@ -2410,10 +2546,79 @@ export default function HomeownerDashboard({
           ? [properties.find((p) => p.id === propertyId)?.city, properties.find((p) => p.id === propertyId)?.state, properties.find((p) => p.id === propertyId)?.zip].filter(Boolean).join(", ")
           : undefined,
       });
-      if (!created.ok || !created.job) {
+      // if (!created.ok || !created.job) {
+      //   setError(created.message || "Could not submit issue.");
+      //   setHireScreenOpen(false);
+      //   if (path === "ai" || path === "experts") returnToIntakeDetails();
+      //   return;
+      // }
+      if (!created.ok) {
         setError(created.message || "Could not submit issue.");
         setHireScreenOpen(false);
         if (path === "ai" || path === "experts") returnToIntakeDetails();
+        return;
+      }
+
+      if (created.type === "pending_service_request") {
+        const pendingId = Number(created.pendingServiceRequestId);
+
+        if (!Number.isFinite(pendingId) || pendingId <= 0) {
+          console.error("[Fixera] Invalid pending service request ID:", created.pendingServiceRequestId);
+          setError("Your request was saved, but we could not start the assessment.");
+          setHireScreenOpen(false);
+          return;
+        }
+
+        console.log("[Fixera] Pending service request CREATED:", pendingId);
+
+        setPendingServiceRequestId(pendingId);
+        setPendingAssessment(null);
+        setActiveJob(null);
+        setSelectedJobId(null);
+        setHireScreenOpen(false);
+        setAssessmentMode(path === "experts" ? "expert" : "diy");
+        setReportPath(path);
+
+        try {
+          sessionStorage.removeItem("fixbridge-partner-intake");
+          clearIntakeDraft();
+          setHasIntakeDraft(false);
+          setIntakeDraftSavedAt(null);
+        } catch {
+          // ignore
+        }
+
+        console.log("[Fixera] Starting pending Fixera assessment:", pendingId);
+
+        const assessed = await runAssessWithProgress(
+          pendingId,
+          propZip,
+          { recordType: "pending_service_request" }
+        );
+
+        console.log("[Fixera] Pending Fixera assessment RESULT:", assessed);
+
+        if (!assessed.ok) {
+          setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
+          setPendingAssessment(null);
+          return;
+        }
+
+        setPendingAssessment(assessed as PendingAssessmentSuccess);
+        setPendingServiceRequestId(pendingId);
+        setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
+        setAssessmentMode(path === "experts" ? "expert" : "diy");
+        setReportPath(path);
+        navigateTo({
+          role: "homeowner",
+          tab: "report",
+          reportStep: "assessment",
+          reportPath:
+            path === "experts"
+              ? "experts"
+              : "ai",
+          jobId: null,
+        });
         return;
       }
       try {
@@ -2716,7 +2921,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
       <p className="mt-2 text-sm text-muted-foreground">{blurb}</p>
       <button
         type="button"
-        onClick={()=> openRequestService}
+        onClick={() => openRequestService}
         className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-semibold text-white"
       >
         <PlusCircle size={16} /> Request Service
@@ -3525,7 +3730,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                   </motion.form>
                 )}
 
-                {step === "assessment" && (activeJob || assessLoadingStep != null || hireScreenOpen) && (
+                {step === "assessment" && (activeJob || pendingAssessment || pendingServiceRequestId != null || assessLoadingStep != null || hireScreenOpen) && (
                   <div id="ai-assessment-panel" className="space-y-5 rounded-lg border border-border bg-card p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <button
@@ -3570,174 +3775,12 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                       </p>
                     ) : null}
 
-                    {((assessmentMode === "expert" || reportPath === "experts") && (activeJob || hireScreenOpen)) ? (
+                    {pendingAssessment?.pendingServiceRequest?.aiAssessment ? (
                       <div className="space-y-4">
-                        <div className="rounded-xl border border-border/70 bg-muted/20 px-4 py-3 text-sm">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Your property</p>
-                          <p className="mt-1 font-medium">
-                            {(() => {
-                              const prop = properties.find((p) => p.id === (activeJob?.propertyId || propertyId));
-                              return [prop?.addressLine1, prop?.city, prop?.state, prop?.zip].filter(Boolean).join(", ") || "Selected property";
-                            })()}
-                          </p>
-                          {description.trim() ? (
-                            <p className="mt-2 text-muted-foreground">{description.trim()}</p>
-                          ) : null}
-                        </div>
-                        {!activeJob ? (
-                          <div className="rounded-xl border border-border/70 px-4 py-3 text-sm">
-                            <p className="flex items-center gap-2 font-medium">
-                              <Loader2 className="h-4 w-4 animate-spin text-[#FF4D1C]" /> Creating your service request
-                            </p>
-                            <div className="fixera-buffer mt-2" role="progressbar" aria-label="Creating your service request" />
-                            <p className="mt-2 text-muted-foreground">Please wait. This step is still buffering.</p>
-                          </div>
-                        ) : (
-                          <>
-                            {(assessLoadingStep != null || (isAssessmentProcessing(activeJob) && !hasRenderableAssessment(activeJob))) ? (
-                              <div className="rounded-xl border border-border/70 px-4 py-3 text-sm">
-                                <p className="flex items-center justify-between gap-2 font-medium">
-                                  AI recommendation
-                                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#FF4D1C]">
-                                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Buffering
-                                  </span>
-                                </p>
-                                <div className="fixera-buffer mt-2" role="progressbar" aria-label="Preparing recommendation" />
-                                <div className="mt-2 max-h-24 space-y-1.5 overflow-y-auto pr-1 text-muted-foreground [scrollbar-width:thin]">
-                                  <p>Preparing recommendation. Please wait.</p>
-                                  <p>You can stay on this screen. Scheduling stays available while this buffers.</p>
-                                  <p>The safety result and estimate appear when this step finishes.</p>
-                                </div>
-                              </div>
-                            ) : hasRenderableAssessment(activeJob) ? (
-                              <p className="text-sm leading-relaxed">{activeJob.aiAssessment?.summary || "Assessment saved."}</p>
-                            ) : (
-                              <div className="rounded-xl border border-amber-300/70 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
-                                <p>
-                                  {activeJob.assessmentStatus === "failed"
-                                    ? "Fixera couldn't complete this assessment. Your request is saved — you can still schedule a professional visit."
-                                    : "Recommendation temporarily unavailable. You can still review scheduling. Authorization stays locked until the recommendation finishes."}
-                                </p>
-                                <button
-                                  type="button"
-                                  className="mt-2 text-xs font-semibold text-[#FF4D1C]"
-                                  onClick={() => {
-                                    requestAiAssessment(async () => {
-                                      const retryZip = properties.find((p) => p.id === activeJob.propertyId)?.zip || null;
-                                      const assessed = await runAssessWithProgress(activeJob.id, retryZip, { force: true });
-                                      if (!assessed.ok || !assessed.job) {
-                                        setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
-                                      } else {
-                                        setActiveJob(assessed.job);
-                                        setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
-                                      }
-                                    });
-                                  }}
-                                >
-                                  Try recommendation again
-                                </button>
-                              </div>
-                            )}
-                            <HireProfessionalWizard
-                              job={activeJob}
-                              busy={busy}
-                              setBusy={setBusy}
-                              onError={setError}
-                              onJobUpdated={(updated) => {
-                                setActiveJob(updated);
-                                setSelectedJobId(updated.id);
-                              }}
-                              onPaid={async () => {
-                                setDispatchSuccessMsg("Service booked. Your professional request is on Home.");
-                                navigateTab("overview");
-                                setSelectedJobId(activeJob.id);
-                                await refresh();
-                              }}
-                            />
-                          </>
-                        )}
-                      </div>
-                    ) : assessLoadingStep != null ||
-                      (isAssessmentProcessing(activeJob) && !hasRenderableAssessment(activeJob) && assessInFlightRef.current === activeJob?.id) ? (
-                      <FixeraAnalysisExperience
-                        zip={assessLoadingZip}
-                        activeStep={assessLoadingStep ?? 0}
-                        mediaUrl={activeJob?.mediaDataUrl || mediaDataUrl}
-                        mediaType={activeJob?.mediaType || mediaType}
-                        category={activeJob?.category || category}
-                        description={description}
-                      />
-                    ) : !hasRenderableAssessment(activeJob) ? (
-                      <div className="space-y-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
-                        <p className="text-sm font-semibold">Fixera couldn&apos;t finish this assessment</p>
-                        <p className="text-sm leading-relaxed">
-                          Your repair request and uploaded media are saved.
-                        </p>
-                        <p className="text-sm leading-relaxed">
-                          You can try the assessment again or continue directly with professional help.
-                        </p>
-                        {activeJob ? (
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              disabled={busy || aiAckOpen}
-                              onClick={() => {
-                                requestAiAssessment(async () => {
-                                  setBusy(true);
-                                  setAssessmentMsg(null);
-                                  try {
-                                    const retryZip =
-                                      properties.find((p) => p.id === activeJob.propertyId)?.zip || null;
-                                    const assessed = await runAssessWithProgress(activeJob.id, retryZip, { force: true });
-                                    if (!assessed.ok || !assessed.job) {
-                                      setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
-                                    } else {
-                                      setActiveJob(assessed.job);
-                                      setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
-                                      await refresh();
-                                    }
-                                  } finally {
-                                    setBusy(false);
-                                  }
-                                });
-                              }}
-                              className="inline-flex items-center gap-2 rounded-md bg-[#FF4D1C] px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60"
-                            >
-                              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                              Try Again
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setAssessmentMode("expert");
-                                setReportPath("experts");
-                                setHireScreenOpen(true);
-                                if (activeJob) setSelectedJobId(activeJob.id);
-                              }}
-                              className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium"
-                            >
-                              Hire a Professional
-                            </button>
-                            <button
-                              type="button"
-                              onClick={returnToIntakeDetails}
-                              className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium"
-                            >
-                              Return to Repair
-                            </button>
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : hasRenderableAssessment(activeJob) ? (
-                      <>
-                        <div className="fixera-card p-4">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--fixbridge-orange)]">Here&apos;s what Fixera found</p>
-                          <p className="mt-1 text-lg font-semibold">{activeJob.title || activeJob.aiAssessment?.summary || "Your repair assessment"}</p>
-                          <p className="mt-1 text-sm text-[var(--fixbridge-muted-text)]">
-                            Using Fixera repair intelligence. Similar scenarios are compared for guidance. Learning improvements use validated outcomes, not automatic retraining on this photo.
-                          </p>
-                        </div>
-                        {/* Mode Selector Toggle */}
+                        {/* Pending service request mode selector.
+                            This mirrors the existing managed-job selector but does not
+                            depend on activeJob/selectedJobId because pending requests
+                            do not have a managed job yet. */}
                         <div className="flex border-b border-border">
                           <button
                             type="button"
@@ -3751,10 +3794,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                           </button>
                           <button
                             type="button"
-                            onClick={() => {
-                              setAssessmentMode("expert");
-                              if (activeJob) setSelectedJobId(activeJob.id);
-                            }}
+                            onClick={() => setAssessmentMode("expert")}
                             className={`flex-1 pb-3 text-center text-sm font-semibold border-b-2 transition ${assessmentMode === "expert"
                               ? "border-[#FF4D1C] text-[#FF4D1C]"
                               : "border-transparent text-muted-foreground hover:text-foreground"
@@ -3764,148 +3804,51 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                           </button>
                         </div>
 
-                        {assessmentStringList(activeJob.aiAssessment?.questions_needed).length > 0 && (
-                          <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100 flex gap-3 shadow-sm">
-                            <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
-                            <div className="text-sm space-y-1.5 w-full">
-                              <p className="font-semibold text-amber-900 dark:text-amber-200">Clarification Needed to Refine Estimate</p>
-                              <p className="text-xs opacity-90 leading-relaxed">
-                                Our AI detected potential uncertainty or mismatch in the details provided (e.g. description and photo trade categories mismatch, or extremely vague summary). Please review the following questions:
-                              </p>
-                              <ul className="list-disc pl-5 text-xs space-y-1 text-amber-800 dark:text-amber-300 font-medium">
-                                {assessmentStringList(activeJob.aiAssessment?.questions_needed).map((q, idx) => (
-                                  <li key={idx}>{q}</li>
-                                ))}
-                              </ul>
-                              <p className="text-xs pt-1 font-medium text-amber-900 dark:text-amber-200">
-                                To fix, click <strong className="text-[#FF4D1C]">Report another issue</strong> above and upload a matching photo and clear description.
-                              </p>
-                            </div>
-                          </div>
-                        )}
+                        <div className="fixera-card p-4">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--fixbridge-orange)]">Here&apos;s what Fixera found</p>
+                          <p className="mt-1 text-lg font-semibold">{pendingAssessment.pendingServiceRequest.aiAssessment.summary || "Your repair assessment"}</p>
+                          <p className="mt-1 text-sm text-[var(--fixbridge-muted-text)]">
+                            Your request is saved while you decide what to do next. This assessment belongs to your pending service request and can be reopened later.
+                          </p>
+                        </div>
 
-                        {assessmentMode === "expert" ? (
-                          <div className="space-y-4">
-                            {activeJob ? (
-                              <ServiceTrackingCard
-                                job={jobs.find((j) => j.id === activeJob.id) || activeJob}
-                                compact
-                                onMessage={() => {
-                                  setSelectedJobId(activeJob.id);
-                                  setTab("jobs");
-                                  setShowTechMessage(true);
-                                }}
-                                onChangeSchedule={() => {
-                                  setSelectedJobId(activeJob.id);
-                                  setTab("jobs");
-                                  setForceEditSchedule(true);
-                                }}
-                              />
-                            ) : null}
-                            {dispatchSuccessMsg ? (
-                              <p className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-900 dark:text-emerald-100">
-                                {dispatchSuccessMsg}
-                              </p>
-                            ) : null}
-                            <p className="text-sm leading-relaxed">{activeJob.aiAssessment?.summary || "Assessment saved."}</p>
-                            <div className="grid gap-3 sm:grid-cols-3">
-                              <div className="rounded-md bg-muted/50 p-3 text-sm">
-                                <p className="text-muted-foreground">Urgency</p>
-                                <p className="font-medium capitalize">{activeJob.aiAssessment?.urgency || " - "}</p>
-                              </div>
-                              <div className="rounded-md bg-muted/50 p-3 text-sm">
-                                <p className="text-muted-foreground">Trade</p>
-                                <p className="font-medium">{activeJob.aiAssessment?.recommended_trade || " - "}</p>
-                              </div>
-                              <div className="rounded-md bg-muted/50 p-3 text-sm">
-                                <p className="text-muted-foreground">Confidence</p>
-                                <p className="font-medium">
-                                  {typeof activeJob.aiAssessment?.confidence === "number" &&
-                                    Number.isFinite(activeJob.aiAssessment.confidence)
-                                    ? `${Math.round(activeJob.aiAssessment.confidence * 100)}%`
-                                    : " - "}
-                                </p>
-                              </div>
-                            </div>
-                            {assessmentStringList(activeJob.aiAssessment?.immediate_safety_steps).length > 0 && (
-                              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
-                                <p className="font-medium">Safety steps</p>
-                                <ul className="mt-1 list-disc pl-5">
-                                  {assessmentStringList(activeJob.aiAssessment?.immediate_safety_steps).map((s) => (
-                                    <li key={s}>{s}</li>
-                                  ))}
-                                </ul>
-                              </div>
-                            )}
-                            <HomeownerLocalEstimate job={activeJob} />
-                            <div className="rounded-xl border border-border bg-card p-4 text-sm">
-                              <p className="font-semibold">Your existing assessment will be sent with the service request.</p>
-                              <p className="mt-1 text-muted-foreground">You do not need to re-enter the property, issue, or photos.</p>
-                              <dl className="mt-3 grid gap-2 sm:grid-cols-2">
-                                <div>
-                                  <dt className="text-xs text-muted-foreground">Issue</dt>
-                                  <dd>{activeJob.title || activeJob.description || "Reported issue"}</dd>
-                                </div>
-                                <div>
-                                  <dt className="text-xs text-muted-foreground">Property</dt>
-                                  <dd>{activeJob.fullAddress || activeJob.cityStateZip || "Saved property"}</dd>
-                                </div>
-                                <div>
-                                  <dt className="text-xs text-muted-foreground">Assessment</dt>
-                                  <dd>{activeJob.aiAssessment?.summary || "Assessment on file"}</dd>
-                                </div>
-                                <div>
-                                  <dt className="text-xs text-muted-foreground">Risk</dt>
-                                  <dd className="capitalize">{String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green")}</dd>
-                                </div>
-                              </dl>
-                              {diyShowProfessionalHandoff ? (
-                                <p className="mt-3 text-muted-foreground">{DIY_PROFESSIONAL_HANDOFF_MESSAGE}</p>
-                              ) : null}
-                            </div>
-                            <HireProfessionalWizard
-                              job={activeJob}
-                              busy={busy}
-                              setBusy={setBusy}
-                              onError={setError}
-                              onJobUpdated={(updated) => {
-                                setActiveJob(updated);
-                                setSelectedJobId(updated.id);
-                              }}
-                              onPaid={async () => {
-                                setDispatchSuccessMsg("Service booked. Your professional request is on Home.");
-                                navigateTab("overview");
-                                setSelectedJobId(activeJob.id);
-                                await refresh();
-                              }}
-                            />
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          <div className="rounded-md bg-muted/50 p-3 text-sm">
+                            <p className="text-muted-foreground">Urgency</p>
+                            <p className="font-medium capitalize">{pendingAssessment.pendingServiceRequest.aiAssessment.urgency || " - "}</p>
                           </div>
-                        ) : (
+                          <div className="rounded-md bg-muted/50 p-3 text-sm">
+                            <p className="text-muted-foreground">Trade</p>
+                            <p className="font-medium">{pendingAssessment.pendingServiceRequest.aiAssessment.recommended_trade || " - "}</p>
+                          </div>
+                          <div className="rounded-md bg-muted/50 p-3 text-sm">
+                            <p className="text-muted-foreground">Confidence</p>
+                            <p className="font-medium">
+                              {typeof pendingAssessment.pendingServiceRequest.aiAssessment.confidence === "number" && Number.isFinite(pendingAssessment.pendingServiceRequest.aiAssessment.confidence)
+                                ? `${Math.round(pendingAssessment.pendingServiceRequest.aiAssessment.confidence * 100)}%`
+                                : " - "}
+                            </p>
+                          </div>
+                        </div>
+
+                        {assessmentStringList(pendingAssessment.pendingServiceRequest.aiAssessment.immediate_safety_steps).length > 0 ? (
+                          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                            <p className="font-medium">Safety steps</p>
+                            <ul className="mt-1 list-disc pl-5">
+                              {assessmentStringList(pendingAssessment.pendingServiceRequest.aiAssessment.immediate_safety_steps).map((s) => (
+                                <li key={s}>{s}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+
+                        {assessmentMode === "diy" ? (
                           !hasDiyAccess ? (
                             <div className="relative space-y-4">
-                              <div className="pointer-events-none select-none opacity-20 blur-sm">
-                                <div className="grid gap-4 sm:grid-cols-2">
-                                  <div className="rounded-xl border border-border bg-muted/20 p-4">
-                                    <h4 className="font-semibold text-sm mb-3">Required Tools</h4>
-                                    <div className="h-4 w-3/4 bg-muted rounded mb-2" />
-                                    <div className="h-4 w-1/2 bg-muted rounded" />
-                                  </div>
-                                  <div className="rounded-xl border border-border bg-muted/20 p-4">
-                                    <h4 className="font-semibold text-sm mb-3">Materials Needed</h4>
-                                    <div className="h-4 w-3/4 bg-muted rounded mb-2" />
-                                    <div className="h-4 w-1/2 bg-muted rounded" />
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div className="relative z-10 rounded-[1.5rem] bg-[#F3F4F6] p-4 dark:bg-muted/40 sm:p-6">
+                              <div className="rounded-[1.5rem] bg-[#F3F4F6] p-4 dark:bg-muted/40 sm:p-6">
                                 <div className="mb-4 text-center">
-                                  <h3 className="[font-family:'Barlow_Condensed',sans-serif] text-2xl font-black uppercase tracking-tight">
-                                    Unlock DIY Action Plan
-                                  </h3>
-                                  <p className="mt-1 text-xs text-muted-foreground">
-                                    Upgrade to HomeCare Pro for full DIY action plans — includes a 7-day free trial.
-                                  </p>
+                                  <h3 className="[font-family:'Barlow_Condensed',sans-serif] text-2xl font-black uppercase tracking-tight">Unlock DIY Action Plan</h3>
+                                  <p className="mt-1 text-xs text-muted-foreground">Upgrade to HomeCare Pro for full DIY action plans — includes a 7-day free trial.</p>
                                 </div>
                                 <HomeownerGoProPlans
                                   compact
@@ -3916,9 +3859,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                   onSelectPlan={handleSelectGoProPlan}
                                   onPlansLoaded={(cards) => {
                                     setGoProPlans(cards);
-                                    setDiyUnlockCodes(
-                                      cards.filter((c) => c.unlocksDiy).map((c) => c.planCode)
-                                    );
+                                    setDiyUnlockCodes(cards.filter((c) => c.unlocksDiy).map((c) => c.planCode));
                                   }}
                                   showFeatureMatrix={false}
                                   checkPricingUpdates={false}
@@ -3926,191 +3867,577 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                               </div>
                             </div>
                           ) : (
-                            <div className="space-y-4">
-                              {diySafetyAccepted ? (
-                                <p className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-                                  {DIY_SESSION_REMINDER}
-                                </p>
+                            <div className="rounded-xl border border-border bg-card p-4 text-sm">
+                              <p className="font-semibold">Your assessment is ready.</p>
+                              <p className="mt-1 text-muted-foreground">Your pending request is saved. You can leave this screen and reopen the request later without losing the assessment.</p>
+                            </div>
+                          )
+                        ) : (
+                          <div className="space-y-4">
+                            <HireProfessionalWizard
+                              pendingServiceRequest={pendingAssessment.pendingServiceRequest as PendingProfessionalRequest}
+                              busy={busy}
+                              setBusy={setBusy}
+                              onError={setError}
+                              onPaid={async (convertedJob) => {
+                                if (convertedJob) {
+                                  setActiveJob(convertedJob);
+                                  setSelectedJobId(convertedJob.id);
+                                }
+                                setDispatchSuccessMsg("Payment successful. Your professional request is now a managed job.");
+                                await refresh();
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+
+                    {!pendingAssessment ? (
+                      <>
+                        {((assessmentMode === "expert" || reportPath === "experts") && (activeJob || hireScreenOpen)) ? (
+                          <div className="space-y-4">
+                            <div className="rounded-xl border border-border/70 bg-muted/20 px-4 py-3 text-sm">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Your property</p>
+                              <p className="mt-1 font-medium">
+                                {(() => {
+                                  const prop = properties.find((p) => p.id === (activeJob?.propertyId || propertyId));
+                                  return [prop?.addressLine1, prop?.city, prop?.state, prop?.zip].filter(Boolean).join(", ") || "Selected property";
+                                })()}
+                              </p>
+                              {description.trim() ? (
+                                <p className="mt-2 text-muted-foreground">{description.trim()}</p>
                               ) : null}
-                              {(() => {
-                                const risk = getHomeownerDiyRisk(activeJob);
-                                const riskText = risk;
-                                const reasonCodes = (activeJob.diyRiskReasonCodes ||
-                                  activeJob.aiAssessment?.diy_risk_reason_codes ||
-                                  []) as string[];
-                                const emergencyCodes = new Set(["GAS", "FIRE", "CO", "LIVE_ELECTRICAL", "FLOOD_ELECTRICAL", "STRUCTURAL", "EMERGENCY"]);
-                                const showEmergency = risk === "red" && reasonCodes.some((c) => emergencyCodes.has(String(c)));
-                                return (
-                                  <>
-                                    {showEmergency ? <DiyEmergencyBanner /> : null}
-                                    {diyUserStopActive ? (
-                                      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-950 dark:text-amber-100">
-                                        <p className="font-semibold">DIY paused</p>
-                                        <p className="mt-1 text-xs leading-relaxed">
-                                          You indicated you want to stop or need help. Request a professional when you are ready — your issue details will carry over.
-                                        </p>
-                                      </div>
-                                    ) : null}
-                                    <p className="sr-only" aria-live="polite">
-                                      Safety status: {riskStatusLabel(riskText)}
+                            </div>
+                            {!activeJob ? (
+                              <div className="rounded-xl border border-border/70 px-4 py-3 text-sm">
+                                <p className="flex items-center gap-2 font-medium">
+                                  <Loader2 className="h-4 w-4 animate-spin text-[#FF4D1C]" /> Creating your service request
+                                </p>
+                                <div className="fixera-buffer mt-2" role="progressbar" aria-label="Creating your service request" />
+                                <p className="mt-2 text-muted-foreground">Please wait. This step is still buffering.</p>
+                              </div>
+                            ) : (
+                              <>
+                                {(assessLoadingStep != null || (isAssessmentProcessing(activeJob) && !hasRenderableAssessment(activeJob))) ? (
+                                  <div className="rounded-xl border border-border/70 px-4 py-3 text-sm">
+                                    <p className="flex items-center justify-between gap-2 font-medium">
+                                      AI recommendation
+                                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#FF4D1C]">
+                                        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Buffering
+                                      </span>
                                     </p>
-                                    {risk === "red" ? (
-                                      <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-red-950 dark:text-red-100 space-y-3">
-                                        <div className="flex gap-3">
-                                          <ShieldAlert className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
-                                          <div className="text-sm">
-                                            <p className="font-semibold">Potential Safety Risk Detected</p>
-                                            <p className="mt-1 text-xs leading-relaxed opacity-90">
-                                              Based on the information provided, this situation may involve a significant safety risk. Do not attempt the repair yourself. Follow the immediate safety guidance below and request professional assistance.
-                                            </p>
-                                          </div>
-                                        </div>
-                                        {(activeJob.aiAssessment?.immediate_safety_steps || []).length > 0 ? (
-                                          <ul className="list-disc pl-5 text-xs space-y-1">
-                                            {assessmentStringList(activeJob.aiAssessment?.immediate_safety_steps).map((step, i) => (
-                                              <li key={i}>{step}</li>
-                                            ))}
-                                          </ul>
-                                        ) : null}
-                                        <button
-                                          type="button"
-                                          onClick={() => void stopDiyAndGetProfessional()}
-                                          className="inline-flex items-center rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white"
-                                        >
-                                          Request a Professional
-                                        </button>
-                                      </div>
-                                    ) : null}
-                                    {risk === "yellow" ? (
-                                      <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-amber-950 dark:text-amber-100 flex gap-3">
-                                        <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
-                                        <div className="text-sm">
-                                          <p className="font-semibold">Use Caution</p>
-                                          <p className="mt-1 opacity-90 text-xs leading-relaxed">
-                                            We can help with limited, low-risk checks, but this issue may require professional service. Avoid opening, disassembling, climbing, handling hazardous materials, or performing work outside your experience.
-                                          </p>
-                                          <button
-                                            type="button"
-                                            onClick={() => void stopDiyAndGetProfessional()}
-                                            className="mt-3 inline-flex items-center rounded-lg border border-primary px-3 py-1.5 text-xs font-semibold text-primary"
-                                          >
-                                            Get a Professional
-                                          </button>
-                                        </div>
-                                      </div>
-                                    ) : null}
-                                  </>
-                                );
-                              })()}
-                              <DiyStopProfessionalBar
-                                onStop={() => void stopDiyAndGetProfessional()}
-                                onGetProfessional={() => void stopDiyAndGetProfessional()}
-                              />
-                              {/* DIY Caution Banner if not safe */}
-                              {!activeJob.aiAssessment?.safe_diy_allowed && getHomeownerDiyRisk(activeJob) !== "red" && (
-                                <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-4 text-red-950 dark:text-red-100 flex gap-3">
-                                  <ShieldAlert className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
-                                  <div className="text-sm">
-                                    <p className="font-semibold">Professional Service Recommended</p>
-                                    <p className="mt-1 opacity-90 text-xs leading-relaxed">
-                                      Fixera found something that may require a professional. A licensed professional is the safer next step.
+                                    <div className="fixera-buffer mt-2" role="progressbar" aria-label="Preparing recommendation" />
+                                    <div className="mt-2 max-h-24 space-y-1.5 overflow-y-auto pr-1 text-muted-foreground [scrollbar-width:thin]">
+                                      <p>Preparing recommendation. Please wait.</p>
+                                      <p>You can stay on this screen. Scheduling stays available while this buffers.</p>
+                                      <p>The safety result and estimate appear when this step finishes.</p>
+                                    </div>
+                                  </div>
+                                ) : hasRenderableAssessment(activeJob) ? (
+                                  <p className="text-sm leading-relaxed">{activeJob.aiAssessment?.summary || "Assessment saved."}</p>
+                                ) : (
+                                  <div className="rounded-xl border border-amber-300/70 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                                    <p>
+                                      {activeJob.assessmentStatus === "failed"
+                                        ? "Fixera couldn't complete this assessment. Your request is saved — you can still schedule a professional visit."
+                                        : "Recommendation temporarily unavailable. You can still review scheduling. Authorization stays locked until the recommendation finishes."}
+                                    </p>
+                                    <button
+                                      type="button"
+                                      className="mt-2 text-xs font-semibold text-[#FF4D1C]"
+                                      onClick={() => {
+                                        requestAiAssessment(async () => {
+                                          const retryZip = properties.find((p) => p.id === activeJob.propertyId)?.zip || null;
+                                          const assessed = await runAssessWithProgress(activeJob.id, retryZip, { force: true });
+                                          if (!assessed.ok || !assessed.job) {
+                                            setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
+                                          } else {
+                                            setActiveJob(assessed.job);
+                                            setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
+                                          }
+                                        });
+                                      }}
+                                    >
+                                      Try recommendation again
+                                    </button>
+                                  </div>
+                                )}
+                                <HireProfessionalWizard
+                                  job={activeJob}
+                                  busy={busy}
+                                  setBusy={setBusy}
+                                  onError={setError}
+                                  onJobUpdated={(updated) => {
+                                    setActiveJob(updated);
+                                    setSelectedJobId(updated.id);
+                                  }}
+                                  onPaid={async () => {
+                                    setDispatchSuccessMsg("Service booked. Your professional request is on Home.");
+                                    navigateTab("overview");
+                                    setSelectedJobId(activeJob.id);
+                                    await refresh();
+                                  }}
+                                />
+                              </>
+                            )}
+                          </div>
+                        ) : assessLoadingStep != null ||
+                          (isAssessmentProcessing(activeJob) && !hasRenderableAssessment(activeJob) && assessInFlightRef.current === activeJob?.id) ? (
+                          <FixeraAnalysisExperience
+                            zip={assessLoadingZip}
+                            activeStep={assessLoadingStep ?? 0}
+                            mediaUrl={activeJob?.mediaDataUrl || mediaDataUrl}
+                            mediaType={activeJob?.mediaType || mediaType}
+                            category={activeJob?.category || category}
+                            description={description}
+                          />
+                        ) : !hasRenderableAssessment(activeJob) ? (
+                          <div className="space-y-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                            <p className="text-sm font-semibold">Fixera couldn&apos;t finish this assessment</p>
+                            <p className="text-sm leading-relaxed">
+                              Your repair request and uploaded media are saved.
+                            </p>
+                            <p className="text-sm leading-relaxed">
+                              You can try the assessment again or continue directly with professional help.
+                            </p>
+                            {activeJob ? (
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  disabled={busy || aiAckOpen}
+                                  onClick={() => {
+                                    requestAiAssessment(async () => {
+                                      setBusy(true);
+                                      setAssessmentMsg(null);
+                                      try {
+                                        const retryZip =
+                                          properties.find((p) => p.id === activeJob.propertyId)?.zip || null;
+                                        const assessed = await runAssessWithProgress(activeJob.id, retryZip, { force: true });
+                                        if (!assessed.ok || !assessed.job) {
+                                          setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
+                                        } else {
+                                          setActiveJob(assessed.job);
+                                          setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
+                                          await refresh();
+                                        }
+                                      } finally {
+                                        setBusy(false);
+                                      }
+                                    });
+                                  }}
+                                  className="inline-flex items-center gap-2 rounded-md bg-[#FF4D1C] px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60"
+                                >
+                                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                                  Try Again
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAssessmentMode("expert");
+                                    setReportPath("experts");
+                                    setHireScreenOpen(true);
+                                    if (activeJob) setSelectedJobId(activeJob.id);
+                                  }}
+                                  className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium"
+                                >
+                                  Hire a Professional
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={returnToIntakeDetails}
+                                  className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium"
+                                >
+                                  Return to Repair
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : hasRenderableAssessment(activeJob) ? (
+                          <>
+                            <div className="fixera-card p-4">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--fixbridge-orange)]">Here&apos;s what Fixera found</p>
+                              <p className="mt-1 text-lg font-semibold">{activeJob.title || activeJob.aiAssessment?.summary || "Your repair assessment"}</p>
+                              <p className="mt-1 text-sm text-[var(--fixbridge-muted-text)]">
+                                Using Fixera repair intelligence. Similar scenarios are compared for guidance. Learning improvements use validated outcomes, not automatic retraining on this photo.
+                              </p>
+                            </div>
+                            {/* Mode Selector Toggle */}
+                            <div className="flex border-b border-border">
+                              <button
+                                type="button"
+                                onClick={() => setAssessmentMode("diy")}
+                                className={`flex-1 pb-3 text-center text-sm font-semibold border-b-2 transition ${assessmentMode === "diy"
+                                  ? "border-[#FF4D1C] text-[#FF4D1C]"
+                                  : "border-transparent text-muted-foreground hover:text-foreground"
+                                  }`}
+                              >
+                                Do It Yourself (DIY)
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAssessmentMode("expert");
+                                  if (activeJob) setSelectedJobId(activeJob.id);
+                                }}
+                                className={`flex-1 pb-3 text-center text-sm font-semibold border-b-2 transition ${assessmentMode === "expert"
+                                  ? "border-[#FF4D1C] text-[#FF4D1C]"
+                                  : "border-transparent text-muted-foreground hover:text-foreground"
+                                  }`}
+                              >
+                                Hire a Professional
+                              </button>
+                            </div>
+
+                            {assessmentStringList(activeJob.aiAssessment?.questions_needed).length > 0 && (
+                              <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100 flex gap-3 shadow-sm">
+                                <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                                <div className="text-sm space-y-1.5 w-full">
+                                  <p className="font-semibold text-amber-900 dark:text-amber-200">Clarification Needed to Refine Estimate</p>
+                                  <p className="text-xs opacity-90 leading-relaxed">
+                                    Our AI detected potential uncertainty or mismatch in the details provided (e.g. description and photo trade categories mismatch, or extremely vague summary). Please review the following questions:
+                                  </p>
+                                  <ul className="list-disc pl-5 text-xs space-y-1 text-amber-800 dark:text-amber-300 font-medium">
+                                    {assessmentStringList(activeJob.aiAssessment?.questions_needed).map((q, idx) => (
+                                      <li key={idx}>{q}</li>
+                                    ))}
+                                  </ul>
+                                  <p className="text-xs pt-1 font-medium text-amber-900 dark:text-amber-200">
+                                    To fix, click <strong className="text-[#FF4D1C]">Report another issue</strong> above and upload a matching photo and clear description.
+                                  </p>
+                                </div>
+                              </div>
+                            )}
+
+                            {assessmentMode === "expert" ? (
+                              <div className="space-y-4">
+                                {activeJob ? (
+                                  <ServiceTrackingCard
+                                    job={jobs.find((j) => j.id === activeJob.id) || activeJob}
+                                    compact
+                                    onMessage={() => {
+                                      setSelectedJobId(activeJob.id);
+                                      setTab("jobs");
+                                      setShowTechMessage(true);
+                                    }}
+                                    onChangeSchedule={() => {
+                                      setSelectedJobId(activeJob.id);
+                                      setTab("jobs");
+                                      setForceEditSchedule(true);
+                                    }}
+                                  />
+                                ) : null}
+                                {dispatchSuccessMsg ? (
+                                  <p className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-900 dark:text-emerald-100">
+                                    {dispatchSuccessMsg}
+                                  </p>
+                                ) : null}
+                                <p className="text-sm leading-relaxed">{activeJob.aiAssessment?.summary || "Assessment saved."}</p>
+                                <div className="grid gap-3 sm:grid-cols-3">
+                                  <div className="rounded-md bg-muted/50 p-3 text-sm">
+                                    <p className="text-muted-foreground">Urgency</p>
+                                    <p className="font-medium capitalize">{activeJob.aiAssessment?.urgency || " - "}</p>
+                                  </div>
+                                  <div className="rounded-md bg-muted/50 p-3 text-sm">
+                                    <p className="text-muted-foreground">Trade</p>
+                                    <p className="font-medium">{activeJob.aiAssessment?.recommended_trade || " - "}</p>
+                                  </div>
+                                  <div className="rounded-md bg-muted/50 p-3 text-sm">
+                                    <p className="text-muted-foreground">Confidence</p>
+                                    <p className="font-medium">
+                                      {typeof activeJob.aiAssessment?.confidence === "number" &&
+                                        Number.isFinite(activeJob.aiAssessment.confidence)
+                                        ? `${Math.round(activeJob.aiAssessment.confidence * 100)}%`
+                                        : " - "}
                                     </p>
                                   </div>
                                 </div>
-                              )}
-
-                              <div className="grid gap-3 md:grid-cols-3">
-                                <div className="rounded-xl border border-border bg-card p-3 text-sm">
-                                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">What Fixera sees</p>
-                                  <ul className="mt-2 list-disc space-y-1 pl-4">
-                                    {(assessmentStringList(activeJob.aiAssessment?.observed_evidence).length
-                                      ? assessmentStringList(activeJob.aiAssessment?.observed_evidence)
-                                      : assessmentStringList(activeJob.aiAssessment?.visual_findings)
-                                    ).slice(0, 4).map((item) => <li key={item}>{item}</li>)}
-                                  </ul>
+                                {assessmentStringList(activeJob.aiAssessment?.immediate_safety_steps).length > 0 && (
+                                  <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                                    <p className="font-medium">Safety steps</p>
+                                    <ul className="mt-1 list-disc pl-5">
+                                      {assessmentStringList(activeJob.aiAssessment?.immediate_safety_steps).map((s) => (
+                                        <li key={s}>{s}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                                <HomeownerLocalEstimate job={activeJob} />
+                                <div className="rounded-xl border border-border bg-card p-4 text-sm">
+                                  <p className="font-semibold">Your existing assessment will be sent with the service request.</p>
+                                  <p className="mt-1 text-muted-foreground">You do not need to re-enter the property, issue, or photos.</p>
+                                  <dl className="mt-3 grid gap-2 sm:grid-cols-2">
+                                    <div>
+                                      <dt className="text-xs text-muted-foreground">Issue</dt>
+                                      <dd>{activeJob.title || activeJob.description || "Reported issue"}</dd>
+                                    </div>
+                                    <div>
+                                      <dt className="text-xs text-muted-foreground">Property</dt>
+                                      <dd>{activeJob.fullAddress || activeJob.cityStateZip || "Saved property"}</dd>
+                                    </div>
+                                    <div>
+                                      <dt className="text-xs text-muted-foreground">Assessment</dt>
+                                      <dd>{activeJob.aiAssessment?.summary || "Assessment on file"}</dd>
+                                    </div>
+                                    <div>
+                                      <dt className="text-xs text-muted-foreground">Risk</dt>
+                                      <dd className="capitalize">{String(activeJob.diyRiskLevel || activeJob.aiAssessment?.diy_risk_level || "green")}</dd>
+                                    </div>
+                                  </dl>
+                                  {diyShowProfessionalHandoff ? (
+                                    <p className="mt-3 text-muted-foreground">{DIY_PROFESSIONAL_HANDOFF_MESSAGE}</p>
+                                  ) : null}
                                 </div>
-                                <div className="rounded-xl border border-border bg-card p-3 text-sm">
-                                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">What may be happening</p>
-                                  <ul className="mt-2 list-disc space-y-1 pl-4">
-                                    {assessmentStringList(activeJob.aiAssessment?.likely_causes).slice(0, 4).map((item) => <li key={item}>{item}</li>)}
-                                  </ul>
-                                </div>
-                                <div className="rounded-xl border border-border bg-card p-3 text-sm">
-                                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">What to confirm</p>
-                                  <ul className="mt-2 list-disc space-y-1 pl-4">
-                                    {assessmentStringList(activeJob.aiAssessment?.needs_confirmation).slice(0, 4).map((item) => <li key={item}>{item}</li>)}
-                                  </ul>
-                                </div>
+                                <HireProfessionalWizard
+                                  job={activeJob}
+                                  busy={busy}
+                                  setBusy={setBusy}
+                                  onError={setError}
+                                  onJobUpdated={(updated) => {
+                                    setActiveJob(updated);
+                                    setSelectedJobId(updated.id);
+                                  }}
+                                  onPaid={async () => {
+                                    setDispatchSuccessMsg("Service booked. Your professional request is on Home.");
+                                    navigateTab("overview");
+                                    setSelectedJobId(activeJob.id);
+                                    await refresh();
+                                  }}
+                                />
                               </div>
+                            ) : (
+                              !hasDiyAccess ? (
+                                <div className="relative space-y-4">
+                                  <div className="pointer-events-none select-none opacity-20 blur-sm">
+                                    <div className="grid gap-4 sm:grid-cols-2">
+                                      <div className="rounded-xl border border-border bg-muted/20 p-4">
+                                        <h4 className="font-semibold text-sm mb-3">Required Tools</h4>
+                                        <div className="h-4 w-3/4 bg-muted rounded mb-2" />
+                                        <div className="h-4 w-1/2 bg-muted rounded" />
+                                      </div>
+                                      <div className="rounded-xl border border-border bg-muted/20 p-4">
+                                        <h4 className="font-semibold text-sm mb-3">Materials Needed</h4>
+                                        <div className="h-4 w-3/4 bg-muted rounded mb-2" />
+                                        <div className="h-4 w-1/2 bg-muted rounded" />
+                                      </div>
+                                    </div>
+                                  </div>
 
-                              <HomeownerDiyExperience
-                                userName={user.name}
-                                jobId={activeJob.id}
-                                title={activeJob.title || activeJob.category || "Repair"}
-                                category={activeJob.category || ""}
-                                selectedCategory={requestSystemId ? tradeLabel(requestSystemId) : ""}
-                                assessmentCategory={activeJob.aiAssessment?.recommended_trade || activeJob.aiAssessment?.category || ""}
-                                subcategory={activeJob.serviceSubcategory || activeJob.aiAssessment?.service_subcategory || ""}
-                                description={activeJob.description || ""}
-                                findings={assessmentStringList(activeJob.aiAssessment?.observed_evidence).length
-                                  ? assessmentStringList(activeJob.aiAssessment?.observed_evidence)
-                                  : assessmentStringList(activeJob.aiAssessment?.visual_findings)}
-                                summary={activeJob.aiAssessment?.summary || ""}
-                                photoUrl={activeJob.mediaType?.startsWith("image") ? activeJob.mediaDataUrl : null}
-                                risk={getHomeownerDiyRisk(activeJob)}
-                                steps={assessmentStringList(activeJob.aiAssessment?.diy_steps)}
-                                guideSteps={activeJob.aiAssessment?.diy_guide_steps || []}
-                                tools={assessmentStringList(activeJob.aiAssessment?.tools_required)}
-                                materials={assessmentStringList(activeJob.aiAssessment?.materials_needed)}
-                                causes={assessmentStringList(activeJob.aiAssessment?.likely_causes)}
-                                stopConditions={assessmentStringList(activeJob.aiAssessment?.stop_conditions)}
-                                completionChecks={assessmentStringList(activeJob.aiAssessment?.completion_checks)}
-                                stepIndex={diyStepIndex}
-                                completed={diyCompletedSteps}
-                                bookmarked={diyBookmarked}
-                                savingStep={diySavingStep}
-                                stepSaved={diyStepSaved}
-                                chatMessages={diyChatMessages}
-                                chatInput={diyChatInput}
-                                chatBusy={diyChatBusy}
-                                chatBlocked={getHomeownerDiyRisk(activeJob) === "red" || diyUserStopActive}
-                                speakingText={speakingText}
-                                view={diyView}
-                                onView={setDiyView}
-                                onBack={() => setDiyView("home")}
-                                onOpenStep={() => void openGuidedDiyStep()}
-                                onOpenIdeas={() => setDiyView("ideas")}
-                                onCompleteStep={() => void completeCurrentDiyStep()}
-                                onStepFeedback={(kind) => {
-                                  if (kind === "worked") {
-                                    void completeCurrentDiyStep();
-                                    return;
-                                  }
-                                  const stepTitle = activeJob.aiAssessment?.diy_guide_steps?.[diyStepIndex]?.title || `step ${diyStepIndex + 1}`;
-                                  if (kind === "failed") {
-                                    const prompt = `Step "${stepTitle}" did not work. Give one focused next check for this step only. Do not rewrite the repair plan.`;
-                                    setDiyView("chat");
-                                    void sendDiyChatMessage(prompt);
-                                    return;
-                                  }
-                                  void reassessWithFixera(`I see something different on ${stepTitle}.`);
-                                }}
-                                onToggleBookmark={() => setDiyBookmarked((v) => !v)}
-                                onHire={openProfessionalFromDiy}
-                                onNotComfortable={openProfessionalFromDiy}
-                                onChatInput={setDiyChatInput}
-                                onSendChat={(text) => void sendDiyChatMessage(text)}
-                                onSpeak={speakText}
-                                onUnsafeChat={() => {
-                                  setDiyUserStopActive(true);
-                                  setDiyIsGuided(false);
-                                }}
-                              />
+                                  <div className="relative z-10 rounded-[1.5rem] bg-[#F3F4F6] p-4 dark:bg-muted/40 sm:p-6">
+                                    <div className="mb-4 text-center">
+                                      <h3 className="[font-family:'Barlow_Condensed',sans-serif] text-2xl font-black uppercase tracking-tight">
+                                        Unlock DIY Action Plan
+                                      </h3>
+                                      <p className="mt-1 text-xs text-muted-foreground">
+                                        Upgrade to HomeCare Pro for full DIY action plans — includes a 7-day free trial.
+                                      </p>
+                                    </div>
+                                    <HomeownerGoProPlans
+                                      compact
+                                      currentPlanCode={user.planCode}
+                                      busy={busy}
+                                      isAuthenticated
+                                      onAuthenticatedCheckout={handleAuthenticatedCheckout}
+                                      onSelectPlan={handleSelectGoProPlan}
+                                      onPlansLoaded={(cards) => {
+                                        setGoProPlans(cards);
+                                        setDiyUnlockCodes(
+                                          cards.filter((c) => c.unlocksDiy).map((c) => c.planCode)
+                                        );
+                                      }}
+                                      showFeatureMatrix={false}
+                                      checkPricingUpdates={false}
+                                    />
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="space-y-4">
+                                  {diySafetyAccepted ? (
+                                    <p className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                                      {DIY_SESSION_REMINDER}
+                                    </p>
+                                  ) : null}
+                                  {(() => {
+                                    const risk = getHomeownerDiyRisk(activeJob);
+                                    const riskText = risk;
+                                    const reasonCodes = (activeJob.diyRiskReasonCodes ||
+                                      activeJob.aiAssessment?.diy_risk_reason_codes ||
+                                      []) as string[];
+                                    const emergencyCodes = new Set(["GAS", "FIRE", "CO", "LIVE_ELECTRICAL", "FLOOD_ELECTRICAL", "STRUCTURAL", "EMERGENCY"]);
+                                    const showEmergency = risk === "red" && reasonCodes.some((c) => emergencyCodes.has(String(c)));
+                                    return (
+                                      <>
+                                        {showEmergency ? <DiyEmergencyBanner /> : null}
+                                        {diyUserStopActive ? (
+                                          <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-950 dark:text-amber-100">
+                                            <p className="font-semibold">DIY paused</p>
+                                            <p className="mt-1 text-xs leading-relaxed">
+                                              You indicated you want to stop or need help. Request a professional when you are ready — your issue details will carry over.
+                                            </p>
+                                          </div>
+                                        ) : null}
+                                        <p className="sr-only" aria-live="polite">
+                                          Safety status: {riskStatusLabel(riskText)}
+                                        </p>
+                                        {risk === "red" ? (
+                                          <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-red-950 dark:text-red-100 space-y-3">
+                                            <div className="flex gap-3">
+                                              <ShieldAlert className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
+                                              <div className="text-sm">
+                                                <p className="font-semibold">Potential Safety Risk Detected</p>
+                                                <p className="mt-1 text-xs leading-relaxed opacity-90">
+                                                  Based on the information provided, this situation may involve a significant safety risk. Do not attempt the repair yourself. Follow the immediate safety guidance below and request professional assistance.
+                                                </p>
+                                              </div>
+                                            </div>
+                                            {(activeJob.aiAssessment?.immediate_safety_steps || []).length > 0 ? (
+                                              <ul className="list-disc pl-5 text-xs space-y-1">
+                                                {assessmentStringList(activeJob.aiAssessment?.immediate_safety_steps).map((step, i) => (
+                                                  <li key={i}>{step}</li>
+                                                ))}
+                                              </ul>
+                                            ) : null}
+                                            <button
+                                              type="button"
+                                              onClick={() => void stopDiyAndGetProfessional()}
+                                              className="inline-flex items-center rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white"
+                                            >
+                                              Request a Professional
+                                            </button>
+                                          </div>
+                                        ) : null}
+                                        {risk === "yellow" ? (
+                                          <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-amber-950 dark:text-amber-100 flex gap-3">
+                                            <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                                            <div className="text-sm">
+                                              <p className="font-semibold">Use Caution</p>
+                                              <p className="mt-1 opacity-90 text-xs leading-relaxed">
+                                                We can help with limited, low-risk checks, but this issue may require professional service. Avoid opening, disassembling, climbing, handling hazardous materials, or performing work outside your experience.
+                                              </p>
+                                              <button
+                                                type="button"
+                                                onClick={() => void stopDiyAndGetProfessional()}
+                                                className="mt-3 inline-flex items-center rounded-lg border border-primary px-3 py-1.5 text-xs font-semibold text-primary"
+                                              >
+                                                Get a Professional
+                                              </button>
+                                            </div>
+                                          </div>
+                                        ) : null}
+                                      </>
+                                    );
+                                  })()}
+                                  <DiyStopProfessionalBar
+                                    onStop={() => void stopDiyAndGetProfessional()}
+                                    onGetProfessional={() => void stopDiyAndGetProfessional()}
+                                  />
+                                  {/* DIY Caution Banner if not safe */}
+                                  {!activeJob.aiAssessment?.safe_diy_allowed && getHomeownerDiyRisk(activeJob) !== "red" && (
+                                    <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-4 text-red-950 dark:text-red-100 flex gap-3">
+                                      <ShieldAlert className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
+                                      <div className="text-sm">
+                                        <p className="font-semibold">Professional Service Recommended</p>
+                                        <p className="mt-1 opacity-90 text-xs leading-relaxed">
+                                          Fixera found something that may require a professional. A licensed professional is the safer next step.
+                                        </p>
+                                      </div>
+                                    </div>
+                                  )}
 
-                              <DiyIncidentReportForm jobId={activeJob.id} />
-                            </div>
-                          )
-                        )}
+                                  <div className="grid gap-3 md:grid-cols-3">
+                                    <div className="rounded-xl border border-border bg-card p-3 text-sm">
+                                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">What Fixera sees</p>
+                                      <ul className="mt-2 list-disc space-y-1 pl-4">
+                                        {(assessmentStringList(activeJob.aiAssessment?.observed_evidence).length
+                                          ? assessmentStringList(activeJob.aiAssessment?.observed_evidence)
+                                          : assessmentStringList(activeJob.aiAssessment?.visual_findings)
+                                        ).slice(0, 4).map((item) => <li key={item}>{item}</li>)}
+                                      </ul>
+                                    </div>
+                                    <div className="rounded-xl border border-border bg-card p-3 text-sm">
+                                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">What may be happening</p>
+                                      <ul className="mt-2 list-disc space-y-1 pl-4">
+                                        {assessmentStringList(activeJob.aiAssessment?.likely_causes).slice(0, 4).map((item) => <li key={item}>{item}</li>)}
+                                      </ul>
+                                    </div>
+                                    <div className="rounded-xl border border-border bg-card p-3 text-sm">
+                                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">What to confirm</p>
+                                      <ul className="mt-2 list-disc space-y-1 pl-4">
+                                        {assessmentStringList(activeJob.aiAssessment?.needs_confirmation).slice(0, 4).map((item) => <li key={item}>{item}</li>)}
+                                      </ul>
+                                    </div>
+                                  </div>
+
+                                  <HomeownerDiyExperience
+                                    userName={user.name}
+                                    jobId={activeJob.id}
+                                    title={activeJob.title || activeJob.category || "Repair"}
+                                    category={activeJob.category || ""}
+                                    selectedCategory={requestSystemId ? tradeLabel(requestSystemId) : ""}
+                                    assessmentCategory={activeJob.aiAssessment?.recommended_trade || activeJob.aiAssessment?.category || ""}
+                                    subcategory={activeJob.serviceSubcategory || activeJob.aiAssessment?.service_subcategory || ""}
+                                    description={activeJob.description || ""}
+                                    findings={assessmentStringList(activeJob.aiAssessment?.observed_evidence).length
+                                      ? assessmentStringList(activeJob.aiAssessment?.observed_evidence)
+                                      : assessmentStringList(activeJob.aiAssessment?.visual_findings)}
+                                    summary={activeJob.aiAssessment?.summary || ""}
+                                    photoUrl={activeJob.mediaType?.startsWith("image") ? activeJob.mediaDataUrl : null}
+                                    risk={getHomeownerDiyRisk(activeJob)}
+                                    steps={assessmentStringList(activeJob.aiAssessment?.diy_steps)}
+                                    guideSteps={activeJob.aiAssessment?.diy_guide_steps || []}
+                                    tools={assessmentStringList(activeJob.aiAssessment?.tools_required)}
+                                    materials={assessmentStringList(activeJob.aiAssessment?.materials_needed)}
+                                    causes={assessmentStringList(activeJob.aiAssessment?.likely_causes)}
+                                    stopConditions={assessmentStringList(activeJob.aiAssessment?.stop_conditions)}
+                                    completionChecks={assessmentStringList(activeJob.aiAssessment?.completion_checks)}
+                                    stepIndex={diyStepIndex}
+                                    completed={diyCompletedSteps}
+                                    bookmarked={diyBookmarked}
+                                    savingStep={diySavingStep}
+                                    stepSaved={diyStepSaved}
+                                    chatMessages={diyChatMessages}
+                                    chatInput={diyChatInput}
+                                    chatBusy={diyChatBusy}
+                                    chatBlocked={getHomeownerDiyRisk(activeJob) === "red" || diyUserStopActive}
+                                    speakingText={speakingText}
+                                    view={diyView}
+                                    onView={setDiyView}
+                                    onBack={() => setDiyView("home")}
+                                    onOpenStep={() => void openGuidedDiyStep()}
+                                    onOpenIdeas={() => setDiyView("ideas")}
+                                    onCompleteStep={() => void completeCurrentDiyStep()}
+                                    onStepFeedback={(kind) => {
+                                      if (kind === "worked") {
+                                        void completeCurrentDiyStep();
+                                        return;
+                                      }
+                                      const stepTitle = activeJob.aiAssessment?.diy_guide_steps?.[diyStepIndex]?.title || `step ${diyStepIndex + 1}`;
+                                      if (kind === "failed") {
+                                        const prompt = `Step "${stepTitle}" did not work. Give one focused next check for this step only. Do not rewrite the repair plan.`;
+                                        setDiyView("chat");
+                                        void sendDiyChatMessage(prompt);
+                                        return;
+                                      }
+                                      void reassessWithFixera(`I see something different on ${stepTitle}.`);
+                                    }}
+                                    onToggleBookmark={() => setDiyBookmarked((v) => !v)}
+                                    onHire={openProfessionalFromDiy}
+                                    onNotComfortable={openProfessionalFromDiy}
+                                    onChatInput={setDiyChatInput}
+                                    onSendChat={(text) => void sendDiyChatMessage(text)}
+                                    onSpeak={speakText}
+                                    onUnsafeChat={() => {
+                                      setDiyUserStopActive(true);
+                                      setDiyIsGuided(false);
+                                    }}
+                                  />
+
+                                  <DiyIncidentReportForm jobId={activeJob.id} />
+                                </div>
+                              )
+                            )}
+                          </>
+                        ) : null}
                       </>
                     ) : null}
                   </div>

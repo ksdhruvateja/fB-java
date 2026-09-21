@@ -8,11 +8,11 @@ export function registerAssessmentProcessor(fn) {
   assessmentProcessor = fn;
 }
 
-export async function runAssessmentProcessor(pool, { jobId, actorUserId }) {
+export async function runAssessmentProcessor(pool, payload) {
   if (!assessmentProcessor) {
     throw new Error('Assessment processor is not registered.');
   }
-  return assessmentProcessor(pool, { jobId, actorUserId });
+  return assessmentProcessor(pool, payload);
 }
 
 function isNetlifyRuntime() {
@@ -55,10 +55,35 @@ export function verifyAssessmentWorkerRequest(req) {
  * Queue assessment processing without blocking the HTTP response.
  */
 export function scheduleAssessmentJob(pool, { jobId, actorUserId }) {
-  const payload = { jobId: Number(jobId), actorUserId: Number(actorUserId) };
-  if (!payload.jobId || !payload.actorUserId) {
+  return scheduleAssessmentPayload(pool, {
+    jobId: Number(jobId),
+    actorUserId: Number(actorUserId),
+    recordType: 'managed_job',
+  });
+}
+
+export function schedulePendingServiceRequestAssessment(pool, { pendingServiceRequestId, actorUserId }) {
+  return scheduleAssessmentPayload(pool, {
+    pendingServiceRequestId: Number(pendingServiceRequestId),
+    actorUserId: Number(actorUserId),
+    recordType: 'pending_service_request',
+  });
+}
+
+function scheduleAssessmentPayload(pool, payload) {
+  const isPending = payload.recordType === 'pending_service_request';
+  const recordId = Number(isPending ? payload.pendingServiceRequestId : payload.jobId);
+  const actorId = Number(payload.actorUserId);
+
+  if (!Number.isFinite(recordId) || recordId <= 0 || !Number.isFinite(actorId) || actorId <= 0) {
     return Promise.resolve({ ok: false, reason: 'invalid_payload' });
   }
+
+  const normalized = {
+    ...(isPending ? { pendingServiceRequestId: recordId } : { jobId: recordId }),
+    actorUserId: actorId,
+    recordType: isPending ? 'pending_service_request' : 'managed_job',
+  };
 
   if (isNetlifyRuntime()) {
     const secret = workerSecret();
@@ -72,22 +97,19 @@ export function scheduleAssessmentJob(pool, { jobId, actorUserId }) {
         'Content-Type': 'application/json',
         'X-Assessment-Secret': secret,
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(normalized),
     })
       .then((res) => {
         if (res.status === 202 || res.ok) {
-          console.log('[assessment] background queued', { jobId: payload.jobId });
+          console.log('[assessment] background queued', normalized);
           return { ok: true, mode: 'background' };
         }
-        console.warn('[assessment] background queue failed', {
-          jobId: payload.jobId,
-          status: res.status,
-        });
+        console.warn('[assessment] background queue failed', { ...normalized, status: res.status});
         return { ok: false, reason: 'background_invoke_failed', status: res.status };
       })
       .catch((err) => {
         console.error('[assessment] background invoke error', {
-          jobId: payload.jobId,
+          ...normalized,
           error: err?.message || String(err),
         });
         return { ok: false, reason: 'background_invoke_error' };
@@ -95,9 +117,9 @@ export function scheduleAssessmentJob(pool, { jobId, actorUserId }) {
   }
 
   setImmediate(() => {
-    runAssessmentProcessor(pool, payload).catch((err) => {
+    runAssessmentProcessor(pool, normalized).catch((err) => {
       console.error('[assessment] local processor failed', {
-        jobId: payload.jobId,
+        ...normalized,
         error: err?.message || String(err),
       });
     });

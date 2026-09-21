@@ -1,11 +1,6 @@
-/**
- * Netlify Background Function — runs long AI assessments outside the synchronous API window.
- */
+/** Netlify Background Function — runs managed-job and pending-service assessments. */
 import { initDb, pool } from '../../api/app.js';
-import {
-  runAssessmentProcessor,
-  verifyAssessmentWorkerRequest,
-} from '../../api/assessment-worker.js';
+import { runAssessmentProcessor, verifyAssessmentWorkerRequest } from '../../api/assessment-worker.js';
 
 export const config = {
   background: true,
@@ -31,10 +26,11 @@ export default async function handler(req) {
     });
   }
 
-  const jobId = Number(body.jobId);
+  const recordType = body.recordType === 'pending_service_request' ? 'pending_service_request' : 'managed_job';
+  const recordId = Number(recordType === 'pending_service_request' ? body.pendingServiceRequestId : body.jobId);
   const actorUserId = Number(body.actorUserId);
-  if (!jobId || !actorUserId) {
-    return new Response(JSON.stringify({ ok: false, message: 'jobId and actorUserId required.' }), {
+  if (!recordId || !actorUserId) {
+    return new Response(JSON.stringify({ ok: false, message: 'A valid record ID and actorUserId are required.' }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' },
     });
@@ -45,12 +41,16 @@ export default async function handler(req) {
     ready = true;
   }
 
+  const payload = recordType === 'pending_service_request'
+    ? { pendingServiceRequestId: recordId, actorUserId, recordType }
+    : { jobId: recordId, actorUserId, recordType };
+
   const started = Date.now();
-  console.log('[assessment] background started', { jobId, actorUserId });
+  console.log('[assessment] background started', payload);
   try {
-    const result = await runAssessmentProcessor(pool, { jobId, actorUserId });
+    const result = await runAssessmentProcessor(pool, payload);
     console.log('[assessment] background complete', {
-      jobId,
+      ...payload,
       ok: result?.ok === true,
       durationMs: Date.now() - started,
     });
@@ -60,7 +60,7 @@ export default async function handler(req) {
     });
   } catch (err) {
     console.error('[assessment] background failed', {
-      jobId,
+      ...payload,
       error: err?.message || String(err),
       durationMs: Date.now() - started,
     });

@@ -18,8 +18,8 @@ import {
   Store,
   Zap,
 } from "lucide-react";
-import type { ManagedJob } from "./managedJobs";
-import { payDispatchFee, prepareCheckout, requestProfessionalDispatch, retailRangeLabel, fetchDispatchPricing, formatMoney, type CheckoutBreakdown } from "./managedJobs";
+import type { ManagedJob, PendingProfessionalRequest } from "./managedJobs";
+import { payDispatchFee, prepareCheckout, requestProfessionalDispatch, retailRangeLabel, fetchDispatchPricing, formatMoney, type CheckoutBreakdown, startPendingProfessionalCheckout, getPendingProfessionalRequest } from "./managedJobs";
 import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
 import ProfessionalServiceRequestBetaCard from "./ProfessionalServiceRequestBetaCard";
 import { consentsFromState, allChecked } from "./ConsentCheckbox";
@@ -113,7 +113,7 @@ function initialStep(job: ManagedJob): HireStep {
   return "schedule";
 }
 
-export default function HireProfessionalWizard({
+function ManagedHireProfessionalWizard({
   job,
   busy,
   setBusy,
@@ -775,4 +775,215 @@ export default function HireProfessionalWizard({
       {ackGate.modal}
     </div>
   );
+}
+
+
+type PendingHireWizardProps = {
+  pendingServiceRequest: PendingProfessionalRequest;
+  busy: boolean;
+  setBusy: (v: boolean) => void;
+  onError: (msg: string | null) => void;
+  onPaid?: (job?: ManagedJob) => void | Promise<void>;
+};
+
+function PendingHireProfessionalWizard({
+  pendingServiceRequest,
+  busy,
+  setBusy,
+  onError,
+  onPaid,
+}: PendingHireWizardProps) {
+  const [step, setStep] = useState<HireStep>("schedule");
+  const [serviceTiming, setServiceTiming] = useState(pendingServiceRequest.serviceTiming || "weekday");
+  const [preferredDate, setPreferredDate] = useState(pendingServiceRequest.preferredDate || "");
+  const [preferredTimeSlot, setPreferredTimeSlot] = useState(pendingServiceRequest.preferredTimeSlot || "9-11");
+  const [propertyPurpose, setPropertyPurpose] = useState(pendingServiceRequest.propertyPurpose || "current_homeowner");
+  const [transactionStage, setTransactionStage] = useState(pendingServiceRequest.transactionStage || "ongoing_maintenance");
+  const [contactPhone, setContactPhone] = useState(pendingServiceRequest.contactPhone || "");
+  const [convertedJob, setConvertedJob] = useState<ManagedJob | null>(null);
+  const [consent, setConsent] = useState(false);
+  const amount = 125;
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const paid = params.get("paid") === "pending-professional";
+    const returnedId = Number(params.get("pendingServiceRequestId"));
+    if (!paid || returnedId !== Number(pendingServiceRequest.id)) return;
+
+    let cancelled = false;
+    let attempts = 0;
+    const poll = async () => {
+      const result = await getPendingProfessionalRequest(pendingServiceRequest.id);
+      if (cancelled) return;
+      if (result.ok && result.managedJob) {
+        setConvertedJob(result.managedJob);
+        await onPaid?.(result.managedJob);
+        return;
+      }
+      attempts += 1;
+      if (attempts < 20) window.setTimeout(poll, 1500);
+      else onError("Payment was received, but the service request is still being finalized. Please refresh in a moment.");
+    };
+    void poll();
+    return () => { cancelled = true; };
+  }, [pendingServiceRequest.id, onPaid, onError]);
+
+  function selectTiming(value: string) {
+    setServiceTiming(value);
+    const nextDate = dateForTiming(value);
+    if (nextDate) setPreferredDate(nextDate);
+  }
+
+  async function saveAndCheckout() {
+    if (!consent) {
+      onError("Please acknowledge the professional-service payment terms before continuing.");
+      return;
+    }
+    setBusy(true);
+    onError(null);
+    try {
+      const result = await startPendingProfessionalCheckout(pendingServiceRequest.id, {
+        serviceTiming,
+        preferredDate: preferredDate || undefined,
+        preferredTimeSlot,
+        propertyPurpose,
+        transactionStage,
+        contactPhone: contactPhone.trim() || undefined,
+        acknowledged: true,
+        consents: { PROFESSIONAL_REQUEST_ACK: true },
+      });
+      if (!result.ok || !result.url) {
+        onError(result.message || "Could not start secure payment.");
+        return;
+      }
+      try {
+        sessionStorage.setItem("fixbridge-pending-service-request-id", String(pendingServiceRequest.id));
+      } catch {
+        // non-fatal
+      }
+      window.location.href = result.url;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (convertedJob) {
+    return (
+      <div className="space-y-4 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-5">
+        <div className="flex items-start gap-3">
+          <CheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+          <div>
+            <h3 className="font-semibold">Payment Successful</h3>
+            <p className="mt-1 text-sm text-muted-foreground">Your pending request has been converted to a managed service request.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const stepIndex = HIRE_STEPS.indexOf(step);
+  return (
+    <div className="space-y-5 rounded-2xl border border-[#FF4D1C]/20 bg-gradient-to-br from-[#FFF7F3] via-card to-[#F3FAF8] p-4 sm:p-6 dark:from-[#2a1812] dark:via-card dark:to-[#142a28]">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#FF4D1C]">Hire a professional</p>
+          <h3 className="mt-1 text-xl font-semibold sm:text-2xl">Professional service request</h3>
+          <p className="mt-1 text-xs text-muted-foreground">Pending request #{pendingServiceRequest.id} · payment converts it to a managed job.</p>
+        </div>
+        <span className="rounded-xl border border-[#FF4D1C]/25 px-3 py-1.5 text-xs font-medium text-[#FF4D1C]">Step {stepIndex + 1} of {HIRE_STEPS.length}</span>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        {HIRE_STEPS.map((s, i) => (
+          <span key={s} className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${i <= stepIndex ? "bg-[#FF4D1C] text-white" : "bg-muted text-muted-foreground"}`}>{STEP_LABELS[s]}</span>
+        ))}
+      </div>
+
+      {step === "schedule" ? (
+        <div className="space-y-5">
+          <fieldset className="space-y-3">
+            <legend className="text-sm font-semibold">When do you need service?</legend>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {SERVICE_TIMING_OPTIONS.map((opt) => {
+                const Icon = opt.icon;
+                const selected = serviceTiming === opt.value;
+                return <button key={opt.value} type="button" onClick={() => selectTiming(opt.value)} className={`rounded-xl border px-4 py-4 text-left ${selected ? "border-[#FF4D1C] bg-[#FF4D1C] text-white" : "border-border bg-background hover:border-[#FF4D1C]/40"}`}>
+                  <Icon className={`mb-2 h-5 w-5 ${selected ? "text-white" : "text-[#FF4D1C]"}`} />
+                  <p className="text-sm font-semibold">{opt.label}</p><p className={`mt-1 text-xs ${selected ? "text-white/85" : "text-muted-foreground"}`}>{opt.hint}</p>
+                </button>;
+              })}
+            </div>
+          </fieldset>
+          <fieldset className="space-y-3">
+            <legend className="text-sm font-semibold">Preferred arrival window</legend>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {TIME_WINDOW_OPTIONS.map((opt) => <button key={opt.value} type="button" onClick={() => setPreferredTimeSlot(opt.value)} className={`rounded-xl border px-3 py-3 text-left ${preferredTimeSlot === opt.value ? "border-[#FF4D1C] bg-[#FF4D1C]/10" : "border-border bg-background"}`}><span className="block text-[10px] uppercase text-muted-foreground">{opt.period}</span><span className="font-semibold">{opt.label}</span></button>)}
+            </div>
+          </fieldset>
+          <label className="block text-sm font-medium">Preferred date
+            <input type="date" value={preferredDate} min={toDateInputValue(new Date())} onChange={(e) => setPreferredDate(e.target.value)} className="mt-2 w-full rounded-xl border border-border bg-background px-3 py-3" />
+          </label>
+          <button type="button" onClick={() => setStep("info")} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white">Continue <ArrowRight className="h-4 w-4" /></button>
+        </div>
+      ) : null}
+
+      {step === "info" ? (
+        <div className="space-y-5">
+          <div className="grid gap-3 sm:grid-cols-2">
+            {PROPERTY_PURPOSE_OPTIONS.map((opt) => { const Icon = opt.icon; return <button key={opt.value} type="button" onClick={() => setPropertyPurpose(opt.value)} className={`rounded-xl border p-3 text-left ${propertyPurpose === opt.value ? "border-[#FF4D1C] bg-[#FF4D1C]/10" : "border-border"}`}><Icon className="mb-2 h-4 w-4 text-[#FF4D1C]" /><span className="text-sm font-semibold">{opt.label}</span></button>; })}
+          </div>
+          <label className="block text-sm font-medium">Project stage
+            <select value={transactionStage} onChange={(e) => setTransactionStage(e.target.value)} className="mt-2 w-full rounded-xl border border-border bg-background px-3 py-3">{PROJECT_STAGE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
+          </label>
+          <label className="block text-sm font-medium">Contact phone
+            <input value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} placeholder="Phone number" className="mt-2 w-full rounded-xl border border-border bg-background px-3 py-3" />
+          </label>
+          <div className="flex gap-2"><button type="button" onClick={() => setStep("schedule")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 font-semibold"><ArrowLeft className="h-4 w-4" /> Back</button><button type="button" onClick={() => setStep("checkout")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white">Review price <ArrowRight className="h-4 w-4" /></button></div>
+        </div>
+      ) : null}
+
+      {step === "checkout" ? (
+        <div className="space-y-5">
+          <div className="rounded-xl border border-[#FF4D1C]/25 bg-background p-5">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Professional service payment</p>
+            <div className="mt-3 flex items-end justify-between gap-4"><span className="text-sm text-muted-foreground">Professional request</span><span className="text-3xl font-black">{formatMoney(amount)}</span></div>
+            <p className="mt-3 text-xs leading-relaxed text-muted-foreground">This is the required professional-service payment for this pending request. After successful Stripe payment, FixBridge converts the request into a managed job.</p>
+          </div>
+          <label className="flex items-start gap-3 rounded-xl border border-border p-4 text-sm"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-1" /><span>I understand that the {formatMoney(amount)} professional-service payment is required to submit this request.</span></label>
+          <div className="flex gap-2"><button type="button" onClick={() => setStep("info")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 font-semibold"><ArrowLeft className="h-4 w-4" /> Back</button><button type="button" disabled={busy} onClick={() => setStep("review")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white disabled:opacity-60">Review <ArrowRight className="h-4 w-4" /></button></div>
+        </div>
+      ) : null}
+
+      {step === "review" ? (
+        <div className="space-y-5">
+          <div className="rounded-xl border border-border bg-background p-4 text-sm"><p className="font-semibold">Ready to pay</p><dl className="mt-3 grid gap-2 sm:grid-cols-2"><div><dt className="text-xs text-muted-foreground">Timing</dt><dd>{SERVICE_TIMING_OPTIONS.find((o) => o.value === serviceTiming)?.label}</dd></div><div><dt className="text-xs text-muted-foreground">Arrival</dt><dd>{TIME_WINDOW_OPTIONS.find((o) => o.value === preferredTimeSlot)?.label}</dd></div><div><dt className="text-xs text-muted-foreground">Date</dt><dd>{formatDisplayDate(preferredDate) || "Flexible"}</dd></div><div><dt className="text-xs text-muted-foreground">Amount</dt><dd className="font-bold">{formatMoney(amount)}</dd></div></dl></div>
+          <div className="flex gap-2"><button type="button" onClick={() => setStep("checkout")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 font-semibold"><ArrowLeft className="h-4 w-4" /> Back</button><button type="button" disabled={busy || !consent} onClick={() => void saveAndCheckout()} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white disabled:opacity-60">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <DollarSign className="h-4 w-4" />} Pay {formatMoney(amount)}</button></div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export default function HireProfessionalWizard({
+  job,
+  pendingServiceRequest,
+  busy,
+  setBusy,
+  onError,
+  onJobUpdated,
+  onPaid,
+}: {
+  job?: ManagedJob | null;
+  pendingServiceRequest?: PendingProfessionalRequest | null;
+  busy: boolean;
+  setBusy: (v: boolean) => void;
+  onError: (msg: string | null) => void;
+  onJobUpdated?: (job: ManagedJob) => void;
+  onPaid?: (job?: ManagedJob) => void | Promise<void>;
+}) {
+  if (pendingServiceRequest && !job) {
+    return <PendingHireProfessionalWizard pendingServiceRequest={pendingServiceRequest} busy={busy} setBusy={setBusy} onError={onError} onPaid={onPaid} />;
+  }
+  if (!job) return null;
+  return <ManagedHireProfessionalWizard job={job} busy={busy} setBusy={setBusy} onError={onError} onJobUpdated={onJobUpdated || (() => {})} onPaid={onPaid} />;
 }

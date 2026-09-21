@@ -103,9 +103,10 @@ export async function createCheckoutSession({
       capture_method: 'manual',
     };
   }
-  if (mode === 'subscription' && trialDays > 0) {
+  if (mode === 'subscription') {
     sessionParams.subscription_data = {
-      trial_period_days: trialDays,
+      ...(trialDays > 0 ? { trial_period_days: trialDays } : {}),
+      metadata: { ...(metadata || {}) },
     };
   }
 

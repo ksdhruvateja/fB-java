@@ -593,7 +593,19 @@ export async function applyPropertyDocumentExtract(
 }
 
 export async function createManagedJob(body: Record<string, unknown>) {
-  return api<{ ok: boolean; job?: ManagedJob; message?: string }>("/api/managed/jobs", {
+  return api<{
+    ok: boolean;
+    type?: "managed_job" | "pending_service_request";
+    job?: ManagedJob;
+    pendingServiceRequestId?: number;
+    pendingServiceRequest?: Record<string, unknown>;
+    entitlement?: {
+      hasAccess: boolean;
+      plan?: string | null;
+      status?: string | null;
+    };
+    message?: string;
+  }>("/api/managed/jobs", {
     method: "POST",
     body: JSON.stringify(body),
   });
@@ -623,6 +635,29 @@ export async function getManagedJobAssessmentStatus(jobId: number) {
     code?: string;
     message?: string;
   }>(`/api/managed/jobs/${jobId}/assessment-status`);
+}
+
+export async function getPendingServiceRequestAssessmentStatus(
+  pendingServiceRequestId: number
+) {
+  return api<{
+    ok: boolean;
+    status?:| "pending" | "processing" | "ready" | "failed";
+    assessmentStatus?: | "pending" | "processing" | "ready" | "failed";
+    pendingServiceRequestId?: number;
+    pendingServiceRequest?: Record<string, unknown>;
+    pricing?: {
+      showPrice?: boolean;
+      message?: string | null;
+      customerRetailEstimateLow?: number | null;
+      customerRetailEstimateHigh?: number | null;
+      disclaimer?: string;
+    };
+
+    errorCode?: string | null;
+    code?: string;
+    message?: string;
+  }>(`/api/pending-service-requests/${pendingServiceRequestId}/assessment-status`);
 }
 
 export async function startManagedJobAssessment(
@@ -673,17 +708,135 @@ export async function assessManagedJob(
 ) {
   const started = await startManagedJobAssessment(jobId, { force, aiAssessmentConsent });
   if (!started.ok) {
+    return { ok: false as const, code: started.code || ASSESSMENT_UNAVAILABLE_CODE, message: started.message || assessmentUnavailableMessage() };
+  }
+  if (started.status === 'ready' && started.job) {
+    return { ok: true as const, job: started.job, pricing: undefined, warning: null };
+  }
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await sleep(3000);
+    const status = await getManagedJobAssessmentStatus(jobId);
+    if (!status.ok) continue;
+    if (status.status === 'ready' && status.job) {
+      return { ok: true as const, job: status.job, pricing: status.pricing, warning: null };
+    }
+    if (status.status === 'failed') {
+      return { ok: false as const, code: status.errorCode || status.code || ASSESSMENT_UNAVAILABLE_CODE, message: status.message || assessmentUnavailableMessage() };
+    }
+  }
+  return { ok: false as const, code: ASSESSMENT_UNAVAILABLE_CODE, message: assessmentUnavailableMessage() };
+}
+
+export async function startPendingServiceRequestAssessment(
+  pendingServiceRequestId: number,
+  {
+    force = false,
+    aiAssessmentConsent,
+  }: {
+    force?: boolean;
+    aiAssessmentConsent?: {
+      assessmentInvocationId: string;
+      consents: { AI_ASSESSMENT_ACK: true };
+    };
+  } = {}
+) {
+  const body: Record<string, unknown> = {};
+
+  if (force) {
+    body.force = true;
+  }
+
+  if (aiAssessmentConsent) {
+    body.assessmentInvocationId =
+      aiAssessmentConsent.assessmentInvocationId;
+    body.consents =
+      aiAssessmentConsent.consents;
+  }
+
+  return api<{
+    ok: boolean;
+    status?: "processing" | "ready";
+    assessmentStatus?: "processing" | "ready";
+    pendingServiceRequestId?: number;
+    pendingServiceRequest?: Record<string, unknown>;
+    code?: string;
+    message?: string;
+  }>(
+    `/api/pending-service-requests/${pendingServiceRequestId}/assess`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    }
+  );
+}
+
+function normalizePendingServiceRequest(raw: any) {
+  if (!raw || typeof raw !== "object") return raw;
+
+  return {
+    ...raw,
+    homeownerUserId: raw.homeownerUserId ?? raw.homeowner_user_id,
+    propertyId: raw.propertyId ?? raw.property_id,
+    serviceSubcategory: raw.serviceSubcategory ?? raw.service_subcategory,
+    mediaDataUrl: raw.mediaDataUrl ?? raw.media_data_url,
+    mediaType: raw.mediaType ?? raw.media_type,
+    serviceTiming: raw.serviceTiming ?? raw.service_timing,
+    preferredDate: raw.preferredDate ?? raw.preferred_date,
+    preferredTimeSlot: raw.preferredTimeSlot ?? raw.preferred_time_slot,
+    contactName: raw.contactName ?? raw.contact_name,
+    contactPhone: raw.contactPhone ?? raw.contact_phone,
+    propertyPurpose: raw.propertyPurpose ?? raw.property_purpose,
+    transactionStage: raw.transactionStage ?? raw.transaction_stage,
+    listingDeadline: raw.listingDeadline ?? raw.listing_deadline,
+    closingDeadline: raw.closingDeadline ?? raw.closing_deadline,
+    inspectionReportUrl: raw.inspectionReportUrl ?? raw.inspection_report_url,
+    listingReferenceUrl: raw.listingReferenceUrl ?? raw.listing_reference_url,
+    propertyOpportunityNotes: raw.propertyOpportunityNotes ?? raw.property_opportunity_notes,
+    cityStateZip: raw.cityStateZip ?? raw.city_state_zip,
+    fullAddress: raw.fullAddress ?? raw.full_address,
+    streetAddress: raw.streetAddress ?? raw.street_address,
+    aiAssessment: raw.aiAssessment ?? raw.ai_assessment,
+    assessmentResult: raw.assessmentResult ?? raw.assessment_result,
+    assessmentStatus: raw.assessmentStatus ?? raw.assessment_status,
+    selectedAction: raw.selectedAction ?? raw.selected_action,
+    paymentStatus: raw.paymentStatus ?? raw.payment_status,
+    paidAmountCents: raw.paidAmountCents ?? raw.paid_amount_cents,
+    paidAt: raw.paidAt ?? raw.paid_at,
+    stripeSessionId: raw.stripeSessionId ?? raw.stripe_session_id,
+    stripePaymentIntentId: raw.stripePaymentIntentId ?? raw.stripe_payment_intent_id,
+    managedJobId: raw.managedJobId ?? raw.managed_job_id,
+    convertedAt: raw.convertedAt ?? raw.converted_at,
+    checkoutExpiresAt: raw.checkoutExpiresAt ?? raw.checkout_expires_at,
+  };
+}
+
+export async function assessPendingServiceRequest(
+  pendingServiceRequestId: number,
+  {
+    force = false,
+    aiAssessmentConsent,
+  }: {
+    force?: boolean;
+    aiAssessmentConsent?: {
+      assessmentInvocationId: string;
+      consents: { AI_ASSESSMENT_ACK: true };
+    };
+  } = {}
+) {
+  const started = await startPendingServiceRequestAssessment(pendingServiceRequestId, { force, aiAssessmentConsent, });
+
+  if (!started.ok) {
     return {
       ok: false as const,
       code: started.code || ASSESSMENT_UNAVAILABLE_CODE,
       message: started.message || assessmentUnavailableMessage(),
     };
   }
-  if (started.status === "ready" && started.job) {
+
+  if (started.status === "ready" && started.pendingServiceRequest) {
     return {
       ok: true as const,
-      job: started.job,
-      assessment: started.job.aiAssessment,
+      pendingServiceRequest: normalizePendingServiceRequest(started.pendingServiceRequest),
       pricing: undefined,
       warning: null,
     };
@@ -692,13 +845,14 @@ export async function assessManagedJob(
   const maxAttempts = 50;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     await sleep(3000);
-    const status = await getManagedJobAssessmentStatus(jobId);
+
+    const status = await getPendingServiceRequestAssessmentStatus(pendingServiceRequestId);
     if (!status.ok) continue;
-    if (status.status === "ready" && status.job) {
+
+    if (status.status === "ready" && status.pendingServiceRequest) {
       return {
         ok: true as const,
-        job: status.job,
-        assessment: status.job.aiAssessment,
+        pendingServiceRequest:normalizePendingServiceRequest(status.pendingServiceRequest),
         pricing: status.pricing,
         warning: null,
       };
@@ -1960,3 +2114,78 @@ export function retailRangeLabel(job: ManagedJob) {
 }
 
 export { brand };
+
+export type PendingProfessionalRequest = {
+  id: number;
+  homeownerUserId?: number | null;
+  propertyId?: number | null;
+  status?: string | null;
+  category?: string | null;
+  serviceSubcategory?: string | null;
+  title?: string | null;
+  description?: string | null;
+  mediaDataUrl?: string | null;
+  mediaType?: string | null;
+  serviceTiming?: string | null;
+  preferredDate?: string | null;
+  preferredTimeSlot?: string | null;
+  contactName?: string | null;
+  contactPhone?: string | null;
+  propertyPurpose?: string | null;
+  transactionStage?: string | null;
+  fullAddress?: string | null;
+  cityStateZip?: string | null;
+  streetAddress?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+  country?: string | null;
+  aiAssessment?: StructuredAssessment | null;
+  assessmentResult?: unknown;
+  assessmentStatus?: string | null;
+  pricing?: Record<string, unknown> | null;
+  selectedAction?: string | null;
+  paymentStatus?: string | null;
+  paidAmountCents?: number | null;
+  paidAt?: string | null;
+  stripeSessionId?: string | null;
+  managedJobId?: number | null;
+  convertedAt?: string | null;
+};
+
+export async function getPendingProfessionalRequest(pendingServiceRequestId: number) {
+  return api<{
+    ok: boolean;
+    pendingServiceRequest?: PendingProfessionalRequest;
+    managedJob?: ManagedJob | null;
+    converted?: boolean;
+    message?: string;
+  }>(`/api/pending-service-requests/${pendingServiceRequestId}`);
+}
+
+export async function startPendingProfessionalCheckout(
+  pendingServiceRequestId: number,
+  body: {
+    serviceTiming: string;
+    preferredDate?: string;
+    preferredTimeSlot: string;
+    propertyPurpose: string;
+    transactionStage: string;
+    contactPhone?: string;
+    acknowledged?: boolean;
+    consents?: Record<string, boolean>;
+  }
+) {
+  return api<{
+    ok: boolean;
+    url?: string;
+    amount?: number;
+    amountCents?: number;
+    pendingServiceRequest?: PendingProfessionalRequest;
+    message?: string;
+    code?: string;
+  }>(`/api/pending-service-requests/${pendingServiceRequestId}/professional-checkout`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}

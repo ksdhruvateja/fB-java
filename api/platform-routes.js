@@ -149,6 +149,7 @@ async function startSubscriptionCheckout(pool, {
   origin,
   lookupManagedPlan,
   auditUserId,
+  pendingServiceRequestId,
 }) {
   const plan = await resolveSubscriptionPlan(pool, planCode, lookupManagedPlan);
   if (!plan) {
@@ -210,6 +211,7 @@ async function startSubscriptionCheckout(pool, {
       planCode,
       userId: String(userId),
       jobId: jobId ? String(jobId) : '',
+      pendingServiceRequestId: pendingServiceRequestId ? String(pendingServiceRequestId) : '',
     },
     idempotencyKey: `homecare-${userId}-${planCode}-${Math.floor(Date.now() / 20000)}`,
   });
@@ -699,6 +701,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       const planCode = String(req.body?.planCode || '');
       if (!planCode) return res.status(400).json({ ok: false, message: 'Plan code is required.' });
       const jobId = req.body?.jobId ? Number(req.body.jobId) : null;
+      const pendingServiceRequestId = req.body?.pendingServiceRequestId ? Number(req.body.pendingServiceRequestId) : null;
       const returnTo = String(req.body?.returnTo || '').slice(0, 32);
       const origin = req.get('origin') || req.get('referer');
       const result = await startSubscriptionCheckout(pool, {
@@ -708,6 +711,7 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
         jobId,
         returnTo,
         origin,
+        pendingServiceRequestId,
         lookupManagedPlan,
         auditUserId: req.authUser.id,
       });
