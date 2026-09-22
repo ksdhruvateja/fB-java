@@ -16,6 +16,7 @@ import {
   getStripe,
 } from './stripe.js';
 import { isAdminRole } from './auth-helpers.js';
+import { convertPendingServiceRequest } from './managed-routes.js';
 import { reconcileRefundForJob } from './payment-settlement.js';
 import { FINANCIAL_EVENT, recordFinancialEvent } from './financial-ledger.js';
 import { isPaidHomeCarePlan, PAID_HOME_CARE_PLAN_CODE } from './subscription-catalog.js';
@@ -167,6 +168,30 @@ async function startSubscriptionCheckout(pool, {
   if (isPaidHomeCarePlan(planCode)) {
     const state = await syncUserHomeCareEntitlement(pool, userId, { force: true });
     if (state.isPro) {
+      // A request can have been created before HomeCare was activated. If the
+      // homeowner is already entitled when they return, reconcile that saved
+      // request without creating another Stripe charge.
+      if (pendingServiceRequestId) {
+        try {
+          const converted = await convertPendingServiceRequest(pool, pendingServiceRequestId, {
+            amountCents: 0,
+            homeownerUserId: userId,
+            paymentType: 'subscription_entitlement',
+          });
+          return {
+            alreadySubscribed: true,
+            convertedPendingServiceRequest: Boolean(converted?.job),
+            managedJobId: converted?.job?.id || null,
+            plan: state.effectivePlanCode || state.planCode || planCode,
+            status: state.status || 'active',
+            cancelAtPeriodEnd: state.cancelAtPeriodEnd,
+            subscription: toPublicHomeCareSubscriptionDto(state),
+          };
+        } catch (conversionError) {
+          console.error('[PENDING SERVICE REQUEST] already-subscribed conversion failed:', conversionError?.message || conversionError);
+          // Do not block an otherwise valid HomeCare entitlement.
+        }
+      }
       return {
         alreadySubscribed: true,
         plan: state.effectivePlanCode || state.planCode || planCode,
@@ -185,16 +210,47 @@ async function startSubscriptionCheckout(pool, {
 
   assertPaymentsAvailable();
 
+  if (pendingServiceRequestId) {
+    const { rows: pendingRows } = await pool.query(
+      `SELECT id, homeowner_user_id, status
+         FROM pending_service_requests
+        WHERE id=$1`,
+      [pendingServiceRequestId]
+    );
+    const pending = pendingRows[0];
+    if (!pending) {
+      const err = new Error('Saved service request not found.');
+      err.status = 404;
+      err.code = 'PENDING_SERVICE_REQUEST_NOT_FOUND';
+      throw err;
+    }
+    if (Number(pending.homeowner_user_id) !== Number(userId)) {
+      const err = new Error('You cannot use another homeowner\'s saved service request.');
+      err.status = 403;
+      err.code = 'PENDING_SERVICE_REQUEST_OWNER_MISMATCH';
+      throw err;
+    }
+    if (String(pending.status || '').toLowerCase() === 'converted') {
+      const err = new Error('This saved service request has already been converted.');
+      err.status = 409;
+      err.code = 'PENDING_SERVICE_REQUEST_ALREADY_CONVERTED';
+      throw err;
+    }
+  }
+
   const returnFeature = ['diy', 'report', 'hire', 'passport', 'dashboard'].includes(String(returnTo || ''))
     ? String(returnTo)
     : '';
   const returnQuery = returnFeature ? `&returnTo=${encodeURIComponent(returnFeature)}` : '';
+  const pendingQuery = pendingServiceRequestId
+    ? `&pendingServiceRequestId=${encodeURIComponent(String(pendingServiceRequestId))}`
+    : '';
   const successPath = jobId
-    ? `/?paid=subscription&plan=${encodeURIComponent(planCode)}&jobId=${jobId}${returnQuery}`
-    : `/?paid=subscription&plan=${encodeURIComponent(planCode)}${returnQuery}`;
+    ? `/?paid=subscription&plan=${encodeURIComponent(planCode)}&jobId=${jobId}${pendingQuery}${returnQuery}`
+    : `/?paid=subscription&plan=${encodeURIComponent(planCode)}${pendingQuery}${returnQuery}`;
   const cancelPath = jobId
-    ? `/?canceled=subscription&plan=${encodeURIComponent(planCode)}&jobId=${jobId}`
-    : `/?canceled=subscription&plan=${encodeURIComponent(planCode)}`;
+    ? `/?canceled=subscription&plan=${encodeURIComponent(planCode)}&jobId=${jobId}${pendingQuery}`
+    : `/?canceled=subscription&plan=${encodeURIComponent(planCode)}${pendingQuery}`;
 
   const checkout = await createCheckoutSession({
     amountCents: Math.round(amount * 100),
@@ -219,7 +275,15 @@ async function startSubscriptionCheckout(pool, {
   await pool.query(
     `INSERT INTO payments (user_id, payment_type, amount, currency, status, stripe_session_id, provider, simulated, meta)
      VALUES ($1,'subscription',$2,'usd','pending',$3,'stripe',false,$4)`,
-    [userId, amount, checkout.sessionId, JSON.stringify({ planCode })]
+    [
+      userId,
+      amount,
+      checkout.sessionId,
+      JSON.stringify({
+        planCode,
+        pendingServiceRequestId: pendingServiceRequestId || null,
+      }),
+    ]
   );
   return { simulated: false, url: checkout.url };
 }
@@ -719,6 +783,8 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
         return res.json({
           ok: true,
           alreadySubscribed: true,
+          convertedPendingServiceRequest: Boolean(result.convertedPendingServiceRequest),
+          managedJobId: result.managedJobId || null,
           plan: result.plan,
           status: result.status || 'active',
           subscription: result.subscription,

@@ -44,6 +44,8 @@ export async function startSubscription(planCode: string, jobId?: number, return
     message?: string;
     code?: string;
     alreadySubscribed?: boolean;
+    convertedPendingServiceRequest?: boolean;
+    managedJobId?: number | null;
     plan?: string;
     status?: string;
     subscription?: unknown;

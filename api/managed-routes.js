@@ -1730,12 +1730,22 @@ async function ensureQuoteNumber(pool, proposalId) {
 
 
 
-/** Convert a paid pending service request into the normal managed-job workflow. */
+/** Convert a paid pending service request into the normal managed-job workflow.
+ *
+ * This is intentionally transactional and idempotent:
+ *  - Stripe/webhook/auth-me retries cannot create a second managed job.
+ *  - the pending row is deleted only after the managed job has been committed.
+ *  - all homeowner/request data needed by the managed workflow is copied forward.
+ */
 export async function convertPendingServiceRequest(pool, pendingServiceRequestId, payment = {}) {
   const pendingId = Number(pendingServiceRequestId);
   if (!Number.isFinite(pendingId) || pendingId <= 0) {
     throw Object.assign(new Error('Invalid pending service request.'), { code: 'INVALID_PENDING_SERVICE_REQUEST' });
   }
+
+  const expectedHomeownerId = Number(payment.homeownerUserId || 0) || null;
+  const stripeSessionId = payment.stripeSessionId || null;
+  const stripePaymentIntentId = payment.stripePaymentIntentId || null;
 
   const client = await pool.connect();
   try {
@@ -1746,8 +1756,61 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
       [pendingId]
     );
     const pending = rows[0];
+
+    // The pending row is deliberately deleted after conversion. A retry therefore
+    // needs another idempotency path instead of treating "not found" as failure.
     if (!pending) {
-      throw Object.assign(new Error('Pending service request not found.'), { code: 'PENDING_SERVICE_REQUEST_NOT_FOUND' });
+      let existingJob = null;
+
+      if (stripeSessionId) {
+        const { rows: paymentRows } = await client.query(
+          `SELECT job_id
+             FROM payments
+            WHERE stripe_session_id=$1
+              AND job_id IS NOT NULL
+            ORDER BY id DESC
+            LIMIT 1`,
+          [stripeSessionId]
+        );
+        const existingJobId = Number(paymentRows[0]?.job_id || 0);
+        if (existingJobId > 0) {
+          const { rows: jobRows } = await client.query(
+            `SELECT * FROM managed_jobs WHERE id=$1`,
+            [existingJobId]
+          );
+          existingJob = jobRows[0] || null;
+        }
+      }
+
+      if (!existingJob && stripePaymentIntentId) {
+        const { rows: jobRows } = await client.query(
+          `SELECT *
+             FROM managed_jobs
+            WHERE stripe_payment_intent_id=$1
+            ORDER BY id DESC
+            LIMIT 1`,
+          [stripePaymentIntentId]
+        );
+        existingJob = jobRows[0] || null;
+      }
+
+      if (existingJob && (!expectedHomeownerId || Number(existingJob.homeowner_user_id) === expectedHomeownerId)) {
+        await client.query('COMMIT');
+        return { ok: true, alreadyConverted: true, job: existingJob };
+      }
+
+      throw Object.assign(new Error('Pending service request not found.'), {
+        code: 'PENDING_SERVICE_REQUEST_NOT_FOUND',
+      });
+    }
+
+    if (
+      expectedHomeownerId &&
+      Number(pending.homeowner_user_id) !== expectedHomeownerId
+    ) {
+      throw Object.assign(new Error('Pending service request does not belong to the payment owner.'), {
+        code: 'PENDING_SERVICE_REQUEST_OWNER_MISMATCH',
+      });
     }
 
     if (pending.managed_job_id) {
@@ -1755,14 +1818,28 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
         `SELECT * FROM managed_jobs WHERE id=$1`,
         [pending.managed_job_id]
       );
-      await client.query('COMMIT');
-      return { ok: true, alreadyConverted: true, job: existing[0] || null };
+      if (existing[0]) {
+        await client.query(`DELETE FROM pending_service_requests WHERE id=$1`, [pendingId]);
+        await client.query('COMMIT');
+        return { ok: true, alreadyConverted: true, job: existing[0] };
+      }
     }
 
-    const paidAmountCents = Number(payment.amountCents ?? pending.paid_amount_cents ?? 12500);
+    const paidAmountCents = Number(
+      payment.amountCents ??
+      pending.paid_amount_cents ??
+      0
+    );
     const paidAmount = Math.max(0, paidAmountCents) / 100;
     const bookingDate = pending.created_at || new Date();
+    const paymentType = String(payment.paymentType || 'pending_professional_fee');
+    const isProfessionalPayment = paymentType === 'pending_professional_fee';
 
+    /*
+     * Copy the request fields that belong to managed_jobs. Keep payment/temporary
+     * pending-only fields out of the job and explicitly set the workflow fields
+     * that must change at conversion time.
+     */
     const { rows: jobs } = await client.query(
       `INSERT INTO managed_jobs (
         homeowner_user_id,
@@ -1779,17 +1856,30 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
         service_timing,
         city_state_zip,
         full_address,
-        contact_name,
-        contact_phone,
-        property_purpose,
-        transaction_stage,
-        partner_code,
-        discount_code,
         street_address,
         city,
         state,
         zip,
         country,
+        contact_name,
+        contact_phone,
+        property_purpose,
+        transaction_stage,
+        listing_deadline,
+        closing_deadline,
+        inspection_report_url,
+        listing_reference_url,
+        property_opportunity_notes,
+        partner_code,
+        referral_source,
+        referring_name,
+        referring_company,
+        referring_email,
+        referring_phone,
+        customer_partner_status_consent,
+        consent_timestamp,
+        consent_version,
+        discount_code,
         job_mode,
         ai_assessment,
         pricing,
@@ -1811,9 +1901,10 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
         stripe_payment_intent_id,
         work_queue_status
       ) VALUES (
-        $1,$2,'paid_for_dispatch',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-        $16,$17,$18,$19,$20,$21,$22,$23,$24,'managed',$25,$26,'ready',NULL,NOW(),
-        $27,$28,$29,$30,$31,$32,$33,$34,true,$35,$35,NOW(),$36,'PAID_NEEDS_REVIEW'
+        $1,$2,'paid_for_dispatch',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
+        $14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,
+        $30,$31,$32,$33,$34,$35,$36,$37,'managed',$38,$39,'ready',NULL,NULL,NOW(),
+        $40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,NOW(),$51,'PAID_NEEDS_REVIEW'
       )
       RETURNING *`,
       [
@@ -1830,17 +1921,30 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
         pending.service_timing || 'weekday',
         pending.city_state_zip || 'TBD',
         pending.full_address || 'TBD',
-        pending.contact_name || null,
-        pending.contact_phone || null,
-        pending.property_purpose || null,
-        pending.transaction_stage || null,
-        pending.partner_code || null,
-        pending.discount_code || null,
         pending.street_address || null,
         pending.city || null,
         pending.state || null,
         pending.zip || null,
         pending.country || 'US',
+        pending.contact_name || null,
+        pending.contact_phone || null,
+        pending.property_purpose || null,
+        pending.transaction_stage || null,
+        pending.listing_deadline || null,
+        pending.closing_deadline || null,
+        pending.inspection_report_url || null,
+        pending.listing_reference_url || null,
+        pending.property_opportunity_notes || null,
+        pending.partner_code || null,
+        pending.referral_source || null,
+        pending.referring_name || null,
+        pending.referring_company || null,
+        pending.referring_email || null,
+        pending.referring_phone || null,
+        pending.customer_partner_status_consent === true,
+        pending.consent_timestamp || null,
+        pending.consent_version || null,
+        pending.discount_code || null,
         pending.ai_assessment || pending.assessment_result || null,
         pending.pricing || null,
         pending.show_retail_price !== false,
@@ -1851,33 +1955,78 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
         pending.diy_risk_level || null,
         pending.estimate_confidence || null,
         pending.similar_jobs_count || 0,
-        paidAmount,
+        isProfessionalPayment,
+        isProfessionalPayment ? paidAmount : null,
+        isProfessionalPayment ? paidAmount : null,
         payment.stripePaymentIntentId || pending.stripe_payment_intent_id || null,
       ]
     );
 
     const job = jobs[0];
     const bookingId = formatBookingId(job.id, bookingDate);
-    await client.query(`UPDATE managed_jobs SET booking_id=$1 WHERE id=$2`, [bookingId, job.id]);
+    await client.query(
+      `UPDATE managed_jobs
+          SET booking_id=$1,
+              updated_at=NOW()
+        WHERE id=$2`,
+      [bookingId, job.id]
+    );
     job.booking_id = bookingId;
 
-    await client.query(
-      `UPDATE pending_service_requests SET
-         status='converted',
-         selected_action='hire',
-         payment_status='succeeded',
-         paid_amount_cents=$2,
-         paid_at=COALESCE(paid_at, NOW()),
-         stripe_payment_intent_id=COALESCE($3, stripe_payment_intent_id),
-         managed_job_id=$4,
-         converted_at=COALESCE(converted_at, NOW()),
-         updated_at=NOW()
-       WHERE id=$1`,
-      [pendingId, paidAmountCents, payment.stripePaymentIntentId || null, job.id]
+    // The payment belongs to the newly-created managed job. This makes a webhook
+    // retry safely idempotent even though the pending row is now gone.
+    if (stripeSessionId) {
+      await client.query(
+        `UPDATE payments
+            SET job_id=$1,
+                status='succeeded',
+                stripe_payment_intent=COALESCE($2, stripe_payment_intent)
+          WHERE stripe_session_id=$3
+            AND (job_id IS NULL OR job_id=$1)`,
+        [job.id, stripePaymentIntentId, stripeSessionId]
+      );
+    }
+
+    // IMPORTANT: delete the exact pending row. It is no longer the source of truth
+    // once the managed job exists.
+    const deleted = await client.query(
+      `DELETE FROM pending_service_requests WHERE id=$1 RETURNING id`,
+      [pendingId]
     );
+    if (!deleted.rows[0]) {
+      throw Object.assign(new Error('Pending service request could not be finalized.'), {
+        code: 'PENDING_SERVICE_REQUEST_DELETE_FAILED',
+      });
+    }
 
     await client.query('COMMIT');
-    return { ok: true, alreadyConverted: false, job };
+
+    // Admin notification is part of the conversion contract. It runs after the
+    // database transaction so a mail/notification failure can never roll back
+    // a successful payment conversion.
+    let adminNotified = false;
+    if (paymentType === 'pending_professional_fee' || paymentType === 'subscription') {
+      try {
+        const { rows: homeowners } = await pool.query(
+          `SELECT id, name, email FROM users WHERE id=$1`,
+          [pending.homeowner_user_id]
+        );
+        await notifyAdminsDispatchServiceRequest(pool, {
+          job,
+          homeowner: homeowners[0] || { name: null, email: null },
+          amount: paidAmount,
+          discountCode: pending.discount_code || null,
+        });
+        adminNotified = true;
+      } catch (notifyError) {
+        console.warn(
+          '[PENDING SERVICE REQUEST] admin notification failed:',
+          notifyError?.message || notifyError
+        );
+      }
+    }
+
+    return { ok: true, alreadyConverted: false, job, adminNotified };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     throw err;
@@ -3864,6 +4013,26 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
+  app.get('/api/pending-service-requests/my', requireAuth, async (req, res) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT *
+           FROM pending_service_requests
+          WHERE homeowner_user_id=$1
+            AND COALESCE(status,'pending') <> 'converted'
+          ORDER BY COALESCE(updated_at, created_at) DESC, id DESC`,
+        [req.authUser.id]
+      );
+      return res.json({ ok: true, pendingServiceRequests: rows });
+    } catch (e) {
+      console.error('pending-service-requests my:', e);
+      return res.status(500).json({
+        ok: false,
+        message: 'Could not load saved service requests.',
+      });
+    }
+  });
+
   app.get('/api/pending-service-requests/:id', requireAuth, async (req, res) => {
     try {
       const pendingId = Number(req.params.id);
@@ -3872,7 +4041,37 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
       const { rows } = await pool.query(`SELECT * FROM pending_service_requests WHERE id=$1`, [pendingId]);
       const pending = rows[0];
-      if (!pending) return res.status(404).json({ ok: false, message: 'Pending service request not found.' });
+
+      // Converted pending requests are intentionally deleted. Resolve the
+      // historical request ID through the payment metadata so the Stripe
+      // return page can still discover the newly-created managed job.
+      if (!pending) {
+        const { rows: convertedRows } = await pool.query(
+          `SELECT j.*
+             FROM payments p
+             JOIN managed_jobs j ON j.id=p.job_id
+            WHERE p.user_id=$1
+              AND p.job_id IS NOT NULL
+              AND (
+                p.meta->>'pendingServiceRequestId'=$2
+                OR p.meta->>'pending_service_request_id'=$2
+              )
+            ORDER BY p.id DESC
+            LIMIT 1`,
+          [req.authUser.id, String(pendingId)]
+        );
+        const convertedJob = convertedRows[0];
+        if (convertedJob) {
+          return res.json({
+            ok: true,
+            pendingServiceRequest: undefined,
+            managedJob: serializeJob(convertedJob, req.authUser),
+            converted: true,
+          });
+        }
+        return res.status(404).json({ ok: false, message: 'Pending service request not found.' });
+      }
+
       if (Number(pending.homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
@@ -3971,6 +4170,36 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       await pool.query(
         `UPDATE pending_service_requests SET stripe_session_id=$2, updated_at=NOW() WHERE id=$1`,
         [pendingId, checkout.sessionId]
+      );
+
+      // Create the payment row before redirecting to Stripe. This gives the
+      // authenticated post-return sync a durable reconciliation record even
+      // when Stripe's webhook arrives late or is temporarily unavailable.
+      await pool.query(
+        `INSERT INTO payments (
+           user_id,
+           payment_type,
+           amount,
+           currency,
+           status,
+           stripe_session_id,
+           provider,
+           simulated,
+           meta
+         )
+         SELECT $1,'pending_professional_fee',$2,'usd','pending',$3,'stripe',false,$4
+          WHERE NOT EXISTS (
+            SELECT 1 FROM payments WHERE stripe_session_id=$3
+          )`,
+        [
+          req.authUser.id,
+          amountCents / 100,
+          checkout.sessionId,
+          JSON.stringify({
+            pendingServiceRequestId: pendingId,
+            source: 'pending_service_request_checkout',
+          }),
+        ]
       );
 
       return res.json({ ok: true, url: checkout.url, amount: 125, amountCents, pendingServiceRequestId: pendingId });
@@ -8601,7 +8830,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           if (amountCents !== 12500) {
             return res.status(400).json({ ok: false, message: 'Pending professional payment amount mismatch.' });
           }
-          await pool.query(
+          const pendingPaymentUpdate = await pool.query(
             `UPDATE pending_service_requests SET
                payment_status='succeeded',
                stripe_session_id=COALESCE(stripe_session_id,$2),
@@ -8612,38 +8841,61 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
              WHERE id=$1 AND homeowner_user_id=$5`,
             [pendingId, session.id, session.payment_intent || null, amountCents, userId]
           );
+
+          // If auth/me already reconciled the Stripe return, the pending row
+          // has been deleted. convertPendingServiceRequest() handles that
+          // idempotently through the payment/job linkage.
+          if (!pendingPaymentUpdate.rowCount) {
+            console.info(
+              '[PENDING SERVICE REQUEST] webhook found no pending row; checking idempotent conversion:',
+              pendingId
+            );
+          }
+
           const converted = await convertPendingServiceRequest(pool, pendingId, {
             amountCents,
+            stripeSessionId: session.id,
             stripePaymentIntentId: session.payment_intent || null,
+            homeownerUserId: userId || null,
+            paymentType: 'pending_professional_fee',
           });
           if (converted.job) {
-            await pool.query(
-              `INSERT INTO payments (job_id,user_id,payment_type,amount,status,stripe_session_id,stripe_payment_intent,simulated,meta)
-               VALUES ($1,$2,'pending_professional_fee',$3,'succeeded',$4,$5,false,$6)`,
+            const paymentMeta = JSON.stringify({
+              source: 'pending_service_request',
+              pendingServiceRequestId: pendingId,
+            });
+            const paymentUpdate = await pool.query(
+              `UPDATE payments SET
+                 job_id=$1,
+                 status='succeeded',
+                 stripe_payment_intent=COALESCE($2, stripe_payment_intent),
+                 provider='stripe',
+                 simulated=false,
+                 meta=COALESCE(meta,'{}'::jsonb) || $3::jsonb
+               WHERE stripe_session_id=$4
+               RETURNING id`,
               [
                 converted.job.id,
-                userId || converted.job.homeowner_user_id,
-                125,
-                session.id,
                 session.payment_intent || null,
-                JSON.stringify({ source: 'pending_service_request', pendingServiceRequestId: pendingId }),
+                paymentMeta,
+                session.id,
               ]
             );
-            await pushStatus(pool, converted.job.id, 'paid_for_dispatch', 'awaiting_contractor', null, 'Ready for Admin review after pending-service conversion');
-            try {
-              const { rows: jobRows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [converted.job.id]);
-              const { rows: userRows } = userId ? await pool.query(`SELECT id,name,email FROM users WHERE id=$1`, [userId]) : { rows: [] };
-              if (jobRows[0]) {
-                await notifyAdminsDispatchServiceRequest(pool, {
-                  job: { ...jobRows[0], work_queue_status: 'PAID_NEEDS_REVIEW' },
-                  homeowner: userRows[0] || { name: session.customer_email, email: session.customer_email },
-                  amount: 125,
-                  discountCode: null,
-                });
-              }
-            } catch (notifyErr) {
-              console.warn('pending professional conversion notification:', notifyErr?.message || notifyErr);
+            if (!paymentUpdate.rows[0]) {
+              await pool.query(
+                `INSERT INTO payments (job_id,user_id,payment_type,amount,status,stripe_session_id,stripe_payment_intent,simulated,meta)
+                 VALUES ($1,$2,'pending_professional_fee',$3,'succeeded',$4,$5,false,$6)`,
+                [
+                  converted.job.id,
+                  userId || converted.job.homeowner_user_id,
+                  125,
+                  session.id,
+                  session.payment_intent || null,
+                  paymentMeta,
+                ]
+              );
             }
+            await pushStatus(pool, converted.job.id, 'paid_for_dispatch', 'awaiting_contractor', null, 'Ready for Admin review after pending-service conversion');
           }
           return res.json({ ok: true, converted: Boolean(converted.job), managedJobId: converted.job?.id || null });
         }
@@ -8875,7 +9127,10 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
               {
                 amountCents: pendingAmountCents,
                 paymentStatus: pendingPaymentStatus,
+                stripeSessionId: session.id,
                 stripePaymentIntentId: session.payment_intent || null,
+                homeownerUserId: userId || null,
+                paymentType: 'subscription',
               }
             );
 

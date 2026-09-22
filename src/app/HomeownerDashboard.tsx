@@ -39,6 +39,8 @@ import {
   type Property,
   type Proposal,
   assessPendingServiceRequest,
+  listPendingServiceRequests,
+  getPendingProfessionalRequest,
 } from "./managedJobs";
 import { cancelHomeCareSubscription, openHomeCareBillingPortal, resumeHomeCareSubscription, startSubscription } from "./platformApi";
 import { listGoProPlans } from "./subscriptionPlansApi";
@@ -424,6 +426,7 @@ export default function HomeownerDashboard({
   const [error, setError] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
   const [pendingServiceRequestId, setPendingServiceRequestId] = useState<number | null>(null);
+  const [savedPendingRequests, setSavedPendingRequests] = useState<PendingProfessionalRequest[]>([]);
   const [pendingAssessment, setPendingAssessment] = useState<PendingAssessmentSuccess | null>(null);
   const [jobFocus, setJobFocus] = useState<"quote" | "invoice" | "tracking" | "completion" | "dispute" | null>(null);
   const [inboxConversationId, setInboxConversationId] = useState<number | null>(null);
@@ -1250,6 +1253,77 @@ export default function HomeownerDashboard({
     goBack();
   }
 
+  async function reopenPendingServiceRequest(id: number) {
+    setError(null);
+    setBusy(true);
+    try {
+      const loaded = await getPendingProfessionalRequest(id);
+      if (!loaded.ok || !loaded.pendingServiceRequest) {
+        setError(loaded.message || "This saved request is no longer available.");
+        return;
+      }
+
+      const request = loaded.pendingServiceRequest;
+      if (loaded.managedJob) {
+        setActiveJob(loaded.managedJob);
+        setSelectedJobId(loaded.managedJob.id);
+        setSavedPendingRequests((prev) => prev.filter((item) => item.id !== id));
+        navigateTo({
+          role: "homeowner",
+          tab: "jobs",
+          jobId: loaded.managedJob.id,
+          jobsSegment: "active",
+        });
+        return;
+      }
+
+      const assessed = await assessPendingServiceRequest(id);
+      if (!assessed.ok || !assessed.pendingServiceRequest) {
+        setPendingServiceRequestId(id);
+        setPendingAssessment(null);
+        setAssessmentMode("expert");
+        setReportPath("experts");
+        setStep("assessment");
+        navigateTo({
+          role: "homeowner",
+          tab: "report",
+          reportStep: "assessment",
+          reportPath: "experts",
+          jobId: null,
+        });
+        setError(
+          assessed.message ||
+          "This saved request needs its Fixera assessment to finish before you can continue."
+        );
+        return;
+      }
+
+      setPendingServiceRequestId(id);
+      setPendingAssessment(assessed);
+      setActiveJob(null);
+      setSelectedJobId(null);
+      setAssessmentMode(
+        request.selectedAction === "hire" || request.selectedAction === "homecare"
+          ? "expert"
+          : "diy"
+      );
+      setReportPath("experts");
+      setStep("assessment");
+      navigateTo({
+        role: "homeowner",
+        tab: "report",
+        reportStep: "assessment",
+        reportPath: "experts",
+        jobId: null,
+      });
+      scrollReportToTop();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not reopen the saved request.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function refresh() {
     const started = performance.now();
     if (jobs.length === 0) setLoading(true);
@@ -1269,8 +1343,15 @@ export default function HomeownerDashboard({
       })
       .catch(() => ({ ok: false as const }))
       .finally(() => setPropertiesLoading(false));
-    const [j, p] = await Promise.all([jobsPromise, propsPromise]);
-    if (!j.ok && !p.ok) setError("Could not load your account data.");
+    const pendingPromise = listPendingServiceRequests()
+      .then((r) => {
+        if (r.ok) setSavedPendingRequests(r.pendingServiceRequests || []);
+        return r;
+      })
+      .catch(() => ({ ok: false as const }))
+      ;
+    const [j, p, pending] = await Promise.all([jobsPromise, propsPromise, pendingPromise]);
+    if (!j.ok && !p.ok && !pending.ok) setError("Could not load your account data.");
     console.info(JSON.stringify({
       event: "dashboard_data",
       durationMs: Math.round(performance.now() - started),
@@ -1604,6 +1685,62 @@ export default function HomeownerDashboard({
         })();
       }
 
+      const pendingReturnId = Number(sessionStorage.getItem("fixbridge-pending-service-request-id") || 0);
+      const pendingReturnResult = sessionStorage.getItem("fixbridge-pending-service-request-result");
+
+      if (pendingReturnId > 0 && pendingReturnResult) {
+        sessionStorage.removeItem("fixbridge-pending-service-request-id");
+        sessionStorage.removeItem("fixbridge-pending-service-request-result");
+
+        if (pendingReturnResult === "canceled") {
+          setError("Payment was not completed. Your saved request is still available.");
+          setPendingServiceRequestId(pendingReturnId);
+          navigateTab("overview");
+          void refresh();
+        } else {
+          setDispatchSuccessMsg("Payment received. Confirming your service request…");
+          setTab("report");
+          setStep("assessment");
+          setAssessmentMode("expert");
+          setReportPath("experts");
+          setPendingServiceRequestId(pendingReturnId);
+
+          void (async () => {
+            for (let i = 0; i < 15; i++) {
+              try {
+                const result = await getPendingProfessionalRequest(pendingReturnId);
+                if (result.ok && result.managedJob) {
+                  setActiveJob(result.managedJob);
+                  setSelectedJobId(result.managedJob.id);
+                  setPendingAssessment(null);
+                  setSavedPendingRequests((prev) => prev.filter((item) => item.id !== pendingReturnId));
+                  setDispatchSuccessMsg("Payment successful. Your professional request is now a managed job.");
+                  await refresh();
+                  return;
+                }
+
+                if (result.ok && result.pendingServiceRequest) {
+                  const assessed = await assessPendingServiceRequest(pendingReturnId);
+                  if (assessed.ok && assessed.pendingServiceRequest) {
+                    setPendingAssessment(assessed);
+                    setDispatchSuccessMsg(null);
+                    return;
+                  }
+                }
+              } catch {
+                /* keep polling */
+              }
+              await new Promise((resolve) => setTimeout(resolve, 1500));
+            }
+
+            setDispatchSuccessMsg(null);
+            setError(
+              "Payment was received, but the service request is still being finalized. Refresh in a moment — do not pay again."
+            );
+          })();
+        }
+      }
+
       const stripeJobId = sessionStorage.getItem("fixbridge-stripe-active-job-id");
       const dispatchConfirming = sessionStorage.getItem("fixbridge-dispatch-confirming") === "1";
       const dispatchCanceled = sessionStorage.getItem("fixbridge-dispatch-canceled") === "1";
@@ -1728,7 +1865,10 @@ export default function HomeownerDashboard({
   }, [selectedJobId, jobs, step, tab]);
 
   async function handleSubscribe(jobId?: number, planCode = PAID_HOME_CARE_PLAN_CODE) {
-    if (user.homeCareSubscription?.isPro) {
+    // If a saved request exists, still reconcile it even when HomeCare Pro is
+    // already active. The backend will convert the pending request without
+    // starting another Stripe checkout.
+    if (user.homeCareSubscription?.isPro && pendingServiceRequestId == null) {
       setError(null);
       return;
     }
@@ -1750,6 +1890,23 @@ export default function HomeownerDashboard({
       if (r.alreadySubscribed) {
         const me = await validateToken({ syncCheckout: true });
         if (me.ok) onUserUpdated?.(me.user);
+        if (r.managedJobId) {
+          const managed = await getManagedJob(Number(r.managedJobId));
+          if (managed.ok && managed.job) {
+            setActiveJob(managed.job);
+            setSelectedJobId(managed.job.id);
+            setPendingServiceRequestId(null);
+            setPendingAssessment(null);
+            setSavedPendingRequests((prev) => prev.filter((item) => item.id !== pendingServiceRequestId));
+            navigateTo({
+              role: "homeowner",
+              tab: "jobs",
+              jobId: managed.job.id,
+              jobsSegment: "active",
+            });
+          }
+        }
+        await refresh();
         setError(null);
         return;
       }
@@ -3043,6 +3200,60 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                     </button>
                   </div>
                 ) : null}
+                {savedPendingRequests.length > 0 ? (
+                  <motion.section
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mx-auto max-w-5xl overflow-hidden rounded-[1.5rem] border border-[#FF4D1C]/20 bg-gradient-to-br from-[#FFF8F4] via-white to-[#F3FAF8] shadow-sm dark:from-[#2a1812] dark:via-card dark:to-[#142a28]"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#FF4D1C]/10 px-5 py-4 sm:px-6">
+                      <div className="flex items-start gap-3">
+                        <span className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-[#FF4D1C]/10 text-[#FF4D1C]">
+                          <Clock className="h-4 w-4" />
+                        </span>
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#FF4D1C]">Saved service requests</p>
+                          <h2 className="mt-0.5 text-base font-bold">Pick up where you left off</h2>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Your Fixera assessment stays saved until you choose a path.
+                          </p>
+                        </div>
+                      </div>
+                      <span className="rounded-full bg-[#FF4D1C]/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-[#FF4D1C]">
+                        {savedPendingRequests.length} open
+                      </span>
+                    </div>
+                    <div className="grid gap-3 p-4 sm:grid-cols-2 sm:p-5">
+                      {savedPendingRequests.slice(0, 4).map((request) => (
+                        <button
+                          key={request.id}
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void reopenPendingServiceRequest(request.id)}
+                          className="group rounded-2xl border border-border/70 bg-background/80 p-4 text-left transition hover:-translate-y-0.5 hover:border-[#FF4D1C]/40 hover:shadow-md disabled:opacity-60"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-bold">{request.title || request.category || "Service request"}</p>
+                              <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                                {request.description || "Saved Fixera service request"}
+                              </p>
+                            </div>
+                            <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-[#FF4D1C] transition-transform group-hover:translate-x-0.5" />
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-1.5">
+                            <span className="rounded-full bg-muted px-2 py-1 text-[10px] font-semibold capitalize">
+                              {request.assessmentStatus === "ready" ? "Assessment ready" : "Assessment saved"}
+                            </span>
+                            <span className="rounded-full bg-muted px-2 py-1 text-[10px] font-semibold">
+                              Request #{request.id}
+                            </span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </motion.section>
+                ) : null}
                 <HomeownerOverview
                   userName={user.name || "there"}
                   property={primaryProperty}
@@ -3777,31 +3988,69 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
 
                     {pendingAssessment?.pendingServiceRequest?.aiAssessment ? (
                       <div className="space-y-4">
-                        {/* Pending service request mode selector.
-                            This mirrors the existing managed-job selector but does not
-                            depend on activeJob/selectedJobId because pending requests
-                            do not have a managed job yet. */}
-                        <div className="flex border-b border-border">
-                          <button
-                            type="button"
-                            onClick={() => setAssessmentMode("diy")}
-                            className={`flex-1 pb-3 text-center text-sm font-semibold border-b-2 transition ${assessmentMode === "diy"
-                              ? "border-[#FF4D1C] text-[#FF4D1C]"
-                              : "border-transparent text-muted-foreground hover:text-foreground"
-                              }`}
-                          >
-                            Do It Yourself (DIY)
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setAssessmentMode("expert")}
-                            className={`flex-1 pb-3 text-center text-sm font-semibold border-b-2 transition ${assessmentMode === "expert"
-                              ? "border-[#FF4D1C] text-[#FF4D1C]"
-                              : "border-transparent text-muted-foreground hover:text-foreground"
-                              }`}
-                          >
-                            Hire a Professional
-                          </button>
+                        <div className="rounded-[1.35rem] border border-border/70 bg-gradient-to-r from-background via-background to-[#FFF7F3] p-4 dark:to-[#241710] sm:p-5">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#FF4D1C]">Your next step</p>
+                              <h3 className="mt-1 text-lg font-bold">Choose how you want to handle this repair</h3>
+                              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
+                                Nothing has been submitted to a contractor yet. Your request stays saved until you choose a path.
+                              </p>
+                            </div>
+                            <span className="rounded-full border border-[#FF4D1C]/20 bg-[#FF4D1C]/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-[#FF4D1C]">
+                              Pending request
+                            </span>
+                          </div>
+
+                          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                            <button
+                              type="button"
+                              onClick={() => setAssessmentMode("diy")}
+                              className={`group rounded-2xl border p-4 text-left transition ${assessmentMode === "diy"
+                                ? "border-[#FF4D1C] bg-[#FF4D1C]/8 ring-2 ring-[#FF4D1C]/10"
+                                : "border-border/70 bg-background/70 hover:border-[#FF4D1C]/35"
+                                }`}
+                            >
+                              <div className="flex items-start gap-3">
+                                <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${assessmentMode === "diy" ? "bg-[#FF4D1C] text-white" : "bg-muted text-[#FF4D1C]"}`}>
+                                  <Wrench className="h-5 w-5" />
+                                </span>
+                                <span>
+                                  <span className="flex items-center gap-2 text-sm font-bold">
+                                    DIY with Fixera
+                                    {assessmentMode === "diy" ? <CheckCircle className="h-4 w-4 text-[#FF4D1C]" /> : null}
+                                  </span>
+                                  <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+                                    Use the assessment and, when eligible, unlock the guided HomeCare Pro action plan.
+                                  </span>
+                                </span>
+                              </div>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setAssessmentMode("expert")}
+                              className={`group rounded-2xl border p-4 text-left transition ${assessmentMode === "expert"
+                                ? "border-[#FF4D1C] bg-[#FF4D1C]/8 ring-2 ring-[#FF4D1C]/10"
+                                : "border-border/70 bg-background/70 hover:border-[#FF4D1C]/35"
+                                }`}
+                            >
+                              <div className="flex items-start gap-3">
+                                <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${assessmentMode === "expert" ? "bg-[#FF4D1C] text-white" : "bg-muted text-[#FF4D1C]"}`}>
+                                  <HardHat className="h-5 w-5" />
+                                </span>
+                                <span>
+                                  <span className="flex items-center gap-2 text-sm font-bold">
+                                    Hire a Professional
+                                    {assessmentMode === "expert" ? <CheckCircle className="h-4 w-4 text-[#FF4D1C]" /> : null}
+                                  </span>
+                                  <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+                                    Choose a service window, review the professional-service payment, then send it to Admin.
+                                  </span>
+                                </span>
+                              </div>
+                            </button>
+                          </div>
                         </div>
 
                         <div className="fixera-card p-4">

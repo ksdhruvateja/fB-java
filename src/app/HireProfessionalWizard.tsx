@@ -806,8 +806,18 @@ function PendingHireProfessionalWizard({
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const paid = params.get("paid") === "pending-professional";
-    const returnedId = Number(params.get("pendingServiceRequestId"));
+    const urlPaid = params.get("paid") === "pending-professional";
+    const urlReturnedId = Number(params.get("pendingServiceRequestId"));
+    let storedId = 0;
+    let storedResult = "";
+    try {
+      storedId = Number(sessionStorage.getItem("fixbridge-pending-service-request-id") || 0);
+      storedResult = sessionStorage.getItem("fixbridge-pending-service-request-result") || "";
+    } catch {
+      // non-fatal
+    }
+    const returnedId = urlReturnedId || storedId;
+    const paid = urlPaid || storedResult === "paid";
     if (!paid || returnedId !== Number(pendingServiceRequest.id)) return;
 
     let cancelled = false;
@@ -816,6 +826,12 @@ function PendingHireProfessionalWizard({
       const result = await getPendingProfessionalRequest(pendingServiceRequest.id);
       if (cancelled) return;
       if (result.ok && result.managedJob) {
+        try {
+          sessionStorage.removeItem("fixbridge-pending-service-request-id");
+          sessionStorage.removeItem("fixbridge-pending-service-request-result");
+        } catch {
+          // non-fatal
+        }
         setConvertedJob(result.managedJob);
         await onPaid?.(result.managedJob);
         return;

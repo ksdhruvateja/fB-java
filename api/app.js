@@ -24,7 +24,7 @@ import {
   registerSubscriptionPlanRoutes,
   getSubscriptionPlanByCode,
 } from './subscription-plans.js';
-import { registerManagedRoutes, processManagedJobAssessmentTask } from './managed-routes.js';
+import { registerManagedRoutes, processManagedJobAssessmentTask, convertPendingServiceRequest } from './managed-routes.js';
 import { registerAssessmentProcessor } from './assessment-worker.js';
 import { registerHomeCareProRoutes } from './homecare-pro-routes.js';
 import { registerHomeCareAdminRoutes, initHomeCareSettingsSchema } from './homecare-admin-routes.js';
@@ -1554,7 +1554,19 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
     const syncCheckout = req.query.sync === 'checkout';
     const { rows: pendingPayments } = syncCheckout
       ? await pool.query(
-        `SELECT * FROM payments WHERE user_id=$1 AND status='pending' AND stripe_session_id IS NOT NULL`,
+        `SELECT *
+           FROM payments
+          WHERE user_id=$1
+            AND stripe_session_id IS NOT NULL
+            AND (
+              status='pending'
+              OR (
+                status='succeeded'
+                AND payment_type IN ('subscription','pending_professional_fee')
+                AND job_id IS NULL
+                AND meta->>'pendingServiceRequestId' IS NOT NULL
+              )
+            )`,
         [req.authUser.id]
       )
       : { rows: [] };
@@ -1569,6 +1581,8 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
               [payment.id]
             );
             const planCode = session.metadata?.planCode;
+            const pendingServiceRequestId = Number(session.metadata?.pendingServiceRequestId);
+
             if (payment.payment_type === 'subscription' && planCode) {
               let periodEnd = null;
               if (session.subscription && stripe) {
@@ -1590,6 +1604,52 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
                 checkoutSessionId: session.id,
                 meta: { activatedByAuthMeSync: true },
               });
+            }
+
+            // The browser may return from Stripe before the webhook reaches
+            // FixBridge. Reconcile the pending request from the verified
+            // checkout session itself. This covers both HomeCare PLAN and
+            // professional HIRE payments.
+            if (
+              Number.isFinite(pendingServiceRequestId) &&
+              pendingServiceRequestId > 0 &&
+              (
+                payment.payment_type === 'subscription' ||
+                payment.payment_type === 'pending_professional_fee'
+              )
+            ) {
+              try {
+                const pendingAmountCents =
+                  session.amount_total != null
+                    ? Number(session.amount_total)
+                    : Number(payment.amount || 0) * 100;
+
+                const converted = await convertPendingServiceRequest(
+                  pool,
+                  pendingServiceRequestId,
+                  {
+                    amountCents: pendingAmountCents,
+                    stripeSessionId: session.id,
+                    stripePaymentIntentId: session.payment_intent || null,
+                    homeownerUserId: req.authUser.id,
+                    paymentType: payment.payment_type,
+                  }
+                );
+
+                console.log('[PENDING SERVICE REQUEST] auth/me conversion:', {
+                  pendingServiceRequestId,
+                  paymentType: payment.payment_type,
+                  managedJobId: converted?.job?.id || null,
+                  alreadyConverted: converted?.alreadyConverted || false,
+                });
+              } catch (conversionError) {
+                // Keep auth/me successful; the signed Stripe webhook can
+                // retry the same conversion. Surface the error in server logs.
+                console.error(
+                  '[PENDING SERVICE REQUEST] auth/me conversion failed:',
+                  conversionError?.message || conversionError
+                );
+              }
             }
           }
         }

@@ -2153,14 +2153,34 @@ export type PendingProfessionalRequest = {
   convertedAt?: string | null;
 };
 
+export async function listPendingServiceRequests() {
+  const result = await api<{
+    ok: boolean;
+    pendingServiceRequests?: PendingProfessionalRequest[];
+    message?: string;
+  }>("/api/pending-service-requests/my");
+
+  return {
+    ...result,
+    pendingServiceRequests: (result.pendingServiceRequests || []).map(normalizePendingServiceRequest),
+  };
+}
+
 export async function getPendingProfessionalRequest(pendingServiceRequestId: number) {
-  return api<{
+  const result = await api<{
     ok: boolean;
     pendingServiceRequest?: PendingProfessionalRequest;
     managedJob?: ManagedJob | null;
     converted?: boolean;
     message?: string;
   }>(`/api/pending-service-requests/${pendingServiceRequestId}`);
+
+  return {
+    ...result,
+    pendingServiceRequest: result.pendingServiceRequest
+      ? normalizePendingServiceRequest(result.pendingServiceRequest)
+      : undefined,
+  };
 }
 
 export async function startPendingProfessionalCheckout(

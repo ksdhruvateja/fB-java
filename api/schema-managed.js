@@ -147,6 +147,90 @@ export async function initManagedSchema(pool) {
     )
   `);
 
+  // Pending Fixera requests are the source of truth for homeowners who do
+  // not yet have an active HomeCare entitlement. They become managed_jobs only
+  // after a verified PLAN/HIRE payment succeeds.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pending_service_requests (
+      id                              BIGSERIAL PRIMARY KEY,
+      homeowner_user_id               INT NOT NULL,
+      property_id                     INT,
+      status                          TEXT NOT NULL DEFAULT 'pending',
+      category                        TEXT,
+      service_subcategory             TEXT,
+      title                           TEXT,
+      description                     TEXT,
+      media_data_url                  TEXT,
+      media_type                      TEXT,
+      preferred_date                  TEXT,
+      preferred_time_slot             TEXT,
+      service_timing                  TEXT,
+      city_state_zip                  TEXT,
+      full_address                    TEXT,
+      street_address                  TEXT,
+      city                            TEXT,
+      state                           TEXT,
+      zip                             TEXT,
+      country                         TEXT DEFAULT 'US',
+      contact_name                    TEXT,
+      contact_phone                   TEXT,
+      partner_code                    TEXT,
+      referral_source                 TEXT,
+      referring_name                  TEXT,
+      referring_company               TEXT,
+      referring_email                 TEXT,
+      referring_phone                 TEXT,
+      customer_partner_status_consent BOOLEAN DEFAULT FALSE,
+      consent_timestamp               TIMESTAMPTZ,
+      consent_version                 TEXT,
+      property_purpose                TEXT,
+      transaction_stage               TEXT,
+      listing_deadline                TEXT,
+      closing_deadline                TEXT,
+      inspection_report_url           TEXT,
+      listing_reference_url           TEXT,
+      property_opportunity_notes      TEXT,
+      discount_code                   TEXT,
+      ai_assessment                   JSONB,
+      assessment_result               JSONB,
+      assessment_status               TEXT DEFAULT 'pending',
+      assessment_error_code           TEXT,
+      assessment_attempts             INT DEFAULT 0,
+      assessment_started_at           TIMESTAMPTZ,
+      assessment_completed_at         TIMESTAMPTZ,
+      pricing                         JSONB,
+      show_retail_price               BOOLEAN DEFAULT TRUE,
+      customer_retail_estimate_low    NUMERIC,
+      customer_retail_estimate_high   NUMERIC,
+      estimated_contractor_net_low    NUMERIC,
+      estimated_contractor_net_high   NUMERIC,
+      diy_risk_level                  TEXT,
+      estimate_confidence             TEXT,
+      similar_jobs_count              INT DEFAULT 0,
+      selected_action                 TEXT,
+      payment_status                  TEXT DEFAULT 'not_required',
+      paid_amount_cents               INT,
+      paid_at                         TIMESTAMPTZ,
+      stripe_session_id               TEXT,
+      stripe_payment_intent_id        TEXT,
+      managed_job_id                  BIGINT REFERENCES managed_jobs(id) ON DELETE SET NULL,
+      converted_at                    TIMESTAMPTZ,
+      checkout_expires_at             TIMESTAMPTZ,
+      created_at                      TIMESTAMPTZ DEFAULT NOW(),
+      updated_at                      TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_pending_service_requests_homeowner
+      ON pending_service_requests (homeowner_user_id, updated_at DESC, id DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_pending_service_requests_payment
+      ON pending_service_requests (stripe_session_id)
+      WHERE stripe_session_id IS NOT NULL
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS job_invitations (
       id                   SERIAL PRIMARY KEY,

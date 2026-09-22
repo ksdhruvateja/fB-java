@@ -628,6 +628,34 @@ export default function App() {
       window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}`);
     }
 
+    if (params.get("paid") === "pending-professional" || params.get("canceled") === "pending-professional") {
+      const pendingId = params.get("pendingServiceRequestId");
+      if (pendingId) {
+        try {
+          sessionStorage.setItem("fixbridge-pending-service-request-id", pendingId);
+          sessionStorage.setItem(
+            "fixbridge-pending-service-request-result",
+            params.get("paid") === "pending-professional" ? "paid" : "canceled"
+          );
+        } catch {
+          /* ignore */
+        }
+      }
+      validateToken({ syncCheckout: true }).then((result) => {
+        if (result.ok) {
+          setCurrentUser(result.user);
+          if (result.user.role === "homeowner") {
+            setPage("homeowner-dashboard");
+          }
+        }
+      });
+      params.delete("paid");
+      params.delete("canceled");
+      params.delete("pendingServiceRequestId");
+      const nextPending = params.toString();
+      window.history.replaceState({}, "", `${window.location.pathname}${nextPending ? `?${nextPending}` : ""}`);
+    }
+
     if (params.get("paid") === "dispatch" || params.get("canceled") === "dispatch") {
       const jobId = params.get("job");
       if (jobId) {
@@ -712,7 +740,7 @@ export default function App() {
         setSubscriptionActivating(true);
         setShowSubscriptionSuccess(true);
         setPostPaymentDashboard(returnTo !== "diy" && returnTo !== "report" && returnTo !== "hire");
-        validateToken().then((result) => {
+        validateToken({ syncCheckout: true }).then((result) => {
           if (result.ok) {
             setCurrentUser(result.user);
             if (result.user.role === "homeowner") {
