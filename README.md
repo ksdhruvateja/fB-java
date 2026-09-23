@@ -20,6 +20,14 @@ pnpm run dev
 - Vite client: http://localhost:5000  
 - API: http://localhost:3001 (proxied from Vite as `/api/*`)
 
+## Railway hosting
+
+Production can run as one Node service on Railway. Config and env checklist: `RAILWAY.md`.
+
+- Build: `npm run build`
+- Start: `npm start` (`node server.js` on `0.0.0.0:$PORT`)
+- Health: `/api/health`
+
 ## Netlify hosting
 
 Config is in `netlify.toml`:

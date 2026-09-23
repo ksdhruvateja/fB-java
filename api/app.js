@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import pg from 'pg';
-import { newDb } from 'pg-mem';
+import { newDb, DataType } from 'pg-mem';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
@@ -79,6 +79,11 @@ import {
 } from './security.js';
 import { postgresSslOptions } from './db-ssl.js';
 import {
+  isDeployedProduction,
+  resolveBuildId,
+  resolveDatabaseUrl,
+} from './hosting.js';
+import {
   requirePermission,
   resolveAdminPreset,
   canAssignPreset,
@@ -89,16 +94,8 @@ import {
 } from './rbac.js';
 
 const isProduction = process.env.NODE_ENV === 'production';
-
-/** Netlify may run with NODE_ENV unset; use hosting signals for health/status only. */
-function isDeployedProduction() {
-  return (
-    isProduction ||
-    process.env.CONTEXT === 'production' ||
-    process.env.FIXBRIDGE_HOSTING === 'netlify'
-  );
-}
-const useInMemoryDb = !process.env.NEON_DATABASE_URL;
+const databaseUrl = resolveDatabaseUrl();
+const useInMemoryDb = !databaseUrl;
 
 // ── Require SESSION_SECRET at startup ─────────────────────────────────────────
 const JWT_SECRET = process.env.SESSION_SECRET || (!isProduction ? 'local-dev-secret' : undefined);
@@ -106,7 +103,7 @@ if (!JWT_SECRET) {
   // Throw (do not process.exit) so Netlify Functions can report the error cleanly.
   throw new Error(
     '[FATAL] SESSION_SECRET environment variable is not set. ' +
-    'Set it in the Netlify UI (Site settings → Environment variables) before deploying.'
+    'Set it in Railway Variables or the Netlify UI before deploying.'
   );
 }
 
@@ -116,45 +113,67 @@ if (!process.env.SESSION_SECRET && !isProduction) {
 
 if (isProduction && useInMemoryDb) {
   throw new Error(
-    '[FATAL] NEON_DATABASE_URL is required in production. In-memory database is not allowed.'
+    '[FATAL] NEON_DATABASE_URL or DATABASE_URL is required in production. In-memory database is not allowed.'
   );
 }
 
-if (isProduction && !stripeConfigured()) {
+const requirePayments =
+  isProduction &&
+  !['false', '0', 'no'].includes(String(process.env.FIXBRIDGE_REQUIRE_PAYMENTS ?? 'true').toLowerCase());
+if (requirePayments && !stripeConfigured()) {
   throw new Error(
     '[FATAL] STRIPE_SECRET_KEY is required in production. Refusing to start without payment secrets.'
   );
 }
-if (isProduction && !String(process.env.STRIPE_WEBHOOK_SECRET || '').trim()) {
+if (requirePayments && !String(process.env.STRIPE_WEBHOOK_SECRET || '').trim()) {
   throw new Error(
     '[FATAL] STRIPE_WEBHOOK_SECRET is required in production. Refusing to start without webhook secrets.'
   );
+}
+if (isProduction && !requirePayments && !stripeConfigured()) {
+  console.warn('[FixBridge API] Starting without Stripe. Set STRIPE_SECRET_KEY and FIXBRIDGE_REQUIRE_PAYMENTS=true when payments go live.');
 }
 
 const { Pool } = pg;
 
 function createPool() {
   if (!useInMemoryDb) {
-    let host = 'neon';
+    let host = 'postgres';
     try {
-      host = new URL(process.env.NEON_DATABASE_URL.replace(/^postgresql:/i, 'postgres:')).hostname;
+      host = new URL(databaseUrl.replace(/^postgresql:/i, 'postgres:')).hostname;
     } catch {
       // Keep generic label if URL parsing fails.
     }
-    console.log(`[FixBridge API] Using Neon Postgres (${host}).`);
-    const connectionString = process.env.NEON_DATABASE_URL.includes('uselibpqcompat=')
-      ? process.env.NEON_DATABASE_URL
-      : `${process.env.NEON_DATABASE_URL}${process.env.NEON_DATABASE_URL.includes('?') ? '&' : '?'}uselibpqcompat=true`;
+    const neonHost = /neon\.tech|neon\.build/i.test(host) || Boolean(process.env.NEON_DATABASE_URL);
+    const railwayInternal = /railway\.internal/i.test(host);
+    console.log(`[FixBridge API] Using ${neonHost ? 'Neon' : 'Postgres'} (${host}).`);
+    const connectionString =
+      neonHost && !databaseUrl.includes('uselibpqcompat=')
+        ? `${databaseUrl}${databaseUrl.includes('?') ? '&' : '?'}uselibpqcompat=true`
+        : databaseUrl;
     return new Pool({
       connectionString,
-      ssl: postgresSslOptions(),
+      ssl: railwayInternal ? false : postgresSslOptions(),
       max: process.env.NETLIFY || process.env.NETLIFY_DEV ? 3 : 10,
     });
   }
 
   const db = newDb({ autoCreateForeignKeyIndices: true });
+  const trimText = (value) => (value == null ? null : String(value).trim());
+  db.public.registerFunction({
+    name: 'trim',
+    args: [DataType.text],
+    returns: DataType.text,
+    implementation: trimText,
+  });
+  db.public.registerFunction({
+    name: 'btrim',
+    args: [DataType.text],
+    returns: DataType.text,
+    implementation: trimText,
+  });
   const { Pool: MemoryPool } = db.adapters.createPg();
-  console.warn('[FixBridge API] NEON_DATABASE_URL not set; using in-memory local database.');
+  console.warn('[FixBridge API] NEON_DATABASE_URL / DATABASE_URL not set; using in-memory local database.');
   return new MemoryPool();
 }
 
@@ -450,6 +469,36 @@ async function writeSchemaReadyVersion() {
   );
 }
 
+async function runLocalSchemaStep(name, fn) {
+  try {
+    await fn();
+  } catch (e) {
+    const firstLine = String(e.message || e).split('\n')[0];
+    if (useInMemoryDb) {
+      console.warn(`[FixBridge API] ${name} skipped (in-memory): ${firstLine}`);
+      return;
+    }
+    throw e;
+  }
+}
+
+async function applyManagedSchemaAndSeeds() {
+  await runLocalSchemaStep('managed schema', () => initManagedSchema(pool));
+  await runLocalSchemaStep('homecare settings', () => initHomeCareSettingsSchema(pool));
+  await runLocalSchemaStep('property memory', () => initPropertyMemorySchema(pool));
+  await runLocalSchemaStep('service reminders', () => initServiceReminderSchema(pool));
+  await runLocalSchemaStep('support tickets', () => initSupportTicketSchema(pool));
+  await runLocalSchemaStep('in-app notifications', () => initInAppNotificationSchema(pool));
+  await runLocalSchemaStep('messaging', () => initMessagingSchema(pool));
+  await runLocalSchemaStep('disputes', () => initDisputeSchema(pool));
+  await runLocalSchemaStep('availability', () => initAvailabilitySchema(pool));
+  await runLocalSchemaStep('homeowner admin', () => initHomeownerAdminSchema(pool));
+  await runLocalSchemaStep('subscription plans', () => initSubscriptionPlansSchema(pool));
+  await runLocalSchemaStep('marketing consent', () => initMarketingConsent(pool));
+  await runLocalSchemaStep('primary admin migration', () => migratePrimaryAdminEmail());
+  await runLocalSchemaStep('demo users', () => ensureDemoUsers());
+}
+
 export async function initDb() {
   if (initDb._done) return;
   try {
@@ -467,20 +516,7 @@ export async function initDb() {
     const check = await pool.query("SELECT id FROM users LIMIT 1");
     if (check.rows.length > 0) {
       console.log('[FixBridge API] DB already initialized, running managed schema checks...');
-      await initManagedSchema(pool);
-      await initHomeCareSettingsSchema(pool);
-      await initPropertyMemorySchema(pool);
-      await initServiceReminderSchema(pool);
-      await initSupportTicketSchema(pool);
-      await initInAppNotificationSchema(pool);
-      await initMessagingSchema(pool);
-      await initDisputeSchema(pool);
-      await initAvailabilitySchema(pool);
-      await initHomeownerAdminSchema(pool);
-      await initSubscriptionPlansSchema(pool);
-      await initMarketingConsent(pool);
-      await migratePrimaryAdminEmail();
-      await ensureDemoUsers();
+      await applyManagedSchemaAndSeeds();
       await writeSchemaReadyVersion();
       initDb._done = true;
       return;
@@ -645,9 +681,6 @@ export async function initDb() {
     )
   `);
 
-  await migratePrimaryAdminEmail();
-  await ensureDemoUsers();
-
   // Migrate any remaining plaintext passwords for other users
   const { rows: allUsers } = await pool.query(
     `SELECT role, email, password FROM users WHERE password NOT LIKE '$2%' AND password NOT IN ('GOOGLE_OAUTH', 'APPLE_OAUTH', 'AUTH0_OAUTH')`
@@ -680,18 +713,7 @@ export async function initDb() {
     console.warn('[FixBridge API] booking_id unique index skipped:', e.message);
   }
 
-  await initManagedSchema(pool);
-  await initHomeCareSettingsSchema(pool);
-  await initPropertyMemorySchema(pool);
-  await initServiceReminderSchema(pool);
-  await initSupportTicketSchema(pool);
-  await initInAppNotificationSchema(pool);
-  await initMessagingSchema(pool);
-  await initDisputeSchema(pool);
-  await initAvailabilitySchema(pool);
-  await initHomeownerAdminSchema(pool);
-  await initSubscriptionPlansSchema(pool);
-  await initMarketingConsent(pool);
+  await applyManagedSchemaAndSeeds();
 
   console.log('[FixBridge API] DB ready ✓');
   await writeSchemaReadyVersion();
@@ -3494,9 +3516,9 @@ app.get('/api/health', async (_req, res) => {
     ok: dbOk,
     service: 'fixbridge-api',
     version: process.env.npm_package_version || '0.0.2',
-    build: process.env.COMMIT_REF || process.env.DEPLOY_ID || process.env.FIXBRIDGE_HOSTING || null,
+    build: resolveBuildId(),
     env: production ? 'production' : 'development',
-    database: useInMemoryDb ? 'memory' : dbOk ? 'neon' : 'neon_unreachable',
+    database: useInMemoryDb ? 'memory' : dbOk ? (/neon/i.test(databaseUrl) ? 'neon' : 'postgres') : 'postgres_unreachable',
     stripeConfigured: stripeConfigured(),
     gmail: mailStatus(),
     paymentsSimulateAllowed: !production && !stripeConfigured(),
@@ -3527,7 +3549,7 @@ app.get('/api/admin/production-config', requireAuth, requireAdmin, requirePermis
   const googleIdInvalid = Boolean(googleRaw) && !googleId;
   const checks = [
     { key: 'SESSION_SECRET', status: classify(Boolean(process.env.SESSION_SECRET)), required: production },
-    { key: 'NEON_DATABASE_URL', status: classify(Boolean(process.env.NEON_DATABASE_URL)), required: production },
+    { key: 'NEON_DATABASE_URL', status: classify(Boolean(databaseUrl)), required: production },
     { key: 'STRIPE_SECRET_KEY', status: classify(stripeConfigured(), stripeInvalid), required: production },
     { key: 'STRIPE_WEBHOOK_SECRET', status: classify(Boolean(process.env.STRIPE_WEBHOOK_SECRET?.trim())), required: production },
     { key: 'APP_URL', status: classify(Boolean(appUrl), production && appUrlInvalid), required: production, localhost: appUrlInvalid },
@@ -3537,7 +3559,7 @@ app.get('/api/admin/production-config', requireAuth, requireAdmin, requirePermis
     { key: 'GOOGLE_CLIENT_ID', status: classify(Boolean(googleId), googleIdInvalid), required: false },
     { key: 'ATTACHMENT_STORAGE_PROVIDER', status: classify(true), required: false },
     { key: 'demo_seed_disabled_in_prod', status: classify(production ? !allowDemoSeed() : true), required: true },
-    { key: 'ssl_reject_unauthorized', status: classify(postgresSslOptions().rejectUnauthorized === true || !production), required: production },
+    { key: 'ssl_reject_unauthorized', status: classify(postgresSslOptions().rejectUnauthorized === true || !production || /railway\.internal/i.test(databaseUrl)), required: production },
   ].map((c) => ({ ...c, ok: c.status === 'PRESENT' }));
   const missingRequired = checks.filter((c) => c.required && c.status !== 'PRESENT').map((c) => c.key);
   res.json({

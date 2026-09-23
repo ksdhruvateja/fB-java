@@ -432,6 +432,6 @@ export async function getReminderSchedulerStatus(pool) {
     invocationObserved: false,
     pendingEligibility: pending,
     hostingNote:
-      'Netlify: scheduled function process-service-reminders (see netlify.toml). Persistent Node host: ENABLE_SERVICE_REMINDER_POLL=true.',
+      'Netlify: scheduled function process-service-reminders (see netlify.toml). Railway / persistent Node: ENABLE_SERVICE_REMINDER_POLL=true (on by default on Railway).',
   };
 }

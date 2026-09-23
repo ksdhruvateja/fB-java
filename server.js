@@ -1,10 +1,25 @@
-// Replit dev server — runs the Express API on port 3001
-import { randomUUID } from 'crypto'; // Imported to generate unique structural request tracking IDs
+// Persistent API server — local, Replit, and Railway.
+import { randomUUID } from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import express from 'express';
 import app, { initDb, pool } from './api/app.js';
+import { isRailwayRuntime } from './api/hosting.js';
 import { processDueServiceReminders } from './api/service-reminders.js';
 import { processComplianceExpirationAlerts } from './api/contractor-compliance-alerts.js';
 
-const PORT = process.env.API_PORT || 3001;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const distDir = path.join(__dirname, 'dist');
+const PORT = Number(process.env.PORT || process.env.API_PORT || 3001);
+const HOST = '0.0.0.0';
+const railway = isRailwayRuntime();
+const serveSpa =
+  process.env.SERVE_SPA === 'true' ||
+  (railway && process.env.SERVE_SPA !== 'false');
+const reminderPollEnabled =
+  process.env.ENABLE_SERVICE_REMINDER_POLL === 'true' ||
+  (railway && process.env.ENABLE_SERVICE_REMINDER_POLL !== 'false');
 
 // 🔥 HOTFIX MIDDLWARE: Intercepts public incoming route requests and assigns a unique ID string
 app.use((req, res, next) => {
@@ -12,11 +27,22 @@ app.use((req, res, next) => {
   next();
 });
 
+if (serveSpa && fs.existsSync(path.join(distDir, 'index.html'))) {
+  app.use(express.static(distDir, { index: false, maxAge: '1h' }));
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    res.sendFile(path.join(distDir, 'index.html'), (err) => {
+      if (err) next(err);
+    });
+  });
+}
+
 initDb()
   .then(() => {
-    app.listen(PORT, () => {
-      console.log(`[FixBridge API] Running on http://localhost:${PORT}`);
-      if (process.env.ENABLE_SERVICE_REMINDER_POLL === 'true') {
+    app.listen(PORT, HOST, () => {
+      console.log(`[FixBridge API] Running on http://${HOST}:${PORT}`);
+      if (reminderPollEnabled) {
         const intervalMs = Number(process.env.SERVICE_REMINDER_POLL_MS || 15 * 60 * 1000);
         console.log(`[FixBridge API] Service reminder poll enabled every ${intervalMs}ms`);
         setInterval(() => {
