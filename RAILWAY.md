@@ -19,7 +19,7 @@ Repo: [ksdhruvateja/fB-java](https://github.com/ksdhruvateja/fB-java)
 | Reminders | In-process poll (`ENABLE_SERVICE_REMINDER_POLL=true`) |
 | AI assessments | In-process (not Netlify background functions) |
 
-`RAILPACK_NO_SPA=true` keeps Railpack from serving Vite with Caddy. The Express process must own HTTP.
+A root `Dockerfile` forces Railway to run `node server.js` instead of serving Vite with Caddy. `RAILPACK_NO_SPA=true` is a backup if the Docker builder is disabled.
 
 ## Railway Variables
 

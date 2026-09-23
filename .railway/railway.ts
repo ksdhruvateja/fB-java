@@ -5,8 +5,7 @@ export default defineRailway(() => {
 
   const fBJava = service("fB-java", {
     source: github("ksdhruvateja/fB-java", { checkSuites: false, branch: "main" }),
-    build: "npm run build",
-    start: "npm start",
+    start: "node server.js",
     healthcheck: "/api/health",
     healthcheckTimeout: 120,
     replicas: { "us-east4-eqdc4a": 1 },
