@@ -2,27 +2,19 @@
  * FixBridge AI / Fixera
  *
  * PRIMARY PROVIDER:
- *   OpenRouter
- *
- * FALLBACK PROVIDER:
- *   Anthropic / Claude
+ *   Google Gemini
  *
  * IMPORTANT:
  * - API keys are server-side only.
  * - No VITE_ AI keys should be used here.
- * - Experiential Labs is no longer used by this file.
+ * - OpenRouter is no longer used.
  * - Existing FixBridge exports are preserved for compatibility.
  */
 
 import {
-  readOpenRouterKey,
-  openrouterProvider,
-} from './fixa/providers/openrouter.js';
-
-import {
-  readAnthropicKey,
-  anthropicProvider,
-} from './fixa/providers/anthropic.js';
+  readGeminiKey,
+  geminiProvider,
+} from './fixa/providers/gemini.js';
 
 import { evaluateRepairAssessment } from './fixa/evaluator/responseEvaluator.js';
 
@@ -503,104 +495,28 @@ function parseJsonObjectFromText(
 /* Provider resolution                                                        */
 /* -------------------------------------------------------------------------- */
 
-function hasOpenRouter() {
+function hasGemini() {
   try {
-    return Boolean(
-      readOpenRouterKey()
-    );
+    return Boolean(readGeminiKey());
   } catch {
-    return Boolean(
-      String(
-        process.env.OPENROUTER_API_KEY ||
-        ''
-      ).trim()
-    );
-  }
-}
-
-function hasAnthropic() {
-  try {
-    return Boolean(
-      readAnthropicKey()
-    );
-  } catch {
-    return Boolean(
-      String(
-        process.env.ANTHROPIC_API_KEY ||
-        ''
-      ).trim()
-    );
+    return Boolean(getGeminiApiKey());
   }
 }
 
 /**
- * OpenRouter is the primary provider.
- * Claude is the automatic fallback.
+ * Google Gemini is the only connected provider.
  */
 export function resolveAiProvider() {
-  const openRouterConfigured =
-    hasOpenRouter();
-
-  const anthropicConfigured =
-    hasAnthropic();
-
-  if (openRouterConfigured) {
+  if (hasGemini()) {
     return {
-      provider:
-        'openrouter',
-
-      adapter:
-        openrouterProvider,
-
-      model:
-        openrouterProvider?.models?.[0] ||
-        process.env.OPENROUTER_MODEL ||
-        null,
-
-      fallback:
-        anthropicConfigured
-          ? {
-            provider:
-              'anthropic',
-
-            adapter:
-              anthropicProvider,
-
-            model:
-              anthropicProvider?.models?.[0] ||
-              process.env.ANTHROPIC_MODEL ||
-              null,
-          }
-          : null,
+      provider: 'gemini',
+      adapter: geminiProvider,
+      model: geminiProvider?.model || process.env.GEMINI_MODEL || 'gemini-3.6-flash',
+      fallback: null,
     };
   }
 
-  /*
-   * If OpenRouter is unavailable but Claude exists,
-   * Claude can operate directly.
-   */
-  if (anthropicConfigured) {
-    return {
-      provider:
-        'anthropic',
-
-      adapter:
-        anthropicProvider,
-
-      model:
-        anthropicProvider?.models?.[0] ||
-        process.env.ANTHROPIC_MODEL ||
-        null,
-
-      fallback:
-        null,
-    };
-  }
-
-  console.error(
-    '[ai] No OpenRouter or Anthropic API key is configured.'
-  );
-
+  console.error('[ai] No Gemini API key is configured. Set GEMINI_API_KEY.');
   return null;
 }
 

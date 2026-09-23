@@ -7,12 +7,11 @@ import { analyzeRepairStructured, chatWithCustomer, extractPropertyDocumentField
 import { buildFixaContext } from './core/context.js';
 import { retrieveKnowledge } from './knowledge/retrieval.js';
 import { selectProvider } from './router/router.js';
-import { explabsProvider } from './providers/explabs.js';
+import { geminiProvider, readGeminiKey, GEMINI_MODEL } from './providers/gemini.js';
 import { evaluateRepairAssessment } from './evaluator/responseEvaluator.js';
 import { recordFixaEvent, fixaObservabilitySummary } from './observability/events.js';
 import { recordLearningCandidate } from './learning/candidates.js';
 import { listFixaProviders } from './providers.js';
-import { readExplabsKey } from './providers/explabs.js';
 
 export const FIXA_UNAVAILABLE = "We couldn't complete the assessment right now. Please try again.";
 
@@ -40,58 +39,45 @@ export function getContext(input, task = 'repair_assessment') {
 export function getFixaPublicStatus() {
   return {
     assistant: 'Fixera',
-    configured: Boolean(readExplabsKey()),
-    provider: 'experiential-labs',
-    model: 'gpt-6-astra',
+    configured: Boolean(readGeminiKey()),
+    provider: 'gemini',
+    model: GEMINI_MODEL,
   };
 }
 
 export async function getFixaHealth() {
-  const health = await explabsProvider.healthCheck();
+  const health = await geminiProvider.healthCheck();
   return {
     assistant: 'Fixera',
-    provider: 'experiential-labs',
-    model: 'gpt-6-astra',
+    provider: 'gemini',
+    model: GEMINI_MODEL,
     configured: Boolean(health.configured),
     authenticated: Boolean(health.authenticated),
     modelReachable: Boolean(health.modelReachable),
     healthy: Boolean(health.healthy),
     code: health.code,
-    ...(health.providerStatus ? { providerStatus: health.providerStatus, httpStatus: health.providerStatus } : {}),
-    ...(health.providerCode ? { providerCode: health.providerCode } : {}),
-    ...(health.modelsHttpStatus != null ? { modelsHttpStatus: health.modelsHttpStatus } : {}),
-    ...(health.modelListed != null ? { modelListed: health.modelListed } : {}),
-    ...(health.returnedModel ? { returnedModel: health.returnedModel } : {}),
     ...(health.latencyMs != null ? { latencyMs: health.latencyMs } : {}),
-    ...(health.usage ? { usage: health.usage } : {}),
     ...(health.text ? { text: health.text } : {}),
-    ...(health.keyShape ? {
-      keyShape: health.keyShape,
-      keyLength: health.keyLength,
-      matchesProviderFormat: health.matchesProviderFormat,
-      prefixXpl: health.prefixXpl,
-      bodyIsHex: health.bodyIsHex,
-    } : {}),
   };
 }
 
 export async function getFixaAdminProviders() {
-  const health = await explabsProvider.healthCheck();
+  const health = await geminiProvider.healthCheck();
   return {
     assistant: 'Fixera',
     principle: 'Models may change. Fixera remains.',
-    currentProvider: 'Experiential Labs',
-    currentModel: 'gpt-6-astra',
+    currentProvider: 'Google Gemini',
+    currentModel: GEMINI_MODEL,
     connection: health.healthy ? 'connected' : health.configured ? 'error' : 'not_connected',
     health,
     routing: {
-      repair_assessment: { primary: 'Experiential Labs', model: 'gpt-6-astra', fallback: null },
-      diy_guidance: { primary: 'Experiential Labs', model: 'gpt-6-astra', fallback: null },
-      customer_support: { primary: 'Experiential Labs', model: 'gpt-6-astra', fallback: null },
+      repair_assessment: { primary: 'Google Gemini', model: GEMINI_MODEL, fallback: null },
+      diy_guidance: { primary: 'Google Gemini', model: GEMINI_MODEL, fallback: null },
+      customer_support: { primary: 'Google Gemini', model: GEMINI_MODEL, fallback: null },
     },
     providers: listFixaProviders().map((provider) => ({
       ...provider,
-      status: provider.id === 'explabs'
+      status: provider.id === 'gemini'
         ? (health.healthy ? 'connected' : health.configured ? 'error' : 'not_connected')
         : 'not_configured',
     })),
@@ -160,61 +146,42 @@ export async function assessRepair(input) {
   const started = Date.now();
   const id = requestId();
   const packed = getContext(input, 'repair_assessment');
-
-  console.log('[Fixbridge Hotfix] Simulating successful Experiential Labs data structure...');
-
-  // Create a perfectly valid mock schema body that matches your evaluation requirements
-  const mockAssessmentResult = {
-    assessment: {
-      safe_diy_allowed: true,
-      professional_required: false,
-      diy_risk_level: "low",
-      diy_guide_steps: [
-        {
-          title: "Initial System Inspection",
-          instruction: "Carefully look over the visible service component connections to check for structural anomalies.",
-          expected_result: "The visible service area connection alignment matches standard operating parameters.",
-          if_not: "If anomalies are detected, clean out surface elements or tighten the secure bracket assemblies."
-        },
-        {
-          title: "Secure Fastener Adjustments",
-          instruction: "Utilize your local mounting tool set to turn the perimeter fastening screws clockwise.",
-          expected_result: "The baseline bracket housing sits completely flush against the mounting platform surface.",
-          if_not: "Loosen the mounting layout completely, check the tracks for blockages, and repeat secure sequence."
-        }
-      ]
-    }
-  };
-
-  // Pass our valid structural simulation object straight down into your evaluation engine
-  const evaluation = evaluateRepairAssessment(mockAssessmentResult.assessment);
+  const result = await analyzeRepairStructured({
+    ...input,
+    description: [input.description, packed.knowledge.items.join(' ')].filter(Boolean).join('\n'),
+  });
+  const evaluation = result.assessment
+    ? evaluateRepairAssessment(result.assessment)
+    : { ok: false, schemaValid: false, issues: ['missing_assessment'] };
 
   recordFixaEvent({
     requestId: id,
     task: 'repair_assessment',
-    provider: 'explabs',
-    model: 'gpt-6-astra',
+    provider: 'gemini',
+    model: GEMINI_MODEL,
     startedAt: new Date(started).toISOString(),
     latencyMs: Date.now() - started,
-    ok: true,
+    ok: Boolean(result.assessment),
     schemaValid: evaluation.schemaValid,
-    safety: mockAssessmentResult.assessment.diy_risk_level || null,
+    safety: result.assessment?.diy_risk_level || null,
     evaluator: evaluation.ok ? 'pass' : 'fail',
     jobId: packed.context.jobId,
-    code: 'ok',
+    code: result.assessment ? 'ok' : 'provider_error',
   });
 
-  recordLearningCandidate({
-    requestId: id,
-    task: 'repair_assessment',
-    jobId: packed.context.jobId,
-    provider: 'explabs',
-    model: 'gpt-6-astra',
-    safety: mockAssessmentResult.assessment.diy_risk_level,
-    evaluator: evaluation.ok ? 'pass' : 'fail',
-  });
+  if (result.assessment) {
+    recordLearningCandidate({
+      requestId: id,
+      task: 'repair_assessment',
+      jobId: packed.context.jobId,
+      provider: 'gemini',
+      model: GEMINI_MODEL,
+      safety: result.assessment.diy_risk_level,
+      evaluator: evaluation.ok ? 'pass' : 'fail',
+    });
+  }
 
-  return publicAssessment(mockAssessmentResult);
+  return publicAssessment(result);
 }
 
 export async function reassessRepair(input) {
@@ -231,8 +198,8 @@ export async function chat(input) {
   const started = Date.now();
   const id = requestId();
   const route = {
-    provider: { id: 'explabs' },
-    model: 'gpt-6-astra'
+    provider: { id: 'gemini' },
+    model: GEMINI_MODEL,
   };
 
   if (!route.provider) {

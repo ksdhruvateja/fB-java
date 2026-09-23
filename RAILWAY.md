@@ -56,7 +56,8 @@ Do **not** set `NODE_ENV=production` in the Variables UI if that would apply to 
 | `GOOGLE_CLIENT_ID` | Sign in with Google |
 | `GMAIL_USER` / `GMAIL_APP_PASSWORD` | Password reset + notifications |
 | `FIXBRIDGE_FROM_EMAIL` | Branded sender |
-| `EXPLABS_API_KEY` | Fixera / AI assessment |
+| `GEMINI_API_KEY` | Google Gemini (Fixera assessments). Server-side only |
+| `GEMINI_MODEL` | Optional. Default `gemini-3.6-flash` |
 | `GEOAPIFY_API_KEY` | Address autocomplete |
 | `CORS_ORIGINS` | Extra origins (www, custom domain) |
 | `VITE_GOOGLE_MAPS_API_KEY` | Maps JS (build-time) |

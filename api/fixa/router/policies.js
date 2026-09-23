@@ -1,14 +1,18 @@
-/** Default routing. All tasks use the connected Experiential Labs provider. No fallback. */
+/** Default routing. All tasks use Google Gemini. */
+
+import { GEMINI_MODEL } from '../providers/gemini.js';
+
+const GEMINI_TASK = { primary: 'gemini', model: GEMINI_MODEL, fallback: null };
 
 export const DEFAULT_POLICY = {
   id: 'default',
   mode: 'default',
   tasks: {
-    repair_assessment: { primary: 'explabs', model: 'gpt-6-astra', fallback: null },
-    diy_guidance: { primary: 'explabs', model: 'gpt-6-astra', fallback: null },
-    reassessment: { primary: 'explabs', model: 'gpt-6-astra', fallback: null },
-    customer_support: { primary: 'explabs', model: 'gpt-6-astra', fallback: null },
-    document_extract: { primary: 'explabs', model: 'gpt-6-astra', fallback: null },
+    repair_assessment: GEMINI_TASK,
+    diy_guidance: GEMINI_TASK,
+    reassessment: GEMINI_TASK,
+    customer_support: GEMINI_TASK,
+    document_extract: GEMINI_TASK,
     professional_handoff: { primary: null, model: null, fallback: null },
   },
 };

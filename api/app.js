@@ -3051,8 +3051,8 @@ async function sendFixeraHealth(_req, res) {
     console.error('fixera health:', e);
     return res.status(500).json({
       assistant: 'Fixera',
-      provider: 'experiential-labs',
-      model: 'gpt-6-astra',
+      provider: 'gemini',
+      model: process.env.GEMINI_MODEL || 'gemini-3.6-flash',
       configured: false,
       authenticated: false,
       modelReachable: false,
@@ -3524,6 +3524,7 @@ app.get('/api/health', async (_req, res) => {
     paymentsSimulateAllowed: !production && !stripeConfigured(),
     demoSeedAllowed: allowDemoSeed(),
     reminders,
+    fixera: getFixeraPublicStatus(),
   });
 });
 
