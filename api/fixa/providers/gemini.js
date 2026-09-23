@@ -13,7 +13,7 @@ const MODEL_FALLBACKS = [...new Set([
   'gemini-3.6-flash',
   'gemini-3.5-flash',
 ])];
-const AI_FETCH_TIMEOUT_MS = Number(process.env.AI_FETCH_TIMEOUT_MS || 38000);
+const AI_FETCH_TIMEOUT_MS = Number(process.env.AI_FETCH_TIMEOUT_MS || 45000);
 
 export function readGeminiKey() {
   return String(
@@ -136,30 +136,52 @@ export async function createCompletion({
     };
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), AI_FETCH_TIMEOUT_MS);
-  if (signal) {
-    if (signal.aborted) controller.abort();
-    else signal.addEventListener('abort', () => controller.abort(), { once: true });
-  }
-
   try {
     let response;
     let raw = '';
     let usedModel = GEMINI_MODEL;
     for (const model of MODEL_FALLBACKS) {
       usedModel = model;
-      response = await fetch(
-        `${BASE_URL}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(toGeminiPayload({ messages, system, temperature, maxTokens, json })),
-          signal: controller.signal,
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), AI_FETCH_TIMEOUT_MS);
+      if (signal) {
+        if (signal.aborted) controller.abort();
+        else signal.addEventListener('abort', () => controller.abort(), { once: true });
+      }
+      try {
+        response = await fetch(
+          `${BASE_URL}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(toGeminiPayload({ messages, system, temperature, maxTokens, json })),
+            signal: controller.signal,
+          }
+        );
+        raw = await response.text();
+      } catch (error) {
+        if (error?.name === 'AbortError' && model !== MODEL_FALLBACKS[MODEL_FALLBACKS.length - 1]) {
+          console.warn('[fixa] Gemini model timed out, trying next model', { model, requestId });
+          continue;
         }
-      );
-      raw = await response.text();
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
       if (response.ok || (response.status !== 503 && response.status !== 429 && response.status !== 404)) break;
+    }
+    if (!response) {
+      return {
+        ok: false,
+        provider: 'gemini',
+        model: usedModel,
+        status: 0,
+        code: 'provider_timeout',
+        text: '',
+        message: null,
+        requestId,
+        latencyMs: Date.now() - startedAt,
+      };
     }
     let payload = {};
     try {
@@ -235,8 +257,6 @@ export async function createCompletion({
       requestId,
       latencyMs,
     };
-  } finally {
-    clearTimeout(timer);
   }
 }
 

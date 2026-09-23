@@ -955,11 +955,26 @@ async function loadAssessContext(pool, job, rules, assessment = null) {
     property = rows[0] || null;
   }
 
-  const { jobs: localJobs, bids, completedPayments, zipPlace } = await loadMarketData(pool, {
-    zip,
-    trade: assessment?.category || job.category,
-    jobId: job.id,
-  });
+  let localJobs = [];
+  let bids = [];
+  let completedPayments = [];
+  let zipPlace = null;
+  try {
+    const market = await loadMarketData(pool, {
+      zip,
+      trade: assessment?.category || job.category,
+      jobId: job.id,
+    });
+    localJobs = market.jobs || [];
+    bids = market.bids || [];
+    completedPayments = market.completedPayments || [];
+    zipPlace = market.zipPlace || null;
+  } catch (err) {
+    console.warn('[assessment] market context unavailable, continuing', {
+      jobId: job.id,
+      error: err?.message || String(err),
+    });
+  }
 
   const marketProfile = await buildLocalMarketProfile({
     zip,
@@ -3544,97 +3559,6 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       // ------------------------------------------------------------
 
       if (!hasActiveHomeCare) {
-        // ----------------------------------------------------------
-        // PENDING TABLE SCHEMA DIAGNOSTIC
-        // ----------------------------------------------------------
-
-        const expectedPendingColumns = [
-          'homeowner_user_id',
-          'property_id',
-          'status',
-          'category',
-          'service_subcategory',
-          'title',
-          'description',
-          'media_data_url',
-          'media_type',
-          'preferred_date',
-          'preferred_time_slot',
-          'service_timing',
-          'city_state_zip',
-          'full_address',
-          'street_address',
-          'city',
-          'state',
-          'zip',
-          'country',
-          'contact_name',
-          'contact_phone',
-          'partner_code',
-          'referral_source',
-          'referring_name',
-          'referring_company',
-          'referring_email',
-          'referring_phone',
-          'customer_partner_status_consent',
-          'consent_timestamp',
-          'consent_version',
-          'property_purpose',
-          'transaction_stage',
-          'listing_deadline',
-          'closing_deadline',
-          'inspection_report_url',
-          'listing_reference_url',
-          'property_opportunity_notes',
-          'discount_code',
-        ];
-
-        const { rows: pendingColumnRows } =
-          await pool.query(`
-          SELECT
-            column_name,
-            data_type,
-            is_nullable,
-            column_default
-          FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'pending_service_requests'
-          ORDER BY ordinal_position
-        `);
-
-        const actualPendingColumns =
-          pendingColumnRows.map(
-            (row) => row.column_name
-          );
-
-        const missingPendingColumns =
-          expectedPendingColumns.filter(
-            (column) =>
-              !actualPendingColumns.includes(column)
-          );
-
-        console.log(
-          '[PENDING SERVICE REQUEST] Expected columns:',
-          expectedPendingColumns
-        );
-
-        console.log(
-          '[PENDING SERVICE REQUEST] Actual DB columns:',
-          pendingColumnRows
-        );
-
-        console.log(
-          '[PENDING SERVICE REQUEST] MISSING columns:',
-          missingPendingColumns
-        );
-
-        if (missingPendingColumns.length > 0) {
-          console.error(
-            '[PENDING SERVICE REQUEST] SCHEMA MISMATCH:',
-            missingPendingColumns
-          );
-        }
-
         // ----------------------------------------------------------
         // PENDING SERVICE REQUEST INSERT
         //

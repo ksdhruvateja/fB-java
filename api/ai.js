@@ -29,7 +29,11 @@ import {
 /* -------------------------------------------------------------------------- */
 
 const AI_FETCH_TIMEOUT_MS = Number(
-  process.env.AI_FETCH_TIMEOUT_MS || 38000
+  process.env.AI_FETCH_TIMEOUT_MS || 45000
+);
+
+const AI_ASSESSMENT_TIMEOUT_MS = Number(
+  process.env.AI_ASSESSMENT_TIMEOUT_MS || 120000
 );
 
 const AI_MAX_IMAGE_CHARS = Number(
@@ -1714,7 +1718,7 @@ async function analyzeWithProvider(
               jsonMode,
           }),
 
-          AI_FETCH_TIMEOUT_MS
+          AI_ASSESSMENT_TIMEOUT_MS
         );
     } catch (err) {
       lastError =
