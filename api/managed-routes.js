@@ -441,6 +441,30 @@ function parseJson(val, fallback = null) {
   }
 }
 
+function getPackageLabel(job) {
+  const raw = job || {};
+
+  // HomeCare / subscription plan
+  const plan = raw.packageLabel ?? raw.package ?? raw.planName ?? raw.plan ?? raw.homeCarePlan ?? raw.homecarePlan;
+
+  if (typeof plan === "string" && plan.trim()) { return "Plan";}
+
+  // Hire a Professional flow
+  const selectedAction = String(raw.selectedAction ?? raw.selected_action ?? "" ).trim().toLowerCase();
+
+  if (selectedAction === "hire" || selectedAction === "hire_professional") {
+    return "Hire a Professional";
+  }
+
+  const paymentType = String(raw.paymentType ?? raw.payment_type ?? "").trim().toLowerCase();
+
+  if (paymentType === "pending_professional_fee" || paymentType === "dispatch_fee") {
+    return "Hire a Professional";
+  }
+
+  return "—";
+}
+
 /** Role-aware job serializer */
 function serializeJob(row, viewer) {
   if (!row) return null;
@@ -1747,6 +1771,16 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
   const stripeSessionId = payment.stripeSessionId || null;
   const stripePaymentIntentId = payment.stripePaymentIntentId || null;
 
+  console.info("[FLOW][4][API] CONVERSION START", {
+    pendingServiceRequestId: pendingId,
+    paymentType: payment.paymentType || null,
+    paymentStatus: payment.paymentStatus || null,
+    amountCents: payment.amountCents ?? null,
+    homeownerUserId: expectedHomeownerId,
+    stripeSessionId: stripeSessionId ? String(stripeSessionId).slice(0, 18) : null,
+    hasPaymentIntent: Boolean(stripePaymentIntentId),
+  });
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -1756,6 +1790,17 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
       [pendingId]
     );
     const pending = rows[0];
+
+    console.info("[FLOW][4][API] PENDING LOOKUP", {
+      pendingServiceRequestId: pendingId,
+      found: Boolean(pending),
+      pendingHomeownerUserId: pending?.homeowner_user_id ?? null,
+      pendingStatus: pending?.status ?? null,
+      paymentStatus: pending?.payment_status ?? null,
+      selectedAction: pending?.selected_action ?? null,
+      managedJobId: pending?.managed_job_id ?? null,
+      assessmentStatus: pending?.assessment_status ?? null,
+    });
 
     // The pending row is deliberately deleted after conversion. A retry therefore
     // needs another idempotency path instead of treating "not found" as failure.
@@ -1795,6 +1840,11 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
       }
 
       if (existingJob && (!expectedHomeownerId || Number(existingJob.homeowner_user_id) === expectedHomeownerId)) {
+        console.info("[FLOW][4][API] ALREADY CONVERTED", {
+          pendingServiceRequestId: pendingId,
+          managedJobId: existingJob.id,
+          managedJobStatus: existingJob.status,
+        });
         await client.query('COMMIT');
         return { ok: true, alreadyConverted: true, job: existingJob };
       }
@@ -1903,7 +1953,7 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
       ) VALUES (
         $1,$2,'paid_for_dispatch',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
         $14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,
-        $30,$31,$32,$33,$34,$35,$36,$37,'managed',$38,$39,'ready',NULL,NULL,NOW(),
+        $30,$31,$32,$33,$34,$35,$36,$37,'managed',$38,$39,'ready',NULL,NOW(),
         $40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,NOW(),$51,'PAID_NEEDS_REVIEW'
       )
       RETURNING *`,
@@ -1963,6 +2013,14 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
     );
 
     const job = jobs[0];
+    console.info("[FLOW][4][API] MANAGED JOB CREATED", {
+      pendingServiceRequestId: pendingId,
+      managedJobId: job?.id || null,
+      managedJobStatus: job?.status || null,
+      paymentStatus: payment.paymentStatus || null,
+      paymentType,
+      amountCents: paidAmountCents,
+    });
     const bookingId = formatBookingId(job.id, bookingDate);
     await client.query(
       `UPDATE managed_jobs
@@ -1987,6 +2045,13 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
       );
     }
 
+    console.info("[FLOW][4][API] PAYMENT LINKED TO MANAGED JOB", {
+      pendingServiceRequestId: pendingId,
+      managedJobId: job.id,
+      stripeSessionId: stripeSessionId ? String(stripeSessionId).slice(0, 18) : null,
+      paymentIntentPresent: Boolean(stripePaymentIntentId),
+    });
+
     // IMPORTANT: delete the exact pending row. It is no longer the source of truth
     // once the managed job exists.
     const deleted = await client.query(
@@ -1999,7 +2064,18 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
       });
     }
 
+    console.info("[FLOW][4][API] PENDING REQUEST FINALIZED/DELETED", {
+      pendingServiceRequestId: pendingId,
+      managedJobId: job.id,
+    });
+
     await client.query('COMMIT');
+
+    console.info("[FLOW][4][API] CONVERSION COMMITTED", {
+      pendingServiceRequestId: pendingId,
+      managedJobId: job.id,
+      status: job.status,
+    });
 
     // Admin notification is part of the conversion contract. It runs after the
     // database transaction so a mail/notification failure can never roll back
@@ -4123,6 +4199,17 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const contactPhone = req.body?.contactPhone != null ? String(req.body.contactPhone).slice(0, 40) : pending.contact_phone;
       const amountCents = 12500;
 
+      console.info("[FLOW][3][API] PROFESSIONAL HIRE CHOSEN", {
+        pendingServiceRequestId: pendingId,
+        homeownerUserId: req.authUser.id,
+        selectedAction: pending.selected_action || null,
+        assessmentStatus: pending.assessment_status || null,
+        amountCents,
+        serviceTiming,
+        preferredDate,
+        preferredTimeSlot,
+      });
+
       await pool.query(
         `UPDATE pending_service_requests SET
            service_timing=$2,
@@ -4201,6 +4288,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           }),
         ]
       );
+
+      console.info("[FLOW][3][API] PROFESSIONAL CHECKOUT CREATED", {
+        pendingServiceRequestId: pendingId,
+        amountCents,
+        stripeSessionId: checkout.sessionId ? String(checkout.sessionId).slice(0, 18) : null,
+        hasUrl: Boolean(checkout.url),
+      });
 
       return res.json({ ok: true, url: checkout.url, amount: 125, amountCents, pendingServiceRequestId: pendingId });
     } catch (e) {
@@ -8852,6 +8946,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
             );
           }
 
+          console.info("[FLOW][4][WEBHOOK] STRIPE PAYMENT CONFIRMED", {
+            pendingServiceRequestId: pendingId,
+            userId,
+            amountCents,
+            stripeSessionId: session.id ? String(session.id).slice(0, 18) : null,
+            paymentIntentPresent: Boolean(session.payment_intent),
+          });
+
           const converted = await convertPendingServiceRequest(pool, pendingId, {
             amountCents,
             stripeSessionId: session.id,
@@ -8859,6 +8961,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
             homeownerUserId: userId || null,
             paymentType: 'pending_professional_fee',
           });
+          console.info("[FLOW][4][WEBHOOK] CONVERSION RESULT", {
+            pendingServiceRequestId: pendingId,
+            managedJobId: converted?.job?.id || null,
+            managedJobStatus: converted?.job?.status || null,
+            alreadyConverted: Boolean(converted?.alreadyConverted),
+          });
+
           if (converted.job) {
             const paymentMeta = JSON.stringify({
               source: 'pending_service_request',

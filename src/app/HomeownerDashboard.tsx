@@ -536,6 +536,7 @@ export default function HomeownerDashboard({
   const [discountMessage, setDiscountMessage] = useState<string | null>(null);
   const [dispatchCouponPreview, setDispatchCouponPreview] = useState<DispatchCouponPreview | null>(null);
   const [dispatchSuccessMsg, setDispatchSuccessMsg] = useState<string | null>(null);
+  const [paymentFinalizingId, setPaymentFinalizingId] = useState<number | null>(null);
   const [invoicePaymentMsg, setInvoicePaymentMsg] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<ManagedJob | null>(null);
   const [assessmentMsg, setAssessmentMsg] = useState<string | null>(null);
@@ -1689,6 +1690,11 @@ export default function HomeownerDashboard({
       const pendingReturnResult = sessionStorage.getItem("fixbridge-pending-service-request-result");
 
       if (pendingReturnId > 0 && pendingReturnResult) {
+        console.info("[FLOW][4] STRIPE RETURN DETECTED", {
+          pendingServiceRequestId: pendingReturnId,
+          result: pendingReturnResult,
+          screenBeforeReturn: tab,
+        });
         sessionStorage.removeItem("fixbridge-pending-service-request-id");
         sessionStorage.removeItem("fixbridge-pending-service-request-result");
 
@@ -1698,7 +1704,12 @@ export default function HomeownerDashboard({
           navigateTab("overview");
           void refresh();
         } else {
-          setDispatchSuccessMsg("Payment received. Confirming your service request…");
+          // Stripe returned successfully. The backend conversion is asynchronous.
+          // Keep the user on a dedicated finalizing state until the managed job
+          // is actually returned. Do not re-run the assessment or show the
+          // payment form again while conversion is in progress.
+          setPaymentFinalizingId(pendingReturnId);
+          setDispatchSuccessMsg(null);
           setTab("report");
           setStep("assessment");
           setAssessmentMode("expert");
@@ -1706,33 +1717,63 @@ export default function HomeownerDashboard({
           setPendingServiceRequestId(pendingReturnId);
 
           void (async () => {
-            for (let i = 0; i < 15; i++) {
+            let convertedJob: ManagedJob | null = null;
+
+            for (let i = 0; i < 40; i++) {
               try {
                 const result = await getPendingProfessionalRequest(pendingReturnId);
+                console.info("[FLOW][4] PAYMENT RECONCILIATION POLL", {
+                  attempt: i + 1,
+                  pendingServiceRequestId: pendingReturnId,
+                  ok: result.ok,
+                  converted: Boolean(result.converted),
+                  hasPendingServiceRequest: Boolean(result.pendingServiceRequest),
+                  managedJobId: result.managedJob?.id || null,
+                  managedJobStatus: result.managedJob?.status || null,
+                  message: result.message || null,
+                });
+
                 if (result.ok && result.managedJob) {
-                  setActiveJob(result.managedJob);
-                  setSelectedJobId(result.managedJob.id);
-                  setPendingAssessment(null);
-                  setSavedPendingRequests((prev) => prev.filter((item) => item.id !== pendingReturnId));
-                  setDispatchSuccessMsg("Payment successful. Your professional request is now a managed job.");
-                  await refresh();
-                  return;
+                  convertedJob = result.managedJob;
+                  console.info("[FLOW][4] PAYMENT COMPLETE -> MANAGED JOB FOUND", {
+                    pendingServiceRequestId: pendingReturnId,
+                    managedJobId: result.managedJob.id,
+                    managedJobStatus: result.managedJob.status,
+                  });
+                  break;
                 }
 
                 if (result.ok && result.pendingServiceRequest) {
-                  const assessed = await assessPendingServiceRequest(pendingReturnId);
-                  if (assessed.ok && assessed.pendingServiceRequest) {
-                    setPendingAssessment(assessed);
-                    setDispatchSuccessMsg(null);
-                    return;
-                  }
+                  // This is NOT a payment failure. The backend may still be
+                  // committing the managed job. Keep polling.
+                  console.info("[FLOW][4] PAYMENT CONVERSION STILL RUNNING", {
+                    pendingServiceRequestId: pendingReturnId,
+                    paymentStatus: (result.pendingServiceRequest as any)?.paymentStatus || null,
+                    selectedAction: (result.pendingServiceRequest as any)?.selectedAction || null,
+                    assessmentStatus: (result.pendingServiceRequest as any)?.assessmentStatus || null,
+                  });
                 }
               } catch {
-                /* keep polling */
+                // A transient response while the backend commits the conversion
+                // is expected. Never ask the homeowner to pay again.
               }
+
               await new Promise((resolve) => setTimeout(resolve, 1500));
             }
 
+            if (convertedJob) {
+              setPaymentFinalizingId(null);
+              setActiveJob(convertedJob);
+              setSelectedJobId(convertedJob.id);
+              setPendingAssessment(null);
+              setPendingServiceRequestId(null);
+              setSavedPendingRequests((prev) => prev.filter((item) => item.id !== pendingReturnId));
+              setDispatchSuccessMsg("Payment successful. Your professional request is now a managed job.");
+              await refresh();
+              return;
+            }
+
+            setPaymentFinalizingId(null);
             setDispatchSuccessMsg(null);
             setError(
               "Payment was received, but the service request is still being finalized. Refresh in a moment — do not pay again."
@@ -1879,6 +1920,13 @@ export default function HomeownerDashboard({
     }
     setCheckoutBusy(true);
     setError(null);
+    console.info("[FLOW][3] HOMECARE CHECKOUT START", {
+      planCode,
+      jobId: jobId || null,
+      pendingServiceRequestId: pendingServiceRequestId || null,
+      currentTab: tab,
+      currentAssessmentMode: assessmentMode,
+    });
     try {
       const returnTo = tab === "report" || diyView === "step" || diyView === "home" ? "diy" : tab === "go-pro" ? "dashboard" : tab;
       try {
@@ -1887,6 +1935,14 @@ export default function HomeownerDashboard({
         /* ignore */
       }
       const r = await startSubscription(planCode, jobId, returnTo, pendingServiceRequestId ?? undefined);
+      console.info("[FLOW][3] HOMECARE CHECKOUT RESPONSE", {
+        ok: r.ok,
+        alreadySubscribed: Boolean(r.alreadySubscribed),
+        managedJobId: r.managedJobId || null,
+        pendingServiceRequestId: pendingServiceRequestId || null,
+        hasCheckoutUrl: Boolean(r.url),
+        code: r.code || null,
+      });
       if (r.alreadySubscribed) {
         const me = await validateToken({ syncCheckout: true });
         if (me.ok) onUserUpdated?.(me.user);
@@ -1958,6 +2014,13 @@ export default function HomeownerDashboard({
 
   function handleSelectGoProPlan(plan: GoProPlanCard) {
     if (!plan.planCode) return;
+    console.info("[FLOW][3] PLAN SELECTED", {
+      planCode: plan.planCode,
+      selectedJobId: selectedJobId || null,
+      pendingServiceRequestId: pendingServiceRequestId || null,
+      currentMode: assessmentMode,
+      screen: tab === "report" ? "assessment" : tab,
+    });
     void handleSubscribe(selectedJobId || undefined, plan.planCode);
   }
 
@@ -2608,6 +2671,16 @@ export default function HomeownerDashboard({
   }
 
   async function submitIssue(path: "ai" | "experts") {
+    console.info("[FLOW][1] USER SUBMIT REQUEST", {
+      path,
+      propertyId,
+      hasMedia: Boolean(mediaDataUrl),
+      mediaType: mediaType || null,
+      hasDescription: Boolean(description.trim()),
+      requestSystemId: requestSystemId || null,
+      issueArea: issueArea || null,
+    });
+
     if (!description.trim()) {
       alert("Please describe the issue first.");
       setError("Please describe the issue first.");
@@ -2657,8 +2730,23 @@ export default function HomeownerDashboard({
     const startedAt = typeof performance !== "undefined" ? performance.now() : 0;
     const propZip = properties.find((p) => p.id === propertyId)?.zip || null;
     if (path === "ai") {
+      console.info("[FLOW][2] BUFFER/ASSESSMENT SCREEN", {
+        screen: "assessment",
+        path: "ai",
+        nextMode: "diy",
+        propertyId,
+        zip: propZip ? String(propZip).slice(0, 5) : null,
+      });
       openAssessmentFlow("ai");
     } else {
+      console.info("[FLOW][2] BUFFER/ASSESSMENT SCREEN", {
+        screen: "assessment",
+        path: "experts",
+        nextMode: "expert",
+        screenState: "hire_professional_loading",
+        propertyId,
+        zip: propZip ? String(propZip).slice(0, 5) : null,
+      });
       setAssessmentMode("expert");
       setReportPath("experts");
       setHireScreenOpen(true);
@@ -2726,6 +2814,12 @@ export default function HomeownerDashboard({
           return;
         }
 
+        console.info("[FLOW][3] REQUEST SAVED AS PENDING", {
+          pendingServiceRequestId: pendingId,
+          selectedPath: path,
+          selectedMode: path === "experts" ? "expert" : "diy",
+          nextScreen: "assessment",
+        });
         console.log("[Fixera] Pending service request CREATED:", pendingId);
 
         setPendingServiceRequestId(pendingId);
@@ -3986,7 +4080,27 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                       </p>
                     ) : null}
 
-                    {pendingAssessment?.pendingServiceRequest?.aiAssessment ? (
+                    {paymentFinalizingId === pendingServiceRequestId ? (
+                      <div className="rounded-2xl border border-[#FF4D1C]/30 bg-[#FFF7F3] p-6 shadow-sm dark:bg-[#2a1812]">
+                        <div className="flex items-start gap-3">
+                          <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-[#FF4D1C]" />
+                          <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#FF4D1C]">
+                              Payment received
+                            </p>
+                            <h3 className="mt-1 text-xl font-semibold">Finalizing your request...</h3>
+                            <p className="mt-2 text-sm text-muted-foreground">
+                              Your $125 payment was received. We are confirming your professional service request. Please wait...
+                            </p>
+                          </div>
+                        </div>
+                        <div
+                          className="fixera-buffer mt-4"
+                          role="progressbar"
+                          aria-label="Finalizing your request"
+                        />
+                      </div>
+                    ) : pendingAssessment?.pendingServiceRequest?.aiAssessment ? (
                       <div className="space-y-4">
                         <div className="rounded-[1.35rem] border border-border/70 bg-gradient-to-r from-background via-background to-[#FFF7F3] p-4 dark:to-[#241710] sm:p-5">
                           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -4005,7 +4119,13 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                           <div className="mt-4 grid gap-3 sm:grid-cols-2">
                             <button
                               type="button"
-                              onClick={() => setAssessmentMode("diy")}
+                              onClick={() => {
+                                console.info("[FLOW][3] USER CHOSE DIY", {
+                                  pendingServiceRequestId: pendingServiceRequestId || null,
+                                  screen: "pending_assessment",
+                                });
+                                setAssessmentMode("diy");
+                              }}
                               className={`group rounded-2xl border p-4 text-left transition ${assessmentMode === "diy"
                                 ? "border-[#FF4D1C] bg-[#FF4D1C]/8 ring-2 ring-[#FF4D1C]/10"
                                 : "border-border/70 bg-background/70 hover:border-[#FF4D1C]/35"
@@ -4029,7 +4149,14 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
 
                             <button
                               type="button"
-                              onClick={() => setAssessmentMode("expert")}
+                              onClick={() => {
+                                console.info("[FLOW][3] USER CHOSE HIRE", {
+                                  pendingServiceRequestId: pendingServiceRequestId || null,
+                                  screen: "pending_assessment",
+                                  nextScreen: "professional_service_request",
+                                });
+                                setAssessmentMode("expert");
+                              }}
                               className={`group rounded-2xl border p-4 text-left transition ${assessmentMode === "expert"
                                 ? "border-[#FF4D1C] bg-[#FF4D1C]/8 ring-2 ring-[#FF4D1C]/10"
                                 : "border-border/70 bg-background/70 hover:border-[#FF4D1C]/35"
@@ -4129,6 +4256,12 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                               setBusy={setBusy}
                               onError={setError}
                               onPaid={async (convertedJob) => {
+                                console.info("[FLOW][4] PAYMENT COMPLETE -> FRONTEND ONPAID", {
+                                  pendingServiceRequestId: pendingServiceRequestId || null,
+                                  managedJobId: convertedJob?.id || null,
+                                  convertedJobStatus: convertedJob?.status || null,
+                                  screen: "professional_service_request",
+                                });
                                 if (convertedJob) {
                                   setActiveJob(convertedJob);
                                   setSelectedJobId(convertedJob.id);
