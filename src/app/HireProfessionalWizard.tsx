@@ -954,7 +954,7 @@ function PendingHireProfessionalWizard({
           <label className="block text-sm font-medium">Contact phone
             <input value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} placeholder="Phone number" className="mt-2 w-full rounded-xl border border-border bg-background px-3 py-3" />
           </label>
-          <div className="flex gap-2"><button type="button" onClick={() => setStep("schedule")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 font-semibold"><ArrowLeft className="h-4 w-4" /> Back</button><button type="button" onClick={() => setStep("checkout")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white">Review price <ArrowRight className="h-4 w-4" /></button></div>
+          <div className="flex gap-2"><button type="button" onClick={() => setStep("schedule")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 font-semibold"><ArrowLeft className="h-4 w-4" /> Back</button><button type="button" disabled={!contactPhone.trim()} onClick={() => setStep("checkout")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Review price <ArrowRight className="h-4 w-4" /></button></div>
         </div>
       ) : null}
 
@@ -966,7 +966,7 @@ function PendingHireProfessionalWizard({
             <p className="mt-3 text-xs leading-relaxed text-muted-foreground">This is the required professional-service payment for this pending request. After successful Stripe payment, FixBridge converts the request into a managed job.</p>
           </div>
           <label className="flex items-start gap-3 rounded-xl border border-border p-4 text-sm"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-1" /><span>I understand that the {formatMoney(amount)} professional-service payment is required to submit this request.</span></label>
-          <div className="flex gap-2"><button type="button" onClick={() => setStep("info")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 font-semibold"><ArrowLeft className="h-4 w-4" /> Back</button><button type="button" disabled={busy} onClick={() => setStep("review")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white disabled:opacity-60">Review <ArrowRight className="h-4 w-4" /></button></div>
+          <div className="flex gap-2"><button type="button" onClick={() => setStep("info")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 font-semibold"><ArrowLeft className="h-4 w-4" /> Back</button><button type="button" disabled={busy || !consent} onClick={() => setStep("review")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Review <ArrowRight className="h-4 w-4" /></button></div>
         </div>
       ) : null}
 
