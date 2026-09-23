@@ -131,6 +131,7 @@ import DiySafetyFeedback from "./DiySafetyFeedback";
 import DiyIncidentReportForm from "./DiyIncidentReportForm";
 import { DIY_PROFESSIONAL_HANDOFF_MESSAGE, DIY_SESSION_REMINDER, riskStatusLabel } from "./diySafetyCopy";
 import HomeownerDiyExperience, { type DiyView } from "./diy/HomeownerDiyExperience";
+import { diyPlanSteps } from "./diy/diyPlanSteps";
 import { readDiyChat, readDiyProgress, writeDiyChat, writeDiyProgress } from "./diy/diyProgressStore";
 import { stopDiyAndEscalate } from "./diySafetyApi";
 import { fetchHomeownerConsentStatus, recordConsentAction } from "./homeownerConsentApi";
@@ -155,6 +156,16 @@ function formatChatMessage(text: string): string {
 function assessmentStringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function jobDiySteps(job: ManagedJob | null | undefined): string[] {
+  if (!job) return [];
+  return diyPlanSteps(
+    job.aiAssessment,
+    job.category || "",
+    job.serviceSubcategory || job.aiAssessment?.service_subcategory || "",
+    job.aiAssessment?.summary || job.title || "",
+  );
 }
 
 function hasRenderableAssessment(job: ManagedJob | null | undefined): job is ManagedJob & { aiAssessment: NonNullable<ManagedJob["aiAssessment"]> } {
@@ -611,7 +622,7 @@ export default function HomeownerDashboard({
     );
 
     const saved = readDiyProgress(numericalUserId, numericalJobId);
-    const steps = assessmentStringList(activeJob.aiAssessment?.diy_steps);
+    const steps = jobDiySteps(activeJob);
     if (saved && steps.length) {
       const next: Record<number, boolean> = {};
       for (const idx of saved.completedSteps) {
@@ -842,7 +853,7 @@ export default function HomeownerDashboard({
 
   async function completeCurrentDiyStep() {
     if (!activeJob) return;
-    const steps = assessmentStringList(activeJob.aiAssessment?.diy_steps);
+    const steps = jobDiySteps(activeJob);
     if (!steps.length) return;
     if (getHomeownerDiyRisk(activeJob) === "red") return;
     setDiySavingStep(true);
@@ -2927,7 +2938,7 @@ export default function HomeownerDashboard({
       const tools = (activeJob.aiAssessment?.tools_required || []).join(", ") || "None";
       const materials = (activeJob.aiAssessment?.materials_needed || []).join(", ") || "None";
       const guide = activeJob.aiAssessment?.diy_guide_steps?.[diyStepIndex];
-      const steps = (activeJob.aiAssessment?.diy_steps || []).map((s, idx) => `${idx + 1}. ${s}`).join("\n") || "No steps generated.";
+      const steps = jobDiySteps(activeJob).map((s, idx) => `${idx + 1}. ${s}`).join("\n") || "No steps generated.";
 
       const jobProperty =
         properties.find((p) => p.id === activeJob.propertyId) ||
@@ -4649,7 +4660,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                     summary={activeJob.aiAssessment?.summary || ""}
                                     photoUrl={activeJob.mediaType?.startsWith("image") ? activeJob.mediaDataUrl : null}
                                     risk={getHomeownerDiyRisk(activeJob)}
-                                    steps={assessmentStringList(activeJob.aiAssessment?.diy_steps)}
+                                    steps={jobDiySteps(activeJob)}
                                     guideSteps={activeJob.aiAssessment?.diy_guide_steps || []}
                                     tools={assessmentStringList(activeJob.aiAssessment?.tools_required)}
                                     materials={assessmentStringList(activeJob.aiAssessment?.materials_needed)}

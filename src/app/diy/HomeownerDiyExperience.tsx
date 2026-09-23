@@ -484,13 +484,15 @@ export default function HomeownerDiyExperience(props: Props) {
   const mismatch =
     Boolean(userPick && detected?.id && userPick !== detected.id && detected.confidence >= 0.75);
   const confidence = userPick ? Math.max(detected?.confidence || 0, 0.9) : detected?.confidence || 0;
-  const showConfirm = !browseOpen && Boolean(working) && (confidence >= 0.55 || Boolean(userPick) || Boolean(servicePick));
+  const showConfirm = !confirmedId && !browseOpen && Boolean(working) && (confidence >= 0.55 || Boolean(userPick) || Boolean(servicePick));
 
   function confirmCategory(id: string, nextSubcategory: string, source: CategorySource) {
     setConfirmedId(id);
     setBrowseOpen(false);
     writeConfirmedCategory(jobId, id, nextSubcategory, source);
-    if (!blocked) onOpenStep();
+    if (blocked) return;
+    onView("step");
+    onOpenStep();
   }
 
   useEffect(() => {
@@ -506,6 +508,7 @@ export default function HomeownerDiyExperience(props: Props) {
   function openGuided() {
     if (blocked) return;
     if (working) writeConfirmedCategory(jobId, working.id, detectedSub, userPick ? "user_selected" : "ai_detected");
+    onView("step");
     onOpenStep();
   }
 
@@ -750,9 +753,12 @@ export default function HomeownerDiyExperience(props: Props) {
       ) : (
         <>
           <div className="rounded-[22px] bg-white p-4">
-            <h3 className="text-[26px] font-semibold leading-tight text-[#2c2926]">{parsed.title}</h3>
+            <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">How to fix this</p>
+            <h3 className="mt-1 text-[26px] font-semibold leading-tight text-[#2c2926]">{parsed.title}</h3>
             {currentGuide?.goal ? (
               <p className="mt-2 text-[14px] text-[#5c574f]">{currentGuide.goal}</p>
+            ) : summary && stepIndex === 0 ? (
+              <p className="mt-2 text-[14px] text-[#5c574f]">{summary}</p>
             ) : null}
             <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">What to do</p>
             <p className="mt-1 whitespace-pre-line text-[15px] leading-relaxed text-[#5c574f]">{currentGuide?.instruction || parsed.body || parsed.title}</p>
