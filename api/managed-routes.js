@@ -1060,32 +1060,20 @@ async function runManagedJobAssessment(pool, job, viewer) {
 
   let propertyAiContext = '';
 
-  if (homeCarePro && job.property_id) {
-    const ctx = await buildPropertyAIContext(
-      pool,
-      job.property_id,
-      job.homeowner_user_id
-    );
-
-    const raw = ctx?.text || '';
-    const trade = String(job.category || '').toLowerCase();
-
-    const keep = /plumb/.test(trade)
-      ? /plumb|water|heater|address|property/i
-      : /hvac|heat|cool/.test(trade)
-        ? /hvac|heat|cool|filter|furnace|address|property/i
-        : /electr/.test(trade)
-          ? /electr|panel|address|property/i
-          : /address|property|year|type/i;
-
-    propertyAiContext = raw
-      .split('\n')
-      .filter(
-        (line, index) =>
-          index < 2 || keep.test(line)
-      )
-      .slice(0, 12)
-      .join('\n');
+  if (job.property_id) {
+    try {
+      const ctx = await buildPropertyAIContext(
+        pool,
+        job.property_id,
+        job.homeowner_user_id
+      );
+      propertyAiContext = String(ctx?.text || '').trim();
+    } catch (err) {
+      console.warn('[assessment] property context unavailable', {
+        propertyId: job.property_id,
+        error: err?.message || String(err),
+      });
+    }
   }
 
   const aiStarted = Date.now();
@@ -1099,7 +1087,7 @@ async function runManagedJobAssessment(pool, job, viewer) {
     description: job.description,
     imageDataUrl: job.media_data_url,
     locationContext: propertyAiContext
-      ? `${preCtx.locationContext}\n\nProperty Passport (HomeCare Pro):\n${propertyAiContext}`
+      ? `${preCtx.locationContext}\n\nThis homeowner's property (this login only):\n${propertyAiContext}`
       : preCtx.locationContext,
     zip: preCtx.zip,
     city: preCtx.city,

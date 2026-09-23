@@ -45,6 +45,8 @@ type Props = {
   causes: string[];
   stopConditions: string[];
   completionChecks?: string[];
+  difficulty?: string | null;
+  estimatedTime?: string | null;
   stepIndex: number;
   completed: Record<number, boolean>;
   bookmarked: boolean;
@@ -406,6 +408,8 @@ export default function HomeownerDiyExperience(props: Props) {
     causes,
     stopConditions,
     completionChecks = [],
+    difficulty,
+    estimatedTime,
     stepIndex,
     completed,
     bookmarked,
@@ -434,6 +438,7 @@ export default function HomeownerDiyExperience(props: Props) {
   } = props;
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const advanceTimerRef = useRef<number | null>(null);
   const [browseOpen, setBrowseOpen] = useState(false);
   const [confirmedId, setConfirmedId] = useState<string | null>(() => readConfirmedCategory(jobId)?.id || null);
   const doneCount = Object.values(completed).filter(Boolean).length;
@@ -486,13 +491,27 @@ export default function HomeownerDiyExperience(props: Props) {
   const confidence = userPick ? Math.max(detected?.confidence || 0, 0.9) : detected?.confidence || 0;
   const showConfirm = !confirmedId && !browseOpen && Boolean(working) && (confidence >= 0.55 || Boolean(userPick) || Boolean(servicePick));
 
+  function goToGuidedStep() {
+    if (blocked) return;
+    if (advanceTimerRef.current) {
+      window.clearTimeout(advanceTimerRef.current);
+      advanceTimerRef.current = null;
+    }
+    onView("step");
+    onOpenStep();
+  }
+
   function confirmCategory(id: string, nextSubcategory: string, source: CategorySource) {
     setConfirmedId(id);
     setBrowseOpen(false);
     writeConfirmedCategory(jobId, id, nextSubcategory, source);
     if (blocked) return;
-    onView("step");
-    onOpenStep();
+    onOpenIdeas();
+    onView("ideas");
+    if (advanceTimerRef.current) window.clearTimeout(advanceTimerRef.current);
+    advanceTimerRef.current = window.setTimeout(() => {
+      goToGuidedStep();
+    }, 1400);
   }
 
   useEffect(() => {
@@ -508,9 +527,14 @@ export default function HomeownerDiyExperience(props: Props) {
   function openGuided() {
     if (blocked) return;
     if (working) writeConfirmedCategory(jobId, working.id, detectedSub, userPick ? "user_selected" : "ai_detected");
-    onView("step");
-    onOpenStep();
+    goToGuidedStep();
   }
+
+  useEffect(() => {
+    return () => {
+      if (advanceTimerRef.current) window.clearTimeout(advanceTimerRef.current);
+    };
+  }, []);
 
   const chatPanel = (
     <section className="flex min-h-[420px] flex-col rounded-[22px] bg-white p-4 lg:min-h-[640px]" aria-label="DIY Chat">
@@ -864,7 +888,14 @@ export default function HomeownerDiyExperience(props: Props) {
       <HeaderBar title="Repair Ideas" onBack={onBack} />
       <div className="rounded-[22px] bg-white p-4">
         <h3 className="text-[22px] font-semibold text-[#2c2926]">{title}</h3>
-        <p className="mt-1 text-[14px] text-[#7a746c]">Simple fixes. Real results.</p>
+        <p className="mt-1 text-[14px] text-[#7a746c]">A 10+ year repair tech would walk a beginner through this next.</p>
+        {(difficulty || estimatedTime) ? (
+          <p className="mt-2 text-[13px] font-medium text-[#5c574f]">
+            {difficulty ? `Difficulty: ${difficulty}` : ""}
+            {difficulty && estimatedTime ? " · " : ""}
+            {estimatedTime ? `Time: ${estimatedTime}` : ""}
+          </p>
+        ) : null}
       </div>
       <DIYRepairSummaryCard title="Possible Cause" tone="bg-[#DDE8D2]">
         <ul className="space-y-2 text-[14px] text-[#31402c]">
@@ -878,10 +909,10 @@ export default function HomeownerDiyExperience(props: Props) {
       </DIYRepairSummaryCard>
       <DIYRepairSummaryCard title="Recommended Fix" tone="bg-[#DDEAF7]">
         <ol className="space-y-2">
-          {(steps.length ? steps : ["Request a professional if no safe steps were generated."]).slice(0, 6).map((step, i) => (
+          {(steps.length ? steps : ["Request a professional if no safe steps were generated."]).slice(0, 8).map((step, i) => (
             <li key={step} className="flex gap-3 text-[14px] text-[#243140]">
               <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-[12px] font-semibold">{i + 1}</span>
-              <span>{splitStep(step).title}</span>
+              <span>{step}</span>
             </li>
           ))}
         </ol>
@@ -911,6 +942,13 @@ export default function HomeownerDiyExperience(props: Props) {
           ))}
         </ul>
       </DIYRepairSummaryCard>
+      <button
+        type="button"
+        onClick={goToGuidedStep}
+        className="inline-flex w-full items-center justify-center rounded-[16px] bg-[#E07A4A] px-4 py-3.5 text-[16px] font-semibold text-white"
+      >
+        Start the repair steps
+      </button>
       <div className="rounded-[22px] bg-white p-4">
         <p className="mb-2 text-[14px] font-semibold text-[#2c2926]">Need help?</p>
         <DIYProfessionalCTA onClick={onHire} />

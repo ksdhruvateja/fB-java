@@ -2990,23 +2990,23 @@ export default function HomeownerDashboard({
         primaryProperty ||
         null;
       const jobHealth = normalizeHealthProfile(jobProperty?.healthProfile as PropertyHealthProfile | null);
-      const passportContext = hasHomeCarePro
-        ? buildPassportAiContext(jobProperty, jobHealth)
-          .split("\n")
-          .filter((line) => {
-            const hay = `${category} ${line}`.toLowerCase();
-            if (/plumb/.test(category.toLowerCase())) return /plumb|water|heater|property:|address:/.test(hay);
-            if (/hvac|heat|cool/.test(category.toLowerCase())) return /hvac|heat|cool|filter|furnace|property:|address:/.test(hay);
-            if (/electr/.test(category.toLowerCase())) return /electr|panel|property:|address:/.test(hay);
-            return /property:|address:|type:|built:/.test(line.toLowerCase());
-          })
-          .slice(0, 8)
-          .join("\n")
-        : null;
+      const yearBuilt = jobProperty?.yearBuilt != null ? Number(jobProperty.yearBuilt) : null;
+      const propertyAge = yearBuilt && yearBuilt > 1800 ? new Date().getFullYear() - yearBuilt : null;
+      const recentJobs = jobs
+        .filter((item) => item.propertyId === jobProperty?.id && item.id !== activeJob.id)
+        .slice(0, 6)
+        .map((item) => `${item.title || item.category} (${item.status})`)
+        .join("; ");
+      const passportContext = [
+        jobProperty ? `Property: ${jobProperty.label || jobProperty.addressLine1 || "this home"}` : "",
+        yearBuilt ? `Year built: ${yearBuilt}${propertyAge != null ? ` (about ${propertyAge} years old)` : ""}` : "Year built: not on file for this login",
+        recentJobs ? `Previous service records: ${recentJobs}` : "Previous service records: none on file for this login",
+        hasHomeCarePro ? buildPassportAiContext(jobProperty, jobHealth) : "",
+      ].filter(Boolean).join("\n");
 
       const systemContext: ChatMessage = {
         role: "user",
-        content: `Instructions: You are a friendly, helpful home-repair AI coach helping the homeowner clarify the step-by-step DIY Action Plan generated for their issue.
+        content: `Instructions: You are a licensed repair professional with 10+ years of experience teaching a beginner homeowner. Use the uploaded photo, this login's property age, and previous service records with the written issue. Do not invent records that are not listed.
 Here is the context of the repair issue they are trying to solve:
 - Category: ${category}
 - Subcategory: ${activeJob.serviceSubcategory || activeJob.aiAssessment?.service_subcategory || "unspecified"}
@@ -3015,8 +3015,9 @@ Here is the context of the repair issue they are trying to solve:
 - Current instruction: ${guide?.instruction || "not started"}
 - Required Tools: ${tools}
 - Materials Needed: ${materials}
+- Difficulty: ${activeJob.aiAssessment?.diy_difficulty || activeJob.aiAssessment?.complexity || "unspecified"}
 
-Relevant property context:
+This homeowner's property context:
 ${passportContext || "No extra property context for this step."}
 
 Instructions/Steps:
@@ -4783,6 +4784,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                     causes={assessmentStringList(activeJob.aiAssessment?.likely_causes)}
                                     stopConditions={assessmentStringList(activeJob.aiAssessment?.stop_conditions)}
                                     completionChecks={assessmentStringList(activeJob.aiAssessment?.completion_checks)}
+                                    difficulty={activeJob.aiAssessment?.diy_difficulty || activeJob.aiAssessment?.complexity || ""}
+                                    estimatedTime={activeJob.aiAssessment?.estimated_time || ""}
                                     stepIndex={diyStepIndex}
                                     completed={diyCompletedSteps}
                                     bookmarked={diyBookmarked}
