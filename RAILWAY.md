@@ -6,7 +6,9 @@ Project: [sublime-optimism / fB-java](https://railway.com/project/1d9eacd5-0eaf-
 
 Public URL: https://fb-java-production.up.railway.app
 
-Repo: [ksdhruvateja/fB-java](https://github.com/ksdhruvateja/fB-java)
+Repo: [ksdhruvateja/fB-java](https://github.com/ksdhruvateja/fB-java) (`main` only)
+
+`https://fixbridge.netlify.app` is a leftover host. It is not production. `fixbridge.us` is a parked Hostinger page, not this app.
 
 ## How it runs
 

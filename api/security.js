@@ -2,7 +2,7 @@
  * Shared security helpers for the FixBridge API.
  */
 
-import { railwayPublicOrigin } from './hosting.js';
+import { RAILWAY_PRODUCTION_URL, railwayPublicOrigin } from './hosting.js';
 
 const DEFAULT_DEV_ORIGINS = [
   'http://localhost:5000',
@@ -21,6 +21,7 @@ export function getAllowedOrigins() {
     process.env.DEPLOY_PRIME_URL,
     process.env.RAILWAY_STATIC_URL,
     railwayPublicOrigin(),
+    RAILWAY_PRODUCTION_URL,
     process.env.CORS_ORIGINS,
   ]
     .filter(Boolean)

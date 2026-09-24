@@ -24,6 +24,7 @@ import {
   saveMarketSnapshot,
 } from './market-intelligence.js';
 import { zip5 } from './address-utils.js';
+import { resolvePublicAppUrl } from './hosting.js';
 import { isPaidHomeCarePlan } from './subscription-catalog.js';
 import {
   activateSubscriptionFromCheckout,
@@ -7036,7 +7037,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
             ? 'cleaning service'
             : 'home service'
         : job.title || 'service';
-      const appUrl = process.env.APP_URL || 'https://fixbridge.netlify.app';
+      const appUrl = process.env.APP_URL || resolvePublicAppUrl();
       const jobLink = `${appUrl}/?job=${jobId}`;
       const photoNote =
         report.beforePhotoUrl || report.afterPhotoUrl

@@ -1,2 +1,2 @@
-/api/*  /.netlify/functions/api/:splat  200!
-/*    /index.html   200
+# Legacy Netlify hostname → Railway production (force)
+/*  https://fb-java-production.up.railway.app/:splat  301!

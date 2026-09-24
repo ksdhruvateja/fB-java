@@ -28,10 +28,25 @@ app.use((req, res, next) => {
 });
 
 if (serveSpa && fs.existsSync(path.join(distDir, 'index.html'))) {
-  app.use(express.static(distDir, { index: false, maxAge: '1h' }));
+  app.use(
+    express.static(distDir, {
+      index: false,
+      maxAge: '1h',
+      setHeaders(res, filePath) {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-store');
+          return;
+        }
+        if (/\.[a-f0-9]{8,}\.(js|css)$/i.test(filePath) || /index-[A-Za-z0-9_-]+\.(js|css)$/i.test(filePath)) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        }
+      },
+    })
+  );
   app.use((req, res, next) => {
     if (req.path.startsWith('/api')) return next();
     if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    res.setHeader('Cache-Control', 'no-store');
     res.sendFile(path.join(distDir, 'index.html'), (err) => {
       if (err) next(err);
     });

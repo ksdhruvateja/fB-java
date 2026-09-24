@@ -1,6 +1,15 @@
 /**
  * Hosting detection and public URL helpers (Netlify + Railway).
+ *
+ * Production source of truth is Railway (ksdhruvateja/fB-java main).
+ * fixbridge.netlify.app is a leftover second deploy and must not be the fallback origin.
  */
+
+export const RAILWAY_PRODUCTION_URL = 'https://fb-java-production.up.railway.app';
+
+export function isLegacyNetlifyUrl(value = '') {
+  return /fixbridge\.netlify\.app/i.test(String(value));
+}
 
 export function isRailwayRuntime() {
   return Boolean(
@@ -44,9 +53,16 @@ export function railwayPublicOrigin() {
 }
 
 export function resolvePublicAppUrl() {
-  const fromEnv = String(process.env.APP_URL || process.env.URL || '').trim();
-  if (fromEnv) return fromEnv.replace(/\/$/, '');
-  return railwayPublicOrigin();
+  const fromEnv = String(process.env.APP_URL || process.env.URL || process.env.BRAND_DOMAIN || '')
+    .trim()
+    .replace(/\/$/, '');
+  if (fromEnv && !isLegacyNetlifyUrl(fromEnv)) return fromEnv;
+  if (isRailwayRuntime()) return railwayPublicOrigin() || RAILWAY_PRODUCTION_URL;
+  if (fromEnv) return RAILWAY_PRODUCTION_URL;
+  if (process.env.NODE_ENV === 'production' || isDeployedProduction()) {
+    return railwayPublicOrigin() || RAILWAY_PRODUCTION_URL;
+  }
+  return 'http://localhost:5000';
 }
 
 export function resolveBuildId() {

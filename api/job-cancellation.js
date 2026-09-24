@@ -1,4 +1,5 @@
 import { brand } from './brand.js';
+import { resolvePublicAppUrl } from './hosting.js';
 import { sendEmailSafe, notifyOps } from './notify.js';
 import { cancelPaymentIntent } from './stripe.js';
 import { cancelServiceReminderForJob, TERMINAL_JOB_STATUSES } from './service-reminders.js';
@@ -43,12 +44,7 @@ function reasonLabel(code, fallback) {
 }
 
 function appBaseUrl() {
-  return (
-    process.env.APP_URL?.trim() ||
-    process.env.URL?.trim() ||
-    brand.domain?.replace(/\/$/, '') ||
-    'https://fixbridge.netlify.app'
-  );
+  return resolvePublicAppUrl();
 }
 
 async function hasSucceededPayment(pool, jobId) {

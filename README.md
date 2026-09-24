@@ -5,7 +5,7 @@ React + Vite app that connects homeowners with local contractors. Auth, jobs, pr
 ## Stack
 
 - **Frontend**: React 18 + Vite 6, Tailwind CSS v4, React Router 7
-- **API**: Express (`api/app.js`) — local Node server or Netlify Function
+- **API**: Express (`api/app.js`) — local Node server, or Railway (`node server.js`) serving the same SPA
 - **Database**: Neon Postgres (`NEON_DATABASE_URL`), or in-memory fallback for local-only
 - **AI**: Fixera is the central assistant. Experiential Labs GPT-6 Astra is the first connected provider (`EXPLABS_API_KEY` server-side). Features call Fixera, not a vendor SDK.
 
@@ -20,15 +20,22 @@ pnpm run dev
 - Vite client: http://localhost:5000  
 - API: http://localhost:3001 (proxied from Vite as `/api/*`)
 
-## Railway hosting
+## Railway hosting (production)
 
-Production can run as one Node service on Railway. Config and env checklist: `RAILWAY.md`.
+Production is one Node service on Railway. Source of truth: `ksdhruvateja/fB-java` `main`. Checklist: `RAILWAY.md`.
 
+- Public URL: https://fb-java-production.up.railway.app
 - Build: `npm run build`
 - Start: `npm start` (`node server.js` on `0.0.0.0:$PORT`)
 - Health: `/api/health`
 
-## Netlify hosting
+The SPA and API are same-origin (`/api/*`). Do not use `https://fixbridge.netlify.app` as production.
+
+## Netlify hosting (legacy)
+
+`https://fixbridge.netlify.app` is a leftover second deploy. It is **not** production.
+
+`netlify.toml` and `public/_redirects` 301 every path to Railway so a future Netlify publish from this repo cannot keep serving a stale frontend. Until that Netlify site is republished from this repo, the old hostname can still show old UI.
 
 Config is in `netlify.toml`:
 
@@ -54,7 +61,7 @@ Set these under **Site settings → Environment variables** (and rebuild after c
 | `GMAIL_USER` | For email | Gmail address used for SMTP (password reset + notifications) |
 | `GMAIL_APP_PASSWORD` | For email | Google App Password (not your normal Gmail password) |
 | `FROM_EMAIL` | Optional | e.g. `FixBridge <you@gmail.com>` (defaults to `GMAIL_USER`) |
-| `APP_URL` | Recommended | `https://YOUR-SITE.netlify.app` (reset-link base URL) |
+| `APP_URL` | Recommended | `https://fb-java-production.up.railway.app` |
 | `VITE_GEMINI_API_KEY` | Optional | Build-time; AI assessment |
 
 Do not commit `.env`. Use `.env.example` as the template.
