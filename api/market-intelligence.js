@@ -382,18 +382,28 @@ export async function loadMarketData(pool, { zip, trade, jobId = null, limit = 1
 
   const zipPlace = await lookupZipPlace(z);
 
-  const { rows: jobs } = await pool.query(
-    `SELECT id, zip, city, state, category, title, status, created_at, updated_at,
-            customer_retail_estimate_low, customer_retail_estimate_high, ai_assessment
-     FROM managed_jobs
-     WHERE zip IS NOT NULL
-       AND ($1::bigint IS NULL OR id <> $1)
-       AND (zip = $2 OR zip LIKE $3 OR LEFT(zip, 2) = LEFT($2, 2))
-       AND status NOT IN ('draft', 'canceled')
-     ORDER BY created_at DESC
-     LIMIT $4`,
-    [jobId, z, `${prefix3}%`, limit]
-  );
+  let jobs = [];
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, zip, city, state, category, title, status, created_at, updated_at,
+              customer_retail_estimate_low, customer_retail_estimate_high, ai_assessment
+       FROM managed_jobs
+       WHERE zip IS NOT NULL
+         AND ($1::bigint IS NULL OR id <> $1)
+         AND (zip = $2 OR zip LIKE $3 OR SUBSTRING(zip FROM 1 FOR 2) = SUBSTRING($2 FROM 1 FOR 2))
+         AND status NOT IN ('draft', 'canceled')
+       ORDER BY created_at DESC
+       LIMIT $4`,
+      [jobId, z, `${prefix3}%`, limit]
+    );
+    jobs = rows;
+  } catch (err) {
+    console.warn('[market] comparable jobs unavailable, continuing assessment', {
+      zip: z,
+      error: err?.message || String(err),
+    });
+    return { jobs: [], bids: [], completedPayments: [], zipPlace };
+  }
 
   const filtered = cat
     ? jobs.filter((j) => normalizeCategory(j.category || j.title || '') === cat)

@@ -1,11 +1,11 @@
 /**
- * Live Netlify production verification for async AI assessment.
+ * Live Railway production verification for async AI assessment.
  * Usage: node scripts/verify-production-assessment.mjs
  * Optional: API_URL, SMOKE_HOMEOWNER_EMAIL, SMOKE_HOMEOWNER_PASSWORD
  */
 import { parseJsonResponse } from './smoke-assessment-poll.mjs';
 
-const API = (process.env.API_URL || 'https://fixbridge.netlify.app').replace(/\/$/, '');
+const API = (process.env.API_URL || 'https://fb-java-production.up.railway.app').replace(/\/$/, '');
 const stamp = Date.now();
 
 const results = [];

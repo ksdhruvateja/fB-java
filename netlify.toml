@@ -1,65 +1,36 @@
+# LEGACY HOST — not production.
+# Production is Railway: https://fb-java-production.up.railway.app
+# Source of truth: ksdhruvateja/fB-java main
+#
+# If this repo is connected to Netlify, send every request to Railway so
+# visitors cannot get a second, stale frontend + API.
+
 [build]
-  # Plain npm run build — do NOT set NODE_ENV=production in Netlify *build* scope (skips devDependencies).
-  # Scope NODE_ENV to Functions/Runtime only in the Netlify UI, or rely on CONTEXT=production at runtime.
   command = "npm run build"
   publish = "dist"
   functions = "netlify/functions"
 
 [build.environment]
   NODE_VERSION = "22"
-  SERVICE_REMINDER_SCHEDULER_MODE = "netlify_scheduled_function_configured"
-  # Install devDependencies during CI even if NODE_ENV=production is scoped to Builds in the Netlify UI.
-  # Remove NODE_ENV from Builds scope in the UI when possible; this is a safe fallback until then.
   NPM_CONFIG_PRODUCTION = "false"
-  # Force npm (package-lock.json) — avoids stale pnpm-lock drift on Netlify CI.
-  NPM_FLAGS = "--prefer-offline"
-  # Vite embeds these at build time — also set them in the Netlify UI.
-  # VITE_GEMINI_API_KEY =
-  # VITE_GOOGLE_MAPS_API_KEY =
-  # Secrets scanner: these vars are server-side AI config and smoke-test
-  # credentials — their values are safe to appear in server source files.
-  # They are never inlined into the client bundle (no VITE_ prefix).
-  SECRETS_SCAN_OMIT_KEYS = "AI_BASE_URL,AI_MODEL,AI_PROVIDER,SMOKE_HOMEOWNER_EMAIL,SMOKE_CONTRACTOR_EMAIL,SMOKE_HOMEOWNER_PASSWORD,SMOKE_CONTRACTOR_PASSWORD,SMOKE_ADMIN_EMAIL,SMOKE_ADMIN_PASSWORD"
+  VITE_SITE_URL = "https://fb-java-production.up.railway.app"
+  APP_URL = "https://fb-java-production.up.railway.app"
 
-# Runtime env for production deploys (API + scheduled functions) — not available from [build.environment] alone.
 [context.production.environment]
-  FIXBRIDGE_HOSTING = "netlify"
-  SERVICE_REMINDER_SCHEDULER_MODE = "netlify_scheduled_function_configured"
+  FIXBRIDGE_HOSTING = "railway"
+  APP_URL = "https://fb-java-production.up.railway.app"
 
-[functions]
-  directory = "netlify/functions"
-  # Bundle all deps (including express). Marking express as external under pnpm
-  # caused production 502s: Runtime.ImportModuleError Cannot find module 'express'.
-  node_bundler = "esbuild"
-
-[functions."process-service-reminders"]
-  schedule = "*/15 * * * *"
-
-# Express API (serverless-http) — keep before the SPA catch-all
-[[redirects]]
-  from = "/api/*"
-  to = "/.netlify/functions/api/:splat"
-  status = 200
-  force = true
-
-# Do not 301 www → apex. A stale apex cache still pointed at Hostinger parking,
-# so that redirect sent visitors to the parking page and they never reached FixBridge.
-# Both hosts serve this site directly.
-
-# SPA fallback for client-side navigation (login/dashboard state lives in history)
+# Send the entire leftover Netlify hostname to Railway, including /api.
 [[redirects]]
   from = "/*"
-  to = "/index.html"
-  status = 200
+  to = "https://fb-java-production.up.railway.app/:splat"
+  status = 301
+  force = true
 
-# Browser security headers for the static site
 [[headers]]
   for = "/*"
   [headers.values]
+    Cache-Control = "no-store"
     X-Frame-Options = "DENY"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
-    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
-    # same-origin breaks Google Identity Services popups (blank/white opener after auth).
-    # Google requires same-origin-allow-popups for Sign in with Google button / One Tap.
-    Cross-Origin-Opener-Policy = "same-origin-allow-popups"

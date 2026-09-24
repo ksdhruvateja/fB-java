@@ -126,11 +126,12 @@ import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 import DiySafetyStartModal from "./DiySafetyStartModal";
 import DiyGuidedSafetyBar from "./DiyGuidedSafetyBar";
 import DiyEmergencyBanner from "./DiyEmergencyBanner";
-import DiyStopProfessionalBar from "./DiyStopProfessionalBar";
 import DiySafetyFeedback from "./DiySafetyFeedback";
 import DiyIncidentReportForm from "./DiyIncidentReportForm";
 import { DIY_PROFESSIONAL_HANDOFF_MESSAGE, DIY_SESSION_REMINDER, riskStatusLabel } from "./diySafetyCopy";
-import HomeownerDiyExperience, { type DiyView } from "./diy/HomeownerDiyExperience";
+import { type DiyView } from "./diy/HomeownerDiyExperience";
+import DiyAnalysisPanel from "./diy/DiyAnalysisPanel";
+import { diyPlanSteps } from "./diy/diyPlanSteps";
 import { readDiyChat, readDiyProgress, writeDiyChat, writeDiyProgress } from "./diy/diyProgressStore";
 import { stopDiyAndEscalate } from "./diySafetyApi";
 import { fetchHomeownerConsentStatus, recordConsentAction } from "./homeownerConsentApi";
@@ -155,6 +156,16 @@ function formatChatMessage(text: string): string {
 function assessmentStringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function jobDiySteps(job: ManagedJob | null | undefined): string[] {
+  if (!job) return [];
+  return diyPlanSteps(
+    job.aiAssessment,
+    job.category || "",
+    job.serviceSubcategory || job.aiAssessment?.service_subcategory || "",
+    job.aiAssessment?.summary || job.title || "",
+  );
 }
 
 function hasRenderableAssessment(job: ManagedJob | null | undefined): job is ManagedJob & { aiAssessment: NonNullable<ManagedJob["aiAssessment"]> } {
@@ -428,6 +439,10 @@ export default function HomeownerDashboard({
   const [pendingServiceRequestId, setPendingServiceRequestId] = useState<number | null>(null);
   const [savedPendingRequests, setSavedPendingRequests] = useState<PendingProfessionalRequest[]>([]);
   const [pendingAssessment, setPendingAssessment] = useState<PendingAssessmentSuccess | null>(null);
+  const [diyGuidanceOpen, setDiyGuidanceOpen] = useState(false);
+  const [diyAnalysisOpen, setDiyAnalysisOpen] = useState(false);
+  const diyAutoOpenedRef = useRef<string | null>(null);
+  const [assessmentFailed, setAssessmentFailed] = useState(false);
   const [jobFocus, setJobFocus] = useState<"quote" | "invoice" | "tracking" | "completion" | "dispute" | null>(null);
   const [inboxConversationId, setInboxConversationId] = useState<number | null>(null);
   const [staleNotice, setStaleNotice] = useState<string | null>(null);
@@ -611,7 +626,7 @@ export default function HomeownerDashboard({
     );
 
     const saved = readDiyProgress(numericalUserId, numericalJobId);
-    const steps = assessmentStringList(activeJob.aiAssessment?.diy_steps);
+    const steps = jobDiySteps(activeJob);
     if (saved && steps.length) {
       const next: Record<number, boolean> = {};
       for (const idx of saved.completedSteps) {
@@ -625,6 +640,12 @@ export default function HomeownerDashboard({
     }
     setDiyView("home");
     setDiyStepSaved(false);
+    try {
+      const key = activeJob?.id ? `fixbridge-diy-open:${activeJob.id}` : "";
+      setDiyGuidanceOpen(Boolean(key && sessionStorage.getItem(key) === "1"));
+    } catch {
+      setDiyGuidanceOpen(false);
+    }
   }, [activeJob?.id, user.id, activeJob?.aiAssessment?.diy_steps?.length]);
 
   // useEffect(() => {
@@ -842,7 +863,7 @@ export default function HomeownerDashboard({
 
   async function completeCurrentDiyStep() {
     if (!activeJob) return;
-    const steps = assessmentStringList(activeJob.aiAssessment?.diy_steps);
+    const steps = jobDiySteps(activeJob);
     if (!steps.length) return;
     if (getHomeownerDiyRisk(activeJob) === "red") return;
     setDiySavingStep(true);
@@ -1202,6 +1223,8 @@ export default function HomeownerDashboard({
     setAssessmentMsg(null);
     setPendingAssessment(null);
     setPendingServiceRequestId(null);
+    setDiyGuidanceOpen(false);
+    setAssessmentFailed(false);
     const handoff = readAssistantHandoff();
     if (handoff) {
       if (handoff.propertyId) setPropertyId(handoff.propertyId);
@@ -1973,6 +1996,33 @@ export default function HomeownerDashboard({
   );
   const homeCareSub = user.homeCareSubscription ?? null;
 
+  useEffect(() => {
+    if (assessmentMode !== "diy") {
+      setDiyAnalysisOpen(false);
+      diyAutoOpenedRef.current = null;
+      return;
+    }
+    const pendingReady = Boolean(pendingAssessment?.pendingServiceRequest?.aiAssessment);
+    const jobReady = Boolean(activeJob && hasRenderableAssessment(activeJob));
+    const jobLoading = Boolean(
+      activeJob && (activeJob.assessmentStatus === "pending" || activeJob.assessmentStatus === "processing")
+    );
+    const key = pendingReady
+      ? `pending:${pendingServiceRequestId || "current"}`
+      : jobReady || jobLoading
+        ? `job:${activeJob?.id}:${activeJob?.assessmentStatus || "ready"}`
+        : "";
+    if (!key || diyAutoOpenedRef.current === key) return;
+    diyAutoOpenedRef.current = key;
+    setDiyAnalysisOpen(true);
+  }, [
+    assessmentMode,
+    pendingAssessment,
+    pendingServiceRequestId,
+    activeJob,
+    hasDiyAccess,
+  ]);
+
   function handleProActivated(feature: ProFeatureId | null) {
     if (!feature) return;
     if (feature === "document_vault") setTab("documents");
@@ -2312,17 +2362,17 @@ export default function HomeownerDashboard({
         );
 
         const apiStartedAt = Date.now();
-
-        const result =
-          await assessPendingServiceRequest(
-            recordId,
-            {
-              force,
-              aiAssessmentConsent:
-                (aiAssessmentConsentRef.current as any) ??
-                undefined,
-            }
-          );
+        const consent = aiAssessmentConsentRef.current ?? prepareAiConsent();
+        let result = await assessPendingServiceRequest(recordId, {
+          force,
+          aiAssessmentConsent: consent,
+        });
+        if (!result.ok && result.code === "AI_ASSESSMENT_ACK_REQUIRED") {
+          result = await assessPendingServiceRequest(recordId, {
+            force,
+            aiAssessmentConsent: prepareAiConsent(),
+          });
+        }
 
         console.log(
           "[Fixera] AFTER assessPendingServiceRequest()",
@@ -2383,15 +2433,20 @@ export default function HomeownerDashboard({
 
       const apiStartedAt = Date.now();
 
-      const result = await assessManagedJob(
+      const consent = aiAssessmentConsentRef.current ?? prepareAiConsent();
+      let result = await assessManagedJob(
         recordId,
         {
           force,
-          aiAssessmentConsent:
-            (aiAssessmentConsentRef.current as any) ??
-            undefined,
+          aiAssessmentConsent: consent,
         }
       );
+      if (!result.ok && result.code === "AI_ASSESSMENT_ACK_REQUIRED") {
+        result = await assessManagedJob(recordId, {
+          force,
+          aiAssessmentConsent: prepareAiConsent(),
+        });
+      }
 
       console.log(
         "[Fixera] AFTER assessManagedJob()",
@@ -2444,8 +2499,6 @@ export default function HomeownerDashboard({
       ) {
         assessInFlightRef.current = null;
       }
-
-      aiAssessmentConsentRef.current = null;
     }
   }
 
@@ -2594,6 +2647,39 @@ export default function HomeownerDashboard({
     scrollReportToTop();
   }
 
+  function diyGuidanceKey(id?: number | null) {
+    return id ? `fixbridge-diy-open:${id}` : "";
+  }
+
+  function openDiyGuidance(id?: number | null) {
+    setDiyGuidanceOpen(true);
+    setDiyAnalysisOpen(true);
+    const key = diyGuidanceKey(id);
+    if (key) {
+      try {
+        sessionStorage.setItem(key, "1");
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  function hireFromDiyPanel() {
+    setDiyAnalysisOpen(false);
+    if (activeJob) {
+      openProfessionalFromDiy();
+      return;
+    }
+    hireFromAssessment();
+  }
+
+  function hireFromAssessment() {
+    setAssessmentMode("expert");
+    setReportPath("experts");
+    setHireScreenOpen(true);
+    if (activeJob) setSelectedJobId(activeJob.id);
+  }
+
   function returnToIntakeDetails() {
     setAssessLoadingStep(null);
     setAssessLoadingZip(null);
@@ -2655,6 +2741,8 @@ export default function HomeownerDashboard({
     setBusy(true);
     setError(null);
     setAssessmentMsg(null);
+    setAssessmentFailed(false);
+    setDiyGuidanceOpen(false);
     const startedAt = typeof performance !== "undefined" ? performance.now() : 0;
     const propZip = properties.find((p) => p.id === propertyId)?.zip || null;
     if (path === "ai") {
@@ -2757,6 +2845,7 @@ export default function HomeownerDashboard({
         console.log("[Fixera] Pending Fixera assessment RESULT:", assessed);
 
         if (!assessed.ok) {
+          setAssessmentFailed(true);
           setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
           setPendingAssessment(null);
           return;
@@ -2814,6 +2903,7 @@ export default function HomeownerDashboard({
       }
       const assessed = await runAssessWithProgress(created.job.id, propZip);
       if (!assessed.ok || !assessed.job) {
+        setAssessmentFailed(true);
         setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
         setActiveJob(created.job);
       } else {
@@ -2927,7 +3017,7 @@ export default function HomeownerDashboard({
       const tools = (activeJob.aiAssessment?.tools_required || []).join(", ") || "None";
       const materials = (activeJob.aiAssessment?.materials_needed || []).join(", ") || "None";
       const guide = activeJob.aiAssessment?.diy_guide_steps?.[diyStepIndex];
-      const steps = (activeJob.aiAssessment?.diy_steps || []).map((s, idx) => `${idx + 1}. ${s}`).join("\n") || "No steps generated.";
+      const steps = jobDiySteps(activeJob).map((s, idx) => `${idx + 1}. ${s}`).join("\n") || "No steps generated.";
 
       const jobProperty =
         properties.find((p) => p.id === activeJob.propertyId) ||
@@ -2935,23 +3025,23 @@ export default function HomeownerDashboard({
         primaryProperty ||
         null;
       const jobHealth = normalizeHealthProfile(jobProperty?.healthProfile as PropertyHealthProfile | null);
-      const passportContext = hasHomeCarePro
-        ? buildPassportAiContext(jobProperty, jobHealth)
-          .split("\n")
-          .filter((line) => {
-            const hay = `${category} ${line}`.toLowerCase();
-            if (/plumb/.test(category.toLowerCase())) return /plumb|water|heater|property:|address:/.test(hay);
-            if (/hvac|heat|cool/.test(category.toLowerCase())) return /hvac|heat|cool|filter|furnace|property:|address:/.test(hay);
-            if (/electr/.test(category.toLowerCase())) return /electr|panel|property:|address:/.test(hay);
-            return /property:|address:|type:|built:/.test(line.toLowerCase());
-          })
-          .slice(0, 8)
-          .join("\n")
-        : null;
+      const yearBuilt = jobProperty?.yearBuilt != null ? Number(jobProperty.yearBuilt) : null;
+      const propertyAge = yearBuilt && yearBuilt > 1800 ? new Date().getFullYear() - yearBuilt : null;
+      const recentJobs = jobs
+        .filter((item) => item.propertyId === jobProperty?.id && item.id !== activeJob.id)
+        .slice(0, 6)
+        .map((item) => `${item.title || item.category} (${item.status})`)
+        .join("; ");
+      const passportContext = [
+        jobProperty ? `Property: ${jobProperty.label || jobProperty.addressLine1 || "this home"}` : "",
+        yearBuilt ? `Year built: ${yearBuilt}${propertyAge != null ? ` (about ${propertyAge} years old)` : ""}` : "Year built: not on file for this login",
+        recentJobs ? `Previous service records: ${recentJobs}` : "Previous service records: none on file for this login",
+        hasHomeCarePro ? buildPassportAiContext(jobProperty, jobHealth) : "",
+      ].filter(Boolean).join("\n");
 
       const systemContext: ChatMessage = {
         role: "user",
-        content: `Instructions: You are a friendly, helpful home-repair AI coach helping the homeowner clarify the step-by-step DIY Action Plan generated for their issue.
+        content: `Instructions: You are a licensed repair professional with 10+ years of experience teaching a beginner homeowner. Use the uploaded photo, this login's property age, and previous service records with the written issue. Do not invent records that are not listed.
 Here is the context of the repair issue they are trying to solve:
 - Category: ${category}
 - Subcategory: ${activeJob.serviceSubcategory || activeJob.aiAssessment?.service_subcategory || "unspecified"}
@@ -2960,8 +3050,9 @@ Here is the context of the repair issue they are trying to solve:
 - Current instruction: ${guide?.instruction || "not started"}
 - Required Tools: ${tools}
 - Materials Needed: ${materials}
+- Difficulty: ${activeJob.aiAssessment?.diy_difficulty || activeJob.aiAssessment?.complexity || "unspecified"}
 
-Relevant property context:
+This homeowner's property context:
 ${passportContext || "No extra property context for this step."}
 
 Instructions/Steps:
@@ -4119,6 +4210,25 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                           </div>
                         ) : null}
 
+                        {(pendingAssessment.pricing?.message || pendingAssessment.pendingServiceRequest.pricing) ? (
+                          <div className="rounded-xl border border-border bg-card p-4 text-sm">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Local repair pricing</p>
+                            <p className="mt-1">
+                              {pendingAssessment.pricing?.message
+                                || (pendingAssessment.pendingServiceRequest.pricing as { message?: string } | undefined)?.message
+                                || "Local pricing is included with this assessment."}
+                            </p>
+                          </div>
+                        ) : null}
+
+                        <button
+                          type="button"
+                          onClick={() => setDiyAnalysisOpen(true)}
+                          className="inline-flex w-full items-center justify-center rounded-xl bg-[#FF4D1C] px-4 py-3 text-sm font-semibold text-white"
+                        >
+                          View detailed analysis
+                        </button>
+
                         </>
                         ) : null}
 
@@ -4268,7 +4378,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                             )}
                           </div>
                         ) : assessLoadingStep != null ||
-                          (isAssessmentProcessing(activeJob) && !hasRenderableAssessment(activeJob) && assessInFlightRef.current === activeJob?.id) ? (
+                          (isAssessmentProcessing(activeJob) && !hasRenderableAssessment(activeJob)) ||
+                          (pendingServiceRequestId != null && !pendingAssessment && !assessmentFailed) ? (
                           <FixeraAnalysisExperience
                             zip={assessLoadingZip}
                             activeStep={assessLoadingStep ?? 0}
@@ -4277,7 +4388,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                             category={activeJob?.category || category}
                             description={description}
                           />
-                        ) : !hasRenderableAssessment(activeJob) ? (
+                        ) : !hasRenderableAssessment(activeJob) && (assessmentFailed || activeJob?.assessmentStatus === "failed" || pendingServiceRequestId != null) ? (
                           <div className="space-y-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
                             <p className="text-sm font-semibold">Fixera couldn&apos;t finish this assessment</p>
                             <p className="text-sm leading-relaxed">
@@ -4286,7 +4397,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                             <p className="text-sm leading-relaxed">
                               You can try the assessment again or continue directly with professional help.
                             </p>
-                            {activeJob ? (
+                            {activeJob || pendingServiceRequestId != null ? (
                               <div className="flex flex-wrap gap-2">
                                 <button
                                   type="button"
@@ -4295,16 +4406,31 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                     requestAiAssessment(async () => {
                                       setBusy(true);
                                       setAssessmentMsg(null);
+                                      setAssessmentFailed(false);
                                       try {
                                         const retryZip =
-                                          properties.find((p) => p.id === activeJob.propertyId)?.zip || null;
-                                        const assessed = await runAssessWithProgress(activeJob.id, retryZip, { force: true });
-                                        if (!assessed.ok || !assessed.job) {
+                                          properties.find((p) => p.id === (activeJob?.propertyId || propertyId))?.zip || null;
+                                        const assessed = activeJob
+                                          ? await runAssessWithProgress(activeJob.id, retryZip, { force: true })
+                                          : await runAssessWithProgress(Number(pendingServiceRequestId), retryZip, {
+                                              force: true,
+                                              recordType: "pending_service_request",
+                                            });
+                                        if (activeJob) {
+                                          if (!assessed.ok || !("job" in assessed) || !assessed.job) {
+                                            setAssessmentFailed(true);
+                                            setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
+                                          } else {
+                                            setActiveJob(assessed.job);
+                                            setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
+                                            await refresh();
+                                          }
+                                        } else if (!assessed.ok) {
+                                          setAssessmentFailed(true);
                                           setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
                                         } else {
-                                          setActiveJob(assessed.job);
+                                          setPendingAssessment(assessed as PendingAssessmentSuccess);
                                           setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
-                                          await refresh();
                                         }
                                       } finally {
                                         setBusy(false);
@@ -4563,13 +4689,6 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                                 ))}
                                               </ul>
                                             ) : null}
-                                            <button
-                                              type="button"
-                                              onClick={() => void stopDiyAndGetProfessional()}
-                                              className="inline-flex items-center rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white"
-                                            >
-                                              Request a Professional
-                                            </button>
                                           </div>
                                         ) : null}
                                         {risk === "yellow" ? (
@@ -4580,23 +4699,12 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                               <p className="mt-1 opacity-90 text-xs leading-relaxed">
                                                 We can help with limited, low-risk checks, but this issue may require professional service. Avoid opening, disassembling, climbing, handling hazardous materials, or performing work outside your experience.
                                               </p>
-                                              <button
-                                                type="button"
-                                                onClick={() => void stopDiyAndGetProfessional()}
-                                                className="mt-3 inline-flex items-center rounded-lg border border-primary px-3 py-1.5 text-xs font-semibold text-primary"
-                                              >
-                                                Get a Professional
-                                              </button>
                                             </div>
                                           </div>
                                         ) : null}
                                       </>
                                     );
                                   })()}
-                                  <DiyStopProfessionalBar
-                                    onStop={() => void stopDiyAndGetProfessional()}
-                                    onGetProfessional={() => void stopDiyAndGetProfessional()}
-                                  />
                                   {/* DIY Caution Banner if not safe */}
                                   {!activeJob.aiAssessment?.safe_diy_allowed && getHomeownerDiyRisk(activeJob) !== "red" && (
                                     <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-4 text-red-950 dark:text-red-100 flex gap-3">
@@ -4634,69 +4742,20 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                     </div>
                                   </div>
 
-                                  <HomeownerDiyExperience
-                                    userName={user.name}
-                                    jobId={activeJob.id}
-                                    title={activeJob.title || activeJob.category || "Repair"}
-                                    category={activeJob.category || ""}
-                                    selectedCategory={requestSystemId ? tradeLabel(requestSystemId) : ""}
-                                    assessmentCategory={activeJob.aiAssessment?.recommended_trade || activeJob.aiAssessment?.category || ""}
-                                    subcategory={activeJob.serviceSubcategory || activeJob.aiAssessment?.service_subcategory || ""}
-                                    description={activeJob.description || ""}
-                                    findings={assessmentStringList(activeJob.aiAssessment?.observed_evidence).length
-                                      ? assessmentStringList(activeJob.aiAssessment?.observed_evidence)
-                                      : assessmentStringList(activeJob.aiAssessment?.visual_findings)}
-                                    summary={activeJob.aiAssessment?.summary || ""}
-                                    photoUrl={activeJob.mediaType?.startsWith("image") ? activeJob.mediaDataUrl : null}
-                                    risk={getHomeownerDiyRisk(activeJob)}
-                                    steps={assessmentStringList(activeJob.aiAssessment?.diy_steps)}
-                                    guideSteps={activeJob.aiAssessment?.diy_guide_steps || []}
-                                    tools={assessmentStringList(activeJob.aiAssessment?.tools_required)}
-                                    materials={assessmentStringList(activeJob.aiAssessment?.materials_needed)}
-                                    causes={assessmentStringList(activeJob.aiAssessment?.likely_causes)}
-                                    stopConditions={assessmentStringList(activeJob.aiAssessment?.stop_conditions)}
-                                    completionChecks={assessmentStringList(activeJob.aiAssessment?.completion_checks)}
-                                    stepIndex={diyStepIndex}
-                                    completed={diyCompletedSteps}
-                                    bookmarked={diyBookmarked}
-                                    savingStep={diySavingStep}
-                                    stepSaved={diyStepSaved}
-                                    chatMessages={diyChatMessages}
-                                    chatInput={diyChatInput}
-                                    chatBusy={diyChatBusy}
-                                    chatBlocked={getHomeownerDiyRisk(activeJob) === "red" || diyUserStopActive}
-                                    speakingText={speakingText}
-                                    view={diyView}
-                                    onView={setDiyView}
-                                    onBack={() => setDiyView("home")}
-                                    onOpenStep={() => void openGuidedDiyStep()}
-                                    onOpenIdeas={() => setDiyView("ideas")}
-                                    onCompleteStep={() => void completeCurrentDiyStep()}
-                                    onStepFeedback={(kind) => {
-                                      if (kind === "worked") {
-                                        void completeCurrentDiyStep();
-                                        return;
-                                      }
-                                      const stepTitle = activeJob.aiAssessment?.diy_guide_steps?.[diyStepIndex]?.title || `step ${diyStepIndex + 1}`;
-                                      if (kind === "failed") {
-                                        const prompt = `Step "${stepTitle}" did not work. Give one focused next check for this step only. Do not rewrite the repair plan.`;
-                                        setDiyView("chat");
-                                        void sendDiyChatMessage(prompt);
-                                        return;
-                                      }
-                                      void reassessWithFixera(`I see something different on ${stepTitle}.`);
-                                    }}
-                                    onToggleBookmark={() => setDiyBookmarked((v) => !v)}
-                                    onHire={openProfessionalFromDiy}
-                                    onNotComfortable={openProfessionalFromDiy}
-                                    onChatInput={setDiyChatInput}
-                                    onSendChat={(text) => void sendDiyChatMessage(text)}
-                                    onSpeak={speakText}
-                                    onUnsafeChat={() => {
-                                      setDiyUserStopActive(true);
-                                      setDiyIsGuided(false);
-                                    }}
-                                  />
+                                  {activeJob.pricing?.message || moneyRange(activeJob) ? (
+                                    <div className="rounded-xl border border-border bg-card p-4 text-sm">
+                                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Local repair pricing</p>
+                                      <p className="mt-1">{activeJob.pricing?.message || moneyRange(activeJob)}</p>
+                                    </div>
+                                  ) : null}
+
+                                  <button
+                                    type="button"
+                                    onClick={() => setDiyAnalysisOpen(true)}
+                                    className="inline-flex w-full items-center justify-center rounded-xl bg-[#FF4D1C] px-4 py-3 text-sm font-semibold text-white"
+                                  >
+                                    View detailed analysis
+                                  </button>
 
                                   <DiyIncidentReportForm jobId={activeJob.id} />
                                 </div>
@@ -5521,6 +5580,103 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
           onInbox={() => navigateTab("inbox")}
           onMore={() => navigateTab("more")}
           inboxBadge={formatBadgeCount(unreadMessages + unreadNotifications)}
+        />
+
+        <DiyAnalysisPanel
+          open={diyAnalysisOpen}
+          onClose={() => setDiyAnalysisOpen(false)}
+          title={
+            activeJob?.title ||
+            activeJob?.category ||
+            pendingAssessment?.pendingServiceRequest?.category ||
+            category ||
+            "Repair"
+          }
+          summary={
+            activeJob?.aiAssessment?.summary ||
+            pendingAssessment?.pendingServiceRequest?.aiAssessment?.summary ||
+            description
+          }
+          category={activeJob?.category || pendingAssessment?.pendingServiceRequest?.category || category || ""}
+          subcategory={
+            activeJob?.serviceSubcategory ||
+            activeJob?.aiAssessment?.service_subcategory ||
+            pendingAssessment?.pendingServiceRequest?.serviceSubcategory ||
+            ""
+          }
+          assessment={
+            (activeJob?.aiAssessment ||
+              pendingAssessment?.pendingServiceRequest?.aiAssessment ||
+              null) as Record<string, unknown> | null
+          }
+          risk={
+            activeJob
+              ? getHomeownerDiyRisk(activeJob)
+              : normalizeDiyRiskLevel(pendingAssessment?.pendingServiceRequest?.aiAssessment?.diy_risk_level)
+          }
+          photoUrl={
+            activeJob?.mediaType?.startsWith("image")
+              ? activeJob.mediaDataUrl
+              : pendingAssessment?.pendingServiceRequest?.mediaType?.startsWith("image")
+                ? pendingAssessment.pendingServiceRequest.mediaDataUrl
+                : mediaDataUrl
+          }
+          loading={
+            !(activeJob?.aiAssessment || pendingAssessment?.pendingServiceRequest?.aiAssessment) &&
+            (busy ||
+              activeJob?.assessmentStatus === "pending" ||
+              activeJob?.assessmentStatus === "processing")
+          }
+          error={
+            assessmentFailed || activeJob?.assessmentStatus === "failed"
+              ? assessmentMsg || "We couldn't complete the detailed analysis right now."
+              : null
+          }
+          onRetry={() => {
+            setDiyAnalysisOpen(true);
+            const retryZip =
+              properties.find((p) => p.id === (activeJob?.propertyId || propertyId))?.zip || null;
+            requestAiAssessment(async () => {
+              setBusy(true);
+              setAssessmentMsg(null);
+              setAssessmentFailed(false);
+              try {
+                const assessed = activeJob
+                  ? await runAssessWithProgress(activeJob.id, retryZip, { force: true })
+                  : pendingServiceRequestId
+                    ? await runAssessWithProgress(Number(pendingServiceRequestId), retryZip, {
+                        force: true,
+                        recordType: "pending_service_request",
+                      })
+                    : null;
+                if (!assessed) {
+                  setAssessmentFailed(true);
+                  setAssessmentMsg("We couldn't complete the detailed analysis right now.");
+                  return;
+                }
+                if (activeJob) {
+                  if (!assessed.ok || !("job" in assessed) || !assessed.job) {
+                    setAssessmentFailed(true);
+                    setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
+                  } else {
+                    setActiveJob(assessed.job);
+                    await refresh();
+                  }
+                } else if (!assessed.ok) {
+                  setAssessmentFailed(true);
+                  setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
+                } else {
+                  setPendingAssessment(assessed as PendingAssessmentSuccess);
+                }
+              } finally {
+                setBusy(false);
+              }
+            });
+          }}
+          onHire={hireFromDiyPanel}
+          stepIndex={diyStepIndex}
+          completed={diyCompletedSteps}
+          onCompleteStep={() => void completeCurrentDiyStep()}
         />
 
         <AiAssessmentAckModal

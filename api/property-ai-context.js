@@ -97,7 +97,17 @@ export async function buildPropertyAIContext(pool, propertyId, userId) {
     `Property: ${property.label || property.address_line1 || `Home #${property.id}`}`,
     `Address: ${[property.address_line1, property.city, property.state, property.zip].filter(Boolean).join(', ')}`,
   ];
-  if (property.year_built) lines.push(`Year built: ${property.year_built}`);
+  if (property.year_built) {
+    const built = Number(property.year_built);
+    const age = Number.isFinite(built) ? new Date().getFullYear() - built : null;
+    lines.push(
+      age != null && age >= 0
+        ? `Year built: ${built} (property age about ${age} years)`
+        : `Year built: ${property.year_built}`
+    );
+  } else {
+    lines.push('Year built: not on file for this login');
+  }
   if (property.beds != null) lines.push(`Beds: ${property.beds}`);
   if (property.baths != null) lines.push(`Baths: ${property.baths}`);
   if (property.sqft) lines.push(`Sq ft: ${property.sqft}`);
@@ -114,11 +124,31 @@ export async function buildPropertyAIContext(pool, propertyId, userId) {
     );
   }
   if (jobRows.length) {
-    lines.push('Recent service history:');
+    lines.push('Previous service records for this property and homeowner:');
     for (const j of jobRows.slice(0, 8)) {
       const amt = j.customer_retail_estimate_high != null ? ` ~$${j.customer_retail_estimate_high}` : '';
       lines.push(`- ${j.title || j.category} (${j.status})${amt}`);
     }
+  } else {
+    lines.push('Previous service records: none on file for this login');
+  }
+
+  try {
+    const { rows: pendingRows } = await pool.query(
+      `SELECT title, category, status, created_at
+         FROM pending_service_requests
+        WHERE property_id = $1 AND homeowner_user_id = $2
+        ORDER BY created_at DESC LIMIT 6`,
+      [propertyId, property.owner_user_id]
+    );
+    if (pendingRows.length) {
+      lines.push('Saved/pending requests for this login:');
+      for (const row of pendingRows) {
+        lines.push(`- ${row.title || row.category} (${row.status || 'pending'})`);
+      }
+    }
+  } catch {
+    /* pending table may not exist in older local DBs */
   }
   const warranties = Array.isArray(passport.warranties) ? passport.warranties.slice(0, 8) : [];
   if (warranties.length) {

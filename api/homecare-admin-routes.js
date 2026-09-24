@@ -238,7 +238,7 @@ export function registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdm
 export async function initHomeCareSettingsSchema(pool) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS homecare_settings (
-      id              TEXT PRIMARY KEY DEFAULT 'default',
+      id              TEXT PRIMARY KEY,
       config          JSONB NOT NULL,
       config_version  INT NOT NULL DEFAULT 1,
       updated_at      TIMESTAMPTZ DEFAULT NOW(),

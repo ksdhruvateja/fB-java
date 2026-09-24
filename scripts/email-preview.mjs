@@ -17,10 +17,10 @@ const sample = {
   jobId: 1048,
   service: 'Plumbing',
   property: '123 Main St\nDallas, TX 75201',
-  viewUrl: 'https://fixbridge.netlify.app/homeowner?job=1048',
+  viewUrl: 'https://fb-java-production.up.railway.app/homeowner?job=1048',
   quoteNumber: 'FB-Q-1048',
   customerTotal: 1250,
-  resetUrl: 'https://fixbridge.netlify.app/reset-password?token=sample',
+  resetUrl: 'https://fb-java-production.up.railway.app/reset-password?token=sample',
   portalLabel: 'Homeowner',
   code: '123456',
 };

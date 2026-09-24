@@ -83,6 +83,7 @@ export type StructuredAssessment = {
   visual_findings: string[];
   estimated_labor_hours_min: number;
   estimated_labor_hours_max: number;
+  estimated_time?: string;
   complexity: string;
   service_type?: string;
   service_subcategory?: string;
@@ -96,7 +97,19 @@ export type StructuredAssessment = {
   diyRiskReasonCodes?: string[];
   diy_risk_reason_codes?: string[];
   tools_required?: string[];
+  tools_recommended?: string[];
+  tools_optional?: string[];
   materials_needed?: string[];
+  suggested_fixture?: {
+    name?: string;
+    type?: string;
+    specification?: string;
+    why?: string;
+    verify_before_purchase?: string;
+  } | null;
+  verification?: string[];
+  troubleshooting?: string[];
+  professional_recommendation?: string;
   diy_steps?: string[];
   diy_risk_level?:string;
   diy_guide_steps?: Array<{
@@ -770,11 +783,24 @@ export async function startPendingServiceRequestAssessment(
   );
 }
 
+function parseJsonField(value: unknown) {
+  if (typeof value !== "string") return value;
+  const text = value.trim();
+  if (!text || (text[0] !== "{" && text[0] !== "[")) return value;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return value;
+  }
+}
+
 function normalizePendingServiceRequest(raw: any) {
   if (!raw || typeof raw !== "object") return raw;
 
   return {
     ...raw,
+    aiAssessment: parseJsonField(raw.aiAssessment ?? raw.ai_assessment),
+    pricing: parseJsonField(raw.pricing),
     homeownerUserId: raw.homeownerUserId ?? raw.homeowner_user_id,
     propertyId: raw.propertyId ?? raw.property_id,
     serviceSubcategory: raw.serviceSubcategory ?? raw.service_subcategory,
@@ -795,7 +821,6 @@ function normalizePendingServiceRequest(raw: any) {
     cityStateZip: raw.cityStateZip ?? raw.city_state_zip,
     fullAddress: raw.fullAddress ?? raw.full_address,
     streetAddress: raw.streetAddress ?? raw.street_address,
-    aiAssessment: raw.aiAssessment ?? raw.ai_assessment,
     assessmentResult: raw.assessmentResult ?? raw.assessment_result,
     assessmentStatus: raw.assessmentStatus ?? raw.assessment_status,
     selectedAction: raw.selectedAction ?? raw.selected_action,

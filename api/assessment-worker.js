@@ -2,6 +2,8 @@
  * Async AI assessment worker scheduling (Netlify background function + local fallback).
  */
 
+import { isNetlifyRuntime } from './hosting.js';
+
 let assessmentProcessor = null;
 
 export function registerAssessmentProcessor(fn) {
@@ -13,15 +15,6 @@ export async function runAssessmentProcessor(pool, payload) {
     throw new Error('Assessment processor is not registered.');
   }
   return assessmentProcessor(pool, payload);
-}
-
-function isNetlifyRuntime() {
-  return Boolean(
-    process.env.NETLIFY ||
-      process.env.FIXBRIDGE_HOSTING === 'netlify' ||
-      process.env.CONTEXT === 'production' ||
-      process.env.CONTEXT === 'deploy-preview'
-  );
 }
 
 function workerSecret() {

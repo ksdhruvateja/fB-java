@@ -4,7 +4,7 @@
  */
 import { getHomeCareConfig } from './homecare-config.js';
 import { sendEmailSafe } from './notify.js';
-import { brand } from './brand.js';
+import { resolvePublicAppUrl } from './hosting.js';
 import {
   resolveServiceAtUtc,
   formatServiceWhenInTimezone,
@@ -79,12 +79,7 @@ function formatServiceWhen(serviceAt, timeSlot, timeZone) {
 }
 
 function appBaseUrl() {
-  return (
-    process.env.APP_URL?.trim() ||
-    process.env.URL?.trim() ||
-    brand.domain?.replace(/\/$/, '') ||
-    'https://fixbridge.netlify.app'
-  );
+  return resolvePublicAppUrl();
 }
 
 function resolveAsOf(options = {}) {
@@ -432,6 +427,6 @@ export async function getReminderSchedulerStatus(pool) {
     invocationObserved: false,
     pendingEligibility: pending,
     hostingNote:
-      'Netlify: scheduled function process-service-reminders (see netlify.toml). Persistent Node host: ENABLE_SERVICE_REMINDER_POLL=true.',
+      'Netlify: scheduled function process-service-reminders (see netlify.toml). Railway / persistent Node: ENABLE_SERVICE_REMINDER_POLL=true (on by default on Railway).',
   };
 }

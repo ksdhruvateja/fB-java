@@ -1,3 +1,9 @@
+# Netlify environment variables (legacy host)
+
+Production is Railway: `https://fb-java-production.up.railway.app` from `ksdhruvateja/fB-java` `main`.
+
+`https://fixbridge.netlify.app` must not be treated as the current app. This repo now 301s Netlify traffic to Railway. The live Netlify site only picks that up after it is republished from this repository.
+
 # Netlify environment variables
 
 Vite embeds `VITE_*` values **at build time**. Changing them in the Netlify UI does nothing until you **trigger a new deploy** (Clear cache and deploy site).

@@ -2,6 +2,8 @@
  * Shared security helpers for the FixBridge API.
  */
 
+import { RAILWAY_PRODUCTION_URL, railwayPublicOrigin } from './hosting.js';
+
 const DEFAULT_DEV_ORIGINS = [
   'http://localhost:5000',
   'http://127.0.0.1:5000',
@@ -17,6 +19,9 @@ export function getAllowedOrigins() {
     process.env.APP_URL,
     process.env.URL, // Netlify
     process.env.DEPLOY_PRIME_URL,
+    process.env.RAILWAY_STATIC_URL,
+    railwayPublicOrigin(),
+    RAILWAY_PRODUCTION_URL,
     process.env.CORS_ORIGINS,
   ]
     .filter(Boolean)
@@ -61,7 +66,9 @@ export function securityHeaders(_req, res, next) {
   res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
   if (process.env.NODE_ENV === 'production') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-    // Light CSP: allow Stripe.js / self. Avoid breaking Checkout.
+    // GIS popups need this; same-origin blanks the Google account chooser.
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+    // Light CSP: Stripe Checkout + Google Identity Services. Avoid breaking either.
     res.setHeader(
       'Content-Security-Policy',
       [
@@ -72,9 +79,9 @@ export function securityHeaders(_req, res, next) {
         "img-src 'self' data: blob: https:",
         "font-src 'self' data: https:",
         "style-src 'self' 'unsafe-inline' https:",
-        "script-src 'self' 'unsafe-inline' https://js.stripe.com https://cdn.jsdelivr.net",
-        "connect-src 'self' https://api.stripe.com https://*.stripe.com https://*.neon.tech https:",
-        "frame-src 'self' https://js.stripe.com https://hooks.stripe.com",
+        "script-src 'self' 'unsafe-inline' https://js.stripe.com https://cdn.jsdelivr.net https://accounts.google.com https://apis.google.com",
+        "connect-src 'self' https://api.stripe.com https://*.stripe.com https://*.neon.tech https://accounts.google.com https://*.googleapis.com https:",
+        "frame-src 'self' https://js.stripe.com https://hooks.stripe.com https://accounts.google.com https://*.google.com",
       ].join('; ')
     );
   }

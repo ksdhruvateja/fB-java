@@ -24,6 +24,7 @@ import {
   saveMarketSnapshot,
 } from './market-intelligence.js';
 import { zip5 } from './address-utils.js';
+import { resolvePublicAppUrl } from './hosting.js';
 import { isPaidHomeCarePlan } from './subscription-catalog.js';
 import {
   activateSubscriptionFromCheckout,
@@ -955,11 +956,26 @@ async function loadAssessContext(pool, job, rules, assessment = null) {
     property = rows[0] || null;
   }
 
-  const { jobs: localJobs, bids, completedPayments, zipPlace } = await loadMarketData(pool, {
-    zip,
-    trade: assessment?.category || job.category,
-    jobId: job.id,
-  });
+  let localJobs = [];
+  let bids = [];
+  let completedPayments = [];
+  let zipPlace = null;
+  try {
+    const market = await loadMarketData(pool, {
+      zip,
+      trade: assessment?.category || job.category,
+      jobId: job.id,
+    });
+    localJobs = market.jobs || [];
+    bids = market.bids || [];
+    completedPayments = market.completedPayments || [];
+    zipPlace = market.zipPlace || null;
+  } catch (err) {
+    console.warn('[assessment] market context unavailable, continuing', {
+      jobId: job.id,
+      error: err?.message || String(err),
+    });
+  }
 
   const marketProfile = await buildLocalMarketProfile({
     zip,
@@ -1045,32 +1061,20 @@ async function runManagedJobAssessment(pool, job, viewer) {
 
   let propertyAiContext = '';
 
-  if (homeCarePro && job.property_id) {
-    const ctx = await buildPropertyAIContext(
-      pool,
-      job.property_id,
-      job.homeowner_user_id
-    );
-
-    const raw = ctx?.text || '';
-    const trade = String(job.category || '').toLowerCase();
-
-    const keep = /plumb/.test(trade)
-      ? /plumb|water|heater|address|property/i
-      : /hvac|heat|cool/.test(trade)
-        ? /hvac|heat|cool|filter|furnace|address|property/i
-        : /electr/.test(trade)
-          ? /electr|panel|address|property/i
-          : /address|property|year|type/i;
-
-    propertyAiContext = raw
-      .split('\n')
-      .filter(
-        (line, index) =>
-          index < 2 || keep.test(line)
-      )
-      .slice(0, 12)
-      .join('\n');
+  if (job.property_id) {
+    try {
+      const ctx = await buildPropertyAIContext(
+        pool,
+        job.property_id,
+        job.homeowner_user_id
+      );
+      propertyAiContext = String(ctx?.text || '').trim();
+    } catch (err) {
+      console.warn('[assessment] property context unavailable', {
+        propertyId: job.property_id,
+        error: err?.message || String(err),
+      });
+    }
   }
 
   const aiStarted = Date.now();
@@ -1084,7 +1088,7 @@ async function runManagedJobAssessment(pool, job, viewer) {
     description: job.description,
     imageDataUrl: job.media_data_url,
     locationContext: propertyAiContext
-      ? `${preCtx.locationContext}\n\nProperty Passport (HomeCare Pro):\n${propertyAiContext}`
+      ? `${preCtx.locationContext}\n\nThis homeowner's property (this login only):\n${propertyAiContext}`
       : preCtx.locationContext,
     zip: preCtx.zip,
     city: preCtx.city,
@@ -3544,97 +3548,6 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       // ------------------------------------------------------------
 
       if (!hasActiveHomeCare) {
-        // ----------------------------------------------------------
-        // PENDING TABLE SCHEMA DIAGNOSTIC
-        // ----------------------------------------------------------
-
-        const expectedPendingColumns = [
-          'homeowner_user_id',
-          'property_id',
-          'status',
-          'category',
-          'service_subcategory',
-          'title',
-          'description',
-          'media_data_url',
-          'media_type',
-          'preferred_date',
-          'preferred_time_slot',
-          'service_timing',
-          'city_state_zip',
-          'full_address',
-          'street_address',
-          'city',
-          'state',
-          'zip',
-          'country',
-          'contact_name',
-          'contact_phone',
-          'partner_code',
-          'referral_source',
-          'referring_name',
-          'referring_company',
-          'referring_email',
-          'referring_phone',
-          'customer_partner_status_consent',
-          'consent_timestamp',
-          'consent_version',
-          'property_purpose',
-          'transaction_stage',
-          'listing_deadline',
-          'closing_deadline',
-          'inspection_report_url',
-          'listing_reference_url',
-          'property_opportunity_notes',
-          'discount_code',
-        ];
-
-        const { rows: pendingColumnRows } =
-          await pool.query(`
-          SELECT
-            column_name,
-            data_type,
-            is_nullable,
-            column_default
-          FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'pending_service_requests'
-          ORDER BY ordinal_position
-        `);
-
-        const actualPendingColumns =
-          pendingColumnRows.map(
-            (row) => row.column_name
-          );
-
-        const missingPendingColumns =
-          expectedPendingColumns.filter(
-            (column) =>
-              !actualPendingColumns.includes(column)
-          );
-
-        console.log(
-          '[PENDING SERVICE REQUEST] Expected columns:',
-          expectedPendingColumns
-        );
-
-        console.log(
-          '[PENDING SERVICE REQUEST] Actual DB columns:',
-          pendingColumnRows
-        );
-
-        console.log(
-          '[PENDING SERVICE REQUEST] MISSING columns:',
-          missingPendingColumns
-        );
-
-        if (missingPendingColumns.length > 0) {
-          console.error(
-            '[PENDING SERVICE REQUEST] SCHEMA MISMATCH:',
-            missingPendingColumns
-          );
-        }
-
         // ----------------------------------------------------------
         // PENDING SERVICE REQUEST INSERT
         //
@@ -7124,7 +7037,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
             ? 'cleaning service'
             : 'home service'
         : job.title || 'service';
-      const appUrl = process.env.APP_URL || 'https://fixbridge.netlify.app';
+      const appUrl = process.env.APP_URL || resolvePublicAppUrl();
       const jobLink = `${appUrl}/?job=${jobId}`;
       const photoNote =
         report.beforePhotoUrl || report.afterPhotoUrl
