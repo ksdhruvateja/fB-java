@@ -21,7 +21,7 @@ import type { ChatMessage } from "../geminiAssessment";
 import DiySafetyFeedback from "../DiySafetyFeedback";
 import { asGuideSteps, guideVisual, type GuideStep } from "./diyGuideVisual";
 
-export type DiyView = "home" | "step" | "chat" | "complete";
+export type DiyView = "home" | "step" | "chat" | "ideas" | "complete";
 
 type Risk = "green" | "yellow" | "red";
 
@@ -45,8 +45,6 @@ type Props = {
   causes: string[];
   stopConditions: string[];
   completionChecks?: string[];
-  difficulty?: string | null;
-  estimatedTime?: string | null;
   stepIndex: number;
   completed: Record<number, boolean>;
   bookmarked: boolean;
@@ -59,6 +57,7 @@ type Props = {
   speakingText: string | null;
   onBack: () => void;
   onOpenStep: () => void;
+  onOpenIdeas: () => void;
   onCompleteStep: () => void;
   onStepFeedback?: (kind: "worked" | "failed" | "different") => void;
   onToggleBookmark: () => void;
@@ -407,8 +406,6 @@ export default function HomeownerDiyExperience(props: Props) {
     causes,
     stopConditions,
     completionChecks = [],
-    difficulty,
-    estimatedTime,
     stepIndex,
     completed,
     bookmarked,
@@ -421,6 +418,7 @@ export default function HomeownerDiyExperience(props: Props) {
     speakingText,
     onBack,
     onOpenStep,
+    onOpenIdeas,
     onCompleteStep,
     onStepFeedback,
     onToggleBookmark,
@@ -436,7 +434,6 @@ export default function HomeownerDiyExperience(props: Props) {
   } = props;
 
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const advanceTimerRef = useRef<number | null>(null);
   const [browseOpen, setBrowseOpen] = useState(false);
   const [confirmedId, setConfirmedId] = useState<string | null>(() => readConfirmedCategory(jobId)?.id || null);
   const doneCount = Object.values(completed).filter(Boolean).length;
@@ -487,24 +484,13 @@ export default function HomeownerDiyExperience(props: Props) {
   const mismatch =
     Boolean(userPick && detected?.id && userPick !== detected.id && detected.confidence >= 0.75);
   const confidence = userPick ? Math.max(detected?.confidence || 0, 0.9) : detected?.confidence || 0;
-  const showConfirm = !confirmedId && !browseOpen && Boolean(working) && (confidence >= 0.55 || Boolean(userPick) || Boolean(servicePick));
-
-  function goToGuidedStep() {
-    if (blocked) return;
-    if (advanceTimerRef.current) {
-      window.clearTimeout(advanceTimerRef.current);
-      advanceTimerRef.current = null;
-    }
-    onView("step");
-    onOpenStep();
-  }
+  const showConfirm = !browseOpen && Boolean(working) && (confidence >= 0.55 || Boolean(userPick) || Boolean(servicePick));
 
   function confirmCategory(id: string, nextSubcategory: string, source: CategorySource) {
     setConfirmedId(id);
     setBrowseOpen(false);
     writeConfirmedCategory(jobId, id, nextSubcategory, source);
-    if (blocked) return;
-    goToGuidedStep();
+    if (!blocked) onOpenStep();
   }
 
   useEffect(() => {
@@ -520,14 +506,8 @@ export default function HomeownerDiyExperience(props: Props) {
   function openGuided() {
     if (blocked) return;
     if (working) writeConfirmedCategory(jobId, working.id, detectedSub, userPick ? "user_selected" : "ai_detected");
-    goToGuidedStep();
+    onOpenStep();
   }
-
-  useEffect(() => {
-    return () => {
-      if (advanceTimerRef.current) window.clearTimeout(advanceTimerRef.current);
-    };
-  }, []);
 
   const chatPanel = (
     <section className="flex min-h-[420px] flex-col rounded-[22px] bg-white p-4 lg:min-h-[640px]" aria-label="DIY Chat">
@@ -577,7 +557,7 @@ export default function HomeownerDiyExperience(props: Props) {
           <DIYQuickAction label="What should I check first?" icon={<Search className="h-4 w-4" />} onClick={() => onSendChat("What should I check first?")} />
           <DIYQuickAction label="Show tools needed" icon={<Wrench className="h-4 w-4" />} onClick={() => onSendChat("Show tools needed")} />
           <DIYQuickAction label="Is this safe to DIY?" icon={<Shield className="h-4 w-4" />} onClick={() => onSendChat("Is this safe to DIY?")} />
-          <DIYQuickAction label="Walk me through this" icon={<Wrench className="h-4 w-4" />} onClick={() => onSendChat("Walk me through this repair step by step")} />
+          <DIYQuickAction label="Get repair ideas" icon={<Lightbulb className="h-4 w-4" />} onClick={() => onSendChat("Get repair ideas")} />
         </div>
       </div>
       <form
@@ -730,6 +710,9 @@ export default function HomeownerDiyExperience(props: Props) {
         </div>
       ) : null}
       <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={onOpenIdeas} className="rounded-full bg-white px-4 py-2 text-[13px] font-semibold text-[#2c2926]">
+          Repair ideas
+        </button>
         <button type="button" onClick={() => onView("chat")} className="rounded-full bg-white px-4 py-2 text-[13px] font-semibold text-[#2c2926] lg:hidden">
           DIY Chat
         </button>
@@ -767,12 +750,9 @@ export default function HomeownerDiyExperience(props: Props) {
       ) : (
         <>
           <div className="rounded-[22px] bg-white p-4">
-            <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">How to fix this</p>
-            <h3 className="mt-1 text-[26px] font-semibold leading-tight text-[#2c2926]">{parsed.title}</h3>
+            <h3 className="text-[26px] font-semibold leading-tight text-[#2c2926]">{parsed.title}</h3>
             {currentGuide?.goal ? (
               <p className="mt-2 text-[14px] text-[#5c574f]">{currentGuide.goal}</p>
-            ) : summary && stepIndex === 0 ? (
-              <p className="mt-2 text-[14px] text-[#5c574f]">{summary}</p>
             ) : null}
             <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">What to do</p>
             <p className="mt-1 whitespace-pre-line text-[15px] leading-relaxed text-[#5c574f]">{currentGuide?.instruction || parsed.body || parsed.title}</p>
@@ -873,6 +853,65 @@ export default function HomeownerDiyExperience(props: Props) {
     </div>
   );
 
+  const ideas = (
+    <div className="space-y-4">
+      <HeaderBar title="Repair Ideas" onBack={onBack} />
+      <div className="rounded-[22px] bg-white p-4">
+        <h3 className="text-[22px] font-semibold text-[#2c2926]">{title}</h3>
+        <p className="mt-1 text-[14px] text-[#7a746c]">Simple fixes. Real results.</p>
+      </div>
+      <DIYRepairSummaryCard title="Possible Cause" tone="bg-[#DDE8D2]">
+        <ul className="space-y-2 text-[14px] text-[#31402c]">
+          {(causes.length ? causes : ["Review the assessment details before changing any parts."]).map((item) => (
+            <li key={item} className="flex gap-2">
+              <span aria-hidden>•</span>
+              <span>{item}</span>
+            </li>
+          ))}
+        </ul>
+      </DIYRepairSummaryCard>
+      <DIYRepairSummaryCard title="Recommended Fix" tone="bg-[#DDEAF7]">
+        <ol className="space-y-2">
+          {(steps.length ? steps : ["Request a professional if no safe steps were generated."]).slice(0, 6).map((step, i) => (
+            <li key={step} className="flex gap-3 text-[14px] text-[#243140]">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-[12px] font-semibold">{i + 1}</span>
+              <span>{splitStep(step).title}</span>
+            </li>
+          ))}
+        </ol>
+      </DIYRepairSummaryCard>
+      <DIYRepairSummaryCard title="Tools Needed" tone="bg-[#F8E6AF]">
+        <div className="flex flex-wrap gap-2">
+          {(toolList.length ? toolList : ["None listed"]).map((tool) => (
+            <DIYToolChip key={tool} label={tool} />
+          ))}
+        </div>
+      </DIYRepairSummaryCard>
+      <DIYRepairSummaryCard title="When to call a pro" tone="bg-[#FADBCB]">
+        <ul className="space-y-2 text-[14px] text-[#5a3a28]">
+          {(stopConditions.length
+            ? stopConditions
+            : [
+                "The issue continues after the listed checks",
+                "You see damaged parts or worsening conditions",
+                "You’re uncomfortable continuing",
+                "There is major leakage, sparking, or water damage",
+              ]
+          ).map((item) => (
+            <li key={item} className="flex gap-2">
+              <span aria-hidden>•</span>
+              <span>{item}</span>
+            </li>
+          ))}
+        </ul>
+      </DIYRepairSummaryCard>
+      <div className="rounded-[22px] bg-white p-4">
+        <p className="mb-2 text-[14px] font-semibold text-[#2c2926]">Need help?</p>
+        <DIYProfessionalCTA onClick={onHire} />
+      </div>
+    </div>
+  );
+
   const completeScreen = (
     <div className="space-y-4">
       <HeaderBar title="Verify the repair" onBack={onBack} />
@@ -905,7 +944,7 @@ export default function HomeownerDiyExperience(props: Props) {
     </div>
   );
 
-  const main = view === "complete" ? completeScreen : view === "step" ? stepScreen : view === "chat" ? null : landing;
+  const main = view === "complete" ? completeScreen : view === "step" ? stepScreen : view === "ideas" ? ideas : view === "chat" ? null : landing;
 
   return (
     <div className="rounded-[24px] bg-[#F8F7F4] p-4 text-[#2c2926] sm:p-5">
@@ -914,14 +953,14 @@ export default function HomeownerDiyExperience(props: Props) {
         <div className={view === "chat" ? "block" : "hidden lg:block"}>{chatPanel}</div>
       </div>
       <div className="mx-auto mt-4 flex max-w-6xl gap-2 lg:hidden">
-        {(["home", "chat"] as DiyView[]).map((id) => (
+        {(["home", "chat", "ideas"] as DiyView[]).map((id) => (
           <button
             key={id}
             type="button"
-            onClick={() => onView(id)}
+            onClick={() => onView(id === "home" ? "home" : id)}
             className={`flex-1 rounded-full px-3 py-2 text-[12px] font-semibold ${view === id ? "bg-[#E07A4A] text-white" : "bg-white text-[#5c574f]"}`}
           >
-            {id === "home" ? "Home" : "Chat"}
+            {id === "home" ? "Home" : id === "chat" ? "Chat" : "Ideas"}
           </button>
         ))}
       </div>

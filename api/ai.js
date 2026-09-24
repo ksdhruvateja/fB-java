@@ -2,19 +2,27 @@
  * FixBridge AI / Fixera
  *
  * PRIMARY PROVIDER:
- *   Google Gemini
+ *   OpenRouter
+ *
+ * FALLBACK PROVIDER:
+ *   Anthropic / Claude
  *
  * IMPORTANT:
  * - API keys are server-side only.
  * - No VITE_ AI keys should be used here.
- * - OpenRouter is no longer used.
+ * - Experiential Labs is no longer used by this file.
  * - Existing FixBridge exports are preserved for compatibility.
  */
 
 import {
-  readGeminiKey,
-  geminiProvider,
-} from './fixa/providers/gemini.js';
+  readOpenRouterKey,
+  openrouterProvider,
+} from './fixa/providers/openrouter.js';
+
+import {
+  readAnthropicKey,
+  anthropicProvider,
+} from './fixa/providers/anthropic.js';
 
 import { evaluateRepairAssessment } from './fixa/evaluator/responseEvaluator.js';
 
@@ -29,11 +37,7 @@ import {
 /* -------------------------------------------------------------------------- */
 
 const AI_FETCH_TIMEOUT_MS = Number(
-  process.env.AI_FETCH_TIMEOUT_MS || 45000
-);
-
-const AI_ASSESSMENT_TIMEOUT_MS = Number(
-  process.env.AI_ASSESSMENT_TIMEOUT_MS || 120000
+  process.env.AI_FETCH_TIMEOUT_MS || 38000
 );
 
 const AI_MAX_IMAGE_CHARS = Number(
@@ -189,25 +193,7 @@ function prepareImageForAi(imageDataUrl) {
 /* -------------------------------------------------------------------------- */
 
 export const STRUCTURED_PROMPT = `
-You are a licensed home-repair professional with more than 10 years of
-field experience. Teach this specific homeowner like a calm beginner class.
-
-Combine ALL of the following before you decide the problem:
-1. The attached photo or video — treat it as primary evidence when present.
-2. The homeowner's written description.
-3. This login's property age / year built, if provided.
-4. Previous service records for THIS property and THIS homeowner only.
-   Use them to see repeat issues, recent work, or aging systems.
-   Never invent service history that is not in the context.
-5. Property Passport / property records for this property, if provided.
-6. Equipment information for this property, if provided.
-7. Existing Fixera findings already in the context.
-
-Write DIY guidance as if you are standing next to a first-time homeowner
-and walking them through this exact item, one action at a time.
-
-If the photo, text, property age, and service history disagree, say so in
-needs_confirmation, lower confidence, and prioritize visible safety.
+You are an experienced home-repair technician guiding a homeowner remotely.
 
 Inspect any attached photo carefully.
 
@@ -245,19 +231,7 @@ Use this exact schema:
   "questions_needed": [],
   "diy_difficulty": "easy|moderate|hard|blocked",
   "tools_required": [],
-  "tools_recommended": [],
-  "tools_optional": [],
   "materials_needed": [],
-  "suggested_fixture": {
-    "name": "",
-    "type": "",
-    "specification": "",
-    "why": "",
-    "verify_before_purchase": ""
-  },
-  "verification": [],
-  "troubleshooting": [],
-  "professional_recommendation": "",
   "preparation_steps": [],
   "diy_guide_steps": [
     {
@@ -302,9 +276,7 @@ Rules:
 5. If the photo contradicts the written description:
    prioritize the visible safety concern and reduce confidence.
 
-6. DIY instructions must be sequential, numbered, and beginner-specific.
-   Write as a teaching list: first gather tools, then make the area safe,
-   then the repair, then the test. Name the exact part the photo shows.
+6. DIY instructions must be sequential and specific.
 
 7. Do not use vague instructions such as:
    "inspect the area"
@@ -313,53 +285,25 @@ Rules:
    "tighten the connection"
 
 8. Every DIY instruction should explain:
-   - WHERE on this item
-   - WHAT to do with which tool
-   - HOW a beginner should do it
+   - WHERE
+   - WHAT
+   - HOW
    - expected result
    - when to stop
-
-8a. tools_required, tools_recommended, and tools_optional must name
-    only tools needed for THIS repair (name, size, or type when
-    known from the photo). Never dump a generic toolbox.
-
-8b. diy_difficulty must be one of easy|moderate|hard|blocked
-    and match how hard this would be for a first-time homeowner.
-
-8c. diy_steps must be a numbered beginner checklist (5-8 short steps).
-    diy_guide_steps must expand each step with teaching detail:
-    what to do, why, what to look for, and how to know it is complete.
-
-8d. materials_needed is replacement parts and consumables only —
-    never tools.
-
-8e. suggested_fixture must name the identifiable fixture or part for
-    this diagnosis. If the exact model cannot be determined from the
-    photo and property context, use the part type as the name and
-    say what to verify in verify_before_purchase. Never invent a
-    brand or model number.
-
-8f. verification is how the homeowner confirms the repair worked.
-    troubleshooting is what to do if the problem continues.
-
-8g. professional_recommendation explains when a licensed professional
-    is the safer next step. Still provide DIY teaching when
-    safe_diy_allowed is true.
 
 9. Use the shutoff, isolation, or power-off step first
    when appropriate.
 
 10. Set safe_diy_allowed=false for:
    - gas
-   - high voltage or major electrical work
-   - refrigerant / sealed HVAC systems
-   - major plumbing or sewage
+   - major electrical work
    - flooding
+   - sewage
    - fire
    - smoke
    - carbon monoxide
    - structural damage
-   - roofing or dangerous roof work
+   - dangerous roof work
    - asbestos
    - lead hazards
    - hazardous materials
@@ -414,47 +358,6 @@ function asStringArray(value) {
         item.trim().length > 0
     )
     .map((item) => item.trim());
-}
-
-function normalizeSuggestedFixture(value) {
-  if (!value) {
-    return null;
-  }
-
-  if (typeof value === 'string' && value.trim()) {
-    return {
-      name: value.trim(),
-      type: '',
-      specification: '',
-      why: '',
-      verify_before_purchase:
-        'Match size, thread, and finish to the failed part before buying.',
-    };
-  }
-
-  if (typeof value !== 'object') {
-    return null;
-  }
-
-  const name = asString(value.name || value.title);
-  if (!name) {
-    return null;
-  }
-
-  return {
-    name,
-    type: asString(value.type || value.part_type),
-    specification: asString(
-      value.specification ||
-      value.compatible_specification ||
-      value.spec
-    ),
-    why: asString(value.why || value.why_recommended),
-    verify_before_purchase: asString(
-      value.verify_before_purchase ||
-      value.verify
-    ),
-  };
 }
 
 function extractMessageText(message) {
@@ -600,28 +503,104 @@ function parseJsonObjectFromText(
 /* Provider resolution                                                        */
 /* -------------------------------------------------------------------------- */
 
-function hasGemini() {
+function hasOpenRouter() {
   try {
-    return Boolean(readGeminiKey());
+    return Boolean(
+      readOpenRouterKey()
+    );
   } catch {
-    return Boolean(getGeminiApiKey());
+    return Boolean(
+      String(
+        process.env.OPENROUTER_API_KEY ||
+        ''
+      ).trim()
+    );
+  }
+}
+
+function hasAnthropic() {
+  try {
+    return Boolean(
+      readAnthropicKey()
+    );
+  } catch {
+    return Boolean(
+      String(
+        process.env.ANTHROPIC_API_KEY ||
+        ''
+      ).trim()
+    );
   }
 }
 
 /**
- * Google Gemini is the only connected provider.
+ * OpenRouter is the primary provider.
+ * Claude is the automatic fallback.
  */
 export function resolveAiProvider() {
-  if (hasGemini()) {
+  const openRouterConfigured =
+    hasOpenRouter();
+
+  const anthropicConfigured =
+    hasAnthropic();
+
+  if (openRouterConfigured) {
     return {
-      provider: 'gemini',
-      adapter: geminiProvider,
-      model: geminiProvider?.model || process.env.GEMINI_MODEL || 'gemini-3.6-flash',
-      fallback: null,
+      provider:
+        'openrouter',
+
+      adapter:
+        openrouterProvider,
+
+      model:
+        openrouterProvider?.models?.[0] ||
+        process.env.OPENROUTER_MODEL ||
+        null,
+
+      fallback:
+        anthropicConfigured
+          ? {
+            provider:
+              'anthropic',
+
+            adapter:
+              anthropicProvider,
+
+            model:
+              anthropicProvider?.models?.[0] ||
+              process.env.ANTHROPIC_MODEL ||
+              null,
+          }
+          : null,
     };
   }
 
-  console.error('[ai] No Gemini API key is configured. Set GEMINI_API_KEY.');
+  /*
+   * If OpenRouter is unavailable but Claude exists,
+   * Claude can operate directly.
+   */
+  if (anthropicConfigured) {
+    return {
+      provider:
+        'anthropic',
+
+      adapter:
+        anthropicProvider,
+
+      model:
+        anthropicProvider?.models?.[0] ||
+        process.env.ANTHROPIC_MODEL ||
+        null,
+
+      fallback:
+        null,
+    };
+  }
+
+  console.error(
+    '[ai] No OpenRouter or Anthropic API key is configured.'
+  );
+
   return null;
 }
 
@@ -719,13 +698,10 @@ function userPromptText({
     locationContext
       ? `
 
-This homeowner's property context for this login
-(photo + description + property age + prior service records):
+Location and property context:
 ${locationContext}
 
-Use the photo, the written issue, property age, and any prior
-service records together to diagnose THIS item. Teach a beginner.
-If a record is missing, say so — do not invent it.
+Use this only for complexity and urgency.
 Do NOT output dollar amounts.
 `
       : '';
@@ -1240,16 +1216,6 @@ export function parseStructuredAssessment(
           parsed.toolsRequired
         ),
 
-    tools_recommended:
-      asStringArray(
-        parsed.tools_recommended
-      ),
-
-    tools_optional:
-      asStringArray(
-        parsed.tools_optional
-      ),
-
     materials_needed:
       asStringArray(
         parsed.materials_needed
@@ -1260,40 +1226,6 @@ export function parseStructuredAssessment(
         : asStringArray(
           parsed.partsNeeded
         ),
-
-    suggested_fixture:
-      normalizeSuggestedFixture(
-        parsed.suggested_fixture ||
-        parsed.recommended_part ||
-        parsed.suggestedFixture
-      ),
-
-    verification:
-      asStringArray(
-        parsed.verification
-      ).length
-        ? asStringArray(
-          parsed.verification
-        )
-        : asStringArray(
-          parsed.completion_checks
-        ),
-
-    troubleshooting:
-      asStringArray(
-        parsed.troubleshooting
-      ).length
-        ? asStringArray(
-          parsed.troubleshooting
-        )
-        : asStringArray(
-          parsed.stop_conditions
-        ),
-
-    professional_recommendation:
-      asString(
-        parsed.professional_recommendation
-      ),
 
     diy_guide_steps:
       normalizeGuideSteps(
@@ -1685,26 +1617,8 @@ export function fallbackStructuredAssessment({
     tools_required:
       [],
 
-    tools_recommended:
-      [],
-
-    tools_optional:
-      [],
-
     materials_needed:
       [],
-
-    suggested_fixture:
-      null,
-
-    verification:
-      [],
-
-    troubleshooting:
-      [],
-
-    professional_recommendation:
-      '',
 
     preparation_steps:
       [
@@ -1884,7 +1798,7 @@ async function analyzeWithProvider(
               jsonMode,
           }),
 
-          AI_ASSESSMENT_TIMEOUT_MS
+          AI_FETCH_TIMEOUT_MS
         );
     } catch (err) {
       lastError =

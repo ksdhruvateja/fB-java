@@ -15,10 +15,10 @@ function resolveBusinessProfileUrl() {
   const raw =
     process.env.APP_URL?.trim() ||
     process.env.URL?.trim() ||
-    'https://fb-java-production.up.railway.app';
+    'https://fixbridge.netlify.app';
   let url = String(raw).replace(/\/$/, '');
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(url)) {
-    return 'https://fb-java-production.up.railway.app';
+    return 'https://fixbridge.netlify.app';
   }
   if (!/^https?:\/\//i.test(url)) {
     url = `https://${url}`;
@@ -28,11 +28,11 @@ function resolveBusinessProfileUrl() {
   try {
     const parsed = new URL(url);
     if (parsed.hostname.endsWith('.example.com') || parsed.hostname === 'example.com') {
-      return 'https://fb-java-production.up.railway.app';
+      return 'https://fixbridge.netlify.app';
     }
     return parsed.origin;
   } catch {
-    return 'https://fb-java-production.up.railway.app';
+    return 'https://fixbridge.netlify.app';
   }
 }
 

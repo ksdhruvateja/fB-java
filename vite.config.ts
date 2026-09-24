@@ -16,16 +16,8 @@ function resolveBuildStamp(): string {
 const BUILD_STAMP = resolveBuildStamp()
 
 function resolveSiteUrl(): string {
-  const railwayDomain = String(process.env.RAILWAY_PUBLIC_DOMAIN || process.env.RAILWAY_STATIC_URL || '').trim()
-  const railwayUrl = railwayDomain
-    ? (/^https?:\/\//i.test(railwayDomain) ? railwayDomain : `https://${railwayDomain}`)
-    : ''
-  const raw =
-    process.env.VITE_SITE_URL ||
-    process.env.APP_URL ||
-    railwayUrl ||
-    'https://fb-java-production.up.railway.app'
-  return raw.replace(/\/$/, '').replace(/fixbridge\.netlify\.app/i, 'fb-java-production.up.railway.app')
+  const raw = process.env.VITE_SITE_URL || process.env.URL || process.env.DEPLOY_PRIME_URL || 'https://fixbridge.us'
+  return raw.replace(/\/$/, '')
 }
 
 function injectSiteMeta(): Plugin {

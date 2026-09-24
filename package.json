@@ -11,7 +11,6 @@
     "dev:api": "node --env-file=.env server.js",
     "dev:client": "vite",
     "build": "vite build",
-    "start": "node server.js",
     "preview": "vite preview",
     "audit:production": "node --env-file=.env scripts/audit-production.mjs",
     "smoke:hardening": "node --env-file=.env scripts/smoke-production-hardening.mjs",
@@ -148,9 +147,5 @@
     "sharp": "^0.35.4",
     "tailwindcss": "4.1.12",
     "vite": "6.4.3"
-  },
-  "allowScripts": {
-    "@tailwindcss/oxide@4.1.12": true,
-    "esbuild": true
   }
 }

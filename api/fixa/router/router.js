@@ -1,8 +1,8 @@
-import { geminiProvider } from '../providers/gemini.js';
+import { explabsProvider } from '../providers/explabs.js';
 import { policyForTask } from './policies.js';
 
 const REGISTRY = {
-  gemini: geminiProvider,
+  explabs: explabsProvider,
 };
 
 export function selectProvider(task) {
@@ -20,15 +20,16 @@ export function selectProvider(task) {
 export function listProviderContracts() {
   return [
     {
-      id: geminiProvider.id,
-      name: geminiProvider.name,
-      models: geminiProvider.models,
-      supportsVision: geminiProvider.supportsVision,
-      supportsVideo: geminiProvider.supportsVideo,
-      supportsStructuredOutput: geminiProvider.supportsStructuredOutput,
+      id: explabsProvider.id,
+      name: explabsProvider.name,
+      models: explabsProvider.models,
+      supportsVision: explabsProvider.supportsVision,
+      supportsVideo: explabsProvider.supportsVideo,
+      supportsStructuredOutput: explabsProvider.supportsStructuredOutput,
     },
     { id: 'openai', name: 'OpenAI', status: 'not_configured' },
     { id: 'anthropic', name: 'Claude', status: 'not_configured' },
+    { id: 'gemini', name: 'Gemini', status: 'not_configured' },
     { id: 'openrouter', name: 'OpenRouter', status: 'not_configured' },
   ];
 }

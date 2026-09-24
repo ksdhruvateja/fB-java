@@ -1,51 +1,53 @@
 /**
  * Fixa provider registry.
  * Connection status comes from server secrets. Raw keys are never returned.
+ * Only Experiential Labs is implemented. Other vendors stay disconnected
+ * so a missing or failed primary provider cannot fall through.
  */
 
-import { readGeminiKey, GEMINI_MODEL } from './providers/gemini.js';
+import { readExplabsKey } from './providers/explabs.js';
 
-function geminiRecord() {
-  const configured = Boolean(readGeminiKey());
+const EXPLABS_MODEL = 'gpt-6-astra';
+
+function explabsKey() {
+  return readExplabsKey();
+}
+
+function maskedKeyHint(key) {
+  if (!key || !key.startsWith('xpl_')) return null;
+  return 'xpl_••••';
+}
+
+function explabsRecord() {
+  const key = explabsKey();
+  const configured = Boolean(key);
   return {
-    id: 'gemini',
-    name: 'Google Gemini',
+    id: 'explabs',
+    name: 'Experiential Labs',
     status: configured ? 'configured' : 'not_connected',
-    defaultModel: GEMINI_MODEL,
-    models: [GEMINI_MODEL],
+    defaultModel: EXPLABS_MODEL,
+    models: [EXPLABS_MODEL],
     supportsVision: true,
     supportsVideo: false,
     supportsStructuredOutput: true,
-    keyHint: configured ? '••••' : null,
+    keyHint: maskedKeyHint(key),
     secretStorage: 'server',
   };
 }
 
 const DISCONNECTED = [
   {
-    id: 'openrouter',
-    name: 'OpenRouter',
-    status: 'not_connected',
+    id: 'fixera-local',
+    name: 'Fixera Local',
+    status: 'not_deployed',
     defaultModel: null,
     models: [],
-    supportsVision: true,
+    supportsVision: false,
     supportsVideo: false,
     supportsStructuredOutput: true,
     keyHint: null,
-    secretStorage: 'server',
-    note: 'Removed. Fixera uses Google Gemini.',
-  },
-  {
-    id: 'explabs',
-    name: 'Experiential Labs',
-    status: 'not_connected',
-    defaultModel: null,
-    models: [],
-    supportsVision: true,
-    supportsVideo: false,
-    supportsStructuredOutput: true,
-    keyHint: null,
-    secretStorage: 'server',
+    secretStorage: 'separate_inference',
+    note: 'Not deployed. A self-hosted model requires separate inference infrastructure, not Netlify Functions.',
   },
   {
     id: 'openai',
@@ -71,22 +73,47 @@ const DISCONNECTED = [
     keyHint: null,
     secretStorage: 'server',
   },
+  {
+    id: 'gemini',
+    name: 'Gemini',
+    status: 'not_connected',
+    defaultModel: null,
+    models: [],
+    supportsVision: true,
+    supportsVideo: true,
+    supportsStructuredOutput: true,
+    keyHint: null,
+    secretStorage: 'server',
+  },
+  {
+    id: 'openrouter',
+    name: 'OpenRouter',
+    status: 'not_connected',
+    defaultModel: null,
+    models: [],
+    supportsVision: true,
+    supportsVideo: false,
+    supportsStructuredOutput: true,
+    keyHint: null,
+    secretStorage: 'server',
+  },
 ];
 
 export function listFixaProviders() {
-  return [geminiRecord(), ...DISCONNECTED];
+  return [explabsRecord(), ...DISCONNECTED];
 }
 
-export function getConnectedProvider(id = 'gemini') {
+export function getConnectedProvider(id = 'explabs') {
   return listFixaProviders().find((provider) => provider.id === id && provider.status === 'configured') || null;
 }
 
-export const FIXA_MODEL = GEMINI_MODEL;
 
-export function getProviderConfig() {
+export const FIXA_MODEL = EXPLABS_MODEL;
+
+export function getProviderConfig(task) {
   return {
-    primary: 'gemini',
-    fallback: null,
-    model: GEMINI_MODEL,
+    primary: 'explabs',
+    fallback: 'explabs',
+    model: EXPLABS_MODEL
   };
 }

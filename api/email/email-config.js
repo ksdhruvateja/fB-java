@@ -2,7 +2,6 @@
  * Central FixBridge email identity and asset configuration.
  */
 import { brand } from '../brand.js';
-import { RAILWAY_PRODUCTION_URL, resolvePublicAppUrl } from '../hosting.js';
 
 export const EMAIL_FROM_NAME = process.env.FIXBRIDGE_FROM_NAME?.trim() || 'FixBridge Support';
 export const EMAIL_FROM_ADDRESS = process.env.FIXBRIDGE_FROM_EMAIL?.trim() || 'support@fixbridge.us';
@@ -20,7 +19,9 @@ export function emailFromHeader() {
 }
 
 export function appBaseUrl() {
-  return resolvePublicAppUrl() || brand.domain || RAILWAY_PRODUCTION_URL;
+  return (process.env.APP_URL || process.env.URL || brand.domain || 'https://fixbridge.netlify.app')
+    .trim()
+    .replace(/\/$/, '');
 }
 
 export function emailLogoUrl() {
@@ -30,7 +31,7 @@ export function emailLogoUrl() {
   if (base && !/localhost|127\.0\.0\.1/i.test(base)) {
     return `${base}/fixbridge-logo-lockup.png`;
   }
-  return `${RAILWAY_PRODUCTION_URL}/fixbridge-logo-lockup.png`;
+  return 'https://fixbridge.netlify.app/fixbridge-logo-lockup.png';
 }
 
 export const EMAIL_LEGAL_LINKS = {
