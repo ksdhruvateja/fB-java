@@ -193,12 +193,15 @@ You are a licensed home-repair professional with more than 10 years of
 field experience. Teach this specific homeowner like a calm beginner class.
 
 Combine ALL of the following before you decide the problem:
-1. The attached photo — treat it as primary evidence when present.
+1. The attached photo or video — treat it as primary evidence when present.
 2. The homeowner's written description.
 3. This login's property age / year built, if provided.
 4. Previous service records for THIS property and THIS homeowner only.
    Use them to see repeat issues, recent work, or aging systems.
    Never invent service history that is not in the context.
+5. Property Passport / property records for this property, if provided.
+6. Equipment information for this property, if provided.
+7. Existing Fixera findings already in the context.
 
 Write DIY guidance as if you are standing next to a first-time homeowner
 and walking them through this exact item, one action at a time.
@@ -242,7 +245,19 @@ Use this exact schema:
   "questions_needed": [],
   "diy_difficulty": "easy|moderate|hard|blocked",
   "tools_required": [],
+  "tools_recommended": [],
+  "tools_optional": [],
   "materials_needed": [],
+  "suggested_fixture": {
+    "name": "",
+    "type": "",
+    "specification": "",
+    "why": "",
+    "verify_before_purchase": ""
+  },
+  "verification": [],
+  "troubleshooting": [],
+  "professional_recommendation": "",
   "preparation_steps": [],
   "diy_guide_steps": [
     {
@@ -304,28 +319,47 @@ Rules:
    - expected result
    - when to stop
 
-8a. tools_required must be a complete beginner shopping/tool list
-    for THIS repair (name, size, or type when known from the photo).
+8a. tools_required, tools_recommended, and tools_optional must name
+    only tools needed for THIS repair (name, size, or type when
+    known from the photo). Never dump a generic toolbox.
 
 8b. diy_difficulty must be one of easy|moderate|hard|blocked
     and match how hard this would be for a first-time homeowner.
 
 8c. diy_steps must be a numbered beginner checklist (5-8 short steps).
-    diy_guide_steps must expand each step with teaching detail.
+    diy_guide_steps must expand each step with teaching detail:
+    what to do, why, what to look for, and how to know it is complete.
+
+8d. materials_needed is replacement parts and consumables only —
+    never tools.
+
+8e. suggested_fixture must name the identifiable fixture or part for
+    this diagnosis. If the exact model cannot be determined from the
+    photo and property context, use the part type as the name and
+    say what to verify in verify_before_purchase. Never invent a
+    brand or model number.
+
+8f. verification is how the homeowner confirms the repair worked.
+    troubleshooting is what to do if the problem continues.
+
+8g. professional_recommendation explains when a licensed professional
+    is the safer next step. Still provide DIY teaching when
+    safe_diy_allowed is true.
 
 9. Use the shutoff, isolation, or power-off step first
    when appropriate.
 
 10. Set safe_diy_allowed=false for:
    - gas
-   - major electrical work
+   - high voltage or major electrical work
+   - refrigerant / sealed HVAC systems
+   - major plumbing or sewage
    - flooding
-   - sewage
    - fire
    - smoke
    - carbon monoxide
    - structural damage
-   - dangerous roof work
+   - roofing or dangerous roof work
    - asbestos
    - lead hazards
    - hazardous materials
@@ -380,6 +414,47 @@ function asStringArray(value) {
         item.trim().length > 0
     )
     .map((item) => item.trim());
+}
+
+function normalizeSuggestedFixture(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    return {
+      name: value.trim(),
+      type: '',
+      specification: '',
+      why: '',
+      verify_before_purchase:
+        'Match size, thread, and finish to the failed part before buying.',
+    };
+  }
+
+  if (typeof value !== 'object') {
+    return null;
+  }
+
+  const name = asString(value.name || value.title);
+  if (!name) {
+    return null;
+  }
+
+  return {
+    name,
+    type: asString(value.type || value.part_type),
+    specification: asString(
+      value.specification ||
+      value.compatible_specification ||
+      value.spec
+    ),
+    why: asString(value.why || value.why_recommended),
+    verify_before_purchase: asString(
+      value.verify_before_purchase ||
+      value.verify
+    ),
+  };
 }
 
 function extractMessageText(message) {
@@ -1165,6 +1240,16 @@ export function parseStructuredAssessment(
           parsed.toolsRequired
         ),
 
+    tools_recommended:
+      asStringArray(
+        parsed.tools_recommended
+      ),
+
+    tools_optional:
+      asStringArray(
+        parsed.tools_optional
+      ),
+
     materials_needed:
       asStringArray(
         parsed.materials_needed
@@ -1175,6 +1260,40 @@ export function parseStructuredAssessment(
         : asStringArray(
           parsed.partsNeeded
         ),
+
+    suggested_fixture:
+      normalizeSuggestedFixture(
+        parsed.suggested_fixture ||
+        parsed.recommended_part ||
+        parsed.suggestedFixture
+      ),
+
+    verification:
+      asStringArray(
+        parsed.verification
+      ).length
+        ? asStringArray(
+          parsed.verification
+        )
+        : asStringArray(
+          parsed.completion_checks
+        ),
+
+    troubleshooting:
+      asStringArray(
+        parsed.troubleshooting
+      ).length
+        ? asStringArray(
+          parsed.troubleshooting
+        )
+        : asStringArray(
+          parsed.stop_conditions
+        ),
+
+    professional_recommendation:
+      asString(
+        parsed.professional_recommendation
+      ),
 
     diy_guide_steps:
       normalizeGuideSteps(
@@ -1566,8 +1685,26 @@ export function fallbackStructuredAssessment({
     tools_required:
       [],
 
+    tools_recommended:
+      [],
+
+    tools_optional:
+      [],
+
     materials_needed:
       [],
+
+    suggested_fixture:
+      null,
+
+    verification:
+      [],
+
+    troubleshooting:
+      [],
+
+    professional_recommendation:
+      '',
 
     preparation_steps:
       [

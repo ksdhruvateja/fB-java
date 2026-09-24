@@ -97,7 +97,19 @@ export type StructuredAssessment = {
   diyRiskReasonCodes?: string[];
   diy_risk_reason_codes?: string[];
   tools_required?: string[];
+  tools_recommended?: string[];
+  tools_optional?: string[];
   materials_needed?: string[];
+  suggested_fixture?: {
+    name?: string;
+    type?: string;
+    specification?: string;
+    why?: string;
+    verify_before_purchase?: string;
+  } | null;
+  verification?: string[];
+  troubleshooting?: string[];
+  professional_recommendation?: string;
   diy_steps?: string[];
   diy_risk_level?:string;
   diy_guide_steps?: Array<{

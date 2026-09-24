@@ -20,9 +20,8 @@ import {
 import type { ChatMessage } from "../geminiAssessment";
 import DiySafetyFeedback from "../DiySafetyFeedback";
 import { asGuideSteps, guideVisual, type GuideStep } from "./diyGuideVisual";
-import { suggestedFixture, suggestedTools } from "./diyPlanSteps";
 
-export type DiyView = "home" | "step" | "chat" | "ideas" | "complete";
+export type DiyView = "home" | "step" | "chat" | "complete";
 
 type Risk = "green" | "yellow" | "red";
 
@@ -451,9 +450,7 @@ export default function HomeownerDiyExperience(props: Props) {
   const tip =
     stopConditions[0] ||
     "Work in a dry, well-lit area and stop if this step looks different from what you expected.";
-  const fixture = suggestedFixture({ summary, service_subcategory: subcategory }, category, subcategory || "", summary || "");
-  const toolList = tools.length ? tools : suggestedTools({ summary }, category, subcategory || "", summary || "");
-  const materialList = materials.length ? materials : fixture ? [fixture] : [];
+  const toolList = tools.length ? tools : materials;
   const blocked = risk === "red";
 
   useEffect(() => {
@@ -500,9 +497,6 @@ export default function HomeownerDiyExperience(props: Props) {
     }
     onView("step");
     onOpenStep();
-    window.setTimeout(() => {
-      document.getElementById("diy-detail-analysis")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 40);
   }
 
   function confirmCategory(id: string, nextSubcategory: string, source: CategorySource) {
@@ -534,13 +528,6 @@ export default function HomeownerDiyExperience(props: Props) {
       if (advanceTimerRef.current) window.clearTimeout(advanceTimerRef.current);
     };
   }, []);
-
-  useEffect(() => {
-    if (blocked || view === "complete" || view === "chat") return;
-    goToGuidedStep();
-    // Open the detailed analysis as soon as this repair is ready.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId, blocked, steps.length]);
 
   const chatPanel = (
     <section className="flex min-h-[420px] flex-col rounded-[22px] bg-white p-4 lg:min-h-[640px]" aria-label="DIY Chat">
@@ -590,7 +577,7 @@ export default function HomeownerDiyExperience(props: Props) {
           <DIYQuickAction label="What should I check first?" icon={<Search className="h-4 w-4" />} onClick={() => onSendChat("What should I check first?")} />
           <DIYQuickAction label="Show tools needed" icon={<Wrench className="h-4 w-4" />} onClick={() => onSendChat("Show tools needed")} />
           <DIYQuickAction label="Is this safe to DIY?" icon={<Shield className="h-4 w-4" />} onClick={() => onSendChat("Is this safe to DIY?")} />
-          <DIYQuickAction label="Explain this step" icon={<Wrench className="h-4 w-4" />} onClick={() => onSendChat("Explain the current repair step like I am a beginner.")} />
+          <DIYQuickAction label="Walk me through this" icon={<Wrench className="h-4 w-4" />} onClick={() => onSendChat("Walk me through this repair step by step")} />
         </div>
       </div>
       <form
@@ -752,7 +739,7 @@ export default function HomeownerDiyExperience(props: Props) {
   );
 
   const stepScreen = (
-    <div id="diy-detail-analysis" className="scroll-mt-24 space-y-4">
+    <div className="space-y-4">
       <HeaderBar
         title={title}
         onBack={onBack}
@@ -780,50 +767,14 @@ export default function HomeownerDiyExperience(props: Props) {
       ) : (
         <>
           <div className="rounded-[22px] bg-white p-4">
-            <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">Detailed analysis</p>
+            <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">How to fix this</p>
             <h3 className="mt-1 text-[26px] font-semibold leading-tight text-[#2c2926]">{parsed.title}</h3>
-            {fixture ? (
-              <p className="mt-2 text-[14px] font-medium text-[#2c2926]">Suggested fixture / part: {fixture}</p>
-            ) : null}
             {currentGuide?.goal ? (
               <p className="mt-2 text-[14px] text-[#5c574f]">{currentGuide.goal}</p>
             ) : summary && stepIndex === 0 ? (
               <p className="mt-2 text-[14px] text-[#5c574f]">{summary}</p>
             ) : null}
-            <div className="mt-4">
-              <p className="mb-2 text-[14px] font-semibold text-[#2c2926]">Tools required</p>
-              <div className="flex flex-wrap gap-2">
-                {(currentGuide?.tools?.length ? currentGuide.tools : toolList).map((tool) => (
-                  <DIYToolChip key={tool} label={tool} />
-                ))}
-              </div>
-            </div>
-            <div className="mt-3">
-              <p className="mb-2 text-[14px] font-semibold text-[#2c2926]">Fixture / replacement part</p>
-              <div className="flex flex-wrap gap-2">
-                {(currentGuide?.materials?.length ? currentGuide.materials : materialList).map((item) => (
-                  <DIYToolChip key={item} label={item} />
-                ))}
-              </div>
-            </div>
-          </div>
-          {steps.length > 0 ? (
-            <div className="rounded-[22px] bg-white p-4">
-              <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">Full repair plan</p>
-              <ol className="mt-3 space-y-2">
-                {steps.map((step, index) => (
-                  <li key={`${index}-${step.slice(0, 24)}`} className="flex gap-3 text-[14px] leading-relaxed text-[#5c574f]">
-                    <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${index === stepIndex ? "bg-[#E07A4A] text-white" : "bg-[#EFE8DF] text-[#5c574f]"}`}>
-                      {index + 1}
-                    </span>
-                    <span>{step}</span>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          ) : null}
-          <div className="rounded-[22px] bg-white p-4">
-            <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">What to do</p>
+            <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">What to do</p>
             <p className="mt-1 whitespace-pre-line text-[15px] leading-relaxed text-[#5c574f]">{currentGuide?.instruction || parsed.body || parsed.title}</p>
             <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">Why this matters</p>
             <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">
@@ -842,6 +793,24 @@ export default function HomeownerDiyExperience(props: Props) {
                 <Wrench className="h-10 w-10" aria-hidden />
               </div>
             )}
+          </div>
+          <div>
+            <p className="mb-2 text-[14px] font-semibold text-[#2c2926]">Tools needed</p>
+            <div className="flex flex-wrap gap-2">
+              {(currentGuide?.tools?.length ? currentGuide.tools : toolList.length ? toolList : ["No special tools listed"]).map((tool) => (
+                <DIYToolChip key={tool} label={tool} />
+              ))}
+            </div>
+            {currentGuide?.materials?.length ? (
+              <div className="mt-3">
+                <p className="mb-2 text-[14px] font-semibold text-[#2c2926]">Materials</p>
+                <div className="flex flex-wrap gap-2">
+                  {currentGuide.materials.map((item) => (
+                    <DIYToolChip key={item} label={item} />
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
           <div className="rounded-[22px] bg-white p-4">
             <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">Safety note</p>
@@ -881,7 +850,7 @@ export default function HomeownerDiyExperience(props: Props) {
               I am not comfortable continuing
             </button>
           </div>
-          <div className="space-y-2 pb-1 pt-2">
+          <div className="sticky bottom-3 space-y-2 bg-[#F8F7F4]/90 pb-1 pt-2 backdrop-blur-sm">
             <button
               type="button"
               onClick={onCompleteStep}
@@ -890,7 +859,14 @@ export default function HomeownerDiyExperience(props: Props) {
             >
               {savingStep ? "Saving step" : stepSaved ? "Saved — next step" : "I completed this step"}
             </button>
-            {stepIndex >= Math.max(steps.length - 1, 0) ? <DIYProfessionalCTA onClick={onHire} /> : null}
+            <DIYProfessionalCTA onClick={onHire} />
+            <button
+              type="button"
+              onClick={onNotComfortable}
+              className="w-full py-2 text-[14px] font-medium text-[#5c574f] underline-offset-2 hover:underline"
+            >
+              I’m not comfortable doing this
+            </button>
           </div>
         </>
       )}
@@ -933,13 +909,10 @@ export default function HomeownerDiyExperience(props: Props) {
 
   return (
     <div className="rounded-[24px] bg-[#F8F7F4] p-4 text-[#2c2926] sm:p-5">
-      <div className={`mx-auto grid max-w-6xl gap-5 ${view === "step" ? "grid-cols-1" : "md:grid-cols-[minmax(0,0.9fr)_minmax(280px,0.7fr)] xl:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.85fr)]"}`}>
+      <div className="mx-auto grid max-w-6xl gap-5 md:grid-cols-[minmax(0,0.9fr)_minmax(280px,0.7fr)] xl:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.85fr)]">
         <div className={view === "chat" ? "hidden lg:block" : ""}>{main}</div>
-        {view === "step" ? null : (
-          <div className={view === "chat" ? "block" : "hidden lg:block"}>{chatPanel}</div>
-        )}
+        <div className={view === "chat" ? "block" : "hidden lg:block"}>{chatPanel}</div>
       </div>
-      {view === "step" ? <div className="mx-auto mt-5 hidden max-w-6xl lg:block">{chatPanel}</div> : null}
       <div className="mx-auto mt-4 flex max-w-6xl gap-2 lg:hidden">
         {(["home", "chat"] as DiyView[]).map((id) => (
           <button
