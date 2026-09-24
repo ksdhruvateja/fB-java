@@ -1,5 +1,5 @@
 import { AlertTriangle, Clock, HardHat, Shield, Wrench } from "lucide-react";
-import { diyPlanSteps } from "./diyPlanSteps";
+import { diyPlanSteps, suggestedFixture, suggestedTools } from "./diyPlanSteps";
 
 type Assessment = Record<string, unknown> | null | undefined;
 
@@ -42,8 +42,9 @@ export default function DiyRepairGuidance({
 }) {
   const row = assessment && typeof assessment === "object" ? assessment : {};
   const steps = diyPlanSteps(row, category, subcategory, summary || String(row.summary || ""));
-  const tools = asList(row.tools_required);
-  const materials = asList(row.materials_needed);
+  const fixture = suggestedFixture(row, category, subcategory, summary || String(row.summary || ""));
+  const tools = suggestedTools(row, category, subcategory, summary || String(row.summary || ""));
+  const materials = asList(row.materials_needed).length ? asList(row.materials_needed) : [fixture];
   const safety = asList(row.immediate_safety_steps);
   const stop = asList(row.stop_conditions);
   const time =
@@ -54,13 +55,14 @@ export default function DiyRepairGuidance({
   const blocked = risk === "red" || row.safe_diy_allowed === false || String(row.diy_difficulty || "").toLowerCase() === "blocked";
 
   return (
-    <section id="diy-repair-guidance" className="space-y-4 rounded-[22px] border border-border bg-[#F8F7F4] p-4 text-[#2c2926] sm:p-5">
+    <section id="diy-repair-guidance" className="scroll-mt-24 space-y-4 rounded-[22px] border border-border bg-[#F8F7F4] p-4 text-[#2c2926] sm:p-5">
       <div>
-        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#E07A4A]">DIY repair guidance</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#E07A4A]">Detailed analysis</p>
         <h3 className="mt-1 text-xl font-semibold">How to fix this</h3>
         <p className="mt-1 text-sm text-[#5c574f]">
           These instructions come from this Fixera assessment{summary ? `: ${summary}` : "."}
         </p>
+        {fixture ? <p className="mt-2 text-sm font-semibold">Suggested fixture / part: {fixture}</p> : null}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
@@ -127,15 +129,15 @@ export default function DiyRepairGuidance({
             <div className="rounded-2xl bg-white p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#8a847b]">Required tools</p>
               <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#5c574f]">
-                {(tools.length ? tools : ["Use only the tools named in the steps above."]).map((item) => (
+                {tools.map((item) => (
                   <li key={item}>{item}</li>
                 ))}
               </ul>
             </div>
             <div className="rounded-2xl bg-white p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#8a847b]">Materials and parts</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#8a847b]">Fixture and parts</p>
               <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#5c574f]">
-                {(materials.length ? materials : ["Use only the materials or parts named in this assessment."]).map((item) => (
+                {materials.map((item) => (
                   <li key={item}>{item}</li>
                 ))}
               </ul>
@@ -158,13 +160,15 @@ export default function DiyRepairGuidance({
         </>
       )}
 
-      <button
-        type="button"
-        onClick={onHire}
-        className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-white px-4 py-3 text-sm font-semibold"
-      >
-        <HardHat className="h-4 w-4" /> Hire a Professional
-      </button>
+      {!blocked ? (
+        <button
+          type="button"
+          onClick={onHire}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-white px-4 py-3 text-sm font-semibold"
+        >
+          <HardHat className="h-4 w-4" /> Hire a Professional
+        </button>
+      ) : null}
     </section>
   );
 }

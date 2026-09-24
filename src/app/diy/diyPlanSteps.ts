@@ -38,6 +38,52 @@ export function fallbackDiyMethod(category = "", subcategory = "", summary = "")
   ];
 }
 
+export function suggestedFixture(
+  assessment: unknown,
+  category = "",
+  subcategory = "",
+  summary = "",
+): string {
+  const row = assessment && typeof assessment === "object" ? (assessment as Record<string, unknown>) : {};
+  const materials = asTextList(row.materials_needed);
+  if (materials[0]) return materials[0];
+  const named = String(row.service_subcategory || row.problem_classification || subcategory || "").replace(/_/g, " ").trim();
+  const hay = `${category} ${named} ${subcategory} ${summary} ${row.summary || ""}`.toLowerCase();
+  if (/faucet|tap|aerator/.test(hay)) return "Matching faucet cartridge or aerator for the faucet in the photo";
+  if (/toilet/.test(hay)) return "Matching toilet fill valve or flapper for the tank in the photo";
+  if (/garbage|disposal/.test(hay)) return "Disposal reset or matching splash guard / drain flange";
+  if (/pipe|leak|valve|shutoff/.test(hay)) return "Pipe-repair clamp or matching compression fitting for the leaking joint";
+  if (/outlet|switch|cover/.test(hay)) return "Replacement outlet, switch, or cover plate matching the existing fixture";
+  if (/filter|furnace|hvac/.test(hay)) return "Replacement filter or access-panel part matching the unit in the photo";
+  if (/door|hinge|handle/.test(hay)) return "Matching hinge, latch, or handle for the door in the photo";
+  return named || String(row.summary || "The failed fixture shown in the photo").slice(0, 90);
+}
+
+export function suggestedTools(
+  assessment: unknown,
+  category = "",
+  subcategory = "",
+  summary = "",
+): string[] {
+  const row = assessment && typeof assessment === "object" ? (assessment as Record<string, unknown>) : {};
+  const listed = asTextList(row.tools_required);
+  if (listed.length) return listed;
+  const hay = `${category} ${subcategory} ${summary} ${row.summary || ""}`.toLowerCase();
+  if (/plumb|pipe|leak|faucet|drain|valve|water|toilet/.test(hay)) {
+    return [
+      "Adjustable wrench",
+      "Channel-lock pliers",
+      "Flashlight",
+      "Bucket and towels",
+      "Pipe-repair clamp or epoxy putty",
+    ];
+  }
+  if (/electr|outlet|switch|light/.test(hay)) {
+    return ["Non-contact voltage tester", "Screwdriver set", "Flashlight", "Replacement fixture matching the photo"];
+  }
+  return ["Flashlight", "Screwdriver set", "Clean cloths"];
+}
+
 export function diyPlanSteps(
   assessment: unknown,
   category = "",
