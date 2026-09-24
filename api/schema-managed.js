@@ -1749,14 +1749,14 @@ export async function initManagedSchema(pool) {
     UPDATE users
     SET admin_role_preset='operations_admin'
     WHERE role='admin'
-      AND (admin_role_preset IS NULL OR TRIM(admin_role_preset)='')
+      AND (admin_role_preset IS NULL OR admin_role_preset='')
       AND COALESCE(admin_access_level,'read-write') IN ('read-write','write','')
   `);
   await pool.query(`
     UPDATE users
     SET admin_role_preset='read_only'
     WHERE role='admin'
-      AND (admin_role_preset IS NULL OR TRIM(admin_role_preset)='')
+      AND (admin_role_preset IS NULL OR admin_role_preset='')
       AND admin_access_level='read'
   `);
 
