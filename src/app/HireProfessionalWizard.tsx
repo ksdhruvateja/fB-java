@@ -783,6 +783,7 @@ type PendingHireWizardProps = {
   busy: boolean;
   setBusy: (v: boolean) => void;
   onError: (msg: string | null) => void;
+  onCancel?: () => void;
   onPaid?: (job?: ManagedJob) => void | Promise<void>;
 };
 
@@ -791,6 +792,7 @@ function PendingHireProfessionalWizard({
   busy,
   setBusy,
   onError,
+  onCancel,
   onPaid,
 }: PendingHireWizardProps) {
   const [step, setStep] = useState<HireStep>("schedule");
@@ -802,12 +804,23 @@ function PendingHireProfessionalWizard({
   const [contactPhone, setContactPhone] = useState(pendingServiceRequest.contactPhone || "");
   const [convertedJob, setConvertedJob] = useState<ManagedJob | null>(null);
   const [consent, setConsent] = useState(false);
+  const [paymentMessage, setPaymentMessage] = useState<string | null>(null);
   const amount = 125;
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlPaid = params.get("paid") === "pending-professional";
+    const urlCanceled = params.get("canceled") === "pending-professional";
     const urlReturnedId = Number(params.get("pendingServiceRequestId"));
+    if (urlCanceled && urlReturnedId === Number(pendingServiceRequest.id)) {
+      setPaymentMessage("Payment was canceled. Your saved request is still available.");
+      try {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      } catch {
+        // non-fatal
+      }
+      return;
+    }
     let storedId = 0;
     let storedResult = "";
     try {
@@ -837,8 +850,11 @@ function PendingHireProfessionalWizard({
         return;
       }
       attempts += 1;
-      if (attempts < 20) window.setTimeout(poll, 1500);
-      else onError("Payment was received, but the service request is still being finalized. Please refresh in a moment.");
+      if (attempts < 40) {
+        window.setTimeout(poll, 1500);
+      } else {
+        setPaymentMessage("Payment was received successfully. FixBridge is still finalizing your request.");
+      }
     };
     void poll();
     return () => { cancelled = true; };
@@ -885,13 +901,24 @@ function PendingHireProfessionalWizard({
 
   if (convertedJob) {
     return (
-      <div className="space-y-4 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-5">
-        <div className="flex items-start gap-3">
-          <CheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
-          <div>
-            <h3 className="font-semibold">Payment Successful</h3>
-            <p className="mt-1 text-sm text-muted-foreground">Your pending request has been converted to a managed service request.</p>
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
+        <div className="w-full max-w-md rounded-2xl border border-border bg-card p-6 text-center shadow-2xl">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600">
+            <CheckCircle className="h-7 w-7" />
           </div>
+          <h3 className="mt-4 text-xl font-bold">Payment Successful</h3>
+          <p className="mt-2 text-sm text-muted-foreground">Your $125 payment was received successfully.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Your professional service request has been submitted to FixBridge.</p>
+          <button
+            type="button"
+            onClick={() => {
+              setConvertedJob(null);
+              void onCancel?.();
+            }}
+            className="mt-6 inline-flex min-w-24 items-center justify-center rounded-xl bg-[#FF4D1C] px-5 py-2.5 text-sm font-semibold text-white"
+          >
+            OK
+          </button>
         </div>
       </div>
     );
@@ -900,13 +927,31 @@ function PendingHireProfessionalWizard({
   const stepIndex = HIRE_STEPS.indexOf(step);
   return (
     <div className="space-y-5 rounded-2xl border border-[#FF4D1C]/20 bg-gradient-to-br from-[#FFF7F3] via-card to-[#F3FAF8] p-4 sm:p-6 dark:from-[#2a1812] dark:via-card dark:to-[#142a28]">
+      {paymentMessage ? (
+        <div className="rounded-xl border border-amber-300/70 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+          {paymentMessage}
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#FF4D1C]">Hire a professional</p>
           <h3 className="mt-1 text-xl font-semibold sm:text-2xl">Professional service request</h3>
           <p className="mt-1 text-xs text-muted-foreground">Pending request #{pendingServiceRequest.id} · payment converts it to a managed job.</p>
         </div>
-        <span className="rounded-xl border border-[#FF4D1C]/25 px-3 py-1.5 text-xs font-medium text-[#FF4D1C]">Step {stepIndex + 1} of {HIRE_STEPS.length}</span>
+        <div className="flex items-center gap-2">
+          <span className="rounded-xl border border-[#FF4D1C]/25 px-3 py-1.5 text-xs font-medium text-[#FF4D1C]">Step {stepIndex + 1} of {HIRE_STEPS.length}</span>
+          {onCancel ? (
+            <button
+              type="button"
+              onClick={() => onCancel()}
+              disabled={busy}
+              className="rounded-xl border border-border px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-muted disabled:opacity-60"
+            >
+              Save & Exit
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-1.5">
@@ -986,6 +1031,7 @@ export default function HireProfessionalWizard({
   busy,
   setBusy,
   onError,
+  onCancel,
   onJobUpdated,
   onPaid,
 }: {
@@ -994,11 +1040,12 @@ export default function HireProfessionalWizard({
   busy: boolean;
   setBusy: (v: boolean) => void;
   onError: (msg: string | null) => void;
+  onCancel?: () => void;
   onJobUpdated?: (job: ManagedJob) => void;
   onPaid?: (job?: ManagedJob) => void | Promise<void>;
 }) {
   if (pendingServiceRequest && !job) {
-    return <PendingHireProfessionalWizard pendingServiceRequest={pendingServiceRequest} busy={busy} setBusy={setBusy} onError={onError} onPaid={onPaid} />;
+    return <PendingHireProfessionalWizard pendingServiceRequest={pendingServiceRequest} busy={busy} setBusy={setBusy} onError={onError} onCancel={onCancel} onPaid={onPaid} />;
   }
   if (!job) return null;
   return <ManagedHireProfessionalWizard job={job} busy={busy} setBusy={setBusy} onError={onError} onJobUpdated={onJobUpdated || (() => {})} onPaid={onPaid} />;

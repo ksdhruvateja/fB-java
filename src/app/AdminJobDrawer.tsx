@@ -42,8 +42,10 @@ export default function AdminJobDrawer({
   onClose,
   busy,
   inviteContractorId,
+  inviteContractorIds,
   inviteRequestType,
   onInviteContractorId,
+  onInviteContractorIds,
   onInviteRequestType,
   onInviteAndAssign,
   onMatch,
@@ -67,8 +69,10 @@ export default function AdminJobDrawer({
   onClose: () => void;
   busy?: boolean;
   inviteContractorId: number | "";
+  inviteContractorIds: number[];
   inviteRequestType: "remote_quote" | "site_visit";
   onInviteContractorId: (id: number | "") => void;
+  onInviteContractorIds: (ids: number[]) => void;
   onInviteRequestType: (t: "remote_quote" | "site_visit") => void;
   onInviteAndAssign: () => void | Promise<void>;
   onMatch: () => void | Promise<void>;
@@ -439,7 +443,7 @@ if (!open || !job) return null;
                   <>
                     <div className="space-y-2">
                       <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                        Contractor bids
+                        Select contractor quote
                       </p>
                       {bids.map((b) => (
                         <button
@@ -451,13 +455,19 @@ if (!open || !job) return null;
                               : "border-border hover:bg-muted/40"
                             }`}
                         >
-                          <span>Bid #{b.id}</span>
+                          <div className="min-w-0">
+                            <div className="truncate font-medium">
+                              {b.contractorName || `Contractor #${b.contractorUserId}`}
+                            </div>
+                            {/* <div className="text-xs text-muted-foreground">Bid #{b.id}</div> */}
+                          </div>
                           <span className="font-semibold tabular-nums">{formatMoney(b.netTotal)}</span>
                         </button>
                       ))}
                     </div>
                     {activeBid && (
                       <AdminQuoteBuilderPanel
+                        key={`${job.id}-${activeBid.id}`}
                         job={job}
                         bid={activeBid}
                         busy={busy}
@@ -533,30 +543,38 @@ if (!open || !job) return null;
                 </div>
 
                 <div>
-                  <label className="text-sm font-medium">Select contractor</label>
+                  <label className="text-sm font-medium">Select contractor(s)</label>
                   <select
+                    multiple
+                    size={Math.min(8, Math.max(4, contractors.length))}
                     className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-                    value={inviteContractorId}
-                    onChange={(e) => onInviteContractorId(e.target.value ? Number(e.target.value) : "")}
+                    value={inviteContractorIds.map(String)}
+                    onChange={(e) => {
+                      const ids = Array.from(e.target.selectedOptions).map((option) => Number(option.value));
+                      onInviteContractorIds(ids);
+                      onInviteContractorId(ids.length === 1 ? ids[0] : "");
+                    }}
                   >
-                    <option value="">Choose…</option>
                     {contractors.map((c) => (
                       <option key={String(c.id)} value={Number(c.id)}>
                         {c.name} · {c.trade || "trade?"} · {c.email}
                       </option>
                     ))}
                   </select>
+                  <p className="mt-1 text-xs text-muted-foreground">Select one contractor or hold Ctrl/Cmd to select multiple.</p>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    disabled={busy || !inviteContractorId}
+                    disabled={busy || !inviteContractorIds.length}
                     onClick={() => void onInviteAndAssign()}
                     className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
                   >
                     <UserPlus className="h-4 w-4" />
-                    {inviteRequestType === "site_visit" ? "Request site visit" : "Request quote"}
+                    {inviteContractorIds.length > 1
+                      ? `Invite ${inviteContractorIds.length} contractors`
+                      : inviteRequestType === "site_visit" ? "Request site visit" : "Request quote"}
                   </button>
                   <button
                     type="button"

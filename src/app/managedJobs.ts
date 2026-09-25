@@ -362,6 +362,7 @@ export type Proposal = {
 export type Bid = {
   id: number;
   jobId: number;
+  contractorName?: string | null;
   contractorUserId: number;
   labor: number;
   materials: number;
@@ -1152,17 +1153,33 @@ export async function adminInvite(
   contractorUserId: number,
   opts?: { message?: string; requestType?: "remote_quote" | "site_visit"; siteVisitWindow?: string },
 ) {
-  const result = await api<{ ok: boolean; message?: string; job?: ManagedJob }>(`/api/admin/managed/jobs/${jobId}/invite`, {
+  return adminInviteMany(jobId, [contractorUserId], opts);
+}
+
+export async function adminInviteMany(
+  jobId: number,
+  contractorUserIds: number[],
+  opts?: { message?: string; requestType?: "remote_quote" | "site_visit"; siteVisitWindow?: string },
+) {
+  const ids = Array.from(new Set(contractorUserIds.map(Number).filter((id) => Number.isFinite(id) && id > 0)));
+  return api<{
+    ok: boolean;
+    message?: string;
+    code?: string;
+    missingAcceptanceTypes?: string[];
+    job?: ManagedJob;
+    contractors?: Array<{ id: number; name?: string; email?: string; trade?: string }>;
+    contractor?: { id: number; name?: string; email?: string; trade?: string };
+  }>(`/api/admin/managed/jobs/${jobId}/invite`, {
     method: "POST",
     body: JSON.stringify({
-      contractorUserId,
+      contractorUserIds: ids,
+      contractorUserId: ids[0],
       message: opts?.message,
       requestType: opts?.requestType,
       siteVisitWindow: opts?.siteVisitWindow,
     }),
   });
-  // console.log("ADMIN INVITE RESPONSE:", result);
-  return result;
 }
 
 export async function adminQuoteBuilderPreview(
@@ -2151,6 +2168,7 @@ export type PendingProfessionalRequest = {
   stripeSessionId?: string | null;
   managedJobId?: number | null;
   convertedAt?: string | null;
+  checkoutExpiresAt?: string | null;
 };
 
 export async function listPendingServiceRequests() {

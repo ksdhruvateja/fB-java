@@ -1638,11 +1638,41 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
         return res.status(403).json({ ok: false, message: 'Homeowners only.' });
       }
       const id = Number(req.params.id);
-      const { rows } = await pool.query(`SELECT * FROM homeowner_invoices WHERE id=$1`, [id]);
+      if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ ok: false, code: 'INVALID_INVOICE_ID', message: 'Invalid invoice id.' });
+      }
+
+      // The managed job is the authoritative ownership source for homeowner invoices.
+      // Older/generated invoice rows can have a missing or stale homeowner_user_id,
+      // which previously caused a legitimate homeowner checkout to return 403.
+      const { rows } = await pool.query(`SELECT hi.*, j.homeowner_user_id AS job_homeowner_user_id FROM homeowner_invoices hi LEFT JOIN managed_jobs j ON j.id = hi.job_id WHERE hi.id=$1`, [id]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Invoice not found.' });
-      const invoice = serializeInvoiceRow(rows[0]);
-      if (!isAdminRole(req.authUser) && !isHomeownerOwner(req.authUser, invoice.homeownerUserId)) {
-        return res.status(403).json({ ok: false, message: 'Not allowed to pay this invoice.' });
+
+      const row = rows[0];
+      const invoice = serializeInvoiceRow(row);
+      const jobHomeownerUserId = row.job_homeowner_user_id != null ? Number(row.job_homeowner_user_id) : null;
+      const invoiceHomeownerUserId = invoice.homeownerUserId != null ? Number(invoice.homeownerUserId) : null;
+      const effectiveHomeownerUserId = jobHomeownerUserId || invoiceHomeownerUserId;
+      if (!isAdminRole(req.authUser)) {
+        if (req.authUser.role !== 'homeowner') {
+          return res.status(403).json({ ok: false, code: 'HOMEOWNER_ONLY', message: 'Homeowners only.' });
+        }
+
+        // Prefer the managed job owner because the job is what grants the homeowner
+        // access to the invoice. This also repairs legacy invoices whose owner column
+        // was not populated correctly when the invoice was created.
+        if (!effectiveHomeownerUserId || Number(req.authUser.id) !== effectiveHomeownerUserId) {
+          return res.status(403).json({
+            ok: false,
+            code: 'INVOICE_NOT_OWNER',
+            message: 'This invoice does not belong to the signed-in homeowner.',
+          });
+        }
+
+        if (jobHomeownerUserId && invoiceHomeownerUserId !== jobHomeownerUserId) {
+          await pool.query(`UPDATE homeowner_invoices SET homeowner_user_id=$1 WHERE id=$2`, [jobHomeownerUserId, id]);
+          invoice.homeownerUserId = jobHomeownerUserId;
+        }
       }
       if (invoice.status === 'paid') {
         return res.status(400).json({ ok: false, message: 'Invoice is already paid.' });
@@ -1727,7 +1757,7 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
           invoiceId: String(id),
           invoiceNumber: invoice.invoiceNumber,
           jobId: String(invoice.jobId),
-          homeownerId: String(invoice.homeownerUserId || req.authUser.id),
+          homeownerId: String(effectiveHomeownerUserId || req.authUser.id),
           proposalId: invoice.proposalId != null ? String(invoice.proposalId) : '',
           serviceAmountCents: String(totals.serviceAmountCents),
           tipAmountCents: String(totals.tipAmountCents),

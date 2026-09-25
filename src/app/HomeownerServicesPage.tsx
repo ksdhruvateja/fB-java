@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowRight, RefreshCw, Search, Sparkles, UserRound, Wrench } from "lucide-react";
+import { ArrowRight, Loader2, RefreshCw, Search, Sparkles, UserRound, Wrench } from "lucide-react";
 import { getStoredToken } from "./auth";
 import type { Property } from "./managedJobs";
 import { formatMoney } from "./managedJobs";
@@ -58,6 +58,7 @@ export default function HomeownerServicesPage({
   const [startDate, setStartDate] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
+  const [actionLoading, setActionLoading] = useState<"request" | "hire" | "diy" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [helpChoice, setHelpChoice] = useState("");
@@ -114,11 +115,20 @@ export default function HomeownerServicesPage({
 
   function startAction(item: ServiceOffering, intent: "request" | "hire" | "diy") {
     const detail = helpChoice || notes;
-    onRequestService({
+    const payload = {
       service: item.category,
       description: detail || undefined,
       intent,
-    });
+    } as const;
+
+    // Every explicit action gets a short transition so the homeowner
+    // immediately sees that FixBridge is preparing the selected path.
+    setActionLoading(intent);
+    setMessage(null);
+    window.setTimeout(() => {
+      setActionLoading(null);
+      onRequestService(payload);
+    }, 650);
   }
 
   function openSetup(item: ServiceOffering) {
@@ -263,7 +273,30 @@ export default function HomeownerServicesPage({
           </div>
         )
       ) : null}
-      {selected && !setup ? (
+      {actionLoading ? (
+        <div className="flex min-h-[360px] items-center justify-center rounded-3xl border border-border bg-card p-8">
+          <div className="flex max-w-sm flex-col items-center text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
+              <Loader2 className="h-7 w-7 animate-spin text-primary" />
+            </div>
+            <h2 className="mt-5 text-xl font-semibold">
+              {actionLoading === "hire"
+                ? "Creating your professional service request..."
+                : actionLoading === "diy"
+                  ? "Preparing your Fixera experience..."
+                  : "Preparing your Fixera assessment..."}
+            </h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {actionLoading === "hire"
+                ? "We’re creating a new professional request for this service."
+                : actionLoading === "diy"
+                  ? "We’re getting your DIY assessment ready."
+                  : "We’re preparing your Fixera assessment."}
+            </p>
+          </div>
+        </div>
+      ) : null}
+      {selected && !setup && !actionLoading ? (
         <div className="space-y-4">
           <button type="button" onClick={() => setSelectedId(null)} className="text-sm font-semibold text-primary">
             Back to services

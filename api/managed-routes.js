@@ -441,30 +441,6 @@ function parseJson(val, fallback = null) {
   }
 }
 
-function getPackageLabel(job) {
-  const raw = job || {};
-
-  // HomeCare / subscription plan
-  const plan = raw.packageLabel ?? raw.package ?? raw.planName ?? raw.plan ?? raw.homeCarePlan ?? raw.homecarePlan;
-
-  if (typeof plan === "string" && plan.trim()) { return "Plan";}
-
-  // Hire a Professional flow
-  const selectedAction = String(raw.selectedAction ?? raw.selected_action ?? "" ).trim().toLowerCase();
-
-  if (selectedAction === "hire" || selectedAction === "hire_professional") {
-    return "Hire a Professional";
-  }
-
-  const paymentType = String(raw.paymentType ?? raw.payment_type ?? "").trim().toLowerCase();
-
-  if (paymentType === "pending_professional_fee" || paymentType === "dispatch_fee") {
-    return "Hire a Professional";
-  }
-
-  return "—";
-}
-
 /** Role-aware job serializer */
 function serializeJob(row, viewer) {
   if (!row) return null;
@@ -1771,16 +1747,6 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
   const stripeSessionId = payment.stripeSessionId || null;
   const stripePaymentIntentId = payment.stripePaymentIntentId || null;
 
-  console.info("[FLOW][4][API] CONVERSION START", {
-    pendingServiceRequestId: pendingId,
-    paymentType: payment.paymentType || null,
-    paymentStatus: payment.paymentStatus || null,
-    amountCents: payment.amountCents ?? null,
-    homeownerUserId: expectedHomeownerId,
-    stripeSessionId: stripeSessionId ? String(stripeSessionId).slice(0, 18) : null,
-    hasPaymentIntent: Boolean(stripePaymentIntentId),
-  });
-
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -1790,17 +1756,6 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
       [pendingId]
     );
     const pending = rows[0];
-
-    console.info("[FLOW][4][API] PENDING LOOKUP", {
-      pendingServiceRequestId: pendingId,
-      found: Boolean(pending),
-      pendingHomeownerUserId: pending?.homeowner_user_id ?? null,
-      pendingStatus: pending?.status ?? null,
-      paymentStatus: pending?.payment_status ?? null,
-      selectedAction: pending?.selected_action ?? null,
-      managedJobId: pending?.managed_job_id ?? null,
-      assessmentStatus: pending?.assessment_status ?? null,
-    });
 
     // The pending row is deliberately deleted after conversion. A retry therefore
     // needs another idempotency path instead of treating "not found" as failure.
@@ -1840,11 +1795,6 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
       }
 
       if (existingJob && (!expectedHomeownerId || Number(existingJob.homeowner_user_id) === expectedHomeownerId)) {
-        console.info("[FLOW][4][API] ALREADY CONVERTED", {
-          pendingServiceRequestId: pendingId,
-          managedJobId: existingJob.id,
-          managedJobStatus: existingJob.status,
-        });
         await client.query('COMMIT');
         return { ok: true, alreadyConverted: true, job: existingJob };
       }
@@ -2013,14 +1963,6 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
     );
 
     const job = jobs[0];
-    console.info("[FLOW][4][API] MANAGED JOB CREATED", {
-      pendingServiceRequestId: pendingId,
-      managedJobId: job?.id || null,
-      managedJobStatus: job?.status || null,
-      paymentStatus: payment.paymentStatus || null,
-      paymentType,
-      amountCents: paidAmountCents,
-    });
     const bookingId = formatBookingId(job.id, bookingDate);
     await client.query(
       `UPDATE managed_jobs
@@ -2045,13 +1987,6 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
       );
     }
 
-    console.info("[FLOW][4][API] PAYMENT LINKED TO MANAGED JOB", {
-      pendingServiceRequestId: pendingId,
-      managedJobId: job.id,
-      stripeSessionId: stripeSessionId ? String(stripeSessionId).slice(0, 18) : null,
-      paymentIntentPresent: Boolean(stripePaymentIntentId),
-    });
-
     // IMPORTANT: delete the exact pending row. It is no longer the source of truth
     // once the managed job exists.
     const deleted = await client.query(
@@ -2064,18 +1999,7 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
       });
     }
 
-    console.info("[FLOW][4][API] PENDING REQUEST FINALIZED/DELETED", {
-      pendingServiceRequestId: pendingId,
-      managedJobId: job.id,
-    });
-
     await client.query('COMMIT');
-
-    console.info("[FLOW][4][API] CONVERSION COMMITTED", {
-      pendingServiceRequestId: pendingId,
-      managedJobId: job.id,
-      status: job.status,
-    });
 
     // Admin notification is part of the conversion contract. It runs after the
     // database transaction so a mail/notification failure can never roll back
@@ -2111,7 +2035,56 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
   }
 }
 
+
+const PENDING_SERVICE_REQUEST_TTL_HOURS = 36;
+
+async function ensurePendingServiceRequestExpiry(pool) {
+  await pool.query(`
+    ALTER TABLE pending_service_requests
+      ADD COLUMN IF NOT EXISTS checkout_expires_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    UPDATE pending_service_requests
+       SET checkout_expires_at = COALESCE(
+         checkout_expires_at,
+         created_at + INTERVAL '${PENDING_SERVICE_REQUEST_TTL_HOURS} hours'
+       )
+     WHERE checkout_expires_at IS NULL
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_pending_service_requests_checkout_expires_at
+      ON pending_service_requests (checkout_expires_at)
+  `);
+}
+
+async function purgeExpiredPendingServiceRequests(pool) {
+  const { rows } = await pool.query(`
+    DELETE FROM pending_service_requests
+     WHERE checkout_expires_at IS NOT NULL
+       AND checkout_expires_at <= NOW()
+       AND COALESCE(LOWER(payment_status), 'unpaid') NOT IN ('succeeded', 'paid', 'captured')
+    RETURNING id
+  `);
+  if (rows.length > 0) {
+    console.info('[PENDING SERVICE REQUEST] expired requests deleted:', rows.map((row) => row.id));
+  }
+  return rows.length;
+}
+
 export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser }) {
+  void ensurePendingServiceRequestExpiry(pool)
+    .then(() => purgeExpiredPendingServiceRequests(pool))
+    .catch((error) => console.warn('[PENDING SERVICE REQUEST] expiry setup failed:', error?.message || error));
+
+  if (!globalThis.__fixbridgePendingExpiryTimer) {
+    globalThis.__fixbridgePendingExpiryTimer = setInterval(() => {
+      void purgeExpiredPendingServiceRequests(pool).catch((error) => {
+        console.warn('[PENDING SERVICE REQUEST] expiry cleanup failed:', error?.message || error);
+      });
+    }, 15 * 60 * 1000);
+    globalThis.__fixbridgePendingExpiryTimer?.unref?.();
+  }
+
   const requireHomeCareFeature = createRequireHomeCareFeature(pool);
   const need = typeof requirePermission === 'function'
     ? requirePermission
@@ -3528,6 +3501,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const hasActiveHomeCare =
         entitlement.hasAccess === true;
 
+      const hireRequest =
+        String(b.intent || '').trim().toLowerCase() === 'hire';
+
+      const pendingRequest = hireRequest || !hasActiveHomeCare;
+
       console.log(
         '[MANAGED JOB] HomeCare entitlement:',
         {
@@ -3535,15 +3513,20 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           hasActiveHomeCare,
           plan: entitlement.plan,
           status: entitlement.status,
+          hireRequest,
+          pendingRequest,
         }
       );
 
       // ------------------------------------------------------------
-      // NON-HOMECARE REQUEST
-      // Store it as pending_service_requests.
+      // PENDING REQUEST FLOW
+      // AI with no active HomeCare -> pending service request.
+      // HIRE always -> pending service request, regardless of HomeCare.
+      // The homeowner continues this exact pending request and it is
+      // converted to a managed_job only after a successful payment.
       // ------------------------------------------------------------
 
-      if (!hasActiveHomeCare) {
+      if (pendingRequest) {
         // ----------------------------------------------------------
         // PENDING TABLE SCHEMA DIAGNOSTIC
         // ----------------------------------------------------------
@@ -3587,6 +3570,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           'listing_reference_url',
           'property_opportunity_notes',
           'discount_code',
+          'selected_action',
+          'payment_status',
+          'checkout_expires_at',
         ];
 
         const { rows: pendingColumnRows } =
@@ -3642,7 +3628,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         // status is omitted so PostgreSQL uses:
         // status TEXT NOT NULL DEFAULT 'pending'
         //
-        // 37 target columns = 37 parameters.
+        // 40 target columns = 39 parameters plus the database expiry expression.
         // ----------------------------------------------------------
 
         const { rows: pendingRows } =
@@ -3685,14 +3671,18 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
               inspection_report_url,
               listing_reference_url,
               property_opportunity_notes,
-              discount_code
+              discount_code,
+              selected_action,
+              payment_status,
+              checkout_expires_at
             )
            VALUES
             (
               $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
               $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
               $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-              $31,$32,$33,$34,$35,$36,$37
+              $31,$32,$33,$34,$35,$36,$37,
+              $38,$39,NOW() + INTERVAL '36 hours'
             )
            RETURNING *`,
             [
@@ -3757,6 +3747,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
                   .trim()
                   .toUpperCase()
                 : null,
+
+              hireRequest ? 'hire' : null,
+              'unpaid',
             ]
           );
 
@@ -3972,10 +3965,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           req.authUser
         ),
         entitlement: {
-          hasAccess: true,
+          hasAccess: hasActiveHomeCare,
           plan: entitlement.plan,
           status: entitlement.status,
         },
+        mode: 'homecare',
       });
     } catch (e) {
       console.error(
@@ -4091,11 +4085,16 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
   app.get('/api/pending-service-requests/my', requireAuth, async (req, res) => {
     try {
+      await purgeExpiredPendingServiceRequests(pool);
       const { rows } = await pool.query(
         `SELECT *
            FROM pending_service_requests
           WHERE homeowner_user_id=$1
             AND COALESCE(status,'pending') <> 'converted'
+            AND (
+              checkout_expires_at IS NULL
+              OR checkout_expires_at > NOW()
+            )
           ORDER BY COALESCE(updated_at, created_at) DESC, id DESC`,
         [req.authUser.id]
       );
@@ -4111,6 +4110,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
   app.get('/api/pending-service-requests/:id', requireAuth, async (req, res) => {
     try {
+      await purgeExpiredPendingServiceRequests(pool);
       const pendingId = Number(req.params.id);
       if (!Number.isFinite(pendingId) || pendingId <= 0) {
         return res.status(400).json({ ok: false, message: 'Invalid pending service request.' });
@@ -4170,13 +4170,18 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
   app.post('/api/pending-service-requests/:id/professional-checkout', requireAuth, async (req, res) => {
     try {
+      await purgeExpiredPendingServiceRequests(pool);
       const pendingId = Number(req.params.id);
       if (!Number.isFinite(pendingId) || pendingId <= 0) {
         return res.status(400).json({ ok: false, message: 'Invalid pending service request.' });
       }
       const { rows } = await pool.query(`SELECT * FROM pending_service_requests WHERE id=$1`, [pendingId]);
       const pending = rows[0];
-      if (!pending) return res.status(404).json({ ok: false, message: 'Pending service request not found.' });
+      if (!pending) return res.status(404).json({ ok: false, message: 'Pending service request not found or expired.' });
+      if (pending.checkout_expires_at && new Date(pending.checkout_expires_at).getTime() <= Date.now()) {
+        await pool.query(`DELETE FROM pending_service_requests WHERE id=$1`, [pendingId]);
+        return res.status(410).json({ ok: false, code: 'PENDING_SERVICE_REQUEST_EXPIRED', message: 'This saved request expired after 36 hours without payment.' });
+      }
       if (Number(pending.homeowner_user_id) !== Number(req.authUser.id)) {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
@@ -4184,9 +4189,10 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         const { rows: jobs } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [pending.managed_job_id]);
         return res.json({ ok: true, alreadyConverted: true, managedJob: jobs[0] ? serializeJob(jobs[0], req.authUser) : null });
       }
-      if (String(pending.assessment_status || '') !== 'ready' && !pending.ai_assessment) {
-        return res.status(400).json({ ok: false, code: 'ASSESSMENT_REQUIRED', message: 'Complete the Fixera assessment before requesting professional service.' });
-      }
+      // Professional checkout is intentionally available without a completed
+      // Fixera assessment. The homeowner may choose Hire directly from a new
+      // request or from the Fixera decision screen. The pending request itself
+      // is the source of truth and will convert only after successful payment.
       if (req.body?.acknowledged !== true) {
         return res.status(400).json({ ok: false, code: 'ACK_REQUIRED', message: 'Please acknowledge the professional-service payment terms.' });
       }
@@ -4198,17 +4204,6 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const transactionStage = String(req.body?.transactionStage || pending.transaction_stage || 'ongoing_maintenance').slice(0, 80);
       const contactPhone = req.body?.contactPhone != null ? String(req.body.contactPhone).slice(0, 40) : pending.contact_phone;
       const amountCents = 12500;
-
-      console.info("[FLOW][3][API] PROFESSIONAL HIRE CHOSEN", {
-        pendingServiceRequestId: pendingId,
-        homeownerUserId: req.authUser.id,
-        selectedAction: pending.selected_action || null,
-        assessmentStatus: pending.assessment_status || null,
-        amountCents,
-        serviceTiming,
-        preferredDate,
-        preferredTimeSlot,
-      });
 
       await pool.query(
         `UPDATE pending_service_requests SET
@@ -4288,13 +4283,6 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           }),
         ]
       );
-
-      console.info("[FLOW][3][API] PROFESSIONAL CHECKOUT CREATED", {
-        pendingServiceRequestId: pendingId,
-        amountCents,
-        stripeSessionId: checkout.sessionId ? String(checkout.sessionId).slice(0, 18) : null,
-        hasUrl: Boolean(checkout.url),
-      });
 
       return res.json({ ok: true, url: checkout.url, amount: 125, amountCents, pendingServiceRequestId: pendingId });
     } catch (e) {
@@ -6362,15 +6350,25 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
 
-      const proposalId = Number(req.body?.proposalId || jobs[0].active_proposal_id || 0);
+      const requestedProposalId = Number(req.body?.proposalId || 0);
       let prop = null;
-      if (proposalId > 0) {
+
+      // Prefer the explicitly requested proposal only when it is currently
+      // actionable. The Admin can publish a newer proposal after the homeowner
+      // page has loaded; in that case the browser may still send the older
+      // proposalId. Never let that stale id block approval when a newer sent
+      // proposal exists for the same job.
+      if (requestedProposalId > 0) {
         const { rows: byId } = await client.query(
           `SELECT * FROM proposals WHERE id=$1 AND job_id=$2`,
-          [proposalId, jobId]
+          [requestedProposalId, jobId]
         );
-        prop = byId[0] || null;
+        if (byId[0] && ['sent','viewed'].includes(String(byId[0].status || '').toLowerCase())) {
+          prop = byId[0];
+        }
       }
+
+      // Always fall back to the newest proposal actually sent to the homeowner.
       if (!prop) {
         const { rows: props } = await client.query(
           `SELECT * FROM proposals
@@ -6381,6 +6379,22 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           [jobId]
         );
         prop = props[0] || null;
+      }
+
+      // Last fallback: use the job's active proposal if it is an already
+      // approved/accepted proposal being retried idempotently.
+      if (!prop) {
+        const activeProposalId = Number(jobs[0].active_proposal_id || 0);
+        if (activeProposalId > 0) {
+          const { rows: activeRows } = await client.query(
+            `SELECT * FROM proposals WHERE id=$1 AND job_id=$2`,
+            [activeProposalId, jobId]
+          );
+          const candidate = activeRows[0];
+          if (candidate && ['accepted','approved'].includes(String(candidate.status || '').toLowerCase())) {
+            prop = candidate;
+          }
+        }
       }
       if (!prop) {
         return res.status(400).json({ ok: false, message: 'No active quote available for approval.' });
@@ -8946,14 +8960,6 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
             );
           }
 
-          console.info("[FLOW][4][WEBHOOK] STRIPE PAYMENT CONFIRMED", {
-            pendingServiceRequestId: pendingId,
-            userId,
-            amountCents,
-            stripeSessionId: session.id ? String(session.id).slice(0, 18) : null,
-            paymentIntentPresent: Boolean(session.payment_intent),
-          });
-
           const converted = await convertPendingServiceRequest(pool, pendingId, {
             amountCents,
             stripeSessionId: session.id,
@@ -8961,13 +8967,6 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
             homeownerUserId: userId || null,
             paymentType: 'pending_professional_fee',
           });
-          console.info("[FLOW][4][WEBHOOK] CONVERSION RESULT", {
-            pendingServiceRequestId: pendingId,
-            managedJobId: converted?.job?.id || null,
-            managedJobStatus: converted?.job?.status || null,
-            alreadyConverted: Boolean(converted?.alreadyConverted),
-          });
-
           if (converted.job) {
             const paymentMeta = JSON.stringify({
               source: 'pending_service_request',

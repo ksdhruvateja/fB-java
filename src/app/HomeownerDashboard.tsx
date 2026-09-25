@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Home, PlusCircle, LogOut, Sun, Moon, Menu, X,
   Loader2, ImagePlus, ShieldAlert, AlertTriangle, CheckCircle, DollarSign, Sparkles, HardHat, ArrowLeft, ArrowRight,
@@ -300,6 +300,17 @@ function moneyRange(job: ManagedJob) {
   return retailRangeLabel(job);
 }
 
+function formatPendingTimeLeft(expiresAt: string | null | undefined, now = Date.now()) {
+  if (!expiresAt) return "36 hrs left";
+  const remaining = new Date(expiresAt).getTime() - now;
+  if (!Number.isFinite(remaining) || remaining <= 0) return "Expired";
+  const totalMinutes = Math.max(1, Math.ceil(remaining / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours >= 1) return `${hours}h ${minutes}m left`;
+  return `${minutes}m left`;
+}
+
 type PendingAssessmentSuccess = Extract<
   Awaited<ReturnType<typeof assessPendingServiceRequest>>,
   { ok: true }
@@ -427,6 +438,7 @@ export default function HomeownerDashboard({
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
   const [pendingServiceRequestId, setPendingServiceRequestId] = useState<number | null>(null);
   const [savedPendingRequests, setSavedPendingRequests] = useState<PendingProfessionalRequest[]>([]);
+  const [pendingExpiryNow, setPendingExpiryNow] = useState(() => Date.now());
   const [pendingAssessment, setPendingAssessment] = useState<PendingAssessmentSuccess | null>(null);
   const [jobFocus, setJobFocus] = useState<"quote" | "invoice" | "tracking" | "completion" | "dispute" | null>(null);
   const [inboxConversationId, setInboxConversationId] = useState<number | null>(null);
@@ -1249,9 +1261,157 @@ export default function HomeownerDashboard({
     });
   }
 
+  async function startDirectProfessionalFlow(prefill?: {
+    service?: HomeownerService;
+    description?: string;
+  }) {
+    setError(null);
+    setHireScreenOpen(false);
+    setAssessmentMsg(null);
+
+    const selectedPropertyId =
+      propertyId || primaryPropertyId || primaryProperty?.id || null;
+
+    const selectedProperty = selectedPropertyId
+      ? properties.find((p) => Number(p.id) === Number(selectedPropertyId)) || primaryProperty
+      : primaryProperty;
+
+    if (!selectedPropertyId || !selectedProperty) {
+      openRequestService({
+        service: prefill?.service,
+        description: prefill?.description,
+      });
+      setAssessmentMode("expert");
+      setReportPath("experts");
+      setIntakePhase("describe");
+      return;
+    }
+
+    if (!selectedProperty.zip || !String(selectedProperty.zip).trim()) {
+      setError("Please add your property ZIP code before requesting a professional.");
+      setTab("properties");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const service = prefill?.service || (category as HomeownerService) || "Other services";
+      const directDescription =
+        String(prefill?.description || description || "").trim() ||
+        `Professional service request for ${String(service)}`;
+      const cityStateZip = [selectedProperty.city, selectedProperty.state, selectedProperty.zip]
+        .filter(Boolean)
+        .join(", ");
+
+      const created = await createManagedJob({
+        intent: "hire",
+        category: service,
+        title: `Professional service request — ${String(service)}`,
+        description: directDescription,
+        propertyId: Number(selectedPropertyId),
+        serviceTiming: "weekday",
+        preferredDate: undefined,
+        preferredTimeSlot: "9-11",
+        mediaDataUrl,
+        mediaType,
+        contactName: user.name,
+        contactPhone: user.phone || "",
+        cityStateZip,
+        propertyPurpose: propertyPurpose || undefined,
+        transactionStage: transactionStage || undefined,
+      });
+
+      if (!created.ok || created.type !== "pending_service_request") {
+        setError(created.message || "Could not save the professional service request.");
+        return;
+      }
+
+      const pendingId = Number(created.pendingServiceRequestId);
+      if (!Number.isFinite(pendingId) || pendingId <= 0) {
+        setError("Your professional request was saved, but its saved-request ID was missing.");
+        return;
+      }
+
+      const loaded = await getPendingProfessionalRequest(pendingId);
+      const request = loaded.ok && loaded.pendingServiceRequest
+        ? loaded.pendingServiceRequest
+        : (created.pendingServiceRequest as PendingProfessionalRequest | undefined);
+      if (!request) {
+        setError("Your professional request was saved, but it could not be reopened.");
+        return;
+      }
+
+      setPendingServiceRequestId(pendingId);
+      setPendingAssessment({
+        ok: true,
+        pendingServiceRequestId: pendingId,
+        pendingServiceRequest: request,
+      } as PendingAssessmentSuccess);
+      setActiveJob(null);
+      setSelectedJobId(null);
+      setAssessmentMode("expert");
+      setReportPath("experts");
+      setStep("assessment");
+      setHireScreenOpen(false);
+      setTab("report");
+      navigateTo({
+        role: "homeowner",
+        tab: "report",
+        reportStep: "assessment",
+        reportPath: "experts",
+        jobId: null,
+      });
+      scrollReportToTop();
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not start the professional service request.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function goBackOneReportStep() {
     setError(null);
     goBack();
+  }
+
+  async function openPendingHireRequest(id: number, pending?: PendingProfessionalRequest) {
+    setError(null);
+    setBusy(true);
+    try {
+      const loaded = pending
+        ? { ok: true as const, pendingServiceRequest: pending }
+        : await getPendingProfessionalRequest(id);
+      const request = loaded.ok ? loaded.pendingServiceRequest : undefined;
+      if (!request) {
+        setError("This saved request is no longer available.");
+        return;
+      }
+      setPendingServiceRequestId(id);
+      setPendingAssessment({
+        ok: true,
+        pendingServiceRequestId: id,
+        pendingServiceRequest: request,
+      } as PendingAssessmentSuccess);
+      setActiveJob(null);
+      setSelectedJobId(null);
+      setAssessmentMode("expert");
+      setReportPath("experts");
+      setStep("assessment");
+      setHireScreenOpen(false);
+      navigateTo({
+        role: "homeowner",
+        tab: "report",
+        reportStep: "assessment",
+        reportPath: "experts",
+        jobId: null,
+      });
+      scrollReportToTop();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not reopen the saved request.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function reopenPendingServiceRequest(id: number) {
@@ -1275,6 +1435,11 @@ export default function HomeownerDashboard({
           jobId: loaded.managedJob.id,
           jobsSegment: "active",
         });
+        return;
+      }
+
+      if (String(request.selectedAction || "").toLowerCase() === "hire") {
+        await openPendingHireRequest(id, request);
         return;
       }
 
@@ -1346,7 +1511,31 @@ export default function HomeownerDashboard({
       .finally(() => setPropertiesLoading(false));
     const pendingPromise = listPendingServiceRequests()
       .then((r) => {
-        if (r.ok) setSavedPendingRequests(r.pendingServiceRequests || []);
+        if (r.ok) {
+          const visiblePendingRequests = (r.pendingServiceRequests || []).filter((item) => {
+            const row = item as typeof item & Record<string, unknown>;
+            const paymentStatus = String(
+              row.payment_status ?? row.paymentStatus ?? ""
+            ).trim().toLowerCase();
+            const managedJobId = row.managed_job_id ?? row.managedJobId;
+
+            // A successfully paid request is no longer a saved/pending request.
+            // Keep this client-side guard so an old/stale pending row cannot
+            // reappear after the dashboard refreshes.
+            if (["succeeded", "paid", "captured"].includes(paymentStatus)) {
+              return false;
+            }
+            if (managedJobId != null && String(managedJobId).trim() !== "") {
+              return false;
+            }
+            const expiresAt = row.checkout_expires_at ?? row.checkoutExpiresAt;
+            if (expiresAt && new Date(String(expiresAt)).getTime() <= Date.now()) {
+              return false;
+            }
+            return true;
+          });
+          setSavedPendingRequests(visiblePendingRequests);
+        }
         return r;
       })
       .catch(() => ({ ok: false as const }))
@@ -1625,6 +1814,12 @@ export default function HomeownerDashboard({
   }, [tab, step, activeJob?.id, activeJob?.assessmentStatus, activeJob?.aiAssessment]);
 
   useEffect(() => {
+    if (savedPendingRequests.length === 0) return;
+    const timer = window.setInterval(() => setPendingExpiryNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [savedPendingRequests.length]);
+
+  useEffect(() => {
     void refresh();
     void listGoProPlans()
       .then((r) => {
@@ -1686,29 +1881,36 @@ export default function HomeownerDashboard({
         })();
       }
 
-      const pendingReturnId = Number(sessionStorage.getItem("fixbridge-pending-service-request-id") || 0);
-      const pendingReturnResult = sessionStorage.getItem("fixbridge-pending-service-request-result");
+      const pendingPaymentParams = new URLSearchParams(window.location.search);
+      const pendingReturnIdFromUrl = Number(pendingPaymentParams.get("pendingServiceRequestId") || 0);
+      const pendingPaymentPaid = pendingPaymentParams.get("paid") === "pending-professional";
+      const pendingPaymentCanceled = pendingPaymentParams.get("canceled") === "pending-professional";
+      const pendingStoredId = Number(sessionStorage.getItem("fixbridge-pending-service-request-id") || 0);
+      const pendingReturnId = pendingReturnIdFromUrl || pendingStoredId;
 
-      if (pendingReturnId > 0 && pendingReturnResult) {
+      if (pendingReturnId > 0 && (pendingPaymentPaid || pendingPaymentCanceled)) {
         sessionStorage.removeItem("fixbridge-pending-service-request-id");
         sessionStorage.removeItem("fixbridge-pending-service-request-result");
 
-        if (pendingReturnResult === "canceled") {
-          setError("Payment was not completed. Your saved request is still available.");
+        if (pendingPaymentCanceled) {
+          setError("Payment was canceled. Your saved request is still available.");
           setPendingServiceRequestId(pendingReturnId);
           navigateTab("overview");
           void refresh();
+          window.history.replaceState({}, document.title, window.location.pathname);
         } else {
-          // Stripe has already confirmed payment. Do not show the old
-          // "Payment received / Finalizing your request" screen.
-          // Show only the centered validation popup and let conversion
-          // continue silently in the background.
-          setDispatchSuccessMsg(null);
-          setShowPaymentSuccess(true);
+          // Stripe's success URL is authoritative for the payment event. Show the
+          // requested success popup immediately, while the webhook conversion is
+          // reconciled in the background. A slow webhook must never ask the user
+          // to pay again or delete the saved request.
           setPendingServiceRequestId(pendingReturnId);
-
+          setShowPaymentSuccess(true);
+          setTab("report");
+          setStep("assessment");
+          setAssessmentMode("expert");
+          setReportPath("experts");
           void (async () => {
-            for (let i = 0; i < 15; i++) {
+            for (let i = 0; i < 60; i++) {
               try {
                 const result = await getPendingProfessionalRequest(pendingReturnId);
                 if (result.ok && result.managedJob) {
@@ -1716,46 +1918,67 @@ export default function HomeownerDashboard({
                   setSelectedJobId(result.managedJob.id);
                   setPendingAssessment(null);
                   setSavedPendingRequests((prev) => prev.filter((item) => item.id !== pendingReturnId));
-                  setDispatchSuccessMsg(null);
                   await refresh();
                   return;
                 }
-
-                if (result.ok && result.pendingServiceRequest) {
-                  const assessed = await assessPendingServiceRequest(pendingReturnId);
-                  if (assessed.ok && assessed.pendingServiceRequest) {
-                    setPendingAssessment(assessed);
-                    setDispatchSuccessMsg(null);
-                    return;
-                  }
-                }
               } catch {
-                /* keep polling */
+                // Keep reconciling while the Stripe webhook finalizes the conversion.
               }
               await new Promise((resolve) => setTimeout(resolve, 1500));
             }
-
-            // Payment is already complete. Keep the success validation visible;
-            // do not replace it with another finalizing/loading screen.
-            setDispatchSuccessMsg(null);
           })();
         }
       }
 
-      const stripeJobId = sessionStorage.getItem("fixbridge-stripe-active-job-id");
+      const dispatchStripeJobId = sessionStorage.getItem("fixbridge-stripe-active-job-id");
       const dispatchConfirming = sessionStorage.getItem("fixbridge-dispatch-confirming") === "1";
       const dispatchCanceled = sessionStorage.getItem("fixbridge-dispatch-canceled") === "1";
+      const paymentUrlParams = new URLSearchParams(window.location.search);
+      const dispatchPaidReturn = paymentUrlParams.get("paid") === "dispatch";
+      const dispatchPaidJobId = Number(paymentUrlParams.get("job") || dispatchStripeJobId || 0);
 
-      if (dispatchConfirming) {
+      // Stripe only redirects to the paid=dispatch URL after Checkout succeeds.
+      // Show the requested success popup immediately, then reconcile the managed
+      // job in the background so the homeowner never sees a false payment-failure
+      // message while the Stripe webhook is still catching up.
+      if (dispatchPaidReturn && dispatchPaidJobId > 0) {
+        sessionStorage.removeItem("fixbridge-dispatch-confirming");
+        sessionStorage.removeItem("fixbridge-dispatch-canceled");
+        setDispatchSuccessMsg(null);
+        setSelectedJobId(dispatchPaidJobId);
+        setShowPaymentSuccess(true);
+        void (async () => {
+          for (let i = 0; i < 60; i++) {
+            try {
+              const r = await getManagedJob(dispatchPaidJobId);
+              const job = r.ok ? r.job : null;
+              const paid =
+                job &&
+                (job.visitFeeAuthorized === true ||
+                  Boolean(job.paymentCompletedAt) ||
+                  ["paid_for_dispatch", "awaiting_contractor"].includes(String(job.status)));
+              if (paid) {
+                setActiveJob(job);
+                setSelectedJobId(dispatchPaidJobId);
+                await refresh();
+                return;
+              }
+            } catch {
+              // Keep reconciling while Stripe/webhook processing settles.
+            }
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+          }
+        })();
+      } else if (dispatchConfirming) {
         setDispatchSuccessMsg("Confirming payment with FixBridge...");
         setTab("report");
         setStep("assessment");
         setAssessmentMode("expert");
-        if (stripeJobId) {
-          setSelectedJobId(Number(stripeJobId));
+        if (dispatchStripeJobId) {
+          setSelectedJobId(Number(dispatchStripeJobId));
         }
         sessionStorage.removeItem("fixbridge-dispatch-confirming");
-        const confirmJobId = Number(stripeJobId || 0);
+        const confirmJobId = Number(dispatchStripeJobId || 0);
         if (confirmJobId) {
           void (async () => {
             for (let i = 0; i < 12; i++) {
@@ -1778,21 +2001,20 @@ export default function HomeownerDashboard({
               }
               await new Promise((resolve) => setTimeout(resolve, 2000));
             }
-            setDispatchSuccessMsg(null);
-            setError(
-              "We could not confirm your payment yet. If you were charged, refresh this page or contact support - do not pay again."
-            );
+            // Keep the confirmation state neutral if Stripe is still settling.
+            // Do not tell a successfully redirected customer to pay again.
+            setDispatchSuccessMsg("Payment successful. Confirming your service request with FixBridge…");
           })();
         }
       } else if (dispatchCanceled) {
         setError("Payment was not completed. Your request has not been submitted for dispatch. Return to checkout to try again.");
-        if (stripeJobId) {
-          setSelectedJobId(Number(stripeJobId));
+        if (dispatchStripeJobId) {
+          setSelectedJobId(Number(dispatchStripeJobId));
         }
         sessionStorage.removeItem("fixbridge-dispatch-canceled");
-      } else if (stripeJobId) {
+      } else if (dispatchStripeJobId) {
         const upgradeReturn = sessionStorage.getItem("fixbridge-upgrade-return");
-        setSelectedJobId(Number(stripeJobId));
+        setSelectedJobId(Number(dispatchStripeJobId));
         if (upgradeReturn === "diy" || upgradeReturn === "report" || upgradeReturn === "hire") {
           setTab("report");
           setStep("assessment");
@@ -1803,7 +2025,7 @@ export default function HomeownerDashboard({
         }
       }
 
-      if (stripeJobId) {
+      if (dispatchStripeJobId) {
         sessionStorage.removeItem("fixbridge-stripe-active-job-id");
       }
 
@@ -2678,6 +2900,7 @@ export default function HomeownerDashboard({
       const code = partnerCode.trim().toUpperCase();
       const usePartner = Boolean(code);
       const created = await createManagedJob({
+        intent: path === "experts" ? "hire" : "ai",
         category,
         title: serviceRequestTitle(resolvedLocation, resolvedTrade),
         description: fullDescription,
@@ -2728,6 +2951,41 @@ export default function HomeownerDashboard({
         }
 
         console.log("[Fixera] Pending service request CREATED:", pendingId);
+
+        if (path === "experts") {
+          const loaded = await getPendingProfessionalRequest(pendingId);
+          const request = loaded.ok && loaded.pendingServiceRequest
+            ? loaded.pendingServiceRequest
+            : (created.pendingServiceRequest as PendingProfessionalRequest | undefined);
+          if (!request) {
+            setError("Your professional request was saved, but it could not be reopened.");
+            return;
+          }
+
+          setPendingServiceRequestId(pendingId);
+          setPendingAssessment({
+            ok: true,
+            pendingServiceRequestId: pendingId,
+            pendingServiceRequest: request,
+          } as PendingAssessmentSuccess);
+          setActiveJob(null);
+          setSelectedJobId(null);
+          setHireScreenOpen(false);
+          setAssessmentMode("expert");
+          setReportPath("experts");
+          setStep("assessment");
+          setTab("report");
+          navigateTo({
+            role: "homeowner",
+            tab: "report",
+            reportStep: "assessment",
+            reportPath: "experts",
+            jobId: null,
+          });
+          scrollReportToTop();
+          await refresh();
+          return;
+        }
 
         setPendingServiceRequestId(pendingId);
         setPendingAssessment(null);
@@ -3105,46 +3363,6 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
   );
 
   return (
-    <>
-      {showPaymentSuccess ? (
-        <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/45 px-4 backdrop-blur-[2px]"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="payment-success-title"
-        >
-          <div className="w-full max-w-md rounded-2xl border border-emerald-500/25 bg-background p-7 text-center shadow-2xl">
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/10">
-              <CheckCircle className="h-9 w-9 text-emerald-600" />
-            </div>
-
-            <h2 id="payment-success-title" className="mt-5 text-2xl font-bold">
-              Payment Successful
-            </h2>
-
-            <p className="mt-3 text-sm leading-6 text-muted-foreground">
-              Your $125 payment was received successfully.
-            </p>
-            <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              Your professional service request has been submitted to FixBridge.
-            </p>
-
-            <button
-              type="button"
-              className="mt-7 w-full rounded-xl bg-[#FF4D1C] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#e84417]"
-              onClick={() => {
-                setShowPaymentSuccess(false);
-                setDispatchSuccessMsg(null);
-                navigateTab("overview");
-                window.setTimeout(() => window.location.reload(), 100);
-              }}
-            >
-              OK
-            </button>
-          </div>
-        </div>
-      ) : null}
-
     <ProFeatureProvider
       planCode={user.planCode}
       homeCareSubscription={user.homeCareSubscription}
@@ -3265,7 +3483,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                       </span>
                     </div>
                     <div className="grid gap-3 p-4 sm:grid-cols-2 sm:p-5">
-                      {savedPendingRequests.slice(0, 4).map((request) => (
+                      {savedPendingRequests.map((request) => (
                         <button
                           key={request.id}
                           type="button"
@@ -3284,10 +3502,15 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                           </div>
                           <div className="mt-3 flex flex-wrap gap-1.5">
                             <span className="rounded-full bg-muted px-2 py-1 text-[10px] font-semibold capitalize">
-                              {request.assessmentStatus === "ready" ? "Assessment ready" : "Assessment saved"}
+                              {String(request.selectedAction || "").toLowerCase() === "hire"
+                                ? "Hire request saved"
+                                : request.assessmentStatus === "ready" ? "Assessment ready" : "Assessment saved"}
                             </span>
                             <span className="rounded-full bg-muted px-2 py-1 text-[10px] font-semibold">
                               Request #{request.id}
+                            </span>
+                            <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${formatPendingTimeLeft((request as any).checkoutExpiresAt ?? (request as any).checkout_expires_at, pendingExpiryNow) === "Expired" ? "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-200" : "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200"}`}>
+                              {formatPendingTimeLeft((request as any).checkoutExpiresAt ?? (request as any).checkout_expires_at, pendingExpiryNow)}
                             </span>
                           </div>
                         </button>
@@ -3338,18 +3561,24 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                 initialOfferingId={typeof window !== "undefined" ? window.sessionStorage.getItem("fixbridge.serviceOffering") : null}
                 onRequestService={(prefill) => {
                   const service = prefill?.service as HomeownerService | undefined;
+
+                  if (prefill?.intent === "hire") {
+                    void startDirectProfessionalFlow({
+                      service,
+                      description: prefill?.description,
+                    });
+                    return;
+                  }
+
                   openRequestService({
                     service,
                     description: prefill?.description,
                   });
-                  if (prefill?.intent === "hire") {
-                    setAssessmentMode("expert");
-                    setIntakePhase("describe");
-                  } else if (prefill?.intent === "diy") {
-                    setReportPath("ai");
-                    setAssessmentMode("diy");
-                    setIntakePhase("describe");
-                  }
+
+                  // Request a Service and Try DIY keep the normal Fixera path.
+                  setReportPath("ai");
+                  setAssessmentMode("diy");
+                  setIntakePhase("describe");
                 }}
                 onOpenHomeCare={() => navigateTab("go-pro")}
               />
@@ -3487,11 +3716,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
               open={Boolean(showSubscriptionSuccess)}
               plan={successPlanCard}
               activating={Boolean(subscriptionActivating)}
-              onClose={() => {
-                onDismissSubscriptionSuccess?.();
-                navigateTab("overview");
-                window.setTimeout(() => window.location.reload(), 100);
-              }}
+              onClose={() => onDismissSubscriptionSuccess?.()}
               onViewFeatures={() => {
                 setTab("go-pro");
                 onDismissSubscriptionSuccess?.();
@@ -3591,7 +3816,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                     setError={setError}
                     onBack={goBackOneReportStep}
                     onSubmitAi={() => requestAiAssessment()}
-                    onHirePro={goToExperts}
+                    onHirePro={() => void submitIssue("experts")}
                     preferHire={assessmentMode === "expert"}
                     onClearMedia={() => {
                       setMediaDataUrl(null);
@@ -4014,13 +4239,17 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                       <ShieldAlert className="mt-0.5 h-5 w-5 text-[#FF4D1C]" />
                       <div>
                         <h2 className="text-lg font-semibold">
-                          {assessmentMode === "expert" || reportPath === "experts" ? "Assessment" : "Fixera Assessment"}
+                          {pendingAssessment?.pendingServiceRequest && String(pendingAssessment.pendingServiceRequest.selectedAction || "").toLowerCase() === "hire"
+                            ? "Professional Service Request"
+                            : assessmentMode === "expert" || reportPath === "experts" ? "Assessment" : "Fixera Assessment"}
                         </h2>
                         <p className="text-sm text-muted-foreground">
-                          {activeJob?.aiAssessment
-                            ? activeJob.aiAssessment.disclaimer ||
-                            "Fixera assessment, not a professional diagnosis."
-                            : "A first look appears as soon as Fixera starts. Safety and local pricing follow."}
+                          {pendingAssessment?.pendingServiceRequest && String(pendingAssessment.pendingServiceRequest.selectedAction || "").toLowerCase() === "hire"
+                            ? "Continue the saved request below. You can leave it unpaid and return later while it is still within its 36-hour window."
+                            : activeJob?.aiAssessment
+                              ? activeJob.aiAssessment.disclaimer ||
+                              "Fixera assessment, not a professional diagnosis."
+                              : "A first look appears as soon as Fixera starts. Safety and local pricing follow."}
                         </p>
                       </div>
                     </div>
@@ -4031,11 +4260,37 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                       </p>
                     ) : null}
 
-                    {pendingAssessment?.pendingServiceRequest?.aiAssessment ? (
+                    {pendingAssessment?.pendingServiceRequest && String(pendingAssessment.pendingServiceRequest.selectedAction || "").toLowerCase() === "hire" ? (
                       <div className="space-y-4">
-                        {assessmentMode !== "expert" ? (
-                          <>
-                            <div className="rounded-[1.35rem] border border-border/70 bg-gradient-to-r from-background via-background to-[#FFF7F3] p-4 dark:to-[#241710] sm:p-5">
+                        <HireProfessionalWizard
+                          pendingServiceRequest={pendingAssessment.pendingServiceRequest as PendingProfessionalRequest}
+                          busy={busy}
+                          setBusy={setBusy}
+                          onError={setError}
+                          onCancel={() => {
+                            setError(null);
+                            setPendingAssessment(null);
+                            setPendingServiceRequestId(null);
+                            setAssessmentMode("diy");
+                            setReportPath(null);
+                            setStep("intake");
+                            setIntakePhase("describe");
+                            navigateTab("overview");
+                            void refresh();
+                          }}
+                          onPaid={async (convertedJob) => {
+                            if (convertedJob) {
+                              setActiveJob(convertedJob);
+                              setSelectedJobId(convertedJob.id);
+                            }
+                            setDispatchSuccessMsg(null);
+                            await refresh();
+                          }}
+                        />
+                      </div>
+                    ) : pendingAssessment?.pendingServiceRequest?.aiAssessment ? (
+                      <div className="space-y-4">
+                        <div className="rounded-[1.35rem] border border-border/70 bg-gradient-to-r from-background via-background to-[#FFF7F3] p-4 dark:to-[#241710] sm:p-5">
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
                               <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#FF4D1C]">Your next step</p>
@@ -4108,6 +4363,25 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                           </p>
                         </div>
 
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          <div className="rounded-md bg-muted/50 p-3 text-sm">
+                            <p className="text-muted-foreground">Urgency</p>
+                            <p className="font-medium capitalize">{pendingAssessment.pendingServiceRequest.aiAssessment.urgency || " - "}</p>
+                          </div>
+                          <div className="rounded-md bg-muted/50 p-3 text-sm">
+                            <p className="text-muted-foreground">Trade</p>
+                            <p className="font-medium">{pendingAssessment.pendingServiceRequest.aiAssessment.recommended_trade || " - "}</p>
+                          </div>
+                          <div className="rounded-md bg-muted/50 p-3 text-sm">
+                            <p className="text-muted-foreground">Confidence</p>
+                            <p className="font-medium">
+                              {typeof pendingAssessment.pendingServiceRequest.aiAssessment.confidence === "number" && Number.isFinite(pendingAssessment.pendingServiceRequest.aiAssessment.confidence)
+                                ? `${Math.round(pendingAssessment.pendingServiceRequest.aiAssessment.confidence * 100)}%`
+                                : " - "}
+                            </p>
+                          </div>
+                        </div>
+
                         {assessmentStringList(pendingAssessment.pendingServiceRequest.aiAssessment.immediate_safety_steps).length > 0 ? (
                           <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
                             <p className="font-medium">Safety steps</p>
@@ -4117,9 +4391,6 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                               ))}
                             </ul>
                           </div>
-                        ) : null}
-
-                        </>
                         ) : null}
 
                         {assessmentMode === "diy" ? (
@@ -4152,29 +4423,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                               <p className="mt-1 text-muted-foreground">Your pending request is saved. You can leave this screen and reopen the request later without losing the assessment.</p>
                             </div>
                           )
-                        ) : (
-                          <div className="space-y-4">
-                            <HireProfessionalWizard
-                              pendingServiceRequest={pendingAssessment.pendingServiceRequest as PendingProfessionalRequest}
-                              busy={busy}
-                              setBusy={setBusy}
-                              onError={setError}
-                              onPaid={async (convertedJob) => {
-                                // Payment is complete. Stop all request/finalizing UI
-                                // and show the centered validation popup only.
-                                setDispatchSuccessMsg(null);
-
-                                if (convertedJob) {
-                                  setActiveJob(convertedJob);
-                                  setSelectedJobId(convertedJob.id);
-                                }
-
-                                await refresh();
-                                setShowPaymentSuccess(true);
-                              }}
-                            />
-                          </div>
-                        )}
+                        ) : null}
                       </div>
                     ) : null}
 
@@ -4194,77 +4443,38 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                 <p className="mt-2 text-muted-foreground">{description.trim()}</p>
                               ) : null}
                             </div>
-                            {!activeJob ? (
+                            {activeJob ? (
+                              <HireProfessionalWizard
+                                job={activeJob}
+                                busy={busy}
+                                setBusy={setBusy}
+                                onError={setError}
+                                onJobUpdated={(updated) => {
+                                  setActiveJob(updated);
+                                  setSelectedJobId(updated.id);
+                                }}
+                                onPaid={async () => {
+                                  setDispatchSuccessMsg("Service booked. Your professional request is on Home.");
+                                  navigateTab("overview");
+                                  setSelectedJobId(activeJob.id);
+                                  await refresh();
+                                }}
+                              />
+                            ) : (
                               <div className="rounded-xl border border-border/70 px-4 py-3 text-sm">
                                 <p className="flex items-center gap-2 font-medium">
-                                  <Loader2 className="h-4 w-4 animate-spin text-[#FF4D1C]" /> Creating your service request
+                                  <Loader2 className="h-4 w-4 animate-spin text-[#FF4D1C]" />
+                                  Preparing your professional service request
                                 </p>
-                                <div className="fixera-buffer mt-2" role="progressbar" aria-label="Creating your service request" />
-                                <p className="mt-2 text-muted-foreground">Please wait. This step is still buffering.</p>
-                              </div>
-                            ) : (
-                              <>
-                                {(assessLoadingStep != null || (isAssessmentProcessing(activeJob) && !hasRenderableAssessment(activeJob))) ? (
-                                  <div className="rounded-xl border border-border/70 px-4 py-3 text-sm">
-                                    <p className="flex items-center justify-between gap-2 font-medium">
-                                      AI recommendation
-                                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#FF4D1C]">
-                                        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Buffering
-                                      </span>
-                                    </p>
-                                    <div className="fixera-buffer mt-2" role="progressbar" aria-label="Preparing recommendation" />
-                                    <div className="mt-2 max-h-24 space-y-1.5 overflow-y-auto pr-1 text-muted-foreground [scrollbar-width:thin]">
-                                      <p>Preparing recommendation. Please wait.</p>
-                                      <p>You can stay on this screen. Scheduling stays available while this buffers.</p>
-                                      <p>The safety result and estimate appear when this step finishes.</p>
-                                    </div>
-                                  </div>
-                                ) : hasRenderableAssessment(activeJob) ? (
-                                  <p className="text-sm leading-relaxed">{activeJob.aiAssessment?.summary || "Assessment saved."}</p>
-                                ) : (
-                                  <div className="rounded-xl border border-amber-300/70 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
-                                    <p>
-                                      {activeJob.assessmentStatus === "failed"
-                                        ? "Fixera couldn't complete this assessment. Your request is saved — you can still schedule a professional visit."
-                                        : "Recommendation temporarily unavailable. You can still review scheduling. Authorization stays locked until the recommendation finishes."}
-                                    </p>
-                                    <button
-                                      type="button"
-                                      className="mt-2 text-xs font-semibold text-[#FF4D1C]"
-                                      onClick={() => {
-                                        requestAiAssessment(async () => {
-                                          const retryZip = properties.find((p) => p.id === activeJob.propertyId)?.zip || null;
-                                          const assessed = await runAssessWithProgress(activeJob.id, retryZip, { force: true });
-                                          if (!assessed.ok || !assessed.job) {
-                                            setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
-                                          } else {
-                                            setActiveJob(assessed.job);
-                                            setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
-                                          }
-                                        });
-                                      }}
-                                    >
-                                      Try recommendation again
-                                    </button>
-                                  </div>
-                                )}
-                                <HireProfessionalWizard
-                                  job={activeJob}
-                                  busy={busy}
-                                  setBusy={setBusy}
-                                  onError={setError}
-                                  onJobUpdated={(updated) => {
-                                    setActiveJob(updated);
-                                    setSelectedJobId(updated.id);
-                                  }}
-                                  onPaid={async () => {
-                                    setDispatchSuccessMsg("Service booked. Your professional request is on Home.");
-                                    navigateTab("overview");
-                                    setSelectedJobId(activeJob.id);
-                                    await refresh();
-                                  }}
+                                <div
+                                  className="fixera-buffer mt-2"
+                                  role="progressbar"
+                                  aria-label="Preparing professional service request"
                                 />
-                              </>
+                                <p className="mt-2 text-muted-foreground">
+                                  Please wait while FixBridge finishes setting up your request.
+                                </p>
+                              </div>
                             )}
                           </div>
                         ) : assessLoadingStep != null ||
@@ -4278,64 +4488,79 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                             description={description}
                           />
                         ) : !hasRenderableAssessment(activeJob) ? (
-                          <div className="space-y-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
-                            <p className="text-sm font-semibold">Fixera couldn&apos;t finish this assessment</p>
-                            <p className="text-sm leading-relaxed">
-                              Your repair request and uploaded media are saved.
-                            </p>
-                            <p className="text-sm leading-relaxed">
-                              You can try the assessment again or continue directly with professional help.
-                            </p>
-                            {activeJob ? (
-                              <div className="flex flex-wrap gap-2">
-                                <button
-                                  type="button"
-                                  disabled={busy || aiAckOpen}
-                                  onClick={() => {
-                                    requestAiAssessment(async () => {
-                                      setBusy(true);
-                                      setAssessmentMsg(null);
-                                      try {
-                                        const retryZip =
-                                          properties.find((p) => p.id === activeJob.propertyId)?.zip || null;
-                                        const assessed = await runAssessWithProgress(activeJob.id, retryZip, { force: true });
-                                        if (!assessed.ok || !assessed.job) {
-                                          setAssessmentMsg(normalizeAssessmentMessage(assessed.message));
-                                        } else {
-                                          setActiveJob(assessed.job);
-                                          setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
-                                          await refresh();
-                                        }
-                                      } finally {
-                                        setBusy(false);
+                          <div className="space-y-4 rounded-[1.35rem] border border-border/70 bg-gradient-to-r from-background via-background to-[#FFF7F3] p-5 dark:to-[#241710]">
+                            <div>
+                              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#FF4D1C]">Your next step</p>
+                              <h3 className="mt-1 text-lg font-bold">Choose how you want to handle this repair</h3>
+                              <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                                Your request and uploaded media are saved. Fixera is not blocking you from getting professional help while the assessment is unavailable.
+                              </p>
+                            </div>
+
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <button
+                                type="button"
+                                disabled={busy || aiAckOpen}
+                                onClick={() => {
+                                  requestAiAssessment(async () => {
+                                    setBusy(true);
+                                    setAssessmentMsg(null);
+                                    try {
+                                      const retryZip =
+                                        properties.find((p) => p.id === activeJob?.propertyId)?.zip || null;
+                                      const assessed = activeJob
+                                        ? await runAssessWithProgress(activeJob.id, retryZip, { force: true })
+                                        : null;
+
+                                      if (!assessed?.ok || !assessed.job) {
+                                        setAssessmentMsg(
+                                          normalizeAssessmentMessage(
+                                            assessed?.message || "Fixera is temporarily unavailable. You can still hire a professional."
+                                          )
+                                        );
+                                      } else {
+                                        setActiveJob(assessed.job);
+                                        setAssessmentMsg(assessed.warning || assessed.pricing?.message || null);
+                                        await refresh();
                                       }
-                                    });
-                                  }}
-                                  className="inline-flex items-center gap-2 rounded-md bg-[#FF4D1C] px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60"
-                                >
-                                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                                  Try Again
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setAssessmentMode("expert");
-                                    setReportPath("experts");
-                                    setHireScreenOpen(true);
-                                    if (activeJob) setSelectedJobId(activeJob.id);
-                                  }}
-                                  className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium"
-                                >
-                                  Hire a Professional
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={returnToIntakeDetails}
-                                  className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium"
-                                >
-                                  Return to Repair
-                                </button>
-                              </div>
+                                    } finally {
+                                      setBusy(false);
+                                    }
+                                  });
+                                }}
+                                className="group rounded-2xl border border-border bg-background p-4 text-left transition hover:border-[#FF4D1C]/40 disabled:opacity-60"
+                              >
+                                <Sparkles className="h-5 w-5 text-[#FF4D1C]" />
+                                <span className="mt-2 block font-semibold">
+                                  Try DIY / Fixera Again
+                                </span>
+                                <span className="mt-1 block text-sm text-muted-foreground">
+                                  Retry the assessment and continue with the DIY path when it becomes available.
+                                </span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAssessmentMode("expert");
+                                  setReportPath("experts");
+                                  setHireScreenOpen(true);
+                                  if (activeJob) setSelectedJobId(activeJob.id);
+                                }}
+                                className="group rounded-2xl border border-[#FF4D1C]/30 bg-[#FF4D1C]/5 p-4 text-left transition hover:border-[#FF4D1C]/60"
+                              >
+                                <HardHat className="h-5 w-5 text-[#FF4D1C]" />
+                                <span className="mt-2 block font-semibold">Hire a Professional</span>
+                                <span className="mt-1 block text-sm text-muted-foreground">
+                                  Continue directly to the professional service request without waiting for Fixera.
+                                </span>
+                              </button>
+                            </div>
+
+                            {assessmentMsg ? (
+                              <p className="rounded-xl border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                                {assessmentMsg}
+                              </p>
                             ) : null}
                           </div>
                         ) : hasRenderableAssessment(activeJob) ? (
@@ -4418,6 +4643,25 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                   </p>
                                 ) : null}
                                 <p className="text-sm leading-relaxed">{activeJob.aiAssessment?.summary || "Assessment saved."}</p>
+                                <div className="grid gap-3 sm:grid-cols-3">
+                                  <div className="rounded-md bg-muted/50 p-3 text-sm">
+                                    <p className="text-muted-foreground">Urgency</p>
+                                    <p className="font-medium capitalize">{activeJob.aiAssessment?.urgency || " - "}</p>
+                                  </div>
+                                  <div className="rounded-md bg-muted/50 p-3 text-sm">
+                                    <p className="text-muted-foreground">Trade</p>
+                                    <p className="font-medium">{activeJob.aiAssessment?.recommended_trade || " - "}</p>
+                                  </div>
+                                  <div className="rounded-md bg-muted/50 p-3 text-sm">
+                                    <p className="text-muted-foreground">Confidence</p>
+                                    <p className="font-medium">
+                                      {typeof activeJob.aiAssessment?.confidence === "number" &&
+                                        Number.isFinite(activeJob.aiAssessment.confidence)
+                                        ? `${Math.round(activeJob.aiAssessment.confidence * 100)}%`
+                                        : " - "}
+                                    </p>
+                                  </div>
+                                </div>
                                 {assessmentStringList(activeJob.aiAssessment?.immediate_safety_steps).length > 0 && (
                                   <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
                                     <p className="font-medium">Safety steps</p>
@@ -5532,8 +5776,60 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
           onClose={cancelAiAssessmentAck}
           onContinue={() => void confirmAiAssessmentAck()}
         />
+
+        <AnimatePresence>
+          {showPaymentSuccess && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.94, y: 8 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.96, y: 4 }}
+                transition={{ duration: 0.18 }}
+                role="dialog"
+                aria-modal="true"
+                className="w-full max-w-md rounded-2xl border border-emerald-500/25 bg-card p-6 text-center shadow-2xl"
+              >
+                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600">
+                  <CheckCircle className="h-8 w-8" />
+                </div>
+                <h2 className="mt-4 text-xl font-bold">Payment Successful</h2>
+                <p className="mt-2 text-sm text-muted-foreground">Your $125 payment was received successfully.</p>
+                <p className="mt-1 text-sm text-muted-foreground">Your professional service request has been submitted to FixBridge.</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPaymentSuccess(false);
+                    setDispatchSuccessMsg(null);
+                    setPendingAssessment(null);
+                    setPendingServiceRequestId(null);
+                    setHireScreenOpen(false);
+                    setActiveJob(null);
+                    setSelectedJobId(null);
+                    setAssessmentMode("diy");
+                    setReportPath(null);
+                    setStep("intake");
+                    setIntakePhase("describe");
+                    void refresh();
+                    navigateTo({
+                      role: "homeowner",
+                      tab: "report",
+                      reportStep: "intake",
+                      intakePhase: "describe",
+                      reportPath: null,
+                      jobId: null,
+                    });
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                    scrollReportToTop();
+                  }}
+                  className="mt-6 inline-flex min-w-24 items-center justify-center rounded-xl bg-[#FF4D1C] px-5 py-2.5 text-sm font-semibold text-white shadow-lg hover:brightness-105"
+                >
+                  OK
+                </button>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </div>
     </ProFeatureProvider>
-    </>
   );
 }

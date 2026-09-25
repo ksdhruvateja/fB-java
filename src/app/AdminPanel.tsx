@@ -103,7 +103,7 @@ import {
   adminUpdateDiscount,
   adminDeleteDiscount,
   adminHomeownerJobs,
-  adminInvite,
+  adminInviteMany,
   adminListJobs,
   adminPartnerReferrals,
   adminPartners,
@@ -495,6 +495,7 @@ export default function AdminPanel({
   const [mobileNav, setMobileNav] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [inviteContractorId, setInviteContractorId] = useState<number | "">("");
+  const [inviteContractorIds, setInviteContractorIds] = useState<number[]>([]);
   const [inviteTechnicianId, setInviteTechnicianId] = useState<number | "">("");
   const [contractorEmployees, setContractorEmployees] = useState<ContractorEmployee[]>([]);
   const [inviteRequestType, setInviteRequestType] = useState<"remote_quote" | "site_visit">("remote_quote");
@@ -721,7 +722,11 @@ export default function AdminPanel({
       // Prefer demo plumber when nothing selected yet
       const james = list.find((c) => String(c.email).toLowerCase() === "james@yourcompany.com");
       if (james?.id != null) {
-        setInviteContractorId((prev) => (prev === "" ? Number(james.id) : prev));
+        setInviteContractorId((prev) => {
+          const id = Number(james.id);
+          if (prev === "") setInviteContractorIds((ids) => (ids.length ? ids : [id]));
+          return prev === "" ? id : prev;
+        });
       }
       await refreshJobs();
     })();
@@ -738,8 +743,10 @@ export default function AdminPanel({
   }, [selectedJobId, jobs]);
 
   useEffect(() => {
-    const contractorId = Number(inviteContractorId || selectedJob?.assignedContractorUserId || 0);
-    if (!contractorId) {
+    const contractorId = inviteContractorIds.length === 1
+      ? Number(inviteContractorIds[0])
+      : Number(inviteContractorId || selectedJob?.assignedContractorUserId || 0);
+    if (!contractorId || inviteContractorIds.length > 1) {
       setContractorEmployees([]);
       setInviteTechnicianId("");
       return;
@@ -747,7 +754,7 @@ export default function AdminPanel({
     void fetchAdminContractorEmployees(contractorId).then((r) => {
       if (r.ok) setContractorEmployees((r.employees || []).filter((e) => e.active));
     });
-  }, [inviteContractorId, selectedJob?.assignedContractorUserId]);
+  }, [inviteContractorId, inviteContractorIds, selectedJob?.assignedContractorUserId]);
 
   useEffect(() => {
     if (tab === "pricing" || tab === "subscriptions" || tab === "partners" || tab === "visit-fee") {
@@ -1212,32 +1219,37 @@ export default function AdminPanel({
   }
 
   async function handleInviteAndAssign() {
-    if (!selectedJob || !inviteContractorId) return;
+    if (!selectedJob || !inviteContractorIds.length) return;
     setBusy(true);
     setMessage(null);
+    console.info('[admin-invite] sending contractor invitation(s)', {
+      jobId: selectedJob.id,
+      contractorUserIds: inviteContractorIds,
+      contractorCount: inviteContractorIds.length,
+      requestType: inviteRequestType,
+    });
     try {
-      const invite = await adminInvite(selectedJob.id, Number(inviteContractorId), {
+      const invite = await adminInviteMany(selectedJob.id, inviteContractorIds, {
         requestType: inviteRequestType,
       });
-      if (!invite.ok) {
-        setMessage(invite.message || "Invite failed.");
-        return;
-      }
-      const assign = await adminAssign(selectedJob.id, Number(inviteContractorId), {
-        employeeId: inviteTechnicianId ? Number(inviteTechnicianId) : undefined,
+      console.info('[admin-invite] API response', {
+        jobId: selectedJob.id,
+        contractorUserIds: inviteContractorIds,
+        ok: invite.ok,
+        code: invite.code,
+        message: invite.message,
+        missingAcceptanceTypes: invite.missingAcceptanceTypes,
       });
-      if (!assign.ok) {
-        setMessage(assign.message || "Invite saved, but assign failed.");
-        await refreshJobs();
+      if (!invite.ok) {
+        setMessage(invite.message || 'Invite failed.');
         return;
       }
-      const name = contractors.find((c) => Number(c.id) === Number(inviteContractorId))?.name || "Contractor";
-      setMessage(
-        `${name} invited (${inviteRequestType === "site_visit" ? "site visit" : "remote quote"}) and assigned.`,
-      );
+      const names = (invite.contractors || []).map((c) => c.name).filter(Boolean).join(', ');
+      setMessage(`${inviteContractorIds.length} contractor${inviteContractorIds.length === 1 ? '' : 's'} invited${names ? `: ${names}` : ''}.`);
       await refreshJobs();
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Invite & assign failed.");
+      console.error('[admin-invite] request failed', err);
+      setMessage(err instanceof Error ? err.message : 'Invite failed.');
     } finally {
       setBusy(false);
     }
@@ -1741,11 +1753,18 @@ export default function AdminPanel({
                         ) : null}
                         <div className="flex flex-wrap gap-2">
                           <select
-                            className={`${fieldClass} max-w-full sm:max-w-xs`}
-                            value={inviteContractorId}
-                            onChange={(e) => setInviteContractorId(e.target.value ? Number(e.target.value) : "")}
+                            multiple
+                            size={Math.min(8, Math.max(4, contractors.length))}
+                            className={`${fieldClass} min-w-[20rem] max-w-full sm:max-w-xl`}
+                            value={inviteContractorIds.map(String)}
+                            onChange={(e) => {
+                              const ids = Array.from(e.target.selectedOptions).map((option) => Number(option.value));
+                              setInviteContractorIds(ids);
+                              setInviteContractorId(ids.length === 1 ? ids[0] : "");
+                              if (ids.length !== 1) setInviteTechnicianId("");
+                            }}
                           >
-                            <option value="">Select contractor</option>
+                            <option value="" disabled>Select one or more contractors</option>
                             {contractors
                               .slice()
                               .sort((a, b) => {
@@ -1771,11 +1790,12 @@ export default function AdminPanel({
                                 );
                               })}
                           </select>
+                          <p className="w-full text-xs text-muted-foreground">Hold Ctrl/Cmd to select multiple contractors. Multiple invitations are sent without assigning the job.</p>
                           <select
                             className={`${fieldClass} max-w-full sm:max-w-xs`}
                             value={inviteTechnicianId}
                             onChange={(e) => setInviteTechnicianId(e.target.value ? Number(e.target.value) : "")}
-                            disabled={!inviteContractorId && !selectedJob.assignedContractorUserId}
+                            disabled={inviteContractorIds.length !== 1 && !selectedJob.assignedContractorUserId}
                           >
                             <option value="">Technician (optional)</option>
                             {contractorEmployees.map((e) => (
@@ -1787,42 +1807,12 @@ export default function AdminPanel({
                           </select>
                           <button
                             type="button"
-                            disabled={busy || !inviteContractorId}
+                            disabled={busy || !inviteContractorIds.length}
                             className={btnPrimary}
-                            onClick={async () => {
-                              if (!inviteContractorId) return;
-                              setBusy(true);
-                              setMessage(null);
-                              try {
-                                const invite = await adminInvite(selectedJob.id, Number(inviteContractorId), {
-                                  requestType: inviteRequestType,
-                                });
-                                if (!invite.ok) {
-                                  setMessage(invite.message || "Invite failed.");
-                                  return;
-                                }
-                                const assign = await adminAssign(selectedJob.id, Number(inviteContractorId), {
-                                  employeeId: inviteTechnicianId ? Number(inviteTechnicianId) : undefined,
-                                });
-                                if (!assign.ok) {
-                                  setMessage(assign.message || "Invite saved, but assign failed.");
-                                  await refreshJobs();
-                                  return;
-                                }
-                                const name =
-                                  contractors.find((c) => Number(c.id) === Number(inviteContractorId))?.name ||
-                                  "Contractor";
-                                setMessage(`${name} invited (${inviteRequestType === "site_visit" ? "site visit" : "remote quote"}) and assigned.`);
-                                await refreshJobs();
-                              } catch (err) {
-                                setMessage(err instanceof Error ? err.message : "Invite & assign failed.");
-                              } finally {
-                                setBusy(false);
-                              }
-                            }}
+                            onClick={handleInviteAndAssign}
                           >
                             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                            Invite & assign
+                            {inviteContractorIds.length > 1 ? `Invite ${inviteContractorIds.length} contractors` : "Invite & assign"}
                           </button>
                           <button
                             type="button"
@@ -4194,8 +4184,10 @@ export default function AdminPanel({
           onClose={() => setDrawerOpen(false)}
           busy={busy}
           inviteContractorId={inviteContractorId}
+          inviteContractorIds={inviteContractorIds}
           inviteRequestType={inviteRequestType}
           onInviteContractorId={setInviteContractorId}
+          onInviteContractorIds={setInviteContractorIds}
           onInviteRequestType={setInviteRequestType}
           onInviteAndAssign={handleInviteAndAssign}
           onMatch={async () => {

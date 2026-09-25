@@ -168,6 +168,28 @@ export default function AdminQuoteBuilderPanel({
     "Quote valid for 7 days.\nAdditional work requires separate approval.",
   );
 
+  // A quote builder is scoped to exactly one selected contractor bid.
+  // Reset every bid-derived field when the selected bid changes so stale values
+  // from the previously selected contractor can never appear in this builder.
+  useEffect(() => {
+    setTab("build");
+    setPreview(null);
+    setContractorLines({
+      labor: Number(bid.labor || 0),
+      materials: Number(bid.materials || 0),
+      equipment: Number(bid.equipment || 0),
+      travelDiagnostic: Number(bid.travelDiagnostic || 0),
+      permitCost: Number(bid.permitCost || 0),
+      disposal: Number(bid.disposal || 0),
+    });
+    setWarranty(bid.warranty || "90-day workmanship");
+    setExclusions(bid.exclusions || "");
+    setTimeline(bid.durationHours ? `${bid.durationHours} hours` : "3–4 hours");
+    setAdjustments([]);
+    setCustomerLineItems([]);
+    setLineItemsTouched(false);
+  }, [bid.id]);
+
   const contractorNet = useMemo(() => sumContractorLines(contractorLines), [contractorLines]);
 
   const buildPreviewBody = useCallback(
@@ -366,6 +388,20 @@ export default function AdminQuoteBuilderPanel({
           <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Customer total</p>
           <p className="text-xl font-bold tabular-nums text-primary">{loading ? "…" : formatMoney(customerTotal)}</p>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-[#FF4D1C]/20 bg-[#FF4D1C]/5 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Selected contractor quote</p>
+            <p className="mt-1 truncate text-sm font-semibold">
+              {bid.contractorName || `Contractor #${bid.contractorUserId}`}
+            </p>
+            <p className="text-[11px] text-muted-foreground">Bid #{bid.id}</p>
+          </div>
+          <span className="shrink-0 text-xl font-bold tabular-nums">{formatMoney(bid.netTotal)}</span>
+        </div>
+        <p className="mt-2 text-[11px] text-muted-foreground">Only this contractor's bid is used to build the FixBridge quotation.</p>
       </div>
 
       <div className="flex gap-1 rounded-xl border border-border bg-muted/30 p-1">
