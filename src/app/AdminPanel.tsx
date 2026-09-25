@@ -496,6 +496,7 @@ export default function AdminPanel({
   const [message, setMessage] = useState<string | null>(null);
   const [inviteContractorId, setInviteContractorId] = useState<number | "">("");
   const [inviteContractorIds, setInviteContractorIds] = useState<number[]>([]);
+  const [inviteContractorSearch, setInviteContractorSearch] = useState("");
   const [inviteTechnicianId, setInviteTechnicianId] = useState<number | "">("");
   const [contractorEmployees, setContractorEmployees] = useState<ContractorEmployee[]>([]);
   const [inviteRequestType, setInviteRequestType] = useState<"remote_quote" | "site_visit">("remote_quote");
@@ -680,6 +681,16 @@ export default function AdminPanel({
   }
 
   const selectedJob = jobs.find((j) => j.id === selectedJobId) || null;
+
+  const filteredInviteContractors = useMemo(() => {
+    const q = inviteContractorSearch.trim().toLowerCase();
+    if (!q) return contractors;
+    return contractors.filter((c) =>
+      `${c.name || ""} ${c.email || ""} ${c.trade || ""} ${(c as AuthUser & { companyName?: string; company?: string }).companyName || ""} ${(c as AuthUser & { companyName?: string; company?: string }).company || ""}`
+        .toLowerCase()
+        .includes(q),
+    );
+  }, [contractors, inviteContractorSearch]);
 
   useEffect(() => {
     if (!selectedJob) return;
@@ -1245,7 +1256,10 @@ export default function AdminPanel({
         return;
       }
       const names = (invite.contractors || []).map((c) => c.name).filter(Boolean).join(', ');
-      setMessage(`${inviteContractorIds.length} contractor${inviteContractorIds.length === 1 ? '' : 's'} invited${names ? `: ${names}` : ''}.`);
+      setMessage(`${inviteContractorIds.length} contractor${inviteContractorIds.length === 1 ? '' : 's'} invited for quote${names ? `: ${names}` : ''}.`);
+      setInviteContractorIds([]);
+      setInviteContractorId("");
+      setInviteContractorSearch("");
       await refreshJobs();
     } catch (err) {
       console.error('[admin-invite] request failed', err);
@@ -1751,10 +1765,21 @@ export default function AdminPanel({
                               : ""}
                           </p>
                         ) : null}
-                        <div className="flex flex-wrap gap-2">
+                        <div className="flex flex-col gap-3">
+                          <label className="relative block max-w-xl">
+                            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                            <input
+                              type="search"
+                              value={inviteContractorSearch}
+                              onChange={(e) => setInviteContractorSearch(e.target.value)}
+                              placeholder="Search contractors by name, trade, or email..."
+                              className={`${fieldClass} w-full pl-9`}
+                              aria-label="Search contractors"
+                            />
+                          </label>
                           <select
                             multiple
-                            size={Math.min(8, Math.max(4, contractors.length))}
+                            size={Math.min(8, Math.max(4, filteredInviteContractors.length || 4))}
                             className={`${fieldClass} min-w-[20rem] max-w-full sm:max-w-xl`}
                             value={inviteContractorIds.map(String)}
                             onChange={(e) => {
@@ -1764,33 +1789,35 @@ export default function AdminPanel({
                               if (ids.length !== 1) setInviteTechnicianId("");
                             }}
                           >
-                            <option value="" disabled>Select one or more contractors</option>
-                            {contractors
+                            {filteredInviteContractors
                               .slice()
                               .sort((a, b) => {
                                 const pref = Number(selectedJob.preferredContractorUserId || 0);
                                 if (Number(a.id) === pref) return -1;
                                 if (Number(b.id) === pref) return 1;
-                                if (a.dispatchEligible && !b.dispatchEligible) return -1;
-                                if (!a.dispatchEligible && b.dispatchEligible) return 1;
                                 return (a.name || "").localeCompare(b.name || "");
                               })
                               .map((c) => {
                                 const compliance = String(c.complianceStatus || "approved").toLowerCase();
                                 const blockedAccount = ["suspended", "rejected", "blocked"].includes(compliance);
-                                const dispatchBlocked = c.dispatchEligible === false || blockedAccount;
                                 const isPreferred = Number(c.id) === Number(selectedJob.preferredContractorUserId);
                                 return (
-                                  <option key={String(c.id)} value={Number(c.id)} disabled={dispatchBlocked}>
+                                  <option key={String(c.id)} value={Number(c.id)} disabled={blockedAccount}>
                                     {isPreferred ? "★ Preferred · " : ""}
                                     {c.name} · {c.trade || "trade?"} · {c.email}
-                                    {dispatchBlocked ? " · NOT DISPATCH ELIGIBLE" : c.dispatchEligible ? " · ELIGIBLE" : ""}
-                                    {!dispatchBlocked && compliance !== "approved" ? ` (${compliance})` : ""}
+                                    {blockedAccount ? " · BLOCKED" : compliance !== "approved" ? ` (${compliance})` : ""}
                                   </option>
                                 );
                               })}
                           </select>
-                          <p className="w-full text-xs text-muted-foreground">Hold Ctrl/Cmd to select multiple contractors. Multiple invitations are sent without assigning the job.</p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-xs text-muted-foreground">Hold Ctrl/Cmd to select multiple. Request quote only — no contractor is assigned automatically.</p>
+                            {inviteContractorIds.length ? (
+                              <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+                                {inviteContractorIds.length} selected
+                              </span>
+                            ) : null}
+                          </div>
                           <select
                             className={`${fieldClass} max-w-full sm:max-w-xs`}
                             value={inviteTechnicianId}
@@ -1812,7 +1839,7 @@ export default function AdminPanel({
                             onClick={handleInviteAndAssign}
                           >
                             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                            {inviteContractorIds.length > 1 ? `Invite ${inviteContractorIds.length} contractors` : "Invite & assign"}
+                            {inviteContractorIds.length > 1 ? `Request quote from ${inviteContractorIds.length}` : "Request quote"}
                           </button>
                           <button
                             type="button"

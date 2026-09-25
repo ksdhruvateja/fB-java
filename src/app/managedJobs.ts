@@ -357,6 +357,8 @@ export type Proposal = {
   invoiceNumber?: string | null;
   invoiceStatus?: string | null;
   invoiceAmountDue?: number | null;
+  invoicePaid?: number | null;
+  invoiceTotal?: number | null;
 };
 
 export type Bid = {

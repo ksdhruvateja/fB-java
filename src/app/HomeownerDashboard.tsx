@@ -1930,6 +1930,39 @@ export default function HomeownerDashboard({
         }
       }
 
+      const invoiceReturnParams = new URLSearchParams(window.location.search);
+      const invoicePaidNumber = String(invoiceReturnParams.get("invoicePaid") || "").trim();
+      const invoiceCanceledNumber = String(invoiceReturnParams.get("invoice") || "").trim();
+
+      if (invoicePaidNumber) {
+        setInvoicePaymentMsg("Confirming your invoice payment with FixBridge...");
+        setTab("jobs");
+        void (async () => {
+          for (let i = 0; i < 30; i++) {
+            try {
+              const status = await homeownerInvoicePaymentStatus(invoicePaidNumber);
+              if (status.ok && status.paid) {
+                setInvoicePaymentMsg("Payment received OK");
+                await refresh();
+                window.history.replaceState({}, document.title, window.location.pathname);
+                return;
+              }
+            } catch {
+              // Keep polling while the Stripe webhook settles the invoice.
+            }
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+          }
+          // Do not claim failure or ask the homeowner to pay again merely
+          // because Stripe's webhook is delayed.
+          setInvoicePaymentMsg("Payment is still being confirmed. Please stay on this page; no second payment is needed.");
+          window.history.replaceState({}, document.title, window.location.pathname);
+        })();
+      } else if (invoiceCanceledNumber) {
+        setInvoicePaymentMsg("Payment was canceled. Your invoice remains available to pay later.");
+        setTab("jobs");
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+
       const dispatchStripeJobId = sessionStorage.getItem("fixbridge-stripe-active-job-id");
       const dispatchConfirming = sessionStorage.getItem("fixbridge-dispatch-confirming") === "1";
       const dispatchCanceled = sessionStorage.getItem("fixbridge-dispatch-canceled") === "1";

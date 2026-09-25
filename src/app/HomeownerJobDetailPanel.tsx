@@ -252,16 +252,19 @@ export default function HomeownerJobDetailPanel({
   const showQuote =
     proposal != null &&
     ["proposal_sent", "awaiting_customer_approval", "approved"].includes(String(job.status));
-  const showInvoicePay =
-    job.invoiceId != null &&
-    String(job.invoiceStatus || "").toLowerCase() === "due" &&
-    Number(job.invoiceAmountDue || 0) > 0;
+  const invoiceStatus = String(job.invoiceStatus || "").toLowerCase();
+  const invoiceIsPaid = invoiceStatus === "paid" || (job.invoiceId != null && Number(job.invoiceAmountDue || 0) <= 0);
+  const invoicePaidAmount = Number(job.invoicePaid ?? ((job.invoiceTotal ?? 0) - (job.invoiceAmountDue ?? 0)) ?? 0);
+  const showInvoiceSection = job.invoiceId != null;
+  const showInvoicePay = !invoiceIsPaid && ["due", "sent"].includes(invoiceStatus) && Number(job.invoiceAmountDue || 0) > 0;
+  const proposalStatus = String(proposal?.status || "").toLowerCase();
+  const proposalApproved = ["approved", "accepted", "converted", "paid"].includes(proposalStatus);
   const showCompletionReport = Boolean(job.completionReport);
   const showReviewForm = job.status === "customer_review_pending";
   const showLegacyComplete = job.status === "completed";
 
   const showAcceptQuoteFooter =
-    isMobile && showQuote && proposal != null && proposal.status !== "approved";
+    isMobile && showQuote && proposal != null && !proposalApproved;
 
   const cancelledLabel = homeownerCancelledLabel(job);
 
@@ -909,7 +912,7 @@ export default function HomeownerJobDetailPanel({
                 <p className="text-xs text-muted-foreground">{secondOpinion.disclaimer}</p>
               </div>
             ) : null}
-            {proposal.status === "approved" && job.status === "approved" && (
+            {proposalApproved && ["approved", "scheduled", "contractor_en_route", "work_started", "work_completed", "customer_review_pending", "payout_pending", "paid_out", "closed"].includes(String(job.status)) && (
               <p className="text-sm text-muted-foreground">
                 Quote approved. FixBridge will schedule your contractor and notify you when dispatch is confirmed.
               </p>
@@ -1045,37 +1048,53 @@ export default function HomeownerJobDetailPanel({
         </DetailSection>
       ) : null}
 
-      {showInvoicePay ? (
+      {showInvoiceSection ? (
         <div id={`job-invoice-section-${job.id}`}>
-        <DetailSection mobile={isMobile} title="Invoice payment" defaultOpen badge="Due">
-          <div className="space-y-3 rounded-lg border border-primary/20 bg-primary/5 p-4">
-            {job.invoiceNumber ? (
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                {job.invoiceNumber}
-              </p>
-            ) : null}
-            <HomeownerTipCheckout
-              serviceTotal={Number(job.invoiceAmountDue || 0)}
-              busy={busy}
-              onPay={async (tipAmount) => {
-                onBusy(true);
-                onError(null);
-                try {
-                  const r = await homeownerInvoiceCheckout(Number(job.invoiceId), tipAmount);
-                  if (r.ok && r.checkoutUrl) {
-                    window.location.href = r.checkoutUrl;
-                    return;
-                  }
-                  onError(r.message || "Stripe checkout could not be started.");
-                } catch (err: unknown) {
-                  onError(err instanceof Error ? err.message : "Payment request failed.");
-                } finally {
-                  onBusy(false);
-                }
-              }}
-            />
-          </div>
-        </DetailSection>
+          <DetailSection mobile={isMobile} title="Invoice payment" defaultOpen badge={invoiceIsPaid ? "Paid" : "Due"}>
+            {invoiceIsPaid ? (
+              <div className="space-y-2 rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-4">
+                {job.invoiceNumber ? (
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    {job.invoiceNumber}
+                  </p>
+                ) : null}
+                <p className="text-sm font-semibold text-emerald-900 dark:text-emerald-100">{formatMoney(invoicePaidAmount)} payment successful</p>
+                <p className="text-sm text-muted-foreground">Your payment has been received successfully. No further payment is due.</p>
+              </div>
+            ) : showInvoicePay ? (
+              <div className="space-y-3 rounded-lg border border-primary/20 bg-primary/5 p-4">
+                {job.invoiceNumber ? (
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    {job.invoiceNumber}
+                  </p>
+                ) : null}
+                <HomeownerTipCheckout
+                  serviceTotal={Number(job.invoiceAmountDue || 0)}
+                  busy={busy}
+                  onPay={async (tipAmount) => {
+                    onBusy(true);
+                    onError(null);
+                    try {
+                      const r = await homeownerInvoiceCheckout(Number(job.invoiceId), tipAmount);
+                      if (r.ok && r.checkoutUrl) {
+                        window.location.href = r.checkoutUrl;
+                        return;
+                      }
+                      onError(r.message || "Stripe checkout could not be started.");
+                    } catch (err: unknown) {
+                      onError(err instanceof Error ? err.message : "Payment request failed.");
+                    } finally {
+                      onBusy(false);
+                    }
+                  }}
+                />
+              </div>
+            ) : (
+              <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
+                Invoice status: {job.invoiceStatus || "pending"}.
+              </div>
+            )}
+          </DetailSection>
         </div>
       ) : null}
 

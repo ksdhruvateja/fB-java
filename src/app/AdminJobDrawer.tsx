@@ -3,6 +3,7 @@ import {
   Check,
   Circle,
   Send,
+  Search,
   UserPlus,
   X,
 } from "lucide-react";
@@ -99,10 +100,21 @@ export default function AdminJobDrawer({
   const [proposalId, setProposalId] = useState<number | null>(null);
   const [quoteMode, setQuoteMode] = useState<QuoteSubMode>("build");
   const [proposalLoading, setProposalLoading] = useState(false);
+  const [inviteSearch, setInviteSearch] = useState("");
 
   const lifecycle = useMemo(() => (job ? lifecycleForJob(job) : []), [job]);
   const latestBid = bids[0] || null;
   const activeBid = bids.find((b) => b.id === selectedBidId) || latestBid;
+  const filteredInviteContractors = useMemo(() => {
+    const q = inviteSearch.trim().toLowerCase();
+    const selected = new Set(inviteContractorIds.map(Number));
+    const list = contractors.slice().sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+    if (!q) return list;
+    return list.filter((c) =>
+      selected.has(Number(c.id)) ||
+      `${c.name || ""} ${c.trade || ""} ${c.email || ""}`.toLowerCase().includes(q),
+    );
+  }, [contractors, inviteSearch, inviteContractorIds]);
   const assignedContractor = job?.assignedContractorUserId
     ? contractors.find((c) => Number(c.id) === Number(job.assignedContractorUserId))
     : null;
@@ -126,6 +138,7 @@ export default function AdminJobDrawer({
   useEffect(() => {
   if (!open || !job) return;
 
+  setInviteSearch("");
   setTab("overview");
   setSelectedBidId(null);
 }, [open, job?.id]);
@@ -544,9 +557,20 @@ if (!open || !job) return null;
 
                 <div>
                   <label className="text-sm font-medium">Select contractor(s)</label>
+                  <div className="relative mt-1">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <input
+                      type="search"
+                      value={inviteSearch}
+                      onChange={(e) => setInviteSearch(e.target.value)}
+                      className="w-full rounded-xl border border-border bg-background py-2.5 pl-9 pr-3 text-sm"
+                      placeholder="Search by name, trade, or email"
+                      aria-label="Search contractors"
+                    />
+                  </div>
                   <select
                     multiple
-                    size={Math.min(8, Math.max(4, contractors.length))}
+                    size={Math.min(8, Math.max(4, filteredInviteContractors.length || 4))}
                     className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
                     value={inviteContractorIds.map(String)}
                     onChange={(e) => {
@@ -555,13 +579,13 @@ if (!open || !job) return null;
                       onInviteContractorId(ids.length === 1 ? ids[0] : "");
                     }}
                   >
-                    {contractors.map((c) => (
+                    {filteredInviteContractors.map((c) => (
                       <option key={String(c.id)} value={Number(c.id)}>
                         {c.name} · {c.trade || "trade?"} · {c.email}
                       </option>
                     ))}
                   </select>
-                  <p className="mt-1 text-xs text-muted-foreground">Select one contractor or hold Ctrl/Cmd to select multiple.</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Search, then select one or more contractors. Selected contractors remain selected while filtering.</p>
                 </div>
 
                 <div className="flex flex-wrap gap-2">

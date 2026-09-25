@@ -59,7 +59,7 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
   const proposal = props[0] || null;
 
   const { rows: payments } = await pool.query(
-    `SELECT * FROM payments WHERE job_id=$1 AND status IN ('succeeded','authorized','paid') ORDER BY created_at ASC`,
+    `SELECT * FROM payments WHERE job_id=$1 AND status IN ('succeeded','authorized','paid','captured','completed') ORDER BY created_at ASC`,
     [jobId]
   );
 
@@ -115,6 +115,35 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
     .reduce((s, p) => s + Number(p.amount || 0), 0);
   const amountDue = Math.max(0, Math.round((subtotal - paid) * 100) / 100);
 
+  // Reuse the proposal-converted invoice when one already exists. This keeps
+  // the Admin invoice, homeowner invoice, and payment record on one invoice.
+  let existingInvoice = null;
+  if (proposal?.converted_invoice_id) {
+    const { rows } = await pool.query(
+      `SELECT id, invoice_number, status, paid, amount_due, total
+         FROM homeowner_invoices WHERE id=$1 LIMIT 1`,
+      [proposal.converted_invoice_id]
+    );
+    existingInvoice = rows[0] || null;
+  }
+  if (!existingInvoice) {
+    const { rows } = await pool.query(
+      `SELECT id, invoice_number, status, paid, amount_due, total
+         FROM homeowner_invoices
+        WHERE job_id=$1
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1`,
+      [jobId]
+    );
+    existingInvoice = rows[0] || null;
+  }
+
+  let resolvedPaid = paid;
+  if (existingInvoice?.paid != null) {
+    resolvedPaid = Math.max(resolvedPaid, Number(existingInvoice.paid) || 0);
+  }
+  const resolvedAmountDue = Math.max(0, Math.round((subtotal - resolvedPaid) * 100) / 100);
+
   let propertyAddr = null;
   if (job.property_id) {
     const { rows: propRows } = await pool.query(`SELECT * FROM properties WHERE id=$1`, [job.property_id]);
@@ -131,7 +160,7 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
   return {
     ok: true,
     invoice: {
-      invoiceNumber: invoiceNumber(jobId),
+      invoiceNumber: existingInvoice?.invoice_number || invoiceNumber(jobId),
       jobId: Number(jobId),
       bookingId: job.booking_id || `FB-${jobId}`,
       issuedAt: new Date().toISOString(),
@@ -142,9 +171,9 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
       jobCategory: job.category,
       lineItems,
       subtotal,
-      paid,
+      paid: resolvedPaid,
       visitFeePaid,
-      amountDue,
+      amountDue: resolvedAmountDue,
       payments: payments.map((p) => ({
         type: p.payment_type,
         amount: Number(p.amount),
@@ -152,7 +181,7 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
         date: p.created_at,
       })),
       proposalId: proposal ? Number(proposal.id) : null,
-      status: job.status,
+      status: existingInvoice?.status || job.status,
       customNote: customNote || null,
       company: {
         name: brand.legalName,

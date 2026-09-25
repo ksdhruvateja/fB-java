@@ -308,10 +308,12 @@ const JOB_WITH_TECH_SELECT = `
   LEFT JOIN users u ON u.id = j.assigned_contractor_user_id
   LEFT JOIN contractor_employees emp ON emp.id = j.assigned_employee_id
   LEFT JOIN LATERAL (
-    SELECT id, invoice_number, status, amount_due
-    FROM homeowner_invoices
-    WHERE job_id = j.id
-    ORDER BY created_at DESC
+    SELECT hi.id, hi.invoice_number, hi.status, hi.amount_due
+    FROM homeowner_invoices hi
+    LEFT JOIN proposals p_inv ON p_inv.converted_invoice_id = hi.id
+    WHERE hi.job_id = j.id
+    ORDER BY CASE WHEN p_inv.converted_invoice_id = hi.id THEN 0 ELSE 1 END,
+             hi.created_at DESC, hi.id DESC
     LIMIT 1
   ) inv ON true
 `;
@@ -5472,109 +5474,136 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
   app.post('/api/admin/managed/jobs/:id/invite', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
-      const contractorUserId = Number(req.body?.contractorUserId);
       if (!Number.isFinite(jobId) || jobId <= 0) {
         return res.status(400).json({ ok: false, message: 'Invalid job.' });
       }
-      if (!Number.isFinite(contractorUserId) || contractorUserId <= 0) {
-        return res.status(400).json({ ok: false, message: 'Select a contractor to invite.' });
+
+      const rawIds = Array.isArray(req.body?.contractorUserIds)
+        ? req.body.contractorUserIds
+        : [req.body?.contractorUserId];
+      const contractorUserIds = Array.from(new Set(rawIds
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value > 0)));
+      if (!contractorUserIds.length) {
+        return res.status(400).json({ ok: false, message: 'Select at least one contractor to invite.' });
       }
 
+      const requestType = req.body?.requestType === 'site_visit' ? 'site_visit' : 'remote_quote';
       const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
       const job = rows[0];
 
       const { rows: contractors } = await pool.query(
-        `SELECT * FROM users WHERE id=$1 AND role='contractor'`,
-        [contractorUserId]
+        `SELECT * FROM users WHERE id = ANY($1::int[]) AND role='contractor'`,
+        [contractorUserIds]
       );
-      if (!contractors[0]) return res.status(404).json({ ok: false, message: 'Contractor not found.' });
-      if (contractors[0].is_blocked === true) {
-        return res.status(400).json({ ok: false, message: 'This contractor account is blocked.' });
+      const contractorById = new Map(contractors.map((c) => [Number(c.id), c]));
+      const missing = contractorUserIds.filter((id) => !contractorById.has(id));
+      if (missing.length) {
+        return res.status(404).json({ ok: false, message: `Contractor not found: ${missing.join(', ')}` });
       }
-      const compliance = String(contractors[0].compliance_status || 'draft').toLowerCase();
-      if (['suspended', 'rejected', 'blocked'].includes(compliance)) {
-        return res.status(400).json({ ok: false, message: 'Contractor is suspended or rejected.' });
-      }
-      const gateOk = await enforceContractorDispatchGate(pool, contractors[0], res, job);
-      if (!gateOk) return;
-      const hoConsent = await assertHomeownerDispatchConsent(pool, job.homeowner_user_id, jobId);
-      if (!hoConsent.ok) {
-        return res.status(409).json({
-          ok: false,
-          code: 'HOMEOWNER_DISPATCH_CONSENT_REQUIRED',
-          message: 'Homeowner dispatch acknowledgments are incomplete.',
-          missingAcceptanceTypes: hoConsent.missing,
-        });
-      }
-      await pool.query(
-        `INSERT INTO job_invitations (job_id, contractor_user_id, status, expected_net_low, expected_net_high, message, invited_by, request_type, site_visit_window)
-         VALUES ($1,$2,'invited',$3,$4,$5,$6,$7,$8)
-         ON CONFLICT (job_id, contractor_user_id) DO UPDATE SET
-           status='invited',
-           expected_net_low=EXCLUDED.expected_net_low,
-           expected_net_high=EXCLUDED.expected_net_high,
-           message=EXCLUDED.message,
-           invited_by=EXCLUDED.invited_by,
-           request_type=EXCLUDED.request_type,
-           site_visit_window=EXCLUDED.site_visit_window,
-           responded_at=NULL`,
-        [
-          jobId,
-          contractorUserId,
-          job.estimated_contractor_net_low,
-          job.estimated_contractor_net_high,
-          req.body?.message || null,
-          req.authUser.id,
-          req.body?.requestType === 'site_visit' ? 'site_visit' : 'remote_quote',
-          req.body?.siteVisitWindow || null,
-        ]
-      );
 
-      if (req.body?.requestType) {
+      // Quote requests are pre-dispatch. Do not require homeowner dispatch
+      // acknowledgments and do not assign a contractor automatically.
+      // Site visits remain behind the normal dispatch eligibility gate.
+      for (const contractorUserId of contractorUserIds) {
+        const contractor = contractorById.get(contractorUserId);
+        if (!contractor) continue;
+        if (contractor.is_blocked === true) {
+          return res.status(400).json({ ok: false, message: `${contractor.name || 'Contractor'} is blocked.` });
+        }
+        const compliance = String(contractor.compliance_status || 'draft').toLowerCase();
+        if (['suspended', 'rejected', 'blocked'].includes(compliance)) {
+          return res.status(400).json({ ok: false, message: `${contractor.name || 'Contractor'} is suspended or rejected.` });
+        }
+        if (requestType === 'site_visit') {
+          const gateOk = await enforceContractorDispatchGate(pool, contractor, res, job);
+          if (!gateOk) return;
+          const hoConsent = await assertHomeownerDispatchConsent(pool, job.homeowner_user_id, jobId);
+          if (!hoConsent.ok) {
+            return res.status(409).json({
+              ok: false,
+              code: 'HOMEOWNER_DISPATCH_CONSENT_REQUIRED',
+              message: 'Homeowner dispatch acknowledgments are incomplete.',
+              missingAcceptanceTypes: hoConsent.missing,
+            });
+          }
+        }
+      }
+
+      for (const contractorUserId of contractorUserIds) {
         await pool.query(
-          `UPDATE managed_jobs SET quote_request_mode=$1, updated_at=NOW() WHERE id=$2`,
-          [req.body.requestType === 'site_visit' ? 'site_visit' : 'remote_quote', jobId],
+          `INSERT INTO job_invitations (job_id, contractor_user_id, status, expected_net_low, expected_net_high, message, invited_by, request_type, site_visit_window)
+           VALUES ($1,$2,'invited',$3,$4,$5,$6,$7,$8)
+           ON CONFLICT (job_id, contractor_user_id) DO UPDATE SET
+             status='invited',
+             expected_net_low=EXCLUDED.expected_net_low,
+             expected_net_high=EXCLUDED.expected_net_high,
+             message=EXCLUDED.message,
+             invited_by=EXCLUDED.invited_by,
+             request_type=EXCLUDED.request_type,
+             site_visit_window=EXCLUDED.site_visit_window,
+             responded_at=NULL`,
+          [
+            jobId,
+            contractorUserId,
+            job.estimated_contractor_net_low,
+            job.estimated_contractor_net_high,
+            req.body?.message || null,
+            req.authUser.id,
+            requestType,
+            req.body?.siteVisitWindow || null,
+          ]
         );
       }
 
-      // Move job into invited state when still pre-assignment
-      const preInvite = [
-        'draft',
-        'ai_review_complete',
-        'awaiting_service_payment',
-        'paid_for_dispatch',
-        'awaiting_contractor',
-      ];
-      if (preInvite.includes(job.status)) {
-        await pushStatus(pool, jobId, job.status, 'contractor_invited', req.authUser.id, 'Contractor invited');
+      await pool.query(
+        `UPDATE managed_jobs SET quote_request_mode=$1, updated_at=NOW() WHERE id=$2`,
+        [requestType, jobId],
+      );
+
+      // Keep the job unassigned. Multiple quote invitations are allowed.
+      if (['draft', 'ai_review_complete', 'awaiting_service_payment', 'paid_for_dispatch', 'awaiting_contractor'].includes(job.status)) {
+        await pushStatus(pool, jobId, job.status, 'contractor_invited', req.authUser.id, 'Contractor quote invitation sent');
       }
 
-      await audit(pool, req.authUser.id, 'contractor_invited', 'managed_job', jobId, { contractorUserId });
-      try {
-        await createInAppNotification(pool, {
-          userId: contractorUserId,
-          userRole: 'contractor',
-          jobId,
-          type: 'job_invitation',
-          title: 'Job invitation',
-          message: `You've been invited to ${job.booking_id || `FB-${jobId}`}.`,
-          entityType: 'job',
-          entityId: jobId,
+      for (const contractorUserId of contractorUserIds) {
+        await audit(pool, req.authUser.id, 'contractor_invited', 'managed_job', jobId, {
+          contractorUserId,
+          requestType,
+          quoteOnly: requestType === 'remote_quote',
         });
-      } catch {
-        /* non-fatal */
+        try {
+          const contractor = contractorById.get(contractorUserId);
+          await createInAppNotification(pool, {
+            userId: contractorUserId,
+            userRole: 'contractor',
+            jobId,
+            type: 'job_invitation',
+            title: requestType === 'remote_quote' ? 'Quote request' : 'Site visit request',
+            message: requestType === 'remote_quote'
+              ? `You've been invited to quote ${job.booking_id || `FB-${jobId}`}.`
+              : `You've been invited to ${job.booking_id || `FB-${jobId}`}.`,
+            entityType: 'job',
+            entityId: jobId,
+          });
+        } catch {
+          /* non-fatal */
+        }
       }
+
       const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
-      res.json({
+      const invitedContractors = contractorUserIds.map((id) => {
+        const c = contractorById.get(id);
+        return { id, name: c?.name, email: c?.email, trade: c?.trade };
+      });
+      return res.json({
         ok: true,
         job: serializeJob(fresh[0], req.authUser),
-        contractor: {
-          id: Number(contractors[0].id),
-          name: contractors[0].name,
-          email: contractors[0].email,
-          trade: contractors[0].trade,
-        },
+        contractors: invitedContractors,
+        contractor: invitedContractors[0] || null,
+        assigned: false,
+        quoteOnly: requestType === 'remote_quote',
       });
     } catch (e) {
       console.error('invite:', e);
@@ -8307,27 +8336,84 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         }
       }
 
-      const { rows: saved } = await pool.query(
-        `INSERT INTO homeowner_invoices
-           (invoice_number, job_id, homeowner_user_id, amount_due, subtotal, paid, line_items, sent_via, sent_by, custom_note)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-         RETURNING *`,
-        [
-          invoice.invoiceNumber,
-          jobId,
-          invoice.homeownerUserId,
-          invoice.amountDue,
-          invoice.subtotal,
-          invoice.paid,
-          JSON.stringify(invoice.lineItems),
-          JSON.stringify({
-            email: sendEmail ? { to: emailTo, simulated: delivery.email?.simulated === true } : null,
-            sms: sendSms ? { to: phoneTo, simulated: delivery.sms?.simulated === true } : null,
-          }),
-          req.authUser.id,
-          req.body?.note || null,
-        ]
+      const sentVia = JSON.stringify({
+        email: sendEmail ? { to: emailTo, simulated: delivery.email?.simulated === true } : null,
+        sms: sendSms ? { to: phoneTo, simulated: delivery.sms?.simulated === true } : null,
+      });
+
+      // IMPORTANT: if homeowner approval already converted the proposal to an
+      // invoice, update that exact invoice. Never create a second invoice just
+      // because Admin pressed "Generate & send invoice".
+      const { rows: existingInvoiceRows } = await pool.query(
+        `SELECT hi.*
+           FROM homeowner_invoices hi
+           LEFT JOIN proposals p ON p.converted_invoice_id = hi.id
+          WHERE hi.job_id=$1
+          ORDER BY CASE WHEN p.converted_invoice_id = hi.id THEN 0 ELSE 1 END,
+                   hi.created_at DESC, hi.id DESC
+          LIMIT 1`,
+        [jobId]
       );
+      const existingInvoice = existingInvoiceRows[0] || null;
+
+      let savedRows;
+      if (existingInvoice) {
+        const { rows } = await pool.query(
+          `UPDATE homeowner_invoices
+              SET invoice_number=$1,
+                  homeowner_user_id=$2,
+                  proposal_id=COALESCE(proposal_id,$3),
+                  amount_due=$4,
+                  subtotal=$5,
+                  total=COALESCE(total,$5),
+                  paid=$6,
+                  line_items=$7,
+                  sent_via=$8,
+                  sent_by=$9,
+                  custom_note=$10,
+                  status=CASE WHEN status='paid' THEN 'paid' ELSE 'due' END,
+                  due_date=COALESCE(due_date, NOW() + INTERVAL '7 days')
+            WHERE id=$11
+          RETURNING *`,
+          [
+            existingInvoice.invoice_number || invoice.invoiceNumber,
+            invoice.homeownerUserId,
+            invoice.proposalId,
+            invoice.amountDue,
+            invoice.subtotal,
+            invoice.paid,
+            JSON.stringify(invoice.lineItems),
+            sentVia,
+            req.authUser.id,
+            req.body?.note || null,
+            existingInvoice.id,
+          ]
+        );
+        savedRows = rows;
+      } else {
+        const { rows } = await pool.query(
+          `INSERT INTO homeowner_invoices
+             (invoice_number, job_id, homeowner_user_id, proposal_id, amount_due, subtotal, paid, total, line_items, sent_via, sent_by, custom_note, status, due_date)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$6,$8,$9,$10,$11,'due',NOW() + INTERVAL '7 days')
+           RETURNING *`,
+          [
+            invoice.invoiceNumber,
+            jobId,
+            invoice.homeownerUserId,
+            invoice.proposalId,
+            invoice.amountDue,
+            invoice.subtotal,
+            invoice.paid,
+            JSON.stringify(invoice.lineItems),
+            sentVia,
+            req.authUser.id,
+            req.body?.note || null,
+          ]
+        );
+        savedRows = rows;
+      }
+
+      const saved = savedRows;
 
       await audit(pool, req.authUser.id, 'invoice_sent', 'managed_job', jobId, {
         invoiceNumber: invoice.invoiceNumber,

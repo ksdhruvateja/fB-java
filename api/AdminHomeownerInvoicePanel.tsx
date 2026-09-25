@@ -79,14 +79,6 @@ export default function AdminHomeownerInvoicePanel({
       } else {
         onMessage?.(r.message || "Invoice sent.");
         if (r.invoice) setInvoice(r.invoice);
-        // Delivery form is one-time input. After a successful send, clear all
-        // editable delivery fields so a second click cannot accidentally resend
-        // stale email/SMS/note values. The invoice itself remains visible.
-        setEmail("");
-        setPhone("");
-        setNote("");
-        setSendEmail(false);
-        setSendSms(false);
       }
     } catch (err) {
       onMessage?.(err instanceof Error ? err.message : "Could not send invoice.");
@@ -133,12 +125,16 @@ export default function AdminHomeownerInvoicePanel({
             <span className="shrink-0 tabular-nums font-medium">{formatMoney(item.amount)}</span>
           </li>
         ))}
-        {invoice.paid > 0 && (
+        {Number(invoice.paid || 0) > 0 ? (
           <li className="flex justify-between gap-3 px-3 py-2 text-teal-700 dark:text-teal-400">
             <span>Payments received</span>
-            <span className="tabular-nums">−{formatMoney(invoice.paid)}</span>
+            <span className="tabular-nums">−{formatMoney(Number(invoice.paid || 0))}</span>
           </li>
-        )}
+        ) : null}
+        <li className="flex justify-between gap-3 px-3 py-2 font-semibold">
+          <span>Amount due</span>
+          <span className="tabular-nums">{formatMoney(invoice.amountDue)}</span>
+        </li>
       </ul>
 
       <div className="grid gap-3 sm:grid-cols-2">

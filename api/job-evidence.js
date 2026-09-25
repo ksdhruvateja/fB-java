@@ -22,7 +22,7 @@ export async function buildJobEvidencePackage(pool, jobId) {
         [jobId]
       ),
       pool.query(
-        `SELECT pas.*, p.stripe_payment_intent_id, p.stripe_checkout_session_id, p.amount_cents AS payment_amount_cents
+        `SELECT pas.*, p.stripe_payment_intent, p.stripe_session_id, ROUND(COALESCE(p.amount,0) * 100)::bigint AS payment_amount_cents
          FROM payment_authorization_snapshots pas
          LEFT JOIN payments p ON p.job_id = pas.job_id AND p.user_id = pas.user_id
          WHERE pas.job_id=$1
@@ -31,7 +31,7 @@ export async function buildJobEvidencePackage(pool, jobId) {
       ),
       pool.query(`SELECT * FROM change_orders WHERE job_id=$1 ORDER BY created_at ASC`, [jobId]),
       pool.query(
-        `SELECT id, amount_cents, status, payment_type, stripe_payment_intent_id, stripe_checkout_session_id, created_at, meta
+        `SELECT id, ROUND(COALESCE(amount,0) * 100)::bigint AS amount_cents, status, payment_type, stripe_payment_intent, stripe_session_id, created_at, meta
          FROM payments WHERE job_id=$1 ORDER BY created_at ASC`,
         [jobId]
       ),
@@ -105,8 +105,8 @@ export async function buildJobEvidencePackage(pool, jobId) {
       authorizedAmountCents: Number(r.authorized_amount_cents),
       currency: r.currency,
       policyDocumentVersion: r.policy_document_version,
-      stripePaymentIntentId: r.stripe_payment_intent_id,
-      stripeCheckoutSessionId: r.stripe_checkout_session_id,
+      stripePaymentIntentId: r.stripe_payment_intent,
+      stripeCheckoutSessionId: r.stripe_session_id,
       createdAt: r.created_at,
     })),
     changeOrders: changeOrders.rows.map((r) => ({
@@ -122,8 +122,8 @@ export async function buildJobEvidencePackage(pool, jobId) {
       amountCents: Number(r.amount_cents),
       status: r.status,
       paymentType: r.payment_type,
-      stripePaymentIntentId: r.stripe_payment_intent_id,
-      stripeCheckoutSessionId: r.stripe_checkout_session_id,
+      stripePaymentIntentId: r.stripe_payment_intent,
+      stripeCheckoutSessionId: r.stripe_session_id,
       createdAt: r.created_at,
       meta: r.meta,
     })),

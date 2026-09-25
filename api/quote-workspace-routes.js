@@ -1330,6 +1330,12 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
       const billTo = invoice.billTo || {};
       const emailTo = String(req.body?.email || billTo.email || '').trim();
       const phoneTo = normalizePhone(String(req.body?.phone || billTo.phone || ''));
+      if (sendEmail && !emailTo) {
+        return res.status(400).json({ ok: false, message: 'No email for invoice.' });
+      }
+      if (sendSms && !phoneTo) {
+        return res.status(400).json({ ok: false, message: 'No valid phone for invoice SMS.' });
+      }
       const html = renderInvoiceHtml({
         ...invoice,
         invoiceNumber: invoice.invoiceNumber,
@@ -1371,6 +1377,7 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
 
       await pool.query(
         `UPDATE homeowner_invoices SET status=CASE WHEN status='paid' THEN status ELSE 'sent' END,
+           status=CASE WHEN status='paid' THEN status ELSE 'due' END,
            sent_via=$1, sent_by=$2 WHERE id=$3`,
         [
           JSON.stringify({
@@ -1762,7 +1769,7 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
           serviceAmountCents: String(totals.serviceAmountCents),
           tipAmountCents: String(totals.tipAmountCents),
         },
-        idempotencyKey: `checkout-${id}-homeowner-${totals.tipAmountCents}`,
+        idempotencyKey: `checkout-${id}-homeowner-v2-${totals.serviceAmountCents}-${totals.tipAmountCents}`,
       });
 
       await pool.query(
