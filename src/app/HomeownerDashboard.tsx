@@ -3602,18 +3602,22 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                 onRequestService={(prefill) => {
                   const service = prefill?.service as HomeownerService | undefined;
 
-                  if (prefill?.intent === "hire") {
-                    void startDirectProfessionalFlow({
-                      service,
-                      description: prefill?.description,
-                    });
-                    return;
-                  }
-
+                  // Keep Hire a Professional on the same Request Service intake so the
+                  // homeowner can describe the issue and upload photos/videos before
+                  // the professional request is created. The previous direct flow
+                  // created the pending request immediately and jumped to the
+                  // Professional Service Request screen, which skipped the media UI.
                   openRequestService({
                     service,
                     description: prefill?.description,
                   });
+
+                  if (prefill?.intent === "hire") {
+                    setReportPath("experts");
+                    setAssessmentMode("expert");
+                    setIntakePhase("describe");
+                    return;
+                  }
 
                   // Request a Service and Try DIY keep the normal Fixera path.
                   setReportPath("ai");

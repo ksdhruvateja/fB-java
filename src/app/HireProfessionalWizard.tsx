@@ -802,6 +802,7 @@ function PendingHireProfessionalWizard({
   const [propertyPurpose, setPropertyPurpose] = useState(pendingServiceRequest.propertyPurpose || "current_homeowner");
   const [transactionStage, setTransactionStage] = useState(pendingServiceRequest.transactionStage || "ongoing_maintenance");
   const [contactPhone, setContactPhone] = useState(pendingServiceRequest.contactPhone || "");
+  const [contactPhoneTouched, setContactPhoneTouched] = useState(false);
   const [convertedJob, setConvertedJob] = useState<ManagedJob | null>(null);
   const [consent, setConsent] = useState(false);
   const [paymentMessage, setPaymentMessage] = useState<string | null>(null);
@@ -866,7 +867,16 @@ function PendingHireProfessionalWizard({
     if (nextDate) setPreferredDate(nextDate);
   }
 
+  const contactPhoneDigits = contactPhone.replace(/\D/g, "");
+  const validContactPhone = contactPhoneDigits.length >= 7 && contactPhoneDigits.length <= 15;
+
   async function saveAndCheckout() {
+    if (!validContactPhone) {
+      setContactPhoneTouched(true);
+      onError("Please enter a valid contact phone number (7–15 digits).");
+      setStep("info");
+      return;
+    }
     if (!consent) {
       onError("Please acknowledge the professional-service payment terms before continuing.");
       return;
@@ -997,9 +1007,27 @@ function PendingHireProfessionalWizard({
             <select value={transactionStage} onChange={(e) => setTransactionStage(e.target.value)} className="mt-2 w-full rounded-xl border border-border bg-background px-3 py-3">{PROJECT_STAGE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
           </label>
           <label className="block text-sm font-medium">Contact phone
-            <input value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} placeholder="Phone number" className="mt-2 w-full rounded-xl border border-border bg-background px-3 py-3" />
+            <input
+              value={contactPhone}
+              onChange={(e) => {
+                setContactPhone(e.target.value);
+                setContactPhoneTouched(true);
+                onError(null);
+              }}
+              onBlur={() => setContactPhoneTouched(true)}
+              inputMode="tel"
+              autoComplete="tel"
+              placeholder="Phone number"
+              aria-invalid={contactPhoneTouched && !validContactPhone}
+              className={`mt-2 w-full rounded-xl border bg-background px-3 py-3 outline-none ${contactPhoneTouched && !validContactPhone ? "border-red-500 ring-2 ring-red-500/10" : "border-border"}`}
+            />
+            {contactPhoneTouched && !validContactPhone ? (
+              <span className="mt-1 block text-xs font-medium text-red-600">Enter a valid phone number with 7–15 digits.</span>
+            ) : (
+              <span className="mt-1 block text-xs text-muted-foreground">Required for FixBridge and the assigned professional to contact you.</span>
+            )}
           </label>
-          <div className="flex gap-2"><button type="button" onClick={() => setStep("schedule")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 font-semibold"><ArrowLeft className="h-4 w-4" /> Back</button><button type="button" disabled={!contactPhone.trim()} onClick={() => setStep("checkout")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Review price <ArrowRight className="h-4 w-4" /></button></div>
+          <div className="flex gap-2"><button type="button" onClick={() => setStep("schedule")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 font-semibold"><ArrowLeft className="h-4 w-4" /> Back</button><button type="button" disabled={!validContactPhone} onClick={() => { onError(null); setStep("checkout"); }} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Review price <ArrowRight className="h-4 w-4" /></button></div>
         </div>
       ) : null}
 
