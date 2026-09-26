@@ -226,7 +226,7 @@ export function renderInvoiceHtml(invoice) {
     <tbody>${rows}</tbody>
   </table>
   <table style="width:100%;margin-top:16px;font-size:14px;">
-    <tr><td style="padding:6px 0;color:#666;">Subtotal</td><td style="text-align:right;">${money(invoice.subtotal)}</td></tr>
+    <tr><td style="padding:6px 0;color:#666;">Total</td><td style="text-align:right;font-weight:600;">${money(invoice.subtotal)}</td></tr>
     ${invoice.visitFeePaid > 0 && !invoice.lineItems.some((i) => /visit fee credit/i.test(String(i.label || '')))
       ? `<tr><td style="padding:6px 0;color:#666;">Visit fee paid</td><td style="text-align:right;color:#0d9488;">−${money(invoice.visitFeePaid)}</td></tr>`
       : ''}
@@ -276,7 +276,7 @@ ${formatAddressLines(invoice.billTo).join('\n') || invoice.billTo.address || ''}
 Line items:
 ${items}
 
-Subtotal: ${money(invoice.subtotal)}
+Total: ${money(invoice.subtotal)}
 ${invoice.paid > 0 ? `Paid: −${money(invoice.paid)}\n` : ''}Amount due: ${money(invoice.amountDue)}
 ${invoice.customNote ? `\nNote: ${invoice.customNote}\n` : ''}
 Contact: ${invoice.company.email}`;

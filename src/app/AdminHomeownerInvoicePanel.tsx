@@ -133,12 +133,20 @@ export default function AdminHomeownerInvoicePanel({
             <span className="shrink-0 tabular-nums font-medium">{formatMoney(item.amount)}</span>
           </li>
         ))}
+        <li className="flex justify-between gap-3 px-3 py-2 font-semibold">
+          <span>Total</span>
+          <span className="shrink-0 tabular-nums">{formatMoney(invoice.subtotal)}</span>
+        </li>
         {invoice.paid > 0 && (
           <li className="flex justify-between gap-3 px-3 py-2 text-teal-700 dark:text-teal-400">
             <span>Payments received</span>
             <span className="tabular-nums">−{formatMoney(invoice.paid)}</span>
           </li>
         )}
+        <li className="flex justify-between gap-3 border-t border-border px-3 py-3 font-bold">
+          <span>Amount due</span>
+          <span className="shrink-0 tabular-nums text-[#FF4D1C]">{formatMoney(invoice.amountDue)}</span>
+        </li>
       </ul>
 
       <div className="grid gap-3 sm:grid-cols-2">

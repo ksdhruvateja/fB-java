@@ -1497,10 +1497,17 @@ export default function HomeownerDashboard({
     setError(null);
     const jobsPromise = listMyManagedJobs()
       .then((j) => {
-        if (j.ok) setJobs(j.jobs || []);
+        if (j.ok) {
+          setJobs(j.jobs || []);
+        } else {
+          setError(j.message || "Could not load your jobs. Please refresh and try again.");
+        }
         return j;
       })
-      .catch(() => ({ ok: false as const }))
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "Could not load your jobs. Please refresh and try again.");
+        return { ok: false as const };
+      })
       .finally(() => setLoading(false));
     const propsPromise = listProperties()
       .then((p) => {
@@ -5048,7 +5055,9 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                   <p className="text-sm text-muted-foreground">Loading...</p>
                 ) : jobs.length === 0 ? (
                   <div className="rounded-[1.5rem] border border-dashed border-border bg-card px-6 py-12 text-center">
-                    <p className="text-sm text-muted-foreground">No requests yet. Report an issue to start tracking.</p>
+                    <p className="text-sm text-muted-foreground">
+                      {error || "No requests yet. Report an issue to start tracking."}
+                    </p>
                     <button
                       type="button"
                       onClick={() => openRequestService()}

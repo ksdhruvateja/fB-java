@@ -332,21 +332,27 @@ export async function processSuccessfulPayment(pool, {
           const inv = invRows[0];
           if (inv && String(inv.status).toLowerCase() !== 'paid') {
             const invTotal = Number(inv.total || inv.amount_due) || 0;
-            const servicePaid = serviceDollars != null ? serviceDollars : invTotal;
+            const existingPaid = Math.max(0, Number(inv.paid) || 0);
+            const paymentApplied = serviceDollars != null
+              ? Math.max(0, serviceDollars)
+              : Math.max(0, invTotal - existingPaid);
+            const cumulativePaid = Math.min(invTotal, roundMoney(existingPaid + paymentApplied));
+            const remainingDue = Math.max(0, roundMoney(invTotal - cumulativePaid));
+            const nextStatus = remainingDue <= 0.009 ? 'paid' : 'partially_paid';
             await client.query(
               `UPDATE homeowner_invoices SET
-                 status='paid',
-                 paid=$1,
-                 amount_due=0,
+                 status=$1,
+                 paid=$2,
+                 amount_due=$3,
                  paid_at=NOW(),
-                 payment_method=$2,
-                 stripe_payment_intent=COALESCE($3, stripe_payment_intent),
-                 stripe_session_id=COALESCE($4, stripe_session_id),
-                 locked_at=COALESCE(locked_at, NOW())
-               WHERE id=$5`,
-              [servicePaid, paymentMethod, stripePaymentIntentId, stripeSessionId, invoiceId]
+                 payment_method=$4,
+                 stripe_payment_intent=COALESCE($5, stripe_payment_intent),
+                 stripe_session_id=COALESCE($6, stripe_session_id),
+                 locked_at=CASE WHEN $1='paid' THEN COALESCE(locked_at, NOW()) ELSE locked_at END
+               WHERE id=$7`,
+              [nextStatus, cumulativePaid, remainingDue, paymentMethod, stripePaymentIntentId, stripeSessionId, invoiceId]
             );
-            invoiceRow = { ...inv, status: 'paid', paid: servicePaid, amount_due: 0 };
+            invoiceRow = { ...inv, status: nextStatus, paid: cumulativePaid, amount_due: remainingDue };
             const propId = proposalId || inv.proposal_id;
             if (propId) {
               await client.query(`UPDATE proposals SET status='paid' WHERE id=$1`, [propId]);

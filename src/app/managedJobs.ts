@@ -169,6 +169,12 @@ export type ManagedJob = {
   } | null;
   assignedEmployeeId?: number | null;
   homeownerStatusLabel?: string | null;
+  invoiceId?: number | null;
+  invoiceNumber?: string | null;
+  invoiceStatus?: string | null;
+  invoiceAmountDue?: number | null;
+  invoicePaid?: number | null;
+  invoiceTotal?: number | null;
   activeProposalId?: number | null;
   completionReport?: Record<string, unknown> | null;
   customerConfirmedAt?: string | null;

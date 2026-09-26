@@ -14,7 +14,9 @@ function round2(n) {
 
 export function proposalRowToQuote(row) {
   const legacyItems = parseJson(row.customer_line_items, []) || [];
-  const lineItems = upgradeLegacyLineItems(legacyItems);
+  const lineItems = upgradeLegacyLineItems(legacyItems).filter(
+    (item) => !/visit fee credit/i.test(String(item?.label || item?.description || ''))
+  );
   const additionalCharges = parseJson(row.additional_charges, []) || [];
   const discountType = row.discount_type || (Number(row.admin_discount) > 0 ? 'fixed' : 'none');
   const discountValue =
@@ -166,7 +168,12 @@ export async function convertProposalToInvoice(client, {
      ORDER BY COALESCE(approved_at, created_at) ASC`,
     [quote.jobId]
   );
-  let invoiceLineItems = [...(quote.lineItems || [])];
+  // Visit/dispatch fee credits are money already received, not a discount on
+  // the authoritative invoice. Show the gross service invoice and carry the
+  // prior dispatch payment in `paid`. Ordinary discounts remain untouched.
+  let invoiceLineItems = [...(quote.lineItems || [])].filter(
+    (item) => !/visit fee credit/i.test(String(item?.label || item?.description || ''))
+  );
   const changeOrderLines = [];
   for (const co of approvedCos) {
     const snap = parseJson(co.approved_snapshot, null) || {};
@@ -198,6 +205,20 @@ export async function convertProposalToInvoice(client, {
   });
   const invoiceNumber = ensureFbiNumber(quote.id);
   const versionKey = quote.versionNumber || 1;
+
+  const { rows: priorPaymentRows } = await client.query(
+    `SELECT COALESCE(SUM(amount),0) AS paid
+       FROM payments
+      WHERE job_id=$1
+        AND payment_type='dispatch_fee'
+        AND status IN ('succeeded','authorized','paid','captured','completed')`,
+    [quote.jobId]
+  );
+  const priorPaid = round2(priorPaymentRows[0]?.paid || 0);
+  const invoiceTotal = round2(invoiceTotals.total);
+  const invoicePaid = Math.min(priorPaid, invoiceTotal);
+  const invoiceAmountDue = Math.max(0, round2(invoiceTotal - invoicePaid));
+  const invoiceStatus = invoiceAmountDue <= 0 ? 'paid' : 'due';
   const { rows: inv } = await client.query(
     `INSERT INTO homeowner_invoices
       (invoice_number, job_id, homeowner_user_id, proposal_id, amount_due, subtotal, paid, total,
@@ -205,16 +226,17 @@ export async function convertProposalToInvoice(client, {
        shipping_amount, shipping_label, tax_mode, tax_value, tax_amount,
        customer_notes, terms_conditions, bill_to, status, custom_note, document_snapshot, due_date)
      VALUES
-      ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'due',$21,$22,$23)
+       ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
      RETURNING *`,
     [
       invoiceNumber,
       quote.jobId,
       quote.homeownerUserId,
       quote.id,
-      invoiceTotals.total,
+      invoiceAmountDue,
       invoiceTotals.subtotal,
-      invoiceTotals.total,
+      invoicePaid,
+      invoiceTotal,
       JSON.stringify(invoiceLineItems),
       JSON.stringify(quote.additionalCharges),
       quote.discountType,
@@ -228,12 +250,14 @@ export async function convertProposalToInvoice(client, {
       quote.customerNotes,
       quote.termsConditions,
       JSON.stringify(quote.billTo),
+      invoiceStatus,
       quote.customerNotes,
       JSON.stringify({
         quoteNumber: quote.quoteNumber,
         convertedAt: new Date().toISOString(),
         versionNumber: versionKey,
         acceptedSnapshotId: quote.acceptedSnapshotId || row.accepted_snapshot_id || null,
+        priorPaid,
         approvedChangeOrders: changeOrderLines.map((l) => ({
           id: l.id,
           description: l.description,

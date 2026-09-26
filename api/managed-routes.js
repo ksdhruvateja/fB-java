@@ -299,28 +299,74 @@ const JOB_WITH_TECH_SELECT = `
     emp.photo_data AS employee_photo_data,
     emp.phones AS employee_phones,
     emp.emails AS employee_emails,
-    u.company_name AS employee_company_name,
-    inv.id AS linked_invoice_id,
-    inv.invoice_number AS linked_invoice_number,
-    inv.status AS linked_invoice_status,
-    inv.amount_due AS linked_invoice_amount_due
+    u.company_name AS employee_company_name
   FROM managed_jobs j
   LEFT JOIN users u ON u.id = j.assigned_contractor_user_id
   LEFT JOIN contractor_employees emp ON emp.id = j.assigned_employee_id
-  LEFT JOIN LATERAL (
-    SELECT hi.id, hi.invoice_number, hi.status, hi.amount_due
-    FROM homeowner_invoices hi
-    LEFT JOIN proposals p_inv ON p_inv.converted_invoice_id = hi.id
-    WHERE hi.job_id = j.id
-    ORDER BY CASE WHEN p_inv.converted_invoice_id = hi.id THEN 0 ELSE 1 END,
-             hi.created_at DESC, hi.id DESC
-    LIMIT 1
-  ) inv ON true
 `;
+
+// Keep invoice hydration separate from the main job query. This prevents a
+// missing/legacy invoice column or proposal join from making the entire
+// homeowner Jobs endpoint return 500. The invoice remains authoritative and
+// is still attached to the job before serialization.
+async function attachAuthoritativeInvoices(pool, rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return rows;
+  const jobIds = rows.map((r) => Number(r.id)).filter(Number.isFinite);
+  if (!jobIds.length) return rows;
+
+  let invoices = [];
+  try {
+    ({ rows: invoices } = await pool.query(
+      `SELECT DISTINCT ON (hi.job_id)
+          hi.job_id, hi.id, hi.invoice_number, hi.status,
+          hi.amount_due, hi.paid, hi.total, hi.created_at
+       FROM homeowner_invoices hi
+       LEFT JOIN proposals p_inv ON p_inv.converted_invoice_id = hi.id
+       WHERE hi.job_id = ANY($1::bigint[])
+       ORDER BY hi.job_id,
+                CASE WHEN p_inv.converted_invoice_id IS NOT NULL THEN 0 ELSE 1 END,
+                hi.created_at DESC, hi.id DESC`,
+      [jobIds]
+    ));
+  } catch (invoiceJoinError) {
+    // Legacy databases may not yet have proposal conversion metadata.
+    console.warn('[managed jobs] authoritative invoice join fallback:', invoiceJoinError?.message || invoiceJoinError);
+    try {
+      ({ rows: invoices } = await pool.query(
+        `SELECT DISTINCT ON (hi.job_id)
+            hi.job_id, hi.id, hi.invoice_number, hi.status,
+            hi.amount_due, hi.paid, hi.total, hi.created_at
+         FROM homeowner_invoices hi
+         WHERE hi.job_id = ANY($1::bigint[])
+         ORDER BY hi.job_id, hi.created_at DESC, hi.id DESC`,
+        [jobIds]
+      ));
+    } catch (invoiceFallbackError) {
+      console.warn('[managed jobs] invoice hydration unavailable:', invoiceFallbackError?.message || invoiceFallbackError);
+      invoices = [];
+    }
+  }
+
+  const byJob = new Map(invoices.map((inv) => [Number(inv.job_id), inv]));
+  return rows.map((row) => {
+    const inv = byJob.get(Number(row.id));
+    if (!inv) return row;
+    return {
+      ...row,
+      linked_invoice_id: inv.id,
+      linked_invoice_number: inv.invoice_number,
+      linked_invoice_status: inv.status,
+      linked_invoice_amount_due: inv.amount_due,
+      linked_invoice_paid: inv.paid,
+      linked_invoice_total: inv.total,
+    };
+  });
+}
 
 async function fetchJobWithTech(pool, jobId) {
   const { rows } = await pool.query(`${JOB_WITH_TECH_SELECT} WHERE j.id=$1`, [jobId]);
-  return rows[0] || null;
+  const hydrated = await attachAuthoritativeInvoices(pool, rows);
+  return hydrated[0] || null;
 }
 
 async function audit(pool, actorUserId, action, entityType, entityId, detail) {
@@ -638,6 +684,10 @@ function serializeJob(row, viewer) {
       base.invoiceStatus = row.linked_invoice_status || null;
       base.invoiceAmountDue =
         row.linked_invoice_amount_due != null ? Number(row.linked_invoice_amount_due) : null;
+      base.invoicePaid =
+        row.linked_invoice_paid != null ? Number(row.linked_invoice_paid) : null;
+      base.invoiceTotal =
+        row.linked_invoice_total != null ? Number(row.linked_invoice_total) : null;
     }
     if (row.discount_code) {
       base.discountSummary =
@@ -1644,6 +1694,10 @@ function serializeProposal(row, viewer) {
       base.invoiceStatus = row.linked_invoice_status || null;
       base.invoiceAmountDue =
         row.linked_invoice_amount_due != null ? Number(row.linked_invoice_amount_due) : null;
+      base.invoicePaid =
+        row.linked_invoice_paid != null ? Number(row.linked_invoice_paid) : null;
+      base.invoiceTotal =
+        row.linked_invoice_total != null ? Number(row.linked_invoice_total) : null;
     }
     base.homeownerPhone = row.homeowner_phone || row.job_contact_phone || null;
     base.discountType = row.discount_type || null;
@@ -4624,6 +4678,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
            ORDER BY j.created_at DESC`,
           [req.authUser.id]
         ));
+        rows = await attachAuthoritativeInvoices(pool, rows);
       } else if (req.authUser.role === 'contractor') {
         ({ rows } = await pool.query(
           `SELECT j.* FROM managed_jobs j

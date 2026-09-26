@@ -1069,7 +1069,9 @@ export default function HomeownerJobDetailPanel({
                   </p>
                 ) : null}
                 <HomeownerTipCheckout
-                  serviceTotal={Number(job.invoiceAmountDue || 0)}
+                  invoiceTotal={Number(job.invoiceTotal ?? 0)}
+                  invoicePaid={Number(job.invoicePaid ?? 0)}
+                  amountDue={Number(job.invoiceAmountDue || 0)}
                   busy={busy}
                   onPay={async (tipAmount) => {
                     onBusy(true);

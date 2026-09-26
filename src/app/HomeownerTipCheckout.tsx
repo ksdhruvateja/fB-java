@@ -4,14 +4,19 @@ import { formatMoney } from "./managedJobs";
 export type TipPreset = "none" | "10" | "15" | "20" | "custom";
 
 export function HomeownerTipCheckout({
-  serviceTotal,
+  invoiceTotal,
+  invoicePaid,
+  amountDue,
   busy,
   onPay,
 }: {
-  serviceTotal: number;
+  invoiceTotal: number;
+  invoicePaid: number;
+  amountDue: number;
   busy?: boolean;
   onPay: (tipAmount: number) => void | Promise<void>;
 }) {
+  const serviceTotal = Math.max(0, Number(amountDue || 0));
   const [preset, setPreset] = useState<TipPreset>("none");
   const [customTip, setCustomTip] = useState("");
 
@@ -83,8 +88,18 @@ export function HomeownerTipCheckout({
 
       <div className="rounded-xl border border-border bg-muted/20 p-4 text-sm">
         <div className="flex justify-between tabular-nums">
-          <span className="text-muted-foreground">Service Total</span>
-          <span className="font-medium">{formatMoney(serviceTotal)}</span>
+          <span className="text-muted-foreground">Invoice Total</span>
+          <span className="font-medium">{formatMoney(invoiceTotal)}</span>
+        </div>
+        {invoicePaid > 0 ? (
+          <div className="mt-2 flex justify-between tabular-nums">
+            <span className="text-muted-foreground">Payments received</span>
+            <span className="font-medium text-teal-600">−{formatMoney(invoicePaid)}</span>
+          </div>
+        ) : null}
+        <div className="mt-2 flex justify-between tabular-nums">
+          <span className="text-muted-foreground">Amount due</span>
+          <span className="font-semibold">{formatMoney(serviceTotal)}</span>
         </div>
         <div className="mt-2 flex justify-between tabular-nums">
           <span className="text-muted-foreground">Tip</span>
@@ -92,7 +107,7 @@ export function HomeownerTipCheckout({
         </div>
         <div className="my-3 border-t border-border" />
         <div className="flex justify-between tabular-nums text-base font-semibold">
-          <span>Total</span>
+          <span>Total to pay</span>
           <span>{formatMoney(customerTotal)}</span>
         </div>
       </div>

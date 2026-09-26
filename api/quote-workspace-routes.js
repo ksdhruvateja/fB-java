@@ -16,7 +16,7 @@ import {
 } from './quote-document.js';
 import { sendEmailSafe, sendSmsSafe, smsConfigured } from './notify.js';
 import { normalizePhone, renderInvoiceHtml } from './invoices.js';
-import { assertPaymentsAvailable, createCheckoutSession, appBaseUrl } from './stripe.js';
+import { assertPaymentsAvailable, createCheckoutSession, appBaseUrl, getStripe } from './stripe.js';
 import { calculateCustomerPaymentTotal, dollarsToCents } from './financial-calculations.js';
 import { recordPendingTip } from './tips.js';
 import { processSuccessfulPayment } from './payment-settlement.js';
@@ -1586,7 +1586,7 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
           serviceAmountCents: String(totals.serviceAmountCents),
           tipAmountCents: String(totals.tipAmountCents),
         },
-        idempotencyKey: `checkout-${id}-v${invoice.status}-${totals.tipAmountCents}`,
+        idempotencyKey: `checkout-${id}-admin-v2-${totals.serviceAmountCents}-${totals.tipAmountCents}`,
       });
 
       await pool.query(
@@ -1824,7 +1824,10 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
     }
   });
 
-  /** Poll payment settlement — authoritative; do not trust return URL alone. */
+  /**
+   * Authoritative payment confirmation. Stripe webhooks are primary, but this
+   * endpoint can reconcile the exact Checkout Session if the webhook is late.
+   */
   app.get('/api/homeowner/invoices/by-number/:num/payment-status', requireAuth, async (req, res) => {
     try {
       if (req.authUser.role !== 'homeowner' && !isAdminRole(req.authUser)) {
@@ -1833,23 +1836,89 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
       const num = String(req.params.num || '').trim();
       const { rows } = await pool.query(`SELECT * FROM homeowner_invoices WHERE invoice_number=$1`, [num]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Invoice not found.' });
-      const invoice = serializeInvoiceRow(rows[0]);
+
+      let invoice = serializeInvoiceRow(rows[0]);
       if (req.authUser.role === 'homeowner' && !isHomeownerOwner(req.authUser, invoice.homeownerUserId)) {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
+
+      let stripeConfirmed = false;
+      let confirmedPaymentAmount = null;
+      const stripeSessionId = invoice.stripeSessionId || rows[0].stripe_session_id || null;
+
+      if (String(invoice.status || '').toLowerCase() !== 'paid' && stripeSessionId) {
+        try {
+          const stripe = await getStripe();
+          if (stripe) {
+            const session = await stripe.checkout.sessions.retrieve(String(stripeSessionId));
+            if (session?.payment_status === 'paid') {
+              const customerTotal = session.amount_total != null ? Number(session.amount_total) / 100 : null;
+              const tipCents = Number(session.metadata?.tipAmountCents || 0);
+              const tipAmount = tipCents > 0 ? tipCents / 100 : 0;
+              const serviceAmount = customerTotal != null
+                ? Math.max(0, customerTotal - tipAmount)
+                : Math.max(0, Number(invoice.amountDue || 0));
+
+              await processSuccessfulPayment(pool, {
+                source: 'stripe_payment_status_reconciliation',
+                jobId: Number(session.metadata?.jobId || invoice.jobId),
+                invoiceId: invoice.id,
+                proposalId: session.metadata?.proposalId ? Number(session.metadata.proposalId) : invoice.proposalId,
+                homeownerUserId: session.metadata?.homeownerId ? Number(session.metadata.homeownerId) : (invoice.homeownerUserId || req.authUser.id),
+                paymentType: 'invoice_payment',
+                customerTotal,
+                serviceAmount,
+                tipAmount,
+                stripeSessionId: session.id,
+                stripePaymentIntentId: session.payment_intent || null,
+                actorUserId: req.authUser.id,
+                stripeMetadata: session.metadata || {},
+                idempotencyKey: `stripe-session-${session.id}`,
+              });
+              stripeConfirmed = true;
+              confirmedPaymentAmount = customerTotal;
+            }
+          }
+        } catch (stripeErr) {
+          console.warn('[invoice payment-status] Stripe reconciliation:', stripeErr?.message || stripeErr);
+        }
+      }
+
+      const { rows: refreshedRows } = await pool.query(`SELECT * FROM homeowner_invoices WHERE id=$1`, [invoice.id]);
+      invoice = serializeInvoiceRow(refreshedRows[0] || rows[0]);
+
+      let latestPaymentAmount = confirmedPaymentAmount;
+      if (latestPaymentAmount == null) {
+        const { rows: paymentRows } = await pool.query(
+          `SELECT amount
+             FROM payments
+            WHERE job_id=$1
+              AND payment_type='invoice_payment'
+              AND status IN ('succeeded','paid','captured','completed')
+              AND (meta->>'invoiceId') = $2
+            ORDER BY id DESC
+            LIMIT 1`,
+          [invoice.jobId, String(invoice.id)]
+        );
+        if (paymentRows[0]) latestPaymentAmount = Number(paymentRows[0].amount) || 0;
+      }
+
       const status = String(invoice.status || '').toLowerCase();
-      const paid = status === 'paid' || Number(invoice.paid || 0) >= Number(invoice.total || 0);
+      const paid = stripeConfirmed || status === 'paid' || Number(invoice.paid || 0) >= Number(invoice.total || 0);
       res.json({
         ok: true,
         invoiceNumber: invoice.invoiceNumber,
         status: invoice.status,
         paid,
         amountPaid: invoice.paid,
+        paymentAmount: latestPaymentAmount,
         total: invoice.total,
+        amountDue: invoice.amountDue,
         jobId: invoice.jobId,
       });
-    } catch {
-      res.status(500).json({ ok: false, message: 'Server error' });
+    } catch (e) {
+      console.error('[invoice payment-status]', e);
+      res.status(500).json({ ok: false, message: 'Server error.' });
     }
-  });
+  });;
 }
