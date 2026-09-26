@@ -369,6 +369,9 @@ function serializeInvoiceRow(row) {
     total,
     paid,
     amountDue,
+    paymentPlanPercent: row.payment_plan_percent != null ? Number(row.payment_plan_percent) : null,
+    initialPaymentAmount: row.initial_payment_amount != null ? Number(row.initial_payment_amount) : null,
+    initialPaymentCompleted: row.initial_payment_completed === true,
     billTo: parseJson(row.bill_to, null),
     customerNotes: row.customer_notes || row.custom_note || null,
     termsConditions: row.terms_conditions || null,
@@ -1652,7 +1655,7 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
       // The managed job is the authoritative ownership source for homeowner invoices.
       // Older/generated invoice rows can have a missing or stale homeowner_user_id,
       // which previously caused a legitimate homeowner checkout to return 403.
-      const { rows } = await pool.query(`SELECT hi.*, j.homeowner_user_id AS job_homeowner_user_id FROM homeowner_invoices hi LEFT JOIN managed_jobs j ON j.id = hi.job_id WHERE hi.id=$1`, [id]);
+      const { rows } = await pool.query(`SELECT hi.*, j.homeowner_user_id AS job_homeowner_user_id, j.status AS job_status FROM homeowner_invoices hi LEFT JOIN managed_jobs j ON j.id = hi.job_id WHERE hi.id=$1`, [id]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Invoice not found.' });
 
       const row = rows[0];
@@ -1685,6 +1688,33 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
         return res.status(400).json({ ok: false, message: 'Invoice is already paid.' });
       }
 
+      const requestedPercent = Number(req.body?.paymentPercent);
+      const finalPayment = invoice.initialPaymentCompleted === true && ['work_completed', 'customer_review_pending', 'payout_pending'].includes(String(row.job_status || ''));
+      if (!finalPayment && requestedPercent !== 50 && requestedPercent !== 75 && requestedPercent !== 100) {
+        return res.status(400).json({ ok: false, code: 'INVALID_PAYMENT_PERCENT', message: 'Choose an initial payment of 50%, 75%, or 100%.' });
+      }
+      if (invoice.initialPaymentCompleted && !finalPayment) {
+        return res.status(409).json({ ok: false, code: 'WORK_NOT_COMPLETE', message: 'The remaining balance can be paid after work is completed.' });
+      }
+      let initialPaymentAmount = 0;
+      if (!finalPayment) {
+        // The initial payment is the selected percentage of the FULL invoice total.
+        // Existing successful payments (for example $125 already received) remain
+        // credited to the invoice and are NOT subtracted from the initial payment.
+        // The existing credit is applied when calculating the final balance after
+        // the initial payment settles.
+        initialPaymentAmount = Math.min(
+          Number(invoice.amountDue) || 0,
+          Math.max(0, Math.round((((Number(invoice.total) || 0) * requestedPercent) / 100) * 100) / 100)
+        );
+        await pool.query(
+          `UPDATE homeowner_invoices SET payment_plan_percent=$1, initial_payment_amount=$2, initial_payment_completed=FALSE WHERE id=$3`,
+          [requestedPercent, initialPaymentAmount, id]
+        );
+      } else {
+        initialPaymentAmount = Math.max(0, Number(invoice.amountDue) || 0);
+      }
+
       const rawTip = req.body?.tipAmount;
       const tipAmount =
         rawTip === null || rawTip === '' || rawTip === undefined ? 0 : Math.max(0, Number(rawTip) || 0);
@@ -1696,7 +1726,7 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
         return res.status(400).json({ ok: false, message: `Tip cannot exceed ${maxTip.toFixed(2)}.` });
       }
 
-      const serviceAmount = Number(invoice.amountDue);
+      const serviceAmount = initialPaymentAmount;
       const totals = calculateCustomerPaymentTotal({
         serviceAmountCents: dollarsToCents(serviceAmount),
         tipAmountCents: dollarsToCents(tipAmount),
@@ -1768,6 +1798,9 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
           proposalId: invoice.proposalId != null ? String(invoice.proposalId) : '',
           serviceAmountCents: String(totals.serviceAmountCents),
           tipAmountCents: String(totals.tipAmountCents),
+          paymentPercent: finalPayment ? '100' : String(requestedPercent),
+          initialPaymentAmount: String(initialPaymentAmount),
+          paymentStage: finalPayment ? 'final' : 'initial',
         },
         idempotencyKey: `checkout-${id}-homeowner-v2-${totals.serviceAmountCents}-${totals.tipAmountCents}`,
       });
@@ -1784,7 +1817,7 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
           req.authUser.id,
           serviceAmount + tipAmount,
           session.sessionId,
-          JSON.stringify({ invoiceId: id, serviceAmount, tipAmount, source: 'homeowner_checkout' }),
+          JSON.stringify({ invoiceId: id, serviceAmount, tipAmount, source: 'homeowner_checkout', paymentPercent: finalPayment ? 100 : requestedPercent, initialPaymentAmount, paymentStage: finalPayment ? 'final' : 'initial' }),
           serviceAmount,
           tipAmount,
         ]
@@ -1797,6 +1830,9 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
           serviceTotal: serviceAmount,
           tipAmount,
           customerTotal: serviceAmount + tipAmount,
+          paymentPercent: finalPayment ? 100 : requestedPercent,
+          initialPaymentAmount,
+          remainingAfterPayment: Math.max(0, Number(invoice.total || 0) - Number(invoice.paid || 0) - initialPaymentAmount),
         },
         invoice: serializeInvoiceRow({ ...rows[0], stripe_payment_link_url: session.url }),
       });
@@ -1896,20 +1932,24 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
               AND payment_type='invoice_payment'
               AND status IN ('succeeded','paid','captured','completed')
               AND (meta->>'invoiceId') = $2
+              AND ($3::text IS NULL OR stripe_session_id=$3)
             ORDER BY id DESC
             LIMIT 1`,
-          [invoice.jobId, String(invoice.id)]
+          [invoice.jobId, String(invoice.id), stripeSessionId]
         );
         if (paymentRows[0]) latestPaymentAmount = Number(paymentRows[0].amount) || 0;
       }
 
       const status = String(invoice.status || '').toLowerCase();
-      const paid = stripeConfirmed || status === 'paid' || Number(invoice.paid || 0) >= Number(invoice.total || 0);
+      const invoicePaid = status === 'paid' || Number(invoice.paid || 0) >= Number(invoice.total || 0);
+      const paymentConfirmed = stripeConfirmed || latestPaymentAmount != null;
       res.json({
         ok: true,
         invoiceNumber: invoice.invoiceNumber,
         status: invoice.status,
-        paid,
+        paid: paymentConfirmed || invoicePaid,
+        paymentConfirmed,
+        invoicePaid,
         amountPaid: invoice.paid,
         paymentAmount: latestPaymentAmount,
         total: invoice.total,

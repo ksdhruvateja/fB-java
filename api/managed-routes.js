@@ -319,7 +319,7 @@ async function attachAuthoritativeInvoices(pool, rows) {
     ({ rows: invoices } = await pool.query(
       `SELECT DISTINCT ON (hi.job_id)
           hi.job_id, hi.id, hi.invoice_number, hi.status,
-          hi.amount_due, hi.paid, hi.total, hi.created_at
+          hi.amount_due, hi.paid, hi.total, hi.line_items, hi.subtotal, hi.payment_plan_percent, hi.initial_payment_amount, hi.initial_payment_completed, p_inv.customer_line_items AS proposal_customer_line_items, hi.created_at
        FROM homeowner_invoices hi
        LEFT JOIN proposals p_inv ON p_inv.converted_invoice_id = hi.id
        WHERE hi.job_id = ANY($1::bigint[])
@@ -335,8 +335,10 @@ async function attachAuthoritativeInvoices(pool, rows) {
       ({ rows: invoices } = await pool.query(
         `SELECT DISTINCT ON (hi.job_id)
             hi.job_id, hi.id, hi.invoice_number, hi.status,
-            hi.amount_due, hi.paid, hi.total, hi.created_at
+            hi.amount_due, hi.paid, hi.total, hi.line_items, hi.subtotal, hi.payment_plan_percent, hi.initial_payment_amount, hi.initial_payment_completed,
+            p_inv.customer_line_items AS proposal_customer_line_items, hi.created_at
          FROM homeowner_invoices hi
+         LEFT JOIN proposals p_inv ON p_inv.converted_invoice_id = hi.id
          WHERE hi.job_id = ANY($1::bigint[])
          ORDER BY hi.job_id, hi.created_at DESC, hi.id DESC`,
         [jobIds]
@@ -347,18 +349,64 @@ async function attachAuthoritativeInvoices(pool, rows) {
     }
   }
 
+  // Homeowner job hydration must use the same payment source as the Admin
+  // invoice view. Some older invoices have a stale homeowner_invoices.paid
+  // value (for example 0) even though a successful payment already exists in
+  // the payments table. Reconcile both sources here so Admin and Homeowner
+  // always see the same authoritative received amount.
+  let successfulPaidByJob = new Map();
+  try {
+    const { rows: paymentTotals } = await pool.query(
+      `SELECT job_id, COALESCE(SUM(amount), 0) AS paid
+         FROM payments
+        WHERE job_id = ANY($1::bigint[])
+          AND status IN ('succeeded', 'authorized', 'paid', 'captured', 'completed')
+        GROUP BY job_id`,
+      [jobIds]
+    );
+    successfulPaidByJob = new Map(
+      paymentTotals.map((p) => [Number(p.job_id), Math.max(0, Number(p.paid) || 0)])
+    );
+  } catch (paymentError) {
+    // Do not break the Jobs endpoint if a legacy database is missing payment
+    // fields. In that case we fall back to the invoice's stored paid value.
+    console.warn('[managed jobs] payment reconciliation unavailable:', paymentError?.message || paymentError);
+  }
+
   const byJob = new Map(invoices.map((inv) => [Number(inv.job_id), inv]));
   return rows.map((row) => {
     const inv = byJob.get(Number(row.id));
     if (!inv) return row;
+    const invoiceLines = parseJson(inv.line_items, []) || [];
+    const proposalLines = parseJson(inv.proposal_customer_line_items, []) || [];
+    const invoiceHasServiceCharge = invoiceLines.some((line) =>
+      /service\s*charge/i.test(String(line?.label || line?.name || line?.description || ''))
+    );
+    const effectiveInvoiceLines = invoiceHasServiceCharge || !proposalLines.length ? invoiceLines : proposalLines;
+
+    const storedPaid = Math.max(0, Number(inv.paid) || 0);
+    const successfulPaid = successfulPaidByJob.get(Number(row.id)) || 0;
+    const authoritativePaid = Math.max(storedPaid, successfulPaid);
+    const invoiceTotal = Number(inv.total);
+    const fallbackTotal = Number(inv.amount_due || 0) + authoritativePaid;
+    const authoritativeTotal = Number.isFinite(invoiceTotal) && invoiceTotal >= 0
+      ? invoiceTotal
+      : fallbackTotal;
+    const authoritativeAmountDue = Math.max(0, authoritativeTotal - authoritativePaid);
+
     return {
       ...row,
       linked_invoice_id: inv.id,
       linked_invoice_number: inv.invoice_number,
       linked_invoice_status: inv.status,
-      linked_invoice_amount_due: inv.amount_due,
-      linked_invoice_paid: inv.paid,
-      linked_invoice_total: inv.total,
+      linked_invoice_amount_due: authoritativeAmountDue,
+      linked_invoice_paid: authoritativePaid,
+      linked_invoice_total: authoritativeTotal,
+      linked_invoice_line_items: effectiveInvoiceLines,
+      linked_invoice_subtotal: inv.subtotal,
+      linked_invoice_payment_plan_percent: inv.payment_plan_percent,
+      linked_invoice_initial_payment_amount: inv.initial_payment_amount,
+      linked_invoice_initial_payment_completed: inv.initial_payment_completed,
     };
   });
 }
@@ -688,6 +736,11 @@ function serializeJob(row, viewer) {
         row.linked_invoice_paid != null ? Number(row.linked_invoice_paid) : null;
       base.invoiceTotal =
         row.linked_invoice_total != null ? Number(row.linked_invoice_total) : null;
+      base.invoiceLineItems = parseJson(row.linked_invoice_line_items, []) || [];
+      base.invoiceSubtotal = row.linked_invoice_subtotal != null ? Number(row.linked_invoice_subtotal) : null;
+      base.invoicePaymentPlanPercent = row.linked_invoice_payment_plan_percent != null ? Number(row.linked_invoice_payment_plan_percent) : null;
+      base.invoiceInitialPaymentAmount = row.linked_invoice_initial_payment_amount != null ? Number(row.linked_invoice_initial_payment_amount) : null;
+      base.invoiceInitialPaymentCompleted = row.linked_invoice_initial_payment_completed === true;
     }
     if (row.discount_code) {
       base.discountSummary =
@@ -5680,6 +5733,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
       const job = rows[0];
+      const { rows: initialInvoices } = await pool.query(
+        `SELECT initial_payment_completed FROM homeowner_invoices WHERE job_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+        [jobId]
+      );
+      if (initialInvoices[0]?.initial_payment_completed !== true) {
+        return res.status(409).json({ ok: false, code: 'INITIAL_PAYMENT_REQUIRED', message: 'The homeowner must successfully complete the selected initial payment before a contractor can be assigned.' });
+      }
 
       const { rows: contractors } = await pool.query(
         `SELECT * FROM users WHERE id=$1 AND role='contractor'`,
@@ -5695,15 +5755,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
       const gateOk = await enforceContractorDispatchGate(pool, contractors[0], res, job);
       if (!gateOk) return;
-      const hoConsent = await assertHomeownerDispatchConsent(pool, job.homeowner_user_id, jobId);
-      if (!hoConsent.ok) {
-        return res.status(409).json({
-          ok: false,
-          code: 'HOMEOWNER_DISPATCH_CONSENT_REQUIRED',
-          message: 'Homeowner dispatch acknowledgments are incomplete.',
-          missingAcceptanceTypes: hoConsent.missing,
-        });
-      }
+      // The homeowner's quote-approval acknowledgments plus successful initial
+      // invoice payment are the gate for assignment. Dispatch itself is a later
+      // Admin action after assignment.
       // Ensure invitation row exists so contractor sees it in their portal
       await pool.query(
         `INSERT INTO job_invitations (job_id, contractor_user_id, status, expected_net_low, expected_net_high, invited_by)
@@ -6337,10 +6391,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       await pool.query(
         `UPDATE managed_jobs SET
            active_proposal_id=$1,
-           assigned_contractor_user_id=$2,
            updated_at=NOW()
-         WHERE id=$3`,
-        [rows[0].id, bids[0].contractor_user_id, jobId]
+         WHERE id=$2`,
+        [rows[0].id, jobId]
       );
       await pushStatus(pool, jobId, jobs[0].status, 'proposal_sent', req.authUser.id, 'Retail proposal published');
       await pushStatus(pool, jobId, 'proposal_sent', 'awaiting_customer_approval', req.authUser.id, 'Awaiting customer approval');
@@ -6708,6 +6761,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (!job.assigned_contractor_user_id) {
         return res.status(400).json({ ok: false, message: 'Assign a contractor before requesting dispatch.' });
       }
+      const { rows: dispatchInvoices } = await pool.query(
+        `SELECT initial_payment_completed FROM homeowner_invoices WHERE job_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+        [jobId]
+      );
+      if (dispatchInvoices[0]?.initial_payment_completed !== true) {
+        return res.status(409).json({ ok: false, code: 'INITIAL_PAYMENT_REQUIRED', message: 'Initial payment must be successfully completed before dispatch.' });
+      }
 
       await pushStatus(pool, jobId, job.status, 'scheduled', req.authUser.id, 'Admin requested contractor dispatch');
 
@@ -6883,6 +6943,24 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const isContractor = Number(job.assigned_contractor_user_id) === Number(req.authUser.id);
       if (!isAdmin && !isContractor) {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      if (toStatus === 'contractor_en_route' && !['approved', 'scheduled'].includes(String(job.status))) {
+        return res.status(400).json({ ok: false, message: 'Dispatch requires homeowner approval, successful initial payment, and an assigned contractor.' });
+      }
+      if (toStatus === 'work_started' && !['contractor_en_route', 'scheduled'].includes(String(job.status))) {
+        return res.status(400).json({ ok: false, message: 'Work can only start after the contractor has been dispatched.' });
+      }
+      if (toStatus === 'contractor_en_route' || toStatus === 'work_started') {
+        const { rows: initialInvoices } = await pool.query(
+          `SELECT initial_payment_completed FROM homeowner_invoices WHERE job_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+          [jobId]
+        );
+        if (initialInvoices[0]?.initial_payment_completed !== true) {
+          return res.status(409).json({ ok: false, code: 'INITIAL_PAYMENT_REQUIRED', message: 'Initial payment must be successfully completed before dispatch or work starts.' });
+        }
+        if (!job.assigned_contractor_user_id) {
+          return res.status(409).json({ ok: false, code: 'CONTRACTOR_ASSIGNMENT_REQUIRED', message: 'An assigned contractor is required before dispatch or work starts.' });
+        }
       }
       const employeeId =
         req.body?.employeeId != null
@@ -7161,6 +7239,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (!isContractor && !isAdmin) {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
+      if (!['work_started', 'change_order_pending'].includes(String(job.status))) {
+        return res.status(400).json({ ok: false, message: 'Work can only be completed after the contractor has started the job.' });
+      }
       const structuredRaw = req.body?.structuredEquipment || req.body?.equipmentUpdate || null;
       const structuredEquipment = structuredRaw
         ? normalizeStructuredEquipment(job, structuredRaw)
@@ -7190,7 +7271,25 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         ? `Work completed by admin (user ${req.authUser.id})`
         : 'Work completed with proof';
       await pushStatus(pool, jobId, job.status, 'work_completed', req.authUser.id, completionNote);
-      await pushStatus(pool, jobId, 'work_completed', 'customer_review_pending', req.authUser.id, 'Awaiting customer confirmation');
+      const { rows: completedInvoices } = await pool.query(
+        `SELECT total, paid, amount_due FROM homeowner_invoices WHERE job_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+        [jobId]
+      );
+      const completedInvoice = completedInvoices[0];
+      const invoiceFullyPaid = completedInvoice && Number(completedInvoice.amount_due || 0) <= 0.009;
+      if (invoiceFullyPaid) {
+        await pushStatus(pool, jobId, 'work_completed', 'payout_pending', req.authUser.id, 'Work completed and invoice fully paid — payout ready');
+        try {
+          await ensurePayoutRecordForJob(pool, jobId, {
+            initialStatus: 'pending_approval',
+            actorUserId: req.authUser.id,
+          });
+        } catch (payoutErr) {
+          console.warn('[completion] payout record:', payoutErr?.message || payoutErr);
+        }
+      } else {
+        await pushStatus(pool, jobId, 'work_completed', 'customer_review_pending', req.authUser.id, 'Awaiting remaining payment');
+      }
 
       try {
         await syncPropertyHistoryFromCompletedJob(pool, { ...job, completion_report: JSON.stringify(report) }, report);

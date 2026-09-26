@@ -87,6 +87,11 @@ export function serializeInvoiceRow(row) {
     total,
     amountDue,
     paid,
+    paymentPlanPercent: row.payment_plan_percent != null ? Number(row.payment_plan_percent) : null,
+    initialPaymentAmount: row.initial_payment_amount != null ? Number(row.initial_payment_amount) : null,
+    initialPaymentCompleted: row.initial_payment_completed === true,
+    lineItems: totals.lineItems,
+    subtotal: row.subtotal != null ? Number(row.subtotal) : totals.subtotal,
     versionNumber: parseJson(row.document_snapshot, {})?.versionNumber || null,
   };
 }
@@ -172,8 +177,27 @@ export async function convertProposalToInvoice(client, {
   // the authoritative invoice. Show the gross service invoice and carry the
   // prior dispatch payment in `paid`. Ordinary discounts remain untouched.
   let invoiceLineItems = [...(quote.lineItems || [])].filter(
-    (item) => !/visit fee credit/i.test(String(item?.label || item?.description || ''))
+    (item) => !/visit fee credit/i.test(String(item?.label || item?.name || item?.description || ''))
   );
+
+  // Keep the invoice breakdown identical to the homeowner-facing quote.
+  const configuredServiceCharge = round2(row.service_charge || 0);
+  if (configuredServiceCharge > 0) {
+    const hasServiceChargeLine = invoiceLineItems.some((item) =>
+      /service\s*charge/i.test(String(item?.label || item?.name || item?.description || ''))
+    );
+    if (!hasServiceChargeLine && invoiceLineItems.length === 1) {
+      const targetTotal = round2(row.retail_amount ?? quote.total);
+      const storedLineTotal = round2(invoiceLineItems[0]?.amount || 0);
+      if (Math.abs(storedLineTotal - targetTotal) < 0.01) {
+        const serviceLabor = round2(Math.max(0, targetTotal - configuredServiceCharge));
+        invoiceLineItems = [
+          { ...invoiceLineItems[0], unitPrice: serviceLabor, amount: serviceLabor },
+          { id: `service-charge-${quote.id}`, name: 'Service charge', label: 'Service charge', description: '', qty: 1, unit: 'Flat Rate', unitPrice: configuredServiceCharge, amount: configuredServiceCharge, visible: true },
+        ];
+      }
+    }
+  }
   const changeOrderLines = [];
   for (const co of approvedCos) {
     const snap = parseJson(co.approved_snapshot, null) || {};
@@ -222,11 +246,12 @@ export async function convertProposalToInvoice(client, {
   const { rows: inv } = await client.query(
     `INSERT INTO homeowner_invoices
       (invoice_number, job_id, homeowner_user_id, proposal_id, amount_due, subtotal, paid, total,
+       payment_plan_percent, initial_payment_amount, initial_payment_completed,
        line_items, additional_charges, discount_type, discount_value, discount_amount,
        shipping_amount, shipping_label, tax_mode, tax_value, tax_amount,
        customer_notes, terms_conditions, bill_to, status, custom_note, document_snapshot, due_date)
      VALUES
-       ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+       ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
      RETURNING *`,
     [
       invoiceNumber,
@@ -237,6 +262,9 @@ export async function convertProposalToInvoice(client, {
       invoiceTotals.subtotal,
       invoicePaid,
       invoiceTotal,
+      null,
+      0,
+      invoiceAmountDue <= 0,
       JSON.stringify(invoiceLineItems),
       JSON.stringify(quote.additionalCharges),
       quote.discountType,

@@ -355,8 +355,13 @@ export async function processSuccessfulPayment(pool, {
             invoiceRow = { ...inv, status: nextStatus, paid: cumulativePaid, amount_due: remainingDue };
             const propId = proposalId || inv.proposal_id;
             if (propId) {
-              await client.query(`UPDATE proposals SET status='paid' WHERE id=$1`, [propId]);
+              await client.query(`UPDATE proposals SET status=$1 WHERE id=$2`, [nextStatus === 'paid' ? 'paid' : 'accepted', propId]);
             }
+            const planPercent = inv.payment_plan_percent != null ? Number(inv.payment_plan_percent) : null;
+            const initialTarget = inv.initial_payment_amount != null ? Number(inv.initial_payment_amount) : 0;
+            const initialDone = planPercent != null && planPercent > 0 ? cumulativePaid + 0.009 >= initialTarget : nextStatus === 'paid';
+            await client.query(`UPDATE homeowner_invoices SET initial_payment_completed=$1 WHERE id=$2`, [initialDone, invoiceId]);
+            invoiceRow = { ...invoiceRow, initial_payment_completed: initialDone, payment_plan_percent: planPercent, initial_payment_amount: initialTarget };
           } else {
             invoiceRow = inv;
           }
@@ -372,14 +377,16 @@ export async function processSuccessfulPayment(pool, {
           [jobId, paidTotal ?? (serviceDollars != null ? serviceDollars + tipDollars : null)]
         );
 
-        const terminal = new Set(['payout_pending', 'paid_out', 'closed', 'canceled', 'refunded']);
-        if (!terminal.has(String(job.status))) {
+        const invoicePaidInFull = invoiceRow && Number(invoiceRow.amount_due || 0) <= 0.009;
+        const workCompleted = ['work_completed', 'customer_review_pending', 'payout_pending', 'paid_out', 'closed'].includes(String(job.status));
+        const shouldEnterPayout = paymentType === 'invoice_payment' && invoicePaidInFull && workCompleted;
+        if (shouldEnterPayout && !['payout_pending', 'paid_out', 'closed'].includes(String(job.status))) {
           await client.query(`UPDATE managed_jobs SET status='payout_pending', updated_at=NOW() WHERE id=$1`, [jobId]);
           try {
             await client.query(
               `INSERT INTO job_status_history (job_id, from_status, to_status, actor_user_id, note)
                VALUES ($1,$2,'payout_pending',$3,$4)`,
-              [jobId, job.status, actorUserId, `Payment settled (${paymentType}/${source})`]
+              [jobId, job.status, actorUserId, `Final payment settled (${paymentType}/${source})`]
             );
           } catch {
             /* optional */
@@ -482,16 +489,25 @@ export async function processSuccessfulPayment(pool, {
   }
 
   let payout = null;
-  if (!skipPayoutLedger && !alreadySettled) {
+  let payoutEligible = paymentType !== 'invoice_payment';
+  if (paymentType === 'invoice_payment') {
     try {
-      payout = await ensurePayoutRecordForJob(pool, jobId, {
-        initialStatus: PAYOUT_STATUS.PENDING_APPROVAL,
-        actorUserId,
-      });
+      const { rows: payoutGate } = await pool.query(
+        `SELECT j.status, hi.amount_due FROM managed_jobs j LEFT JOIN homeowner_invoices hi ON hi.id=$2 WHERE j.id=$1`,
+        [jobId, invoiceId]
+      );
+      payoutEligible = Boolean(payoutGate[0]) && Number(payoutGate[0].amount_due || 0) <= 0.009 && ['work_completed','customer_review_pending','payout_pending','paid_out','closed'].includes(String(payoutGate[0].status));
+    } catch {
+      payoutEligible = false;
+    }
+  }
+  if (!skipPayoutLedger && !alreadySettled && payoutEligible) {
+    try {
+      payout = await ensurePayoutRecordForJob(pool, jobId, { initialStatus: PAYOUT_STATUS.PENDING_APPROVAL, actorUserId });
     } catch (e) {
       console.warn('[settlement] ensurePayoutRecordForJob:', e.message);
     }
-  } else if (!skipPayoutLedger) {
+  } else if (!skipPayoutLedger && payoutEligible) {
     try {
       payout = await ensurePayoutRecordForJob(pool, jobId, { actorUserId });
     } catch {

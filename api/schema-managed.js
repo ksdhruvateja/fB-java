@@ -1447,6 +1447,10 @@ export async function initManagedSchema(pool) {
     ON homeowner_invoices (homeowner_user_id, created_at DESC)
   `);
   await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS proposal_id INT`);
+  // Managed repair payment plan: homeowner selects 50%, 75%, or 100% after quote approval.
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS payment_plan_percent INT`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS initial_payment_amount NUMERIC DEFAULT 0`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS initial_payment_completed BOOLEAN DEFAULT FALSE`);
   await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'draft'`);
   await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS discount_type TEXT DEFAULT 'none'`);
   await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS discount_value NUMERIC DEFAULT 0`);

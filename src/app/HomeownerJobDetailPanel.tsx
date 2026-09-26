@@ -188,6 +188,9 @@ export default function HomeownerJobDetailPanel({
     PAYMENT_AUTHORIZATION: false,
     PAYMENT_VISIT_POLICY: false,
   });
+  const [initialPaymentPercent, setInitialPaymentPercent] = useState<50 | 75 | 100>(
+    job.invoicePaymentPlanPercent === 75 || job.invoicePaymentPlanPercent === 100 ? job.invoicePaymentPlanPercent : 50
+  );
   const [hasOpenDispute, setHasOpenDispute] = useState(false);
 
   const quoteConsentKeys: AcceptanceType[] = [
@@ -245,10 +248,8 @@ export default function HomeownerJobDetailPanel({
 
   const arrival = arrivalWindowLabel(job);
   const showDispatch = job.status === "awaiting_service_payment";
-  const showPayAfterWork =
-    (job.status === "customer_review_pending" || job.status === "work_completed") &&
-    proposal != null &&
-    proposal.status === "approved";
+  // Final payment is handled by the authoritative homeowner invoice section below.
+  const showPayAfterWork = false;
   const showQuote =
     proposal != null &&
     ["proposal_sent", "awaiting_customer_approval", "approved"].includes(String(job.status));
@@ -256,9 +257,11 @@ export default function HomeownerJobDetailPanel({
   const invoiceIsPaid = invoiceStatus === "paid" || (job.invoiceId != null && Number(job.invoiceAmountDue || 0) <= 0);
   const invoicePaidAmount = Number(job.invoicePaid ?? ((job.invoiceTotal ?? 0) - (job.invoiceAmountDue ?? 0)) ?? 0);
   const showInvoiceSection = job.invoiceId != null;
-  const showInvoicePay = !invoiceIsPaid && ["due", "sent"].includes(invoiceStatus) && Number(job.invoiceAmountDue || 0) > 0;
   const proposalStatus = String(proposal?.status || "").toLowerCase();
   const proposalApproved = ["approved", "accepted", "converted", "paid"].includes(proposalStatus);
+  const initialPaymentCompleted = job.invoiceInitialPaymentCompleted === true;
+  const showInitialPayment = proposalApproved && !initialPaymentCompleted && !invoiceIsPaid && Number(job.invoiceAmountDue || 0) > 0 && String(job.status) === "approved";
+  const showRemainingPayment = proposalApproved && initialPaymentCompleted && !invoiceIsPaid && Number(job.invoiceAmountDue || 0) > 0 && ["work_completed", "customer_review_pending"].includes(String(job.status));
   const showCompletionReport = Boolean(job.completionReport);
   const showReviewForm = job.status === "customer_review_pending";
   const showLegacyComplete = job.status === "completed";
@@ -703,7 +706,7 @@ export default function HomeownerJobDetailPanel({
             <p className="text-[10px] leading-normal text-muted-foreground">
               Card hold placed now. Only charged when the contractor checks in on-site. Released if cancelled.
             </p>
-            <ConsentSection title="Payment authorization">
+            <ConsentSection title="Payment authorization (required)">
               <p className="text-sm font-semibold tabular-nums">
                 Amount authorized: {formatMoney(dispatchHoldAmount)}
               </p>
@@ -850,7 +853,7 @@ export default function HomeownerJobDetailPanel({
             <p className="mt-2 text-xs text-muted-foreground">{proposal.exclusions}</p>
           ) : null}
           <div className={`mt-4 flex flex-wrap gap-2 ${showAcceptQuoteFooter ? "hidden" : ""}`}>
-            {proposal.status !== "approved" && (
+            {!proposalApproved && (
               <>
                 <ConsentSection title="Quote approval">
                   <ConsentCheckbox
@@ -914,7 +917,7 @@ export default function HomeownerJobDetailPanel({
             ) : null}
             {proposalApproved && ["approved", "scheduled", "contractor_en_route", "work_started", "work_completed", "customer_review_pending", "payout_pending", "paid_out", "closed"].includes(String(job.status)) && (
               <p className="text-sm text-muted-foreground">
-                Quote approved. FixBridge will schedule your contractor and notify you when dispatch is confirmed.
+                Quote approved. Your selected initial payment must be successfully confirmed before dispatch can begin.
               </p>
             )}
           </div>
@@ -1051,7 +1054,93 @@ export default function HomeownerJobDetailPanel({
       {showInvoiceSection ? (
         <div id={`job-invoice-section-${job.id}`}>
           <DetailSection mobile={isMobile} title="Invoice payment" defaultOpen badge={invoiceIsPaid ? "Paid" : "Due"}>
-            {invoiceIsPaid ? (
+            <div className="mb-4 rounded-xl border border-border bg-background p-4 text-sm">
+              {job.invoiceLineItems?.length ? (
+                <div className="space-y-2">
+                  {job.invoiceLineItems.map((line, index) => (
+                    <div key={`${line.label || line.name || "line"}-${index}`} className="flex justify-between gap-4 tabular-nums">
+                      <span className="text-muted-foreground">{line.label || line.name || line.description || "Item"}</span>
+                      <span className="font-medium">{formatMoney(Number(line.amount || 0))}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <div className="mt-3 flex justify-between border-t border-border pt-3 tabular-nums font-semibold">
+                <span>Total</span>
+                <span>{formatMoney(Number(job.invoiceTotal || 0))}</span>
+              </div>
+              <div className="mt-2 flex justify-between tabular-nums">
+                <span className="text-muted-foreground">Payments received</span>
+                <span className="font-medium text-teal-600">−{formatMoney(invoicePaidAmount)}</span>
+              </div>
+              <div className="mt-2 flex justify-between tabular-nums font-semibold">
+                <span>Amount due</span>
+                <span>{formatMoney(Number(job.invoiceAmountDue || 0))}</span>
+              </div>
+            </div>
+            {showInitialPayment ? (
+              <div className="space-y-4 rounded-lg border border-primary/20 bg-primary/5 p-4">
+                <div>
+                  <p className="text-sm font-semibold">Choose your initial payment</p>
+                  <p className="mt-1 text-sm text-muted-foreground">Pay 50%, 75%, or 100% now. Dispatch can begin after this payment is successfully confirmed.</p>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {[50, 75, 100].map((pct) => {
+                    const amount = Math.min(
+                      Number(job.invoiceAmountDue || 0),
+                      Math.max(0, Math.round((((Number(job.invoiceTotal || 0) * pct) / 100) * 100)) / 100)
+                    );
+                    return (
+                      <button key={pct} type="button" disabled={busy} onClick={() => setInitialPaymentPercent(pct as 50 | 75 | 100)} className={`rounded-xl border px-3 py-3 text-sm font-semibold ${initialPaymentPercent === pct ? "border-primary bg-primary/10" : "border-border bg-background"}`}>
+                        <span className="block text-lg">{pct}%</span>
+                        <span className="block text-xs tabular-nums text-muted-foreground">{formatMoney(amount)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <ConsentSection title="Payment authorization">
+                  <p className="text-sm font-semibold tabular-nums">
+                    Initial payment: {formatMoney(
+                      Math.min(
+                        Number(job.invoiceAmountDue || 0),
+                        Math.max(0, Math.round((((Number(job.invoiceTotal || 0) * initialPaymentPercent) / 100) * 100)) / 100)
+                      )
+                    )}
+                  </p>
+                  <ConsentCheckbox
+                    id={`initial-payment-${job.id}`}
+                    checked={retailPaymentConsents.PAYMENT_AUTHORIZATION === true}
+                    onChange={(v) => setRetailPaymentConsents((state) => ({ ...state, PAYMENT_AUTHORIZATION: v, PAYMENT_VISIT_POLICY: v }))}
+                    label="I authorize this initial payment under the stated cancellation/refund rules."
+                    documentKey="PAYMENT_VISIT_POLICY"
+                    documentLabel="Payment / Visit Policy"
+                  />
+                </ConsentSection>
+                <button
+                  type="button"
+                  disabled={busy || !allChecked(retailPaymentConsents, paymentConsentKeys)}
+                  onClick={async () => {
+                    onBusy(true);
+                    onError(null);
+                    try {
+                      const r = await homeownerInvoiceCheckout(Number(job.invoiceId), 0, initialPaymentPercent);
+                      if (r.ok && r.checkoutUrl) {
+                        window.location.href = r.checkoutUrl;
+                        return;
+                      }
+                      onError(r.message || "Stripe checkout could not be started.");
+                    } catch (err: unknown) {
+                      onError(err instanceof Error ? err.message : "Payment request failed.");
+                    } finally {
+                      onBusy(false);
+                    }
+                  }}
+                  className="w-full rounded-xl bg-primary px-3 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  Pay {initialPaymentPercent}% Now
+                </button>
+              </div>
+            ) : invoiceIsPaid ? (
               <div className="space-y-2 rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-4">
                 {job.invoiceNumber ? (
                   <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -1061,13 +1150,10 @@ export default function HomeownerJobDetailPanel({
                 <p className="text-sm font-semibold text-emerald-900 dark:text-emerald-100">{formatMoney(invoicePaidAmount)} payment successful</p>
                 <p className="text-sm text-muted-foreground">Your payment has been received successfully. No further payment is due.</p>
               </div>
-            ) : showInvoicePay ? (
+            ) : showRemainingPayment ? (
               <div className="space-y-3 rounded-lg border border-primary/20 bg-primary/5 p-4">
-                {job.invoiceNumber ? (
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    {job.invoiceNumber}
-                  </p>
-                ) : null}
+                <p className="text-sm text-muted-foreground">Work is complete. Pay the remaining balance to finish payment and release the job for payout.</p>
+                <p className="tabular-nums text-2xl font-semibold">{formatMoney(Number(job.invoiceAmountDue || 0))}</p>
                 <HomeownerTipCheckout
                   invoiceTotal={Number(job.invoiceTotal ?? 0)}
                   invoicePaid={Number(job.invoicePaid ?? 0)}
@@ -1077,7 +1163,7 @@ export default function HomeownerJobDetailPanel({
                     onBusy(true);
                     onError(null);
                     try {
-                      const r = await homeownerInvoiceCheckout(Number(job.invoiceId), tipAmount);
+                      const r = await homeownerInvoiceCheckout(Number(job.invoiceId), tipAmount, 100);
                       if (r.ok && r.checkoutUrl) {
                         window.location.href = r.checkoutUrl;
                         return;
@@ -1091,11 +1177,11 @@ export default function HomeownerJobDetailPanel({
                   }}
                 />
               </div>
-            ) : (
+            ) : initialPaymentCompleted ? (
               <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
-                Invoice status: {job.invoiceStatus || "pending"}.
+                Initial payment successful. The remaining balance will be available after work is completed.
               </div>
-            )}
+            ) : null}
           </DetailSection>
         </div>
       ) : null}

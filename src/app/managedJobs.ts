@@ -173,6 +173,11 @@ export type ManagedJob = {
   invoiceNumber?: string | null;
   invoiceStatus?: string | null;
   invoiceAmountDue?: number | null;
+  invoiceLineItems?: Array<{ label?: string; name?: string; amount: number; description?: string }>;
+  invoiceSubtotal?: number | null;
+  invoicePaymentPlanPercent?: 50 | 75 | 100 | null;
+  invoiceInitialPaymentAmount?: number | null;
+  invoiceInitialPaymentCompleted?: boolean;
   invoicePaid?: number | null;
   invoiceTotal?: number | null;
   activeProposalId?: number | null;
@@ -1551,9 +1556,12 @@ export type HomeownerInvoicePreview = {
   subtotal: number;
   paid: number;
   amountDue: number;
+  paymentPlanPercent?: 50 | 75 | 100 | null;
+  initialPaymentAmount?: number | null;
+  initialPaymentCompleted?: boolean;
 };
 
-export async function homeownerInvoiceCheckout(invoiceId: number, tipAmount = 0) {
+export async function homeownerInvoiceCheckout(invoiceId: number, tipAmount = 0, paymentPercent: 50 | 75 | 100 = 100) {
   return api<{
     ok: boolean;
     checkoutUrl?: string;
@@ -1561,7 +1569,7 @@ export async function homeownerInvoiceCheckout(invoiceId: number, tipAmount = 0)
     message?: string;
   }>(`/api/homeowner/invoices/${invoiceId}/checkout`, {
     method: "POST",
-    body: JSON.stringify({ tipAmount }),
+    body: JSON.stringify({ tipAmount, paymentPercent }),
   });
 }
 

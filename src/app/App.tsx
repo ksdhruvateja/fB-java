@@ -384,7 +384,7 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
         { label: "Careers", page: "home" as Page },
         { label: "Contact", page: "home" as Page },
         { label: "Staff login", page: "admin-login" as Page },
-        { label: "Partner portal", page: "partner" as Page },
+        // { label: "Partner portal", page: "partner" as Page },
       ],
     },
   ];
