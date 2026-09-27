@@ -31,6 +31,7 @@ import {
 } from "./adminOpsHelpers";
 import type { AuthUser } from "./auth";
 import DeleteServiceRequestMenu from "./DeleteServiceRequestMenu";
+import QuoteNegotiationPanel from "./QuoteNegotiationPanel";
 
 type DrawerTab = "overview" | "quotes" | "dispatch" | "invoice" | "evidence";
 type QuoteSubMode = "document" | "build";
@@ -98,6 +99,7 @@ export default function AdminJobDrawer({
   const [tab, setTab] = useState<DrawerTab>("overview");
   const [selectedBidId, setSelectedBidId] = useState<number | null>(null);
   const [proposalId, setProposalId] = useState<number | null>(null);
+  const [currentProposal, setCurrentProposal] = useState<import("./managedJobs").Proposal | null>(null);
   const [quoteMode, setQuoteMode] = useState<QuoteSubMode>("build");
   const [proposalLoading, setProposalLoading] = useState(false);
   const [inviteSearch, setInviteSearch] = useState("");
@@ -126,6 +128,7 @@ export default function AdminJobDrawer({
       .then((r) => {
         const id = r.proposal?.id ?? job.activeProposalId ?? null;
         setProposalId(id != null ? Number(id) : null);
+        setCurrentProposal(r.proposal || null);
         if (id != null) {
           setQuoteMode("document");
         } else if (bids.length > 0) {
@@ -435,6 +438,20 @@ if (!open || !job) return null;
                   </div>
                 )}
 
+                {proposalId ? (
+                  <QuoteNegotiationPanel
+                    jobId={job.id}
+                    proposal={currentProposal || { id: proposalId, jobId: job.id, status: "sent", retailAmount: 0 }}
+                    role="admin"
+                    onChanged={async () => {
+                      await onRefresh();
+                      const r = await getProposal(job.id);
+                      if (r.proposal?.id) { setProposalId(Number(r.proposal.id)); setCurrentProposal(r.proposal); }
+                    }}
+                    onMessage={onMessage}
+                  />
+                ) : null}
+
                 {proposalLoading ? (
                   <p className="py-10 text-center text-sm text-muted-foreground">Loading quote…</p>
                 ) : quoteMode === "document" && proposalId ? (
@@ -445,7 +462,7 @@ if (!open || !job) return null;
                     onChanged={async () => {
                       await onRefresh();
                       const r = await getProposal(job.id);
-                      if (r.proposal?.id) setProposalId(Number(r.proposal.id));
+                      if (r.proposal?.id) { setProposalId(Number(r.proposal.id)); setCurrentProposal(r.proposal); }
                     }}
                   />
                 ) : bids.length === 0 ? (
@@ -490,6 +507,7 @@ if (!open || !job) return null;
                           const r = await getProposal(job.id);
                           if (r.proposal?.id) {
                             setProposalId(Number(r.proposal.id));
+                            setCurrentProposal(r.proposal);
                             setQuoteMode("document");
                           }
                         }}

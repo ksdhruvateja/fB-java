@@ -176,6 +176,7 @@ export default function AdminQuoteOptionsPanel({
             const margin = Number(opt.margin ?? customer - contractor);
             const locked = ["accepted", "approved", "converted", "paid"].includes(String(opt.status).toLowerCase());
             const draft = String(opt.status).toLowerCase() === "draft";
+            const sent = ["sent", "viewed"].includes(String(opt.status).toLowerCase());
             const historical = Boolean(opt.historical) || String(opt.status).toLowerCase() === "superseded";
             return (
               <div
@@ -214,7 +215,7 @@ export default function AdminQuoteOptionsPanel({
                     <span className="text-muted-foreground">Customer-facing title</span>
                     <input
                       className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
-                      disabled={locked || historical}
+                      disabled={locked || historical || sent}
                       value={edits[opt.id]?.title ?? ""}
                       onChange={(e) => setEdits((p) => ({ ...p, [opt.id]: { ...(p[opt.id] || { title: "", scope: "" }), title: e.target.value } }))}
                       onBlur={() => void saveMeta(opt.id)}
@@ -226,7 +227,7 @@ export default function AdminQuoteOptionsPanel({
                     <textarea
                       rows={2}
                       className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
-                      disabled={locked || historical}
+                      disabled={locked || historical || sent}
                       value={edits[opt.id]?.scope ?? ""}
                       onChange={(e) => setEdits((p) => ({ ...p, [opt.id]: { ...(p[opt.id] || { title: "", scope: "" }), scope: e.target.value } }))}
                       onBlur={() => void saveMeta(opt.id)}

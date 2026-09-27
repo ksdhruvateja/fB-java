@@ -370,6 +370,14 @@ export type Proposal = {
   invoiceAmountDue?: number | null;
   invoicePaid?: number | null;
   invoiceTotal?: number | null;
+  negotiationStatus?: string | null;
+};
+
+export type Negotiation = {
+  id: number; proposalId: number; jobId: number;
+  requestedAmount?: number | null; requestedScope?: string | null; homeownerMessage?: string | null;
+  adminAmount?: number | null; adminMessage?: string | null; action: string;
+  createdAt?: string; resolvedAt?: string | null;
 };
 
 export type Bid = {
@@ -1017,6 +1025,35 @@ export async function payDispatchFee(
 export async function getProposal(jobId: number) {
   return api<{ ok: boolean; proposal: Proposal | null }>(`/api/managed/jobs/${jobId}/proposal`);
 }
+
+export async function selectProposal(jobId: number, proposalId: number) {
+  return api<{ ok: boolean; proposal?: Proposal; message?: string }>(`/api/managed/jobs/${jobId}/select-proposal`, {
+    method: 'POST', body: JSON.stringify({ proposalId }),
+  });
+}
+
+export async function listNegotiations(jobId: number) {
+  return api<{ ok: boolean; negotiations?: Negotiation[]; message?: string }>(`/api/managed/jobs/${jobId}/negotiations`);
+}
+
+export async function requestNegotiation(jobId: number, body: { proposalId: number; requestedAmount?: number | null; requestedScope?: string; message?: string }) {
+  return api<{ ok: boolean; negotiation?: Negotiation; message?: string }>(`/api/managed/jobs/${jobId}/negotiate`, {
+    method: 'POST', body: JSON.stringify(body),
+  });
+}
+
+export async function respondNegotiation(jobId: number, negotiationId: number, body: { action: 'accept'|'counter'|'decline'|'finalize'; counterAmount?: number; message?: string }) {
+  return api<{ ok: boolean; proposal?: Proposal; message?: string }>(`/api/admin/managed/jobs/${jobId}/negotiate/${negotiationId}/respond`, {
+    method: 'POST', body: JSON.stringify(body),
+  });
+}
+
+export async function finalizeEstimate(jobId: number) {
+  return api<{ ok: boolean; proposal?: Proposal; message?: string }>(`/api/admin/managed/jobs/${jobId}/finalize-estimate`, {
+    method: 'POST', body: '{}',
+  });
+}
+
 
 export async function approveProposal(jobId: number, consents?: Record<string, boolean>, proposalId?: number) {
   return api<{ ok: boolean; proposal?: Proposal; message?: string }>(

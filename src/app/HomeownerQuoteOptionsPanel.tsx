@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
-import { approveProposal, formatMoney, type ManagedJob, type Proposal } from "./managedJobs";
+import { formatMoney, selectProposal, type ManagedJob, type Proposal } from "./managedJobs";
 import { getStoredToken } from "./auth";
 
 type QuoteOption = Proposal & {
@@ -68,20 +68,20 @@ export default function HomeownerQuoteOptionsPanel({
     );
   }
 
-  if (!hasAlternatives || options.length < 2) return null;
+  if (options.length === 0) return null;
 
-  const activeOptions = options.filter((o) => ["sent", "viewed"].includes(String(o.status)));
+  const activeOptions = options.filter((o) => ["sent", "viewed", "finalized"].includes(String(o.status)));
 
-  if (activeOptions.length < 2) return null;
+  if (activeOptions.length === 0) return null;
 
   async function selectOption(proposalId: number) {
     onBusy(true);
     setSelectingId(proposalId);
     onError(null);
     try {
-      const r = await approveProposal(job.id, undefined, proposalId);
+      const r = await selectProposal(job.id, proposalId);
       if (!r.ok) {
-        onError(r.message || "Could not select option.");
+        onError(r.message || "Could not select estimate.");
         return;
       }
       await onRefresh();
@@ -93,7 +93,7 @@ export default function HomeownerQuoteOptionsPanel({
 
   return (
     <div className="space-y-4">
-      <p className="text-sm font-semibold">Choose the option that works best for you</p>
+      <p className="text-sm font-semibold">Choose one contractor estimate</p>
       <div className="grid grid-cols-1 gap-3 overflow-x-hidden">
         {activeOptions.map((opt, idx) => {
           const letter = optionLetter(opt, idx);
@@ -101,6 +101,7 @@ export default function HomeownerQuoteOptionsPanel({
           return (
             <div key={opt.id} className="min-w-0 rounded-xl border border-border bg-card p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-primary">Option {letter}</p>
+              {opt.contractorName ? <p className="mt-1 font-semibold">{opt.contractorName}</p> : null}
               <p className="mt-1 break-words font-medium">{title}</p>
               <p className="mt-2 text-2xl font-semibold tabular-nums">{formatMoney(Number(opt.total ?? opt.retailAmount ?? 0))}</p>
               {opt.scopeSummary && opt.quoteOptionTitle ? (
@@ -112,7 +113,7 @@ export default function HomeownerQuoteOptionsPanel({
                 onClick={() => void selectOption(opt.id)}
                 className="mt-4 w-full rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
               >
-                {selectingId === opt.id ? "Selecting…" : `Select Option ${letter}`}
+                {selectingId === opt.id ? "Selecting…" : `Select Estimate ${letter}`}
               </button>
             </div>
           );

@@ -1,3 +1,4 @@
+// FIXBRIDGE_STAGE_B_CONTRACTOR_CARDS_CALCULATION_FINAL
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, Plus, Trash2, Send, Eye, Pencil, ChevronRight, User } from "lucide-react";
 import {
@@ -161,6 +162,7 @@ export default function AdminQuoteBuilderPanel({
   const [timeline, setTimeline] = useState(bid.durationHours ? `${bid.durationHours} hours` : "3–4 hours");
   const [customerLineItems, setCustomerLineItems] = useState<QuoteLineItem[]>([]);
   const [lineItemsTouched, setLineItemsTouched] = useState(false);
+  const [contractorLinesTouched, setContractorLinesTouched] = useState(false);
   const [customerNotes, setCustomerNotes] = useState(
     "Thank you for choosing FixBridge.\nThis quote includes labor and materials listed above.",
   );
@@ -168,9 +170,6 @@ export default function AdminQuoteBuilderPanel({
     "Quote valid for 7 days.\nAdditional work requires separate approval.",
   );
 
-  // A quote builder is scoped to exactly one selected contractor bid.
-  // Reset every bid-derived field when the selected bid changes so stale values
-  // from the previously selected contractor can never appear in this builder.
   useEffect(() => {
     setTab("build");
     setPreview(null);
@@ -188,9 +187,35 @@ export default function AdminQuoteBuilderPanel({
     setAdjustments([]);
     setCustomerLineItems([]);
     setLineItemsTouched(false);
+    setContractorLinesTouched(false);
   }, [bid.id]);
 
-  const contractorNet = useMemo(() => sumContractorLines(contractorLines), [contractorLines]);
+  // The contractor's submitted bid is the authoritative starting amount.
+  // Admin-only cost buckets replace that amount only after the admin edits them.
+  const contractorNet = useMemo(
+    () => (contractorLinesTouched ? sumContractorLines(contractorLines) : Number(bid.netTotal || 0)),
+    [bid.netTotal, contractorLines, contractorLinesTouched],
+  );
+
+  const pricingAdjustmentTotal = useMemo(
+    () =>
+      adjustments.reduce((sum, a) => {
+        const amount = Math.max(0, Number(a.amount) || 0);
+        return sum + (a.calculation === "percent" ? contractorNet * (amount / 100) : amount);
+      }, 0),
+    [adjustments, contractorNet],
+  );
+
+  const preDiscountTotal = contractorNet + pricingAdjustmentTotal + Math.max(0, Number(serviceCharge) || 0);
+
+  const calculatedDiscount = useMemo(() => {
+    const value = Math.max(0, Number(adminDiscount) || 0);
+    if (!value) return 0;
+    const raw = discountType === "percent" ? preDiscountTotal * (value / 100) : value;
+    return Math.min(preDiscountTotal, raw);
+  }, [adminDiscount, discountType, preDiscountTotal]);
+
+  const calculatedCustomerTotal = Math.max(0, preDiscountTotal - calculatedDiscount);
 
   const buildPreviewBody = useCallback(
     () => ({
@@ -202,20 +227,56 @@ export default function AdminQuoteBuilderPanel({
         adminDiscount > 0
           ? { type: discountType, amount: adminDiscount, reason: discountReason }
           : undefined,
+      // This value is the customer-facing quote total. The server should persist
+      // the explicit total supplied by the admin instead of recalculating an
+      // internal AI/retail price.
+      retailAmount: calculatedCustomerTotal,
     }),
-    [contractorLines, contractorNet, adjustments, serviceCharge, adminDiscount, discountReason, discountType],
+    [
+      contractorLines,
+      contractorNet,
+      adjustments,
+      serviceCharge,
+      adminDiscount,
+      discountReason,
+      discountType,
+      calculatedCustomerTotal,
+    ],
   );
 
   const reloadPreview = useCallback(async () => {
     setLoading(true);
+
+    // Keep the existing preview API call for compatibility/validation, but the
+    // customer-facing total is calculated locally from explicit quote inputs.
     const r = await adminQuoteBuilderPreview(job.id, bid.id, buildPreviewBody());
+
     setLoading(false);
-    if (!r.ok || !r.quotePreview) {
-      onMessage(r.message || "Could not load quote preview.");
+
+    if (!r.ok) {
+      onMessage(r.message || "Could not validate quote preview.");
       return;
     }
-    const qp = r.quotePreview as QuotePreview;
-    setPreview(qp);
+
+    const qp = (r.quotePreview || {}) as Partial<QuotePreview>;
+    const localPreview: QuotePreview = {
+      contractorNet,
+      baseRetail: contractorNet,
+      pricingAdjustment: pricingAdjustmentTotal,
+      serviceCharge: Math.max(0, Number(serviceCharge) || 0),
+      adminDiscount: calculatedDiscount,
+      couponAmount: 0,
+      customerQuote: calculatedCustomerTotal,
+      processingCost: Number(qp.processingCost || 0),
+      grossDifference: calculatedCustomerTotal - contractorNet,
+      netContribution: calculatedCustomerTotal - contractorNet,
+      expectedMarginPct:
+        contractorNet > 0
+          ? ((calculatedCustomerTotal - contractorNet) / calculatedCustomerTotal) * 100
+          : 0,
+    };
+
+    setPreview(localPreview);
 
     if (!lineItemsTouched) {
       const auto: QuoteLineItem[] = [
@@ -225,15 +286,17 @@ export default function AdminQuoteBuilderPanel({
           description: scopeSummary || job.title || "",
           qty: 1,
           unit: "Service",
-          unitPrice: qp.baseRetail,
-          amount: qp.baseRetail,
+          unitPrice: contractorNet,
+          amount: contractorNet,
           visible: true,
         },
         ...adjustments
           .filter((a) => a.includeInDisplay !== false)
           .map((a) => {
             const amt =
-              a.calculation === "percent" ? Math.round(qp.baseRetail * (a.amount / 100)) : a.amount;
+              a.calculation === "percent"
+                ? contractorNet * (Math.max(0, Number(a.amount) || 0) / 100)
+                : Math.max(0, Number(a.amount) || 0);
             return {
               id: a.id,
               name: a.label || a.type,
@@ -259,7 +322,7 @@ export default function AdminQuoteBuilderPanel({
               },
             ]
           : []),
-        ...(qp.adminDiscount > 0
+        ...(calculatedDiscount > 0
           ? [
               {
                 id: "disc",
@@ -267,8 +330,8 @@ export default function AdminQuoteBuilderPanel({
                 description: "",
                 qty: 1,
                 unit: "Flat Rate",
-                unitPrice: -qp.adminDiscount,
-                amount: -qp.adminDiscount,
+                unitPrice: -calculatedDiscount,
+                amount: -calculatedDiscount,
                 visible: true,
               },
             ]
@@ -281,9 +344,13 @@ export default function AdminQuoteBuilderPanel({
     job.title,
     bid.id,
     buildPreviewBody,
-    adjustments,
+    contractorNet,
+    contractorLinesTouched,
+    pricingAdjustmentTotal,
     serviceCharge,
-    discountReason,
+    calculatedDiscount,
+    calculatedCustomerTotal,
+    adjustments,
     lineItemsTouched,
     onMessage,
     scopeSummary,
@@ -296,7 +363,7 @@ export default function AdminQuoteBuilderPanel({
   const customerTotal =
     customerLineItems.length > 0
       ? customerLineItems.reduce((s, l) => s + lineAmount(l.qty, l.unitPrice), 0)
-      : preview?.customerQuote ?? 0;
+      : calculatedCustomerTotal;
 
   const addAdjustment = () => {
     setAdjustments((prev) => [
@@ -397,11 +464,11 @@ export default function AdminQuoteBuilderPanel({
             <p className="mt-1 truncate text-sm font-semibold">
               {bid.contractorName || `Contractor #${bid.contractorUserId}`}
             </p>
-            <p className="text-[11px] text-muted-foreground">Bid #{bid.id}</p>
+            {/* <p className="text-[11px] text-muted-foreground">Bid #{bid.id}</p> */}
           </div>
           <span className="shrink-0 text-xl font-bold tabular-nums">{formatMoney(bid.netTotal)}</span>
         </div>
-        <p className="mt-2 text-[11px] text-muted-foreground">Only this contractor's bid is used to build the FixBridge quotation.</p>
+        {/* <p className="mt-2 text-[11px] text-muted-foreground">Only this contractor&apos;s bid is used to build the FixBridge quotation.</p> */}
       </div>
 
       <div className="flex gap-1 rounded-xl border border-border bg-muted/30 p-1">
@@ -444,6 +511,7 @@ export default function AdminQuoteBuilderPanel({
                     value={contractorLines[key]}
                     onChange={(e) => {
                       setContractorLines((prev) => ({ ...prev, [key]: Number(e.target.value) || 0 }));
+                      setContractorLinesTouched(true);
                       setLineItemsTouched(false);
                     }}
                     onBlur={() => void reloadPreview()}
@@ -486,7 +554,7 @@ export default function AdminQuoteBuilderPanel({
             </Field>
           </Section>
 
-          <Section title="Pricing" hint="Service charge, validity, and discount." className="lg:col-span-2">
+          <Section title="Pricing" hint="Service charge, validity, and discount.">
             {job.discountCode ? (
               <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
                 <p className="text-[11px] font-bold uppercase tracking-wider">Coupon on this job</p>

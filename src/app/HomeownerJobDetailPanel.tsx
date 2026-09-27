@@ -24,6 +24,7 @@ import HomeownerAccordion from "./HomeownerAccordion";
 import JobReviewForm from "./JobReviewForm";
 import HomeownerJobCompletionPanel from "./HomeownerJobCompletionPanel";
 import HomeownerQuoteOptionsPanel from "./HomeownerQuoteOptionsPanel";
+import QuoteNegotiationPanel from "./QuoteNegotiationPanel";
 import { fetchJobDispute } from "./disputesApi";
 import DeleteServiceRequestMenu from "./DeleteServiceRequestMenu";
 import { homeownerCancelledLabel } from "./jobCancellation";
@@ -252,14 +253,23 @@ export default function HomeownerJobDetailPanel({
   const showPayAfterWork = false;
   const showQuote =
     proposal != null &&
-    ["proposal_sent", "awaiting_customer_approval", "approved"].includes(String(job.status));
+    ["proposal_sent", "awaiting_customer_approval", "approved", "finalized", "negotiation_pending"].includes(String(job.status));
   const invoiceStatus = String(job.invoiceStatus || "").toLowerCase();
   const invoiceIsPaid = invoiceStatus === "paid" || (job.invoiceId != null && Number(job.invoiceAmountDue || 0) <= 0);
   const invoicePaidAmount = Number(job.invoicePaid ?? ((job.invoiceTotal ?? 0) - (job.invoiceAmountDue ?? 0)) ?? 0);
   const showInvoiceSection = job.invoiceId != null;
   const proposalStatus = String(proposal?.status || "").toLowerCase();
   const proposalApproved = ["approved", "accepted", "converted", "paid"].includes(proposalStatus);
-  const initialPaymentCompleted = job.invoiceInitialPaymentCompleted === true;
+  const proposalFinalized = proposalStatus === "finalized";
+  // The 50/75/100 selector is a one-time initial-payment step. It must never
+  // render again after the backend confirms the initial Stripe payment. The
+  // paid-amount fallback prevents a brief reappearance while the boolean flag
+  // is synchronizing. Hire-a-Professional is intentionally not counted here.
+  const requiredInitialPayment = Math.max(0, Number(job.invoiceInitialPaymentAmount || 0));
+  const initialPaymentPaidByAmount =
+    requiredInitialPayment > 0 && invoicePaidAmount + 0.009 >= requiredInitialPayment;
+  const initialPaymentCompleted =
+    job.invoiceInitialPaymentCompleted === true || initialPaymentPaidByAmount;
   const showInitialPayment = proposalApproved && !initialPaymentCompleted && !invoiceIsPaid && Number(job.invoiceAmountDue || 0) > 0 && String(job.status) === "approved";
   const showRemainingPayment = proposalApproved && initialPaymentCompleted && !invoiceIsPaid && Number(job.invoiceAmountDue || 0) > 0 && ["work_completed", "customer_review_pending"].includes(String(job.status));
   const showCompletionReport = Boolean(job.completionReport);
@@ -852,15 +862,26 @@ export default function HomeownerJobDetailPanel({
           {proposal.exclusions ? (
             <p className="mt-2 text-xs text-muted-foreground">{proposal.exclusions}</p>
           ) : null}
+          <div className="mt-4">
+            {!proposalApproved && proposal ? (
+              <QuoteNegotiationPanel
+                jobId={job.id}
+                proposal={proposal}
+                role="homeowner"
+                onChanged={onRefresh}
+                onMessage={onError}
+              />
+            ) : null}
+          </div>
           <div className={`mt-4 flex flex-wrap gap-2 ${showAcceptQuoteFooter ? "hidden" : ""}`}>
-            {!proposalApproved && (
+            {!proposalApproved && proposalFinalized && (
               <>
                 <ConsentSection title="Quote approval">
                   <ConsentCheckbox
                     id={`quote-agreement-${job.id}`}
                     checked={quoteConsents.HOMEOWNER_SERVICE_AGREEMENT === true}
                     onChange={(v) => setQuoteConsents((s) => ({ ...s, HOMEOWNER_SERVICE_AGREEMENT: v }))}
-                    label="I agree to the Homeowner Service Agreement and Visit/Cancellation Policy."
+                    label="I agree to the Homeowner Service Agreement."
                     documentKey="HOMEOWNER_SERVICE_AGREEMENT"
                     documentLabel="Homeowner Agreement"
                   />
@@ -1350,7 +1371,7 @@ export default function HomeownerJobDetailPanel({
   const acceptQuoteFooter =
     showAcceptQuoteFooter && proposal ? (
       <div
-        className="fixed inset-x-0 z-30 border-t border-border bg-background/95 px-4 py-3 backdrop-blur lg:hidden"
+        className={`fixed inset-x-0 z-30 border-t border-border bg-background/95 px-4 py-3 backdrop-blur lg:hidden ${proposal.status !== "finalized" ? "hidden" : ""}`}
         style={{ bottom: "calc(4.25rem + env(safe-area-inset-bottom, 0px))" }}
       >
         <div className="mx-auto max-w-lg space-y-2 max-h-[45vh] overflow-y-auto">
@@ -1359,7 +1380,7 @@ export default function HomeownerJobDetailPanel({
               id={`mobile-quote-agreement-${job.id}`}
               checked={quoteConsents.HOMEOWNER_SERVICE_AGREEMENT === true}
               onChange={(v) => setQuoteConsents((s) => ({ ...s, HOMEOWNER_SERVICE_AGREEMENT: v }))}
-              label="I agree to the Homeowner Service Agreement and Visit/Cancellation Policy."
+              label="I agree to the Homeowner Service Agreement."
               documentKey="HOMEOWNER_SERVICE_AGREEMENT"
               documentLabel="Homeowner Agreement"
             />

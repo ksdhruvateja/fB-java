@@ -271,6 +271,26 @@ export async function initManagedSchema(pool) {
     )
   `);
 
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS proposal_negotiations (
+      id                  BIGSERIAL PRIMARY KEY,
+      job_id              BIGINT NOT NULL,
+      proposal_id         INT NOT NULL,
+      homeowner_user_id   INT NOT NULL,
+      requested_amount    NUMERIC,
+      requested_scope     TEXT,
+      homeowner_message   TEXT,
+      admin_amount        NUMERIC,
+      admin_message       TEXT,
+      action              TEXT NOT NULL DEFAULT 'pending',
+      created_at          TIMESTAMPTZ DEFAULT NOW(),
+      resolved_at         TIMESTAMPTZ
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_proposal_negotiations_proposal ON proposal_negotiations(proposal_id, created_at DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_proposal_negotiations_job ON proposal_negotiations(job_id, created_at DESC)`);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS proposals (
       id                   SERIAL PRIMARY KEY,

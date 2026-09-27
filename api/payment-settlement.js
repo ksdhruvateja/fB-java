@@ -285,13 +285,18 @@ export async function processSuccessfulPayment(pool, {
       }
 
       if (stripeSessionId) {
+        // A checkout.session.completed webhook can update the pre-created
+        // pending payment row to succeeded before this central settlement
+        // function runs. That row is NOT proof that invoice settlement was
+        // completed; payment_settlements is the idempotency source of truth.
+        // Reuse the existing Stripe payment row and continue settlement so the
+        // homeowner invoice is actually updated.
         const dup = await client.query(
           `SELECT * FROM payments WHERE stripe_session_id=$1 AND status IN ('succeeded','paid') LIMIT 1`,
           [stripeSessionId]
         );
         if (dup.rows[0]) {
           paymentRow = dup.rows[0];
-          alreadySettled = true;
         }
       }
 
@@ -307,25 +312,57 @@ export async function processSuccessfulPayment(pool, {
           paymentMethod,
           manualReference,
         };
-        const { rows: payIns } = await client.query(
-          `INSERT INTO payments
-             (job_id, user_id, payment_type, amount, currency, status, stripe_session_id, stripe_payment_intent, simulated, meta, service_amount, tip_amount)
-           VALUES ($1,$2,$3,$4,'usd','succeeded',$5,$6,$7,$8,$9,$10)
-           RETURNING *`,
-          [
-            jobId,
-            homeownerUserId || job.homeowner_user_id,
-            paymentType,
-            paidTotal ?? serviceDollars ?? 0,
-            stripeSessionId,
-            stripePaymentIntentId,
-            simulated,
-            JSON.stringify(payMeta),
-            serviceDollars,
-            tipDollars,
-          ]
-        );
-        paymentRow = payIns[0];
+        if (!paymentRow) {
+          const { rows: payIns } = await client.query(
+            `INSERT INTO payments
+               (job_id, user_id, payment_type, amount, currency, status, stripe_session_id, stripe_payment_intent, simulated, meta, service_amount, tip_amount)
+             VALUES ($1,$2,$3,$4,'usd','succeeded',$5,$6,$7,$8,$9,$10)
+             RETURNING *`,
+            [
+              jobId,
+              homeownerUserId || job.homeowner_user_id,
+              paymentType,
+              paidTotal ?? serviceDollars ?? 0,
+              stripeSessionId,
+              stripePaymentIntentId,
+              simulated,
+              JSON.stringify(payMeta),
+              serviceDollars,
+              tipDollars,
+            ]
+          );
+          paymentRow = payIns[0];
+        } else {
+          const { rows: payUpd } = await client.query(
+            `UPDATE payments SET
+               job_id=COALESCE(job_id,$1),
+               user_id=COALESCE(user_id,$2),
+               payment_type=COALESCE(payment_type,$3),
+               amount=COALESCE($4, amount),
+               currency=COALESCE(currency,'usd'),
+               status='succeeded',
+               stripe_payment_intent=COALESCE($5, stripe_payment_intent),
+               simulated=$6,
+               meta=COALESCE(meta,'{}'::jsonb) || $7::jsonb,
+               service_amount=COALESCE($8, service_amount),
+               tip_amount=COALESCE($9, tip_amount)
+             WHERE id=$10
+             RETURNING *`,
+            [
+              jobId,
+              homeownerUserId || job.homeowner_user_id,
+              paymentType,
+              paidTotal ?? serviceDollars ?? 0,
+              stripePaymentIntentId,
+              simulated,
+              JSON.stringify(payMeta),
+              serviceDollars,
+              tipDollars,
+              paymentRow.id,
+            ]
+          );
+          paymentRow = payUpd[0] || paymentRow;
+        }
 
         if (invoiceId) {
           const { rows: invRows } = await client.query(`SELECT * FROM homeowner_invoices WHERE id=$1 FOR UPDATE`, [invoiceId]);
@@ -333,10 +370,34 @@ export async function processSuccessfulPayment(pool, {
           if (inv && String(inv.status).toLowerCase() !== 'paid') {
             const invTotal = Number(inv.total || inv.amount_due) || 0;
             const existingPaid = Math.max(0, Number(inv.paid) || 0);
-            const paymentApplied = serviceDollars != null
-              ? Math.max(0, serviceDollars)
-              : Math.max(0, invTotal - existingPaid);
-            const cumulativePaid = Math.min(invTotal, roundMoney(existingPaid + paymentApplied));
+
+            // Rebuild the received amount from successful payment records for
+            // this invoice instead of blindly adding the current checkout to
+            // homeowner_invoices.paid. This makes the result idempotent when
+            // Stripe sends payment_intent.succeeded before or after
+            // checkout.session.completed, and preserves any prior dispatch-fee
+            // credit already carried by the invoice.
+            const { rows: paidRows } = await client.query(
+              `SELECT COALESCE(SUM(
+                 CASE
+                   WHEN payment_type='dispatch_fee'
+                     THEN COALESCE(amount,0)
+                   WHEN payment_type IN ('invoice_payment','invoice_manual')
+                     AND (meta->>'invoiceId') = $2
+                     THEN COALESCE(service_amount, amount, 0)
+                   ELSE 0
+                 END
+               ),0) AS paid
+                 FROM payments
+                WHERE job_id=$1
+                  AND status IN ('succeeded','paid','captured','completed')`,
+              [jobId, String(invoiceId)]
+            );
+            const successfulPaymentsPaid = Math.max(0, Number(paidRows[0]?.paid) || 0);
+            const cumulativePaid = Math.min(
+              invTotal,
+              roundMoney(Math.max(existingPaid, successfulPaymentsPaid))
+            );
             const remainingDue = Math.max(0, roundMoney(invTotal - cumulativePaid));
             const nextStatus = remainingDue <= 0.009 ? 'paid' : 'partially_paid';
             await client.query(
@@ -354,33 +415,72 @@ export async function processSuccessfulPayment(pool, {
             );
             invoiceRow = { ...inv, status: nextStatus, paid: cumulativePaid, amount_due: remainingDue };
             const propId = proposalId || inv.proposal_id;
-            if (propId) {
-              await client.query(`UPDATE proposals SET status=$1 WHERE id=$2`, [nextStatus === 'paid' ? 'paid' : 'accepted', propId]);
+            if (propId && nextStatus === 'paid') {
+              await client.query(`UPDATE proposals SET status='paid' WHERE id=$1`, [propId]);
             }
-            const planPercent = inv.payment_plan_percent != null ? Number(inv.payment_plan_percent) : null;
-            const initialTarget = inv.initial_payment_amount != null ? Number(inv.initial_payment_amount) : 0;
-            const initialDone = planPercent != null && planPercent > 0 ? cumulativePaid + 0.009 >= initialTarget : nextStatus === 'paid';
-            await client.query(`UPDATE homeowner_invoices SET initial_payment_completed=$1 WHERE id=$2`, [initialDone, invoiceId]);
-            invoiceRow = { ...invoiceRow, initial_payment_completed: initialDone, payment_plan_percent: planPercent, initial_payment_amount: initialTarget };
           } else {
             invoiceRow = inv;
           }
         }
 
-        await client.query(
-          `UPDATE managed_jobs SET
-             payment_completed_at = COALESCE(payment_completed_at, NOW()),
-             final_customer_amount = COALESCE($2::numeric, final_customer_amount),
-             work_queue_status = COALESCE(work_queue_status, 'PAID_NEEDS_REVIEW'),
-             updated_at = NOW()
-           WHERE id=$1`,
-          [jobId, paidTotal ?? (serviceDollars != null ? serviceDollars + tipDollars : null)]
-        );
+        const paymentStage = String(stripeMetadata?.paymentStage || (paymentType === 'retail_payment' ? 'final' : 'final')).toLowerCase();
+        const invoiceFullyPaid = invoiceRow
+          ? Number(invoiceRow.amount_due || 0) <= 0.009
+          : paymentStage === 'final';
+        if (paymentStage === 'initial') {
+          const initialPercent = Number(stripeMetadata?.paymentPercent || 0);
+          const initialAmount = Number(stripeMetadata?.targetAmount || 0) || null;
+          await client.query(
+            `UPDATE managed_jobs SET
+               initial_payment_percent=COALESCE($2, initial_payment_percent),
+               initial_payment_amount=COALESCE($3, initial_payment_amount),
+               initial_payment_completed_at=NOW(),
+               payment_completed_at=COALESCE(payment_completed_at, NOW()),
+               updated_at=NOW()
+             WHERE id=$1`,
+            [jobId, Number.isFinite(initialPercent) && initialPercent > 0 ? initialPercent : null, initialAmount]
+          );
 
-        const invoicePaidInFull = invoiceRow && Number(invoiceRow.amount_due || 0) <= 0.009;
-        const workCompleted = ['work_completed', 'customer_review_pending', 'payout_pending', 'paid_out', 'closed'].includes(String(job.status));
-        const shouldEnterPayout = paymentType === 'invoice_payment' && invoicePaidInFull && workCompleted;
-        if (shouldEnterPayout && !['payout_pending', 'paid_out', 'closed'].includes(String(job.status))) {
+          // The invoice is the source of truth used by both the homeowner and
+          // Admin screens. Mark the initial payment on the invoice itself so
+          // the Admin Invoice/Dispatch tabs immediately know that the one-time
+          // 50/75/100% payment has succeeded.
+          if (invoiceId) {
+            await client.query(
+              `UPDATE homeowner_invoices SET
+                 payment_plan_percent=COALESCE($2, payment_plan_percent),
+                 initial_payment_amount=COALESCE($3, initial_payment_amount),
+                 initial_payment_completed=true,
+                 updated_at=NOW()
+               WHERE id=$1`,
+              [
+                invoiceId,
+                Number.isFinite(initialPercent) && initialPercent > 0 ? initialPercent : null,
+                initialAmount,
+              ]
+            );
+            invoiceRow = {
+              ...(invoiceRow || {}),
+              initial_payment_completed: true,
+              payment_plan_percent: Number.isFinite(initialPercent) && initialPercent > 0 ? initialPercent : invoiceRow?.payment_plan_percent,
+              initial_payment_amount: initialAmount || invoiceRow?.initial_payment_amount,
+            };
+          }
+          if (['approved','awaiting_customer_approval'].includes(String(job.status))) {
+            await client.query(`UPDATE managed_jobs SET status='paid_for_dispatch', updated_at=NOW() WHERE id=$1`, [jobId]);
+            try {
+              await client.query(
+                `INSERT INTO job_status_history (job_id, from_status, to_status, actor_user_id, note)
+                 VALUES ($1,$2,'paid_for_dispatch',$3,$4)`,
+                [jobId, job.status, actorUserId, `Initial payment settled (${initialPercent || '?'}%)`]
+              );
+            } catch {}
+          }
+        } else if (invoiceFullyPaid && ['work_completed','customer_review_pending','admin_review_pending'].includes(String(job.status))) {
+          await client.query(
+            `UPDATE managed_jobs SET payment_completed_at=COALESCE(payment_completed_at,NOW()), final_customer_amount=COALESCE($2::numeric, final_customer_amount), work_queue_status=COALESCE(work_queue_status,'PAID_NEEDS_REVIEW'), updated_at=NOW() WHERE id=$1`,
+            [jobId, paidTotal ?? (serviceDollars != null ? serviceDollars + tipDollars : null)]
+          );
           await client.query(`UPDATE managed_jobs SET status='payout_pending', updated_at=NOW() WHERE id=$1`, [jobId]);
           try {
             await client.query(
@@ -388,9 +488,12 @@ export async function processSuccessfulPayment(pool, {
                VALUES ($1,$2,'payout_pending',$3,$4)`,
               [jobId, job.status, actorUserId, `Final payment settled (${paymentType}/${source})`]
             );
-          } catch {
-            /* optional */
-          }
+          } catch {}
+        } else {
+          await client.query(
+            `UPDATE managed_jobs SET final_customer_amount=COALESCE($2::numeric, final_customer_amount), updated_at=NOW() WHERE id=$1`,
+            [jobId, paidTotal ?? (serviceDollars != null ? serviceDollars + tipDollars : null)]
+          );
         }
 
         if (tipDollars > 0) {
@@ -489,25 +592,16 @@ export async function processSuccessfulPayment(pool, {
   }
 
   let payout = null;
-  let payoutEligible = paymentType !== 'invoice_payment';
-  if (paymentType === 'invoice_payment') {
+  if (!skipPayoutLedger && !alreadySettled) {
     try {
-      const { rows: payoutGate } = await pool.query(
-        `SELECT j.status, hi.amount_due FROM managed_jobs j LEFT JOIN homeowner_invoices hi ON hi.id=$2 WHERE j.id=$1`,
-        [jobId, invoiceId]
-      );
-      payoutEligible = Boolean(payoutGate[0]) && Number(payoutGate[0].amount_due || 0) <= 0.009 && ['work_completed','customer_review_pending','payout_pending','paid_out','closed'].includes(String(payoutGate[0].status));
-    } catch {
-      payoutEligible = false;
-    }
-  }
-  if (!skipPayoutLedger && !alreadySettled && payoutEligible) {
-    try {
-      payout = await ensurePayoutRecordForJob(pool, jobId, { initialStatus: PAYOUT_STATUS.PENDING_APPROVAL, actorUserId });
+      payout = await ensurePayoutRecordForJob(pool, jobId, {
+        initialStatus: PAYOUT_STATUS.PENDING_APPROVAL,
+        actorUserId,
+      });
     } catch (e) {
       console.warn('[settlement] ensurePayoutRecordForJob:', e.message);
     }
-  } else if (!skipPayoutLedger && payoutEligible) {
+  } else if (!skipPayoutLedger) {
     try {
       payout = await ensurePayoutRecordForJob(pool, jobId, { actorUserId });
     } catch {
