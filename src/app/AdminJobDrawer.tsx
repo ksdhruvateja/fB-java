@@ -19,6 +19,8 @@ import {
   STATUS_LABELS,
   formatMoney,
   getProposal,
+  adminAssignContractor,
+  adminGetJobInvoice,
   retailRangeLabel,
   type Bid,
   type ManagedJob,
@@ -103,6 +105,8 @@ export default function AdminJobDrawer({
   const [quoteMode, setQuoteMode] = useState<QuoteSubMode>("build");
   const [proposalLoading, setProposalLoading] = useState(false);
   const [inviteSearch, setInviteSearch] = useState("");
+  const [assigningContractor, setAssigningContractor] = useState(false);
+  const [dispatchInvoice, setDispatchInvoice] = useState<import("./managedJobs").HomeownerInvoicePreview | null>(null);
 
   const lifecycle = useMemo(() => (job ? lifecycleForJob(job) : []), [job]);
   const latestBid = bids[0] || null;
@@ -120,6 +124,27 @@ export default function AdminJobDrawer({
   const assignedContractor = job?.assignedContractorUserId
     ? contractors.find((c) => Number(c.id) === Number(job.assignedContractorUserId))
     : null;
+  const proposalStatus = String(currentProposal?.status || "").toLowerCase();
+  const homeownerApprovedProposal =
+    Boolean(currentProposal && ["accepted", "approved", "paid"].includes(proposalStatus)) ||
+    ["paid_for_dispatch", "scheduled", "contractor_en_route", "work_started", "work_completed", "payout_pending", "paid_out", "closed"].includes(String(job?.status || ""));
+  const approvedContractorUserId =
+    currentProposal?.contractorUserId ??
+    (currentProposal?.bidId != null
+      ? bids.find((b) => Number(b.id) === Number(currentProposal.bidId))?.contractorUserId ?? null
+      : null);
+  const approvedContractor = approvedContractorUserId
+    ? contractors.find((c) => Number(c.id) === Number(approvedContractorUserId))
+    : null;
+  const initialPaymentCompleted =
+    dispatchInvoice?.initialPaymentCompleted === true ||
+    job?.invoiceInitialPaymentCompleted === true;
+  const approvedEstimateAmount =
+    currentProposal?.retailAmount != null
+      ? Number(currentProposal.retailAmount)
+      : approvedContractorUserId != null
+        ? bids.find((b) => Number(b.contractorUserId) === Number(approvedContractorUserId))?.netTotal ?? null
+        : null;
 
   useEffect(() => {
     if (!open || !job) return;
@@ -137,6 +162,17 @@ export default function AdminJobDrawer({
       })
       .finally(() => setProposalLoading(false));
   }, [open, job?.id, job?.activeProposalId, bids.length]);
+
+  useEffect(() => {
+    if (!open || !job || tab !== "dispatch") return;
+    let cancelled = false;
+    void adminGetJobInvoice(job.id).then((r) => {
+      if (!cancelled) setDispatchInvoice(r.ok ? r.invoice || null : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, job?.id, tab]);
 
   useEffect(() => {
   if (!open || !job) return;
@@ -520,113 +556,185 @@ if (!open || !job) return null;
 
             {tab === "dispatch" && (
               <div className="space-y-4">
-                <div className="rounded-xl border border-dashed border-border bg-muted/20 p-3 space-y-2">
-                  <p className="text-sm font-medium">Coupon</p>
-                  {job.discountCode ? (
-                    <p className="text-xs text-teal-700 dark:text-teal-400">
-                      Active: <span className="font-semibold">{job.discountCode}</span>
-                    </p>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">No coupon applied.</p>
-                  )}
-                  {onApplyCoupon && (
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm uppercase"
-                        placeholder="CODE"
-                        value={dispatchCouponCode}
-                        onChange={(e) => onDispatchCouponCodeChange?.(e.target.value.toUpperCase())}
-                        disabled={readOnly}
-                      />
+                {!homeownerApprovedProposal ? (
+                  <>
+                    <div className="rounded-xl border border-dashed border-border bg-muted/20 p-3 space-y-2">
+                      <p className="text-sm font-medium">Coupon</p>
+                      {job.discountCode ? (
+                        <p className="text-xs text-teal-700 dark:text-teal-400">
+                          Active: <span className="font-semibold">{job.discountCode}</span>
+                        </p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">No coupon applied.</p>
+                      )}
+                      {onApplyCoupon && (
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm uppercase"
+                            placeholder="CODE"
+                            value={dispatchCouponCode}
+                            onChange={(e) => onDispatchCouponCodeChange?.(e.target.value.toUpperCase())}
+                            disabled={readOnly}
+                          />
+                          <button
+                            type="button"
+                            disabled={busy || readOnly || !dispatchCouponCode.trim()}
+                            onClick={() => void onApplyCoupon()}
+                            className="rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
+                          >
+                            Apply
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <p className="text-sm text-muted-foreground">How should contractors evaluate this request?</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {(
+                        [
+                          ["remote_quote", "Remote quote", "Send photos & details for an off-site estimate."],
+                          ["site_visit", "Site visit", "Schedule an on-site inspection before quoting."],
+                        ] as const
+                      ).map(([id, title, hint]) => (
+                        <button
+                          key={id}
+                          type="button"
+                          onClick={() => onInviteRequestType(id)}
+                          className={`rounded-xl border p-3 text-left text-sm transition ${inviteRequestType === id
+                              ? "border-[#FF4D1C] bg-[#FF4D1C]/5 ring-1 ring-[#FF4D1C]/30"
+                              : "border-border hover:bg-muted/40"
+                            }`}
+                        >
+                          <p className="font-semibold">{title}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
+                        </button>
+                      ))}
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Select contractor(s)</label>
+                      <div className="relative mt-1">
+                        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <input
+                          type="search"
+                          value={inviteSearch}
+                          onChange={(e) => setInviteSearch(e.target.value)}
+                          className="w-full rounded-xl border border-border bg-background py-2.5 pl-9 pr-3 text-sm"
+                          placeholder="Search by name, trade, or email"
+                          aria-label="Search contractors"
+                        />
+                      </div>
+                      <select
+                        multiple
+                        size={Math.min(8, Math.max(4, filteredInviteContractors.length || 4))}
+                        className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
+                        value={inviteContractorIds.map(String)}
+                        onChange={(e) => {
+                          const ids = Array.from(e.target.selectedOptions).map((option) => Number(option.value));
+                          onInviteContractorIds(ids);
+                          onInviteContractorId(ids.length === 1 ? ids[0] : "");
+                        }}
+                      >
+                        {filteredInviteContractors.map((c) => (
+                          <option key={String(c.id)} value={Number(c.id)}>
+                            {c.name} · {c.trade || "trade?"} · {c.email}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-1 text-xs text-muted-foreground">Search, then select one or more contractors. Selected contractors remain selected while filtering.</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        disabled={busy || readOnly || !dispatchCouponCode.trim()}
-                        onClick={() => void onApplyCoupon()}
-                        className="rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
+                        disabled={busy || !inviteContractorIds.length}
+                        onClick={() => void onInviteAndAssign()}
+                        className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
                       >
-                        Apply
+                        <UserPlus className="h-4 w-4" />
+                        {inviteContractorIds.length > 1
+                          ? `Invite ${inviteContractorIds.length} contractors`
+                          : inviteRequestType === "site_visit" ? "Request site visit" : "Request quote"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void onMatch()}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-border px-4 py-2.5 text-sm font-medium hover:bg-muted disabled:opacity-50"
+                      >
+                        Auto-match
                       </button>
                     </div>
-                  )}
-                </div>
-                <p className="text-sm text-muted-foreground">How should contractors evaluate this request?</p>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {(
-                    [
-                      ["remote_quote", "Remote quote", "Send photos & details for an off-site estimate."],
-                      ["site_visit", "Site visit", "Schedule an on-site inspection before quoting."],
-                    ] as const
-                  ).map(([id, title, hint]) => (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => onInviteRequestType(id)}
-                      className={`rounded-xl border p-3 text-left text-sm transition ${inviteRequestType === id
-                          ? "border-[#FF4D1C] bg-[#FF4D1C]/5 ring-1 ring-[#FF4D1C]/30"
-                          : "border-border hover:bg-muted/40"
-                        }`}
-                    >
-                      <p className="font-semibold">{title}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
-                    </button>
-                  ))}
-                </div>
+                  </>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="rounded-xl border border-[#FF4D1C]/20 bg-[#FF4D1C]/5 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-bold uppercase tracking-wider text-[#FF4D1C]">Approved contractor</p>
+                          <p className="mt-1 truncate text-base font-semibold">
+                            {approvedContractor?.name || currentProposal?.contractorName || `Contractor #${approvedContractorUserId ?? "unknown"}`}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {approvedContractor?.trade || "Contractor"}{approvedContractor?.email ? ` · ${approvedContractor.email}` : ""}
+                          </p>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <p className="text-[11px] text-muted-foreground">Approved estimate</p>
+                          <p className="text-xl font-bold tabular-nums">
+                            {approvedEstimateAmount != null ? formatMoney(approvedEstimateAmount) : "—"}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
 
-                <div>
-                  <label className="text-sm font-medium">Select contractor(s)</label>
-                  <div className="relative mt-1">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                    <input
-                      type="search"
-                      value={inviteSearch}
-                      onChange={(e) => setInviteSearch(e.target.value)}
-                      className="w-full rounded-xl border border-border bg-background py-2.5 pl-9 pr-3 text-sm"
-                      placeholder="Search by name, trade, or email"
-                      aria-label="Search contractors"
-                    />
+                    <div className="rounded-xl border border-border p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold">Initial payment</p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {initialPaymentCompleted
+                              ? `PAID — ${formatMoney(dispatchInvoice?.initialPaymentAmount ?? job.invoiceInitialPaymentAmount ?? 0)}`
+                              : "Waiting for the homeowner to successfully complete the selected 50% / 75% / 100% payment."}
+                          </p>
+                        </div>
+                        <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${initialPaymentCompleted ? "bg-teal-100 text-teal-700" : "bg-amber-100 text-amber-700"}`}>
+                          {initialPaymentCompleted ? "PAID" : "PAYMENT REQUIRED"}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-border p-4">
+                      <p className="text-sm font-semibold">Contractor assignment</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Only the contractor connected to the homeowner-approved estimate can be assigned to this job.
+                      </p>
+                      {assignedContractor ? (
+                        <div className="mt-3 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-800">
+                          Assigned: <span className="font-semibold">{assignedContractor.name}</span>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={readOnly || busy || assigningContractor || !initialPaymentCompleted || !approvedContractorUserId}
+                          onClick={async () => {
+                            if (!approvedContractorUserId) return;
+                            setAssigningContractor(true);
+                            try {
+                              const r = await adminAssignContractor(job.id, Number(approvedContractorUserId));
+                              onMessage(r.ok ? "Approved contractor assigned." : r.message || "Could not assign contractor.");
+                              if (r.ok) await onRefresh();
+                            } finally {
+                              setAssigningContractor(false);
+                            }
+                          }}
+                          className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+                        >
+                          <UserPlus className="h-4 w-4" />
+                          {assigningContractor ? "Assigning…" : initialPaymentCompleted ? "Assign Contractor" : "Awaiting Initial Payment"}
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <select
-                    multiple
-                    size={Math.min(8, Math.max(4, filteredInviteContractors.length || 4))}
-                    className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-                    value={inviteContractorIds.map(String)}
-                    onChange={(e) => {
-                      const ids = Array.from(e.target.selectedOptions).map((option) => Number(option.value));
-                      onInviteContractorIds(ids);
-                      onInviteContractorId(ids.length === 1 ? ids[0] : "");
-                    }}
-                  >
-                    {filteredInviteContractors.map((c) => (
-                      <option key={String(c.id)} value={Number(c.id)}>
-                        {c.name} · {c.trade || "trade?"} · {c.email}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="mt-1 text-xs text-muted-foreground">Search, then select one or more contractors. Selected contractors remain selected while filtering.</p>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    disabled={busy || !inviteContractorIds.length}
-                    onClick={() => void onInviteAndAssign()}
-                    className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
-                  >
-                    <UserPlus className="h-4 w-4" />
-                    {inviteContractorIds.length > 1
-                      ? `Invite ${inviteContractorIds.length} contractors`
-                      : inviteRequestType === "site_visit" ? "Request site visit" : "Request quote"}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void onMatch()}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-border px-4 py-2.5 text-sm font-medium hover:bg-muted disabled:opacity-50"
-                  >
-                    Auto-match
-                  </button>
-                </div>
+                )}
               </div>
             )}
 

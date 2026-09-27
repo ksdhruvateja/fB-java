@@ -1685,8 +1685,7 @@ function serializeProposal(row, viewer) {
     base.contractorNet = row.contractor_net != null ? Number(row.contractor_net) : null;
     base.platformGross = row.platform_gross != null ? Number(row.platform_gross) : null;
     base.processingCost = row.processing_cost != null ? Number(row.processing_cost) : null;
-    base.bidId = row.bid_id != null ? Number(row.bid_id) : null;
-    base.contractorUserId = row.contractor_user_id != null ? Number(row.contractor_user_id) : null;
+    base.bidId = row.bid_id;
     base.lineItems = parseJson(row.line_items);
     base.pricingAdjustments = parseJson(row.pricing_adjustments);
     base.adminDiscount = row.admin_discount != null ? Number(row.admin_discount) : null;
@@ -5710,40 +5709,39 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         return res.status(409).json({ ok: false, code: 'INITIAL_PAYMENT_REQUIRED', message: 'The homeowner must successfully complete the selected initial payment before a contractor can be assigned.' });
       }
 
-      // Assignment is locked to the exact contractor whose estimate the
-      // homeowner approved.
+      // Assignment is only allowed to the contractor attached to the
+      // homeowner-approved proposal. Never let Admin assign a different
+      // invited contractor after approval.
       const { rows: approvedProposalRows } = await pool.query(
-        `SELECT p.id, p.status, p.bid_id, b.contractor_user_id
+        `SELECT p.id, p.bid_id, b.contractor_user_id
            FROM proposals p
-           LEFT JOIN bids b ON b.id = p.bid_id
+           JOIN bids b ON b.id = p.bid_id
           WHERE p.job_id=$1
-          ORDER BY p.created_at DESC, p.id DESC
+            AND p.status IN ('accepted','approved','paid','converted')
+          ORDER BY COALESCE(p.approved_at, p.published_at, p.created_at) DESC, p.id DESC
           LIMIT 1`,
         [jobId]
       );
       const approvedProposal = approvedProposalRows[0];
-      const approvedContractorId = approvedProposal?.contractor_user_id != null
-        ? Number(approvedProposal.contractor_user_id)
-        : null;
-      const proposalStatus = String(approvedProposal?.status || '').toLowerCase();
-      if (!approvedProposal || !['accepted', 'approved', 'paid'].includes(proposalStatus)) {
+      if (!approvedProposal) {
         return res.status(409).json({ ok: false, code: 'APPROVED_PROPOSAL_REQUIRED', message: 'A homeowner-approved contractor estimate is required before assignment.' });
       }
-      if (!approvedContractorId || approvedContractorId !== contractorUserId) {
-        return res.status(409).json({ ok: false, code: 'APPROVED_CONTRACTOR_ONLY', message: 'Only the contractor connected to the homeowner-approved estimate can be assigned.' });
+      if (Number(approvedProposal.contractor_user_id) !== contractorUserId) {
+        return res.status(409).json({ ok: false, code: 'APPROVED_CONTRACTOR_ONLY', message: 'Only the contractor whose estimate was approved by the homeowner can be assigned.' });
       }
-      if (!approvedProposal.bid_id) {
-        return res.status(409).json({ ok: false, code: 'APPROVED_BID_REQUIRED', message: 'The approved estimate must be linked to a contractor bid before assignment.' });
-      }
-
-      const { rows: acceptedInvites } = await pool.query(
-        `SELECT id FROM job_invitations
-           WHERE job_id=$1 AND contractor_user_id=$2 AND status='accepted'
-           LIMIT 1`,
+      const { rows: acceptedInviteRows } = await pool.query(
+        `SELECT id, status FROM job_invitations WHERE job_id=$1 AND contractor_user_id=$2 LIMIT 1`,
         [jobId, contractorUserId]
       );
-      if (!acceptedInvites[0]) {
-        return res.status(409).json({ ok: false, code: 'CONTRACTOR_NOT_ACCEPTED', message: 'The approved contractor must accept the invitation before assignment.' });
+      if (!acceptedInviteRows[0] || String(acceptedInviteRows[0].status || '').toLowerCase() !== 'accepted') {
+        return res.status(409).json({ ok: false, code: 'CONTRACTOR_ACCEPTANCE_REQUIRED', message: 'The approved contractor must accept the invitation before assignment.' });
+      }
+      const { rows: approvedBidRows } = await pool.query(
+        `SELECT id FROM bids WHERE id=$1 AND job_id=$2 AND contractor_user_id=$3 LIMIT 1`,
+        [approvedProposal.bid_id, jobId, contractorUserId]
+      );
+      if (!approvedBidRows[0]) {
+        return res.status(409).json({ ok: false, code: 'APPROVED_BID_REQUIRED', message: 'The approved contractor must have a submitted estimate before assignment.' });
       }
 
       const { rows: contractors } = await pool.query(
@@ -5763,22 +5761,6 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       // The homeowner's quote-approval acknowledgments plus successful initial
       // invoice payment are the gate for assignment. Dispatch itself is a later
       // Admin action after assignment.
-      // Ensure invitation row exists so contractor sees it in their portal
-      await pool.query(
-        `INSERT INTO job_invitations (job_id, contractor_user_id, status, expected_net_low, expected_net_high, invited_by)
-         VALUES ($1,$2,'accepted',$3,$4,$5)
-         ON CONFLICT (job_id, contractor_user_id) DO UPDATE SET
-           status='accepted',
-           responded_at=COALESCE(job_invitations.responded_at, NOW())`,
-        [
-          jobId,
-          contractorUserId,
-          rows[0].estimated_contractor_net_low,
-          rows[0].estimated_contractor_net_high,
-          req.authUser.id,
-        ]
-      );
-
       await pool.query(
         `UPDATE managed_jobs SET assigned_contractor_user_id=$1, updated_at=NOW() WHERE id=$2`,
         [contractorUserId, jobId]
@@ -6524,43 +6506,37 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
-  // Homeowner negotiation support. Create the table lazily because
-  // registerManagedRoutes is intentionally synchronous.
-  let negotiationSchemaReady = false;
-  let negotiationSchemaPromise = null;
-  const ensureNegotiationSchema = async () => {
-    if (negotiationSchemaReady) return;
-    if (!negotiationSchemaPromise) {
-      negotiationSchemaPromise = (async () => {
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS proposal_negotiations (
-            id BIGSERIAL PRIMARY KEY,
-            job_id BIGINT NOT NULL,
-            proposal_id INT NOT NULL,
-            homeowner_user_id INT NOT NULL,
-            requested_amount NUMERIC,
-            requested_scope TEXT,
-            homeowner_message TEXT,
-            admin_amount NUMERIC,
-            admin_message TEXT,
-            action TEXT NOT NULL DEFAULT 'pending',
-            created_at TIMESTAMPTZ DEFAULT NOW(),
-            resolved_at TIMESTAMPTZ
-          )
-        `);
-        await pool.query(`CREATE INDEX IF NOT EXISTS idx_proposal_negotiations_proposal ON proposal_negotiations(proposal_id)`);
-        await pool.query(`CREATE INDEX IF NOT EXISTS idx_proposal_negotiations_job ON proposal_negotiations(job_id)`);
-        negotiationSchemaReady = true;
-      })().catch((e) => {
-        negotiationSchemaPromise = null;
-        throw e;
-      });
+  // Homeowner negotiation support. Keep this table self-healing so existing
+  // FixBridge databases do not return 404/500 when the negotiation UI loads.
+  // registerManagedRoutes is intentionally synchronous. Initialize the optional
+  // negotiation table in the background so route registration itself never hits
+  // a syntax/runtime barrier. Existing databases already have this table.
+  void (async () => {
+    try {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS proposal_negotiations (
+          id BIGSERIAL PRIMARY KEY,
+          job_id BIGINT NOT NULL,
+          proposal_id INT NOT NULL,
+          homeowner_user_id INT NOT NULL,
+          requested_amount NUMERIC,
+          requested_scope TEXT,
+          homeowner_message TEXT,
+          admin_amount NUMERIC,
+          admin_message TEXT,
+          action TEXT NOT NULL DEFAULT 'pending',
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          resolved_at TIMESTAMPTZ
+        )
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_proposal_negotiations_proposal ON proposal_negotiations(proposal_id)`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_proposal_negotiations_job ON proposal_negotiations(job_id)`);
+    } catch (e) {
+      console.warn('[managed negotiations] schema setup warning:', e?.message || e);
     }
-    await negotiationSchemaPromise;
-  };
+  })();
 
   app.get('/api/managed/jobs/:id/negotiations', requireAuth, async (req, res) => {
-      await ensureNegotiationSchema();
     try {
       const jobId = Number(req.params.id);
       if (!Number.isFinite(jobId) || jobId <= 0) {
@@ -6620,7 +6596,6 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
   });
 
   app.post('/api/managed/jobs/:id/negotiate', requireAuth, async (req, res) => {
-      await ensureNegotiationSchema();
     try {
       const jobId = Number(req.params.id);
       if (!Number.isFinite(jobId) || jobId <= 0) {

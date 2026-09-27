@@ -354,6 +354,8 @@ export type Proposal = {
   aiEstimateHigh?: number | null;
   createdAt?: string | null;
   publishedAt?: string | null;
+  bidId?: number | null;
+  contractorUserId?: number | null;
   quoteOptionLabel?: string | null;
   quoteOptionTitle?: string | null;
   optionGroup?: string | null;
@@ -1232,6 +1234,13 @@ export async function adminInviteMany(
   });
 }
 
+export async function adminAssignContractor(jobId: number, contractorUserId: number) {
+  return api<{ ok: boolean; message?: string; job?: ManagedJob }>(`/api/admin/managed/jobs/${jobId}/assign`, {
+    method: "POST",
+    body: JSON.stringify({ contractorUserId }),
+  });
+}
+
 export async function adminQuoteBuilderPreview(
   jobId: number,
   bidId: number,
@@ -1593,9 +1602,12 @@ export type HomeownerInvoicePreview = {
   subtotal: number;
   paid: number;
   amountDue: number;
-  paymentPlanPercent?: 50 | 75 | 100 | null;
+  professionalFeePaid?: number;
   initialPaymentAmount?: number | null;
+  initialPaymentPercent?: 50 | 75 | 100 | null;
   initialPaymentCompleted?: boolean;
+  paymentPlanPercent?: 50 | 75 | 100 | null;
+  
 };
 
 export async function homeownerInvoiceCheckout(invoiceId: number, tipAmount = 0, paymentPercent: 50 | 75 | 100 = 100) {

@@ -58,34 +58,27 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
   );
   const proposal = props[0] || null;
 
-  const { rows: payments } = await pool.query(
-    `SELECT * FROM payments
-      WHERE job_id=$1
-        AND status IN ('succeeded','authorized','paid','captured','completed')
-      ORDER BY created_at ASC`,
+  const { rows: rawPayments } = await pool.query(
+    `SELECT * FROM payments WHERE job_id=$1 AND status IN ('succeeded','authorized','paid','captured','completed') ORDER BY created_at ASC, id ASC`,
     [jobId]
   );
-
-  // Stripe can produce more than one successful ledger row for the same
-  // checkout when webhook/reconciliation paths both run. Deduplicate by the
-  // Stripe session/payment-intent before building the Admin invoice.
-  const seenPaymentKeys = new Set();
-  const uniquePayments = payments.filter((p) => {
+  // Stripe can notify through multiple webhook paths. Treat the Stripe session
+  // or payment-intent as the payment identity so Admin never displays the same
+  // successful checkout twice. Rows without a Stripe identity remain distinct.
+  const paymentMap = new Map();
+  for (const p of rawPayments) {
     const key = p.stripe_session_id
       ? `session:${p.stripe_session_id}`
       : p.stripe_payment_intent
         ? `intent:${p.stripe_payment_intent}`
         : `row:${p.id}`;
-    if (seenPaymentKeys.has(key)) return false;
-    seenPaymentKeys.add(key);
-    return true;
-  });
-
-  const invoicePayments = uniquePayments.filter((p) =>
-    ['invoice_payment', 'invoice_manual'].includes(String(p.payment_type || ''))
-  );
-  const professionalPayments = uniquePayments.filter((p) =>
-    ['pending_professional_fee', 'professional_fee'].includes(String(p.payment_type || ''))
+    const existing = paymentMap.get(key);
+    if (!existing || new Date(p.created_at || 0).getTime() > new Date(existing.created_at || 0).getTime()) {
+      paymentMap.set(key, p);
+    }
+  }
+  const payments = Array.from(paymentMap.values()).sort(
+    (a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
   );
 
   let lineItems = [];
@@ -130,15 +123,21 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
   }
 
   const subtotal = lineItems.reduce((s, i) => s + (Number(i.amount) || 0), 0);
-  const invoiceLedgerPaid = invoicePayments.reduce((s, p) => s + Number(p.service_amount ?? p.amount ?? 0), 0);
-  const visitFeePaid = uniquePayments
-    .filter((p) => p.payment_type === 'dispatch_fee')
-    .reduce((s, p) => s + Number(p.amount || 0), 0);
-  const professionalFeePaid = professionalPayments
-    .reduce((s, p) => s + Number(p.service_amount ?? p.amount ?? 0), 0);
-
-  // Reuse the proposal-converted invoice when one already exists. This keeps
-  // the Admin invoice, homeowner invoice, and payment record on one invoice.
+  const hasVisitCreditLine = lineItems.some((i) => /visit fee credit/i.test(String(i.label || '')));
+  const professionalPayments = payments.filter((p) =>
+    ['pending_professional_fee', 'dispatch_fee'].includes(String(p.payment_type || ''))
+  );
+  const hireProfessionalPaid = professionalPayments.reduce((s, p) => s + Number(p.amount || 0), 0);
+  const initialPayments = payments.filter((p) => {
+    if (!['invoice_payment','invoice_manual'].includes(String(p.payment_type || ''))) return false;
+    const meta = parseJson(p.meta, {}) || {};
+    return String(meta.paymentStage || '').toLowerCase() === 'initial';
+  });
+  const finalPayments = payments.filter((p) => {
+    if (!['invoice_payment','invoice_manual'].includes(String(p.payment_type || ''))) return false;
+    const meta = parseJson(p.meta, {}) || {};
+    return String(meta.paymentStage || '').toLowerCase() !== 'initial';
+  });
   let existingInvoice = null;
   if (proposal?.converted_invoice_id) {
     const { rows } = await pool.query(
@@ -151,22 +150,53 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
   if (!existingInvoice) {
     const { rows } = await pool.query(
       `SELECT id, invoice_number, status, paid, amount_due, total, payment_plan_percent, initial_payment_amount, initial_payment_completed
-         FROM homeowner_invoices
-        WHERE job_id=$1
-        ORDER BY created_at DESC, id DESC
-        LIMIT 1`,
+         FROM homeowner_invoices WHERE job_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1`,
       [jobId]
     );
     existingInvoice = rows[0] || null;
   }
+  const initialPaymentRowsPaid = initialPayments.reduce((s, p) => s + Number(p.amount || 0), 0);
+  const storedInitialAmount = Math.max(0, Number(existingInvoice?.initial_payment_amount || 0));
+  const initialPaymentPaid = existingInvoice?.initial_payment_completed
+    ? Math.max(storedInitialAmount, initialPaymentRowsPaid)
+    : initialPaymentRowsPaid;
+  // A successful Stripe initial-payment row is enough to repair an older invoice
+  // where the boolean flag was not persisted by a previous webhook path.
+  const inferredInitialPaymentCompleted =
+    existingInvoice?.initial_payment_completed === true || initialPaymentPaid > 0;
+  const finalPaymentsPaid = finalPayments.reduce((s, p) => s + Number(p.amount || 0), 0);
+  const totalPaymentsReceived = Math.max(0, Math.round((hireProfessionalPaid + initialPaymentPaid + finalPaymentsPaid) * 100) / 100);
+  if (existingInvoice?.id && inferredInitialPaymentCompleted && existingInvoice.initial_payment_completed !== true) {
+    try {
+      await pool.query(
+        `UPDATE homeowner_invoices
+            SET initial_payment_completed=true,
+                initial_payment_amount=CASE
+                  WHEN COALESCE(initial_payment_amount,0) > 0 THEN initial_payment_amount
+                  ELSE $1
+                END,
+                updated_at=NOW()
+          WHERE id=$2`,
+        [initialPaymentPaid, existingInvoice.id]
+      );
+      existingInvoice.initial_payment_completed = true;
+      existingInvoice.initial_payment_amount = existingInvoice.initial_payment_amount || initialPaymentPaid;
+    } catch (repairError) {
+      console.warn('[invoice] initial payment flag repair:', repairError?.message || repairError);
+    }
+  }
+  const invoiceTotal = Math.max(0, Number(existingInvoice?.total ?? subtotal) || 0);
+  const paid = Math.min(invoiceTotal, totalPaymentsReceived);
+  const visitFeePaid = hireProfessionalPaid;
+  const amountDue = Math.max(0, Math.round((invoiceTotal - paid) * 100) / 100);
 
-  // homeowner_invoices.paid is the authoritative invoice settlement value.
-  // Do not replace it with the raw job payment sum: that sum can contain the
-  // separate Hire-a-Professional credit and duplicate Stripe ledger rows.
-  const resolvedPaid = existingInvoice?.paid != null
-    ? Math.max(0, Number(existingInvoice.paid) || 0)
-    : Math.max(0, invoiceLedgerPaid);
-  const resolvedAmountDue = Math.max(0, Math.round((subtotal - resolvedPaid) * 100) / 100);
+  let resolvedPaid = paid;
+  // Successful payment rows are authoritative for the Admin breakdown. The
+  // stored invoice.paid value is only a fallback when no payment rows exist.
+  if (!payments.length && existingInvoice?.paid != null) {
+    resolvedPaid = Math.max(resolvedPaid, Number(existingInvoice.paid) || 0);
+  }
+  const resolvedAmountDue = Math.max(0, Math.round((invoiceTotal - resolvedPaid) * 100) / 100);
 
   let propertyAddr = null;
   if (job.property_id) {
@@ -195,18 +225,18 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
       jobCategory: job.category,
       lineItems,
       subtotal,
+      total: invoiceTotal,
       paid: resolvedPaid,
       visitFeePaid,
-      professionalFeePaid,
-      initialPaymentAmount: existingInvoice?.initial_payment_amount != null
-        ? Number(existingInvoice.initial_payment_amount)
-        : null,
-      initialPaymentPercent: existingInvoice?.payment_plan_percent != null
-        ? Number(existingInvoice.payment_plan_percent)
-        : null,
-      initialPaymentCompleted: existingInvoice?.initial_payment_completed === true,
+      hireProfessionalPaid,
+      initialPaymentPaid,
+      finalPaymentsPaid,
+      totalPaymentsReceived: Math.min(subtotal, totalPaymentsReceived),
+      paymentPlanPercent: existingInvoice?.payment_plan_percent != null ? Number(existingInvoice.payment_plan_percent) : null,
+      initialPaymentAmount: existingInvoice?.initial_payment_amount != null ? Number(existingInvoice.initial_payment_amount) : null,
+      initialPaymentCompleted: inferredInitialPaymentCompleted,
       amountDue: resolvedAmountDue,
-      payments: uniquePayments.map((p) => ({
+      payments: payments.map((p) => ({
         type: p.payment_type,
         amount: Number(p.amount),
         status: p.status,
@@ -262,18 +292,8 @@ export function renderInvoiceHtml(invoice) {
     ${invoice.visitFeePaid > 0 && !invoice.lineItems.some((i) => /visit fee credit/i.test(String(i.label || '')))
       ? `<tr><td style="padding:6px 0;color:#666;">Visit fee paid</td><td style="text-align:right;color:#0d9488;">−${money(invoice.visitFeePaid)}</td></tr>`
       : ''}
-    ${invoice.initialPaymentCompleted && Number(invoice.initialPaymentAmount || 0) > 0
-      ? `<tr><td style="padding:6px 0;color:#666;">Initial payment (${escapeHtml(String(invoice.initialPaymentPercent ?? 'selected'))}%)</td><td style="text-align:right;color:#0d9488;">−${money(invoice.initialPaymentAmount)}</td></tr>`
-      : invoice.paid > 0
-        ? `<tr><td style="padding:6px 0;color:#666;">Payments received</td><td style="text-align:right;color:#0d9488;">−${money(invoice.paid)}</td></tr>`
-        : ''}
-    ${Number(invoice.professionalFeePaid || 0) > 0
-      ? `<tr><td style="padding:6px 0;color:#0d7490;">Hire a Professional already paid</td><td style="text-align:right;color:#0d7490;">−${money(invoice.professionalFeePaid)}</td></tr>`
-      : ''}
-    <tr><td style="padding:12px 0;font-size:18px;font-weight:700;">Remaining service balance</td><td style="text-align:right;font-size:18px;font-weight:700;color:${brand.primaryColor};">${money(invoice.amountDue)}</td></tr>
-    ${Number(invoice.professionalFeePaid || 0) > 0
-      ? `<tr><td style="padding:6px 0;color:#666;">Final settlement after work</td><td style="text-align:right;font-weight:700;">${money(Math.max(0, Number(invoice.amountDue || 0) - Number(invoice.professionalFeePaid || 0)))}</td></tr>`
-      : ''}
+    ${invoice.paid > 0 ? `<tr><td style="padding:6px 0;color:#666;">Payments received</td><td style="text-align:right;color:#0d9488;">−${money(invoice.paid)}</td></tr>` : ''}
+    <tr><td style="padding:12px 0;font-size:18px;font-weight:700;">Amount due</td><td style="text-align:right;font-size:18px;font-weight:700;color:${brand.primaryColor};">${money(invoice.amountDue)}</td></tr>
   </table>
   ${invoice.customNote ? `<p style="margin-top:24px;padding:12px;background:#fff7ed;border-radius:8px;font-size:13px;"><strong>Note:</strong> ${escapeHtml(invoice.customNote)}</p>` : ''}`;
 
@@ -290,10 +310,8 @@ export function renderInvoiceHtml(invoice) {
         { label: 'Job', value: invoice.bookingId },
         { label: 'Service', value: invoice.jobTitle || invoice.jobCategory },
         { label: 'Invoice total', value: formatCurrency(invoice.subtotal) },
-        { label: 'Initial payment', value: invoice.initialPaymentCompleted ? formatCurrency(invoice.initialPaymentAmount || 0) : 'Not paid' },
-        { label: 'Hire a Professional credit', value: invoice.professionalFeePaid ? formatCurrency(invoice.professionalFeePaid) : formatCurrency(0) },
-        { label: 'Service balance', value: formatCurrency(invoice.amountDue) },
-        { label: 'Final settlement after work', value: formatCurrency(Math.max(0, Number(invoice.amountDue || 0) - Number(invoice.professionalFeePaid || 0))) },
+        { label: 'Amount paid', value: formatCurrency(invoice.paid) },
+        { label: 'Balance due', value: formatCurrency(invoice.amountDue) },
         { label: 'Due date', value: formatDate(invoice.dueDate) },
       ],
     },

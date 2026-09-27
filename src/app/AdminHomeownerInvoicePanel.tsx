@@ -137,17 +137,55 @@ export default function AdminHomeownerInvoicePanel({
           <span>Total</span>
           <span className="shrink-0 tabular-nums">{formatMoney(invoice.subtotal)}</span>
         </li>
-        {invoice.paid > 0 && (
+        {invoice.initialPaymentCompleted && (invoice.initialPaymentAmount ?? 0) > 0 ? (
+          <li className="flex justify-between gap-3 px-3 py-2 text-teal-700 dark:text-teal-400">
+            <span>Initial payment ({invoice.initialPaymentPercent ?? invoice.paymentPlanPercent ?? "—"}%)</span>
+            <span className="tabular-nums">−{formatMoney(invoice.initialPaymentAmount ?? 0)}</span>
+          </li>
+        ) : invoice.paid > 0 ? (
           <li className="flex justify-between gap-3 px-3 py-2 text-teal-700 dark:text-teal-400">
             <span>Payments received</span>
             <span className="tabular-nums">−{formatMoney(invoice.paid)}</span>
           </li>
-        )}
+        ) : null}
+        {(invoice.professionalFeePaid ?? 0) > 0 ? (
+          <li className="flex justify-between gap-3 px-3 py-2 text-sky-700 dark:text-sky-400">
+            <span>Hire a Professional already paid</span>
+            <span className="tabular-nums">−{formatMoney(invoice.professionalFeePaid ?? 0)}</span>
+          </li>
+        ) : null}
         <li className="flex justify-between gap-3 border-t border-border px-3 py-3 font-bold">
-          <span>Amount due</span>
+          <span>Remaining service balance</span>
           <span className="shrink-0 tabular-nums text-[#FF4D1C]">{formatMoney(invoice.amountDue)}</span>
         </li>
       </ul>
+
+      <div className="rounded-lg border border-border bg-muted/20 px-3 py-3 text-xs">
+        {invoice.initialPaymentCompleted ? (
+          <>
+            <p className="font-semibold text-teal-700 dark:text-teal-400">
+              Initial payment confirmed — {invoice.initialPaymentPercent ?? invoice.paymentPlanPercent ?? "selected"}%.
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              Contractor assignment may proceed. The remaining service balance becomes payable after work is completed.
+            </p>
+            {(invoice.professionalFeePaid ?? 0) > 0 ? (
+              <>
+                <p className="mt-1 text-muted-foreground">
+                  Hire a Professional ({formatMoney(invoice.professionalFeePaid ?? 0)}) is a separate final-settlement credit and is not deducted from the initial-payment calculation.
+                </p>
+                <p className="mt-1 font-semibold text-foreground">
+                  Final settlement after work: {formatMoney(Math.max(0, Number(invoice.amountDue || 0) - Number(invoice.professionalFeePaid || 0)))}
+                </p>
+              </>
+            ) : null}
+          </>
+        ) : (
+          <p className="text-muted-foreground">
+            Waiting for the homeowner to successfully complete the selected 50% / 75% / 100% initial payment.
+          </p>
+        )}
+      </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="grid gap-1 text-sm">
