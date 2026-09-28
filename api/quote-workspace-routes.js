@@ -191,7 +191,7 @@ function serializeQuoteDocument(row) {
     taxAmount: totals.taxAmount,
     subtotal: totals.subtotal,
     total: totals.total,
-    retailAmount: Number(row.retail_amount) || totals.total,
+    retailAmount: totals.total,
     depositAmount: row.deposit_amount != null ? Number(row.deposit_amount) : null,
     customerNotes:
       row.customer_notes ||

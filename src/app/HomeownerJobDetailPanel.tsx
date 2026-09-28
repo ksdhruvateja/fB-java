@@ -857,9 +857,6 @@ export default function HomeownerJobDetailPanel({
               {proposal.warranty}
             </p>
           ) : null}
-          {proposal.exclusions ? (
-            <p className="mt-2 text-xs text-muted-foreground">{proposal.exclusions}</p>
-          ) : null}
           <div className="mt-4">
             {!proposalApproved && proposal ? (
               <QuoteNegotiationPanel

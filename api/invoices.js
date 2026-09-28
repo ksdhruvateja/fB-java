@@ -166,12 +166,19 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
   const resolvedPaid = existingInvoice?.paid != null
     ? Math.max(0, Number(existingInvoice.paid) || 0)
     : Math.max(0, invoiceLedgerPaid + professionalFeePaid);
+  const calculatedAmountDue = Math.max(0, Math.round((subtotal - resolvedPaid - professionalFeePaid) * 100) / 100);
   const storedAmountDue = existingInvoice?.amount_due != null
     ? Math.max(0, Number(existingInvoice.amount_due) || 0)
     : null;
-  const resolvedAmountDue = storedAmountDue != null
-    ? storedAmountDue
-    : Math.max(0, Math.round((subtotal - resolvedPaid) * 100) / 100);
+  // Reconcile legacy/stale invoice balances whenever the Admin or homeowner
+  // opens the invoice. The $125 professional fee is a real payment credit.
+  const resolvedAmountDue = calculatedAmountDue;
+  if (existingInvoice && storedAmountDue != null && Math.abs(storedAmountDue - resolvedAmountDue) > 0.009) {
+    await pool.query(
+      `UPDATE homeowner_invoices SET amount_due=$1, status=$2, updated_at=NOW() WHERE id=$3`,
+      [resolvedAmountDue, resolvedAmountDue <= 0.009 ? 'paid' : resolvedPaid + professionalFeePaid > 0 ? 'partially_paid' : 'due', existingInvoice.id]
+    );
+  }
 
   let propertyAddr = null;
   if (job.property_id) {
@@ -294,7 +301,7 @@ export function renderInvoiceHtml(invoice) {
       : ''}
     <tr><td style="padding:12px 0;font-size:18px;font-weight:700;">Remaining service balance</td><td style="text-align:right;font-size:18px;font-weight:700;color:${brand.primaryColor};">${money(invoice.amountDue)}</td></tr>
     ${Number(invoice.professionalFeePaid || 0) > 0
-      ? `<tr><td style="padding:6px 0;color:#666;">Final settlement after work</td><td style="text-align:right;font-weight:700;">${money(Math.max(0, Number(invoice.amountDue || 0) - Number(invoice.professionalFeePaid || 0)))}</td></tr>`
+      ? `<tr><td style="padding:6px 0;color:#666;">Final settlement after work</td><td style="text-align:right;font-weight:700;">${money(Number(invoice.amountDue || 0))}</td></tr>`
       : ''}
   </table>
   ${invoice.customNote ? `<p style="margin-top:24px;padding:12px;background:#fff7ed;border-radius:8px;font-size:13px;"><strong>Note:</strong> ${escapeHtml(invoice.customNote)}</p>` : ''}`;
@@ -315,7 +322,7 @@ export function renderInvoiceHtml(invoice) {
         { label: 'Initial payment', value: invoice.initialPaymentCompleted ? formatCurrency(invoice.initialPaymentAmount || 0) : 'Not paid' },
         { label: 'Hire a Professional credit', value: invoice.professionalFeePaid ? formatCurrency(invoice.professionalFeePaid) : formatCurrency(0) },
         { label: 'Service balance', value: formatCurrency(invoice.amountDue) },
-        { label: 'Final settlement after work', value: formatCurrency(Math.max(0, Number(invoice.amountDue || 0) - Number(invoice.professionalFeePaid || 0))) },
+        { label: 'Final settlement after work', value: formatCurrency(Number(invoice.amountDue || 0)) },
         { label: 'Due date', value: formatDate(invoice.dueDate) },
       ],
     },
