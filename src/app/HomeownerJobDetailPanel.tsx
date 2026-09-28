@@ -251,7 +251,8 @@ export default function HomeownerJobDetailPanel({
     ["proposal_sent", "awaiting_customer_approval", "approved", "finalized", "negotiation_pending"].includes(String(job.status));
   const invoiceStatus = String(job.invoiceStatus || "").toLowerCase();
   const invoiceIsPaid = invoiceStatus === "paid" || (job.invoiceId != null && Number(job.invoiceAmountDue || 0) <= 0);
-  const invoicePaidAmount = Number(job.invoicePaid ?? ((job.invoiceTotal ?? 0) - (job.invoiceAmountDue ?? 0)) ?? 0);
+  const invoiceUpfrontPaid = Math.max(0, Number(job.invoiceUpfrontPaid || 0));
+  const invoicePaidAmount = Math.max(0, Number(job.invoicePaid ?? ((job.invoiceTotal ?? 0) - (job.invoiceAmountDue ?? 0)) ?? 0));
   const showInvoiceSection = job.invoiceId != null;
   const proposalStatus = String(proposal?.status || "").toLowerCase();
   const proposalApproved =
@@ -1073,16 +1074,16 @@ export default function HomeownerJobDetailPanel({
                 <span>Total</span>
                 <span>{formatMoney(Number(job.invoiceTotal || 0))}</span>
               </div>
-              {Number(job.invoiceProfessionalFeePaid || 0) > 0 ? (
+              {invoiceUpfrontPaid > 0 ? (
                 <div className="mt-2 flex justify-between tabular-nums text-sky-700 dark:text-sky-400">
                   <span>Already Paid / Upfront Service Fee</span>
-                  <span className="font-medium">−{formatMoney(Number(job.invoiceProfessionalFeePaid || 0))}</span>
+                  <span className="font-medium">−{formatMoney(invoiceUpfrontPaid)}</span>
                 </div>
               ) : null}
-              {initialPaymentCompleted && Number(job.invoiceInitialPaymentAmount || 0) > 0 ? (
+              {Number(job.invoiceInitialPaymentAmount || 0) > 0 ? (
                 <div className="mt-2 flex justify-between tabular-nums text-teal-700 dark:text-teal-400">
                   <span>Initial Payment ({job.invoicePaymentPlanPercent ?? "—"}%)</span>
-                  <span className="font-medium">−{formatMoney(Number(job.invoiceInitialPaymentAmount || 0))}</span>
+                  <span className="font-medium">{initialPaymentCompleted ? `−${formatMoney(Number(job.invoiceInitialPaymentAmount || 0))}` : formatMoney(Number(job.invoiceInitialPaymentAmount || 0))}</span>
                 </div>
               ) : null}
               <div className="mt-2 flex justify-between tabular-nums">

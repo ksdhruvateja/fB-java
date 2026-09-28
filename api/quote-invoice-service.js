@@ -144,6 +144,43 @@ export async function convertProposalToInvoice(client, {
     const { rows: existing } = await client.query(`SELECT * FROM homeowner_invoices WHERE id=$1`, [
       row.converted_invoice_id,
     ]);
+    const existingInvoice = existing[0] || null;
+    if (existingInvoice) {
+      // Repair invoices created before the upfront-credit migration. The $125
+      // professional/service fee is a payment credit, not a negotiation
+      // adjustment, and must be included in the canonical invoice balance.
+      const { rows: ledgerRows } = await client.query(
+        `SELECT COALESCE(SUM(
+           CASE
+             WHEN payment_type IN ('pending_professional_fee','professional_fee','dispatch_fee')
+               THEN COALESCE(service_amount, amount, 0)
+             WHEN payment_type IN ('invoice_payment','invoice_manual')
+               AND (meta->>'invoiceId') = $2
+               THEN COALESCE(service_amount, amount, 0)
+             ELSE 0
+           END
+         ),0) AS paid
+           FROM payments
+          WHERE job_id=$1
+            AND status IN ('succeeded','authorized','paid','captured','completed')`,
+        [row.job_id, String(existingInvoice.id)]
+      );
+      const ledgerPaid = round2(ledgerRows[0]?.paid || 0);
+      const total = round2(existingInvoice.total || existingInvoice.amount_due || 0);
+      const repairedPaid = Math.min(total, Math.max(round2(existingInvoice.paid || 0), ledgerPaid));
+      const repairedDue = Math.max(0, round2(total - repairedPaid));
+      const repairedStatus = repairedDue <= 0.009 ? 'paid' : repairedPaid > 0 ? 'partially_paid' : 'due';
+      if (Math.abs(Number(existingInvoice.paid || 0) - repairedPaid) > 0.009 || Math.abs(Number(existingInvoice.amount_due || 0) - repairedDue) > 0.009) {
+        const { rows: repaired } = await client.query(
+          `UPDATE homeowner_invoices
+              SET paid=$1, amount_due=$2, status=$3, updated_at=NOW()
+            WHERE id=$4
+            RETURNING *`,
+          [repairedPaid, repairedDue, repairedStatus, existingInvoice.id]
+        );
+        existing[0] = repaired[0] || existingInvoice;
+      }
+    }
     return {
       ok: true,
       alreadyConverted: true,
@@ -235,13 +272,24 @@ export async function convertProposalToInvoice(client, {
   const invoiceNumber = ensureFbiNumber(quote.id);
   const versionKey = quote.versionNumber || 1;
 
+  // Preserve every successful upfront/service payment that belongs to this
+  // managed job. The $125 professional/service fee is a real payment credit,
+  // not a discount and must survive quote negotiation and invoice creation.
   const { rows: priorPaymentRows } = await client.query(
-    `SELECT COALESCE(SUM(amount),0) AS paid
+    `SELECT COALESCE(SUM(
+       CASE
+         WHEN payment_type IN ('pending_professional_fee','professional_fee','dispatch_fee')
+           THEN COALESCE(service_amount, amount, 0)
+         WHEN payment_type IN ('invoice_payment','invoice_manual')
+           AND (meta->>'invoiceId') = $2
+           THEN COALESCE(service_amount, amount, 0)
+         ELSE 0
+       END
+     ),0) AS paid
        FROM payments
       WHERE job_id=$1
-        AND payment_type='dispatch_fee'
         AND status IN ('succeeded','authorized','paid','captured','completed')`,
-    [quote.jobId]
+    [quote.jobId, String(ensureFbiNumber(quote.id))]
   );
   const priorPaid = round2(priorPaymentRows[0]?.paid || 0);
   const invoiceTotal = round2(invoiceTotals.total);

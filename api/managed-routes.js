@@ -320,7 +320,10 @@ async function attachAuthoritativeInvoices(pool, rows) {
     ({ rows: invoices } = await pool.query(
       `SELECT DISTINCT ON (hi.job_id)
           hi.job_id, hi.id, hi.invoice_number, hi.status,
-          hi.amount_due, hi.paid, hi.total, hi.line_items, hi.subtotal, hi.original_quote_total, hi.negotiation_adjustment, hi.final_agreed_total, hi.negotiation_details, hi.payment_plan_percent, hi.initial_payment_amount, hi.initial_payment_completed, p_inv.customer_line_items AS proposal_customer_line_items, hi.created_at
+          hi.amount_due, hi.paid, hi.total, hi.line_items, hi.subtotal, hi.original_quote_total, hi.negotiation_adjustment, hi.final_agreed_total, hi.negotiation_details, hi.payment_plan_percent, hi.initial_payment_amount, hi.initial_payment_completed,
+          COALESCE((SELECT SUM(CASE WHEN p.payment_type IN ('pending_professional_fee','professional_fee','dispatch_fee') THEN COALESCE(p.service_amount,p.amount,0) ELSE 0 END) FROM payments p WHERE p.job_id=hi.job_id AND p.status IN ('succeeded','authorized','paid','captured','completed')),0) AS upfront_payment_paid,
+          COALESCE((SELECT SUM(CASE WHEN p.payment_type IN ('pending_professional_fee','professional_fee','dispatch_fee') THEN COALESCE(p.service_amount,p.amount,0) WHEN p.payment_type IN ('invoice_payment','invoice_manual') AND (p.meta->>'invoiceId')=hi.id::text THEN COALESCE(p.service_amount,p.amount,0) ELSE 0 END) FROM payments p WHERE p.job_id=hi.job_id AND p.status IN ('succeeded','authorized','paid','captured','completed')),0) AS ledger_paid,
+          p_inv.customer_line_items AS proposal_customer_line_items, hi.created_at
        FROM homeowner_invoices hi
        LEFT JOIN proposals p_inv ON p_inv.converted_invoice_id = hi.id
        WHERE hi.job_id = ANY($1::bigint[])
@@ -365,8 +368,9 @@ async function attachAuthoritativeInvoices(pool, rows) {
       linked_invoice_id: inv.id,
       linked_invoice_number: inv.invoice_number,
       linked_invoice_status: inv.status,
-      linked_invoice_amount_due: inv.amount_due,
-      linked_invoice_paid: inv.paid,
+      linked_invoice_amount_due: Math.max(0, Number(inv.total || 0) - Math.min(Number(inv.total || 0), Math.max(Number(inv.paid || 0), Number(inv.ledger_paid || 0)))),
+      linked_invoice_upfront_paid: Number(inv.upfront_payment_paid || 0),
+      linked_invoice_paid: Math.min(Number(inv.total || 0), Math.max(Number(inv.paid || 0), Number(inv.ledger_paid || 0))),
       linked_invoice_total: inv.total,
       linked_invoice_line_items: effectiveInvoiceLines,
       linked_invoice_subtotal: inv.subtotal,
@@ -704,6 +708,8 @@ function serializeJob(row, viewer) {
         row.linked_invoice_amount_due != null ? Number(row.linked_invoice_amount_due) : null;
       base.invoicePaid =
         row.linked_invoice_paid != null ? Number(row.linked_invoice_paid) : null;
+      base.invoiceUpfrontPaid =
+        row.linked_invoice_upfront_paid != null ? Number(row.linked_invoice_upfront_paid) : 0;
       base.invoiceTotal =
         row.linked_invoice_total != null ? Number(row.linked_invoice_total) : null;
       base.invoiceLineItems = parseJson(row.linked_invoice_line_items, []) || [];
@@ -1728,6 +1734,8 @@ function serializeProposal(row, viewer) {
         row.linked_invoice_amount_due != null ? Number(row.linked_invoice_amount_due) : null;
       base.invoicePaid =
         row.linked_invoice_paid != null ? Number(row.linked_invoice_paid) : null;
+      base.invoiceUpfrontPaid =
+        row.linked_invoice_upfront_paid != null ? Number(row.linked_invoice_upfront_paid) : 0;
       base.invoiceTotal =
         row.linked_invoice_total != null ? Number(row.linked_invoice_total) : null;
     }
