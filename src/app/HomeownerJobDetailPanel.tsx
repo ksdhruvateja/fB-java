@@ -28,8 +28,6 @@ import QuoteNegotiationPanel from "./QuoteNegotiationPanel";
 import { fetchJobDispute } from "./disputesApi";
 import DeleteServiceRequestMenu from "./DeleteServiceRequestMenu";
 import { homeownerCancelledLabel } from "./jobCancellation";
-import { useProFeature } from "./ProFeatureProvider";
-import { requestQuoteSecondOpinion, type QuoteSecondOpinion } from "./homecareProApi";
 import { setPreferredProvider } from "./homeAssistantApi";
 import {
   arrivalWindowLabel,
@@ -38,7 +36,7 @@ import {
   TIME_SLOT_LABELS,
 } from "./ServiceTrackingCard";
 import { useIsMobile } from "./components/ui/use-mobile";
-import { CalendarDays, Clock, HardHat, Loader2, MapPin, Pencil, Phone, Save, Sparkles } from "lucide-react";
+import { CalendarDays, Clock, HardHat, Loader2, MapPin, Pencil, Phone, Save } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
 const TIME_WINDOW_OPTIONS = [
@@ -173,9 +171,6 @@ export default function HomeownerJobDetailPanel({
   const [description, setDescription] = useState(job.description || "");
   const [contactPhone, setContactPhone] = useState(job.contactPhone || "");
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
-  const { isPro, requestFeature } = useProFeature();
-  const [secondOpinion, setSecondOpinion] = useState<QuoteSecondOpinion | null>(null);
-  const [secondOpinionBusy, setSecondOpinionBusy] = useState(false);
   const [quoteConsents, setQuoteConsents] = useState<ConsentState>({
     HOMEOWNER_SERVICE_AGREEMENT: false,
     VISIT_CANCELLATION_POLICY: false,
@@ -259,7 +254,10 @@ export default function HomeownerJobDetailPanel({
   const invoicePaidAmount = Number(job.invoicePaid ?? ((job.invoiceTotal ?? 0) - (job.invoiceAmountDue ?? 0)) ?? 0);
   const showInvoiceSection = job.invoiceId != null;
   const proposalStatus = String(proposal?.status || "").toLowerCase();
-  const proposalApproved = ["approved", "accepted", "converted", "paid"].includes(proposalStatus);
+  const proposalApproved =
+    ["approved", "scheduled", "contractor_en_route", "work_started", "work_completed", "customer_review_pending", "admin_review_pending", "payout_pending", "paid_out", "closed"].includes(
+      String(job.status || "")
+    );
   const proposalFinalized = proposalStatus === "finalized";
   // The 50/75/100 selector is a one-time initial-payment step. It must never
   // render again after the backend confirms the initial Stripe payment. The
@@ -910,37 +908,6 @@ export default function HomeownerJobDetailPanel({
                 </button>
               </>
             )}
-            <button
-              type="button"
-              className="inline-flex items-center gap-2 rounded-xl border border-border px-4 py-2.5 text-sm font-semibold hover:bg-muted disabled:opacity-60"
-              disabled={secondOpinionBusy || busy}
-              onClick={() => {
-                if (!requestFeature("quote_second_opinion", "job-quote")) return;
-                setSecondOpinionBusy(true);
-                void requestQuoteSecondOpinion(job.id).then((r) => {
-                  setSecondOpinionBusy(false);
-                  if (!r.ok) onError(r.message || "Could not get AI second opinion.");
-                  else if (r.opinion) setSecondOpinion(r.opinion);
-                });
-              }}
-            >
-              {secondOpinionBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              Get AI Second Opinion
-            </button>
-            {secondOpinion ? (
-              <div className="mt-3 w-full space-y-2 rounded-xl border border-border bg-muted/20 p-3 text-sm">
-                {secondOpinion.summary ? <p><span className="font-semibold">Summary: </span>{secondOpinion.summary}</p> : null}
-                {secondOpinion.scopeReview ? <p><span className="font-semibold">Scope review: </span>{secondOpinion.scopeReview}</p> : null}
-                {secondOpinion.pricingContext ? <p><span className="font-semibold">Pricing context: </span>{secondOpinion.pricingContext}</p> : null}
-                {secondOpinion.recommendation ? <p><span className="font-semibold">Recommendation: </span>{secondOpinion.recommendation}</p> : null}
-                <p className="text-xs text-muted-foreground">{secondOpinion.disclaimer}</p>
-              </div>
-            ) : null}
-            {proposalApproved && ["approved", "scheduled", "contractor_en_route", "work_started", "work_completed", "customer_review_pending", "payout_pending", "paid_out", "closed"].includes(String(job.status)) && (
-              <p className="text-sm text-muted-foreground">
-                Quote approved. Your selected initial payment must be successfully confirmed before dispatch can begin.
-              </p>
-            )}
           </div>
         </DetailSection>
         </div>
@@ -1075,6 +1042,25 @@ export default function HomeownerJobDetailPanel({
       {showInvoiceSection ? (
         <div id={`job-invoice-section-${job.id}`}>
           <DetailSection mobile={isMobile} title="Invoice payment" defaultOpen badge={invoiceIsPaid ? "Paid" : "Due"}>
+            {proposalApproved ? (
+              <div className="mb-3 rounded-xl border border-border bg-muted/20 p-4 text-sm">
+                <p className="font-semibold">Estimate & negotiation</p>
+                <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
+                  <div>
+                    <p className="text-muted-foreground">Original</p>
+                    <p className="mt-1 font-semibold tabular-nums">{formatMoney(Number(job.invoiceOriginalEstimateTotal ?? job.invoiceTotal ?? 0))}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Negotiation</p>
+                    <p className="mt-1 font-semibold tabular-nums">{formatMoney(Number(job.invoiceNegotiationAdjustment ?? 0))}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Final</p>
+                    <p className="mt-1 font-bold tabular-nums">{formatMoney(Number(job.invoiceTotal ?? 0))}</p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             <div className="mb-4 rounded-xl border border-border bg-background p-4 text-sm">
               {job.invoiceLineItems?.length ? (
                 <div className="space-y-2">
@@ -1090,8 +1076,20 @@ export default function HomeownerJobDetailPanel({
                 <span>Total</span>
                 <span>{formatMoney(Number(job.invoiceTotal || 0))}</span>
               </div>
+              {Number(job.invoiceProfessionalFeePaid || 0) > 0 ? (
+                <div className="mt-2 flex justify-between tabular-nums text-sky-700 dark:text-sky-400">
+                  <span>Already Paid / Upfront Service Fee</span>
+                  <span className="font-medium">−{formatMoney(Number(job.invoiceProfessionalFeePaid || 0))}</span>
+                </div>
+              ) : null}
+              {initialPaymentCompleted && Number(job.invoiceInitialPaymentAmount || 0) > 0 ? (
+                <div className="mt-2 flex justify-between tabular-nums text-teal-700 dark:text-teal-400">
+                  <span>Initial Payment ({job.invoicePaymentPlanPercent ?? "—"}%)</span>
+                  <span className="font-medium">−{formatMoney(Number(job.invoiceInitialPaymentAmount || 0))}</span>
+                </div>
+              ) : null}
               <div className="mt-2 flex justify-between tabular-nums">
-                <span className="text-muted-foreground">Payments received</span>
+                <span className="text-muted-foreground">Total paid</span>
                 <span className="font-medium text-teal-600">−{formatMoney(invoicePaidAmount)}</span>
               </div>
               <div className="mt-2 flex justify-between tabular-nums font-semibold">
@@ -1173,7 +1171,8 @@ export default function HomeownerJobDetailPanel({
               </div>
             ) : showRemainingPayment ? (
               <div className="space-y-3 rounded-lg border border-primary/20 bg-primary/5 p-4">
-                <p className="text-sm text-muted-foreground">Work is complete. Pay the remaining balance to finish payment and release the job for payout.</p>
+                <p className="text-sm font-semibold">Work Status: COMPLETED</p>
+                <p className="text-sm text-muted-foreground">Final payment is now available. Pay the remaining balance to finish payment and release the job for payout.</p>
                 <p className="tabular-nums text-2xl font-semibold">{formatMoney(Number(job.invoiceAmountDue || 0))}</p>
                 <HomeownerTipCheckout
                   invoiceTotal={Number(job.invoiceTotal ?? 0)}

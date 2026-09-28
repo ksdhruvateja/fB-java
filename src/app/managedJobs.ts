@@ -179,7 +179,15 @@ export type ManagedJob = {
   invoiceInitialPaymentAmount?: number | null;
   invoiceInitialPaymentCompleted?: boolean;
   invoicePaid?: number | null;
+  invoiceProfessionalFeePaid?: number | null;
   invoiceTotal?: number | null;
+  invoiceOriginalEstimateTotal?: number | null;
+  invoiceNegotiationAdjustment?: number | null;
+  invoiceEstimateBreakdown?: {
+    originalTotal: number;
+    negotiationAdjustment: number;
+    finalTotal: number;
+  } | null;
   activeProposalId?: number | null;
   completionReport?: Record<string, unknown> | null;
   customerConfirmedAt?: string | null;
@@ -1600,8 +1608,16 @@ export type HomeownerInvoicePreview = {
   jobTitle?: string;
   lineItems: Array<{ label: string; amount: number; note?: string }>;
   subtotal: number;
+  total?: number;
   paid: number;
   amountDue: number;
+  originalEstimateTotal?: number | null;
+  negotiationAdjustment?: number | null;
+  estimateBreakdown?: {
+    originalTotal: number;
+    negotiationAdjustment: number;
+    finalTotal: number;
+  } | null;
   professionalFeePaid?: number;
   initialPaymentAmount?: number | null;
   initialPaymentPercent?: 50 | 75 | 100 | null;

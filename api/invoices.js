@@ -142,7 +142,7 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
   let existingInvoice = null;
   if (proposal?.converted_invoice_id) {
     const { rows } = await pool.query(
-      `SELECT id, invoice_number, status, paid, amount_due, total, payment_plan_percent, initial_payment_amount, initial_payment_completed
+      `SELECT id, invoice_number, status, paid, amount_due, total, payment_plan_percent, initial_payment_amount, initial_payment_completed, document_snapshot
          FROM homeowner_invoices WHERE id=$1 LIMIT 1`,
       [proposal.converted_invoice_id]
     );
@@ -150,7 +150,7 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
   }
   if (!existingInvoice) {
     const { rows } = await pool.query(
-      `SELECT id, invoice_number, status, paid, amount_due, total, payment_plan_percent, initial_payment_amount, initial_payment_completed
+      `SELECT id, invoice_number, status, paid, amount_due, total, payment_plan_percent, initial_payment_amount, initial_payment_completed, document_snapshot
          FROM homeowner_invoices
         WHERE job_id=$1
         ORDER BY created_at DESC, id DESC
@@ -165,8 +165,13 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
   // separate Hire-a-Professional credit and duplicate Stripe ledger rows.
   const resolvedPaid = existingInvoice?.paid != null
     ? Math.max(0, Number(existingInvoice.paid) || 0)
-    : Math.max(0, invoiceLedgerPaid);
-  const resolvedAmountDue = Math.max(0, Math.round((subtotal - resolvedPaid) * 100) / 100);
+    : Math.max(0, invoiceLedgerPaid + professionalFeePaid);
+  const storedAmountDue = existingInvoice?.amount_due != null
+    ? Math.max(0, Number(existingInvoice.amount_due) || 0)
+    : null;
+  const resolvedAmountDue = storedAmountDue != null
+    ? storedAmountDue
+    : Math.max(0, Math.round((subtotal - resolvedPaid) * 100) / 100);
 
   let propertyAddr = null;
   if (job.property_id) {
@@ -180,6 +185,19 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
     ...(propertyAddr || {}),
     address: job.full_address || job.city_state_zip || null,
   });
+
+  const snapshot = parseJson(existingInvoice?.document_snapshot, {}) || {};
+  const negotiation = snapshot.negotiation || {};
+  const originalEstimateTotal = Number(negotiation.originalEstimateTotal);
+  const negotiationAdjustment = Number(negotiation.negotiationAdjustment);
+  const finalInvoiceTotal = Number(existingInvoice?.total ?? subtotal) || subtotal;
+  const estimateBreakdown = {
+    originalTotal: Number.isFinite(originalEstimateTotal) && originalEstimateTotal > 0
+      ? originalEstimateTotal
+      : finalInvoiceTotal,
+    negotiationAdjustment: Number.isFinite(negotiationAdjustment) ? negotiationAdjustment : 0,
+    finalTotal: finalInvoiceTotal,
+  };
 
   return {
     ok: true,
@@ -195,6 +213,7 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
       jobCategory: job.category,
       lineItems,
       subtotal,
+      total: finalInvoiceTotal,
       paid: resolvedPaid,
       visitFeePaid,
       professionalFeePaid,
@@ -206,6 +225,9 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
         : null,
       initialPaymentCompleted: existingInvoice?.initial_payment_completed === true,
       amountDue: resolvedAmountDue,
+      originalEstimateTotal: estimateBreakdown.originalTotal,
+      negotiationAdjustment: estimateBreakdown.negotiationAdjustment,
+      estimateBreakdown,
       payments: uniquePayments.map((p) => ({
         type: p.payment_type,
         amount: Number(p.amount),

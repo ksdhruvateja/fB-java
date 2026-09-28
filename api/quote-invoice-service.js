@@ -76,7 +76,12 @@ export function serializeInvoiceRow(row) {
   });
   const paid = Number(row.paid) || 0;
   const total = row.total != null ? Number(row.total) : totals.total;
-  const amountDue = total <= 0 ? 0 : Math.max(0, round2(total - paid));
+  // amount_due is maintained by the payment settlement layer and already
+  // includes the $125 professional/upfront credit. Never recompute it as
+  // total-paid when a canonical stored value exists.
+  const amountDue = row.amount_due != null
+    ? Math.max(0, round2(Number(row.amount_due)))
+    : total <= 0 ? 0 : Math.max(0, round2(total - paid));
   return {
     id: Number(row.id),
     invoiceNumber: row.invoice_number,
@@ -173,9 +178,10 @@ export async function convertProposalToInvoice(client, {
      ORDER BY COALESCE(approved_at, created_at) ASC`,
     [quote.jobId]
   );
-  // Visit/dispatch fee credits are money already received, not a discount on
-  // the authoritative invoice. Show the gross service invoice and carry the
-  // prior dispatch payment in `paid`. Ordinary discounts remain untouched.
+  // Upfront/dispatch/professional payments are money already received, not
+  // discounts. Carry every successful pre-invoice credit into `paid` so the
+  // homeowner and Admin share one authoritative balance. Ordinary discounts
+  // remain part of the quote economics.
   let invoiceLineItems = [...(quote.lineItems || [])].filter(
     (item) => !/visit fee credit/i.test(String(item?.label || item?.name || item?.description || ''))
   );
@@ -231,10 +237,10 @@ export async function convertProposalToInvoice(client, {
   const versionKey = quote.versionNumber || 1;
 
   const { rows: priorPaymentRows } = await client.query(
-    `SELECT COALESCE(SUM(amount),0) AS paid
+    `SELECT COALESCE(SUM(COALESCE(service_amount, amount)),0) AS paid
        FROM payments
       WHERE job_id=$1
-        AND payment_type='dispatch_fee'
+        AND payment_type IN ('dispatch_fee','professional_fee','pending_professional_fee')
         AND status IN ('succeeded','authorized','paid','captured','completed')`,
     [quote.jobId]
   );
@@ -285,6 +291,7 @@ export async function convertProposalToInvoice(client, {
         convertedAt: new Date().toISOString(),
         versionNumber: versionKey,
         acceptedSnapshotId: quote.acceptedSnapshotId || row.accepted_snapshot_id || null,
+        negotiation: parseJson(row.document_snapshot, {})?.negotiation || null,
         priorPaid,
         approvedChangeOrders: changeOrderLines.map((l) => ({
           id: l.id,

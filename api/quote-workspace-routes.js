@@ -347,7 +347,13 @@ function serializeInvoiceRow(row) {
   });
   const paid = Number(row.paid) || 0;
   const total = row.total != null ? Number(row.total) : totals.total;
-  const amountDue = total <= 0 ? 0 : Math.max(0, round2(total - paid));
+  const amountDue = row.amount_due != null
+    ? Math.max(0, round2(Number(row.amount_due)))
+    : total <= 0 ? 0 : Math.max(0, round2(total - paid));
+  const snapshot = parseJson(row.document_snapshot, {}) || {};
+  const negotiation = snapshot.negotiation || {};
+  const originalEstimateTotal = Number(negotiation.originalEstimateTotal);
+  const negotiationAdjustment = Number(negotiation.negotiationAdjustment);
   return {
     id: Number(row.id),
     invoiceNumber: row.invoice_number,
@@ -369,6 +375,15 @@ function serializeInvoiceRow(row) {
     total,
     paid,
     amountDue,
+    originalEstimateTotal:
+      Number.isFinite(originalEstimateTotal) && originalEstimateTotal > 0 ? originalEstimateTotal : total,
+    negotiationAdjustment: Number.isFinite(negotiationAdjustment) ? negotiationAdjustment : 0,
+    estimateBreakdown: {
+      originalTotal:
+        Number.isFinite(originalEstimateTotal) && originalEstimateTotal > 0 ? originalEstimateTotal : total,
+      negotiationAdjustment: Number.isFinite(negotiationAdjustment) ? negotiationAdjustment : 0,
+      finalTotal: total,
+    },
     paymentPlanPercent: row.payment_plan_percent != null ? Number(row.payment_plan_percent) : null,
     initialPaymentAmount: row.initial_payment_amount != null ? Number(row.initial_payment_amount) : null,
     initialPaymentCompleted: row.initial_payment_completed === true,
@@ -1686,6 +1701,19 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
       }
       if (invoice.status === 'paid') {
         return res.status(400).json({ ok: false, message: 'Invoice is already paid.' });
+      }
+
+      // Initial payment is available only after the homeowner has approved
+      // the final quote. Final payment is separately unlocked by work completion.
+      const jobStatus = String(row.job_status || '').toLowerCase();
+      const isFinalPaymentStage = invoice.initialPaymentCompleted === true &&
+        ['work_completed', 'customer_review_pending', 'payout_pending'].includes(jobStatus);
+      if (!isFinalPaymentStage && !['approved','scheduled','contractor_en_route','work_started'].includes(jobStatus)) {
+        return res.status(409).json({
+          ok: false,
+          code: 'QUOTE_APPROVAL_REQUIRED',
+          message: 'The homeowner must approve the final quote before the initial payment can be made.',
+        });
       }
 
       const requestedPercent = Number(req.body?.paymentPercent);

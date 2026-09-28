@@ -124,10 +124,13 @@ export default function AdminJobDrawer({
   const assignedContractor = job?.assignedContractorUserId
     ? contractors.find((c) => Number(c.id) === Number(job.assignedContractorUserId))
     : null;
-  const proposalStatus = String(currentProposal?.status || "").toLowerCase();
+  // The managed-job status is the authoritative homeowner-approval gate.
+  // A proposal/bid status alone must never expose contractor assignment before
+  // the homeowner has actually approved the final quote.
   const homeownerApprovedProposal =
-    Boolean(currentProposal && ["accepted", "approved", "paid"].includes(proposalStatus)) ||
-    ["paid_for_dispatch", "scheduled", "contractor_en_route", "work_started", "work_completed", "payout_pending", "paid_out", "closed"].includes(String(job?.status || ""));
+    ["approved", "scheduled", "contractor_en_route", "work_started", "work_completed", "customer_review_pending", "admin_review_pending", "payout_pending", "paid_out", "closed"].includes(
+      String(job?.status || "")
+    );
   const approvedContractorUserId =
     currentProposal?.contractorUserId ??
     (currentProposal?.bidId != null
@@ -664,6 +667,13 @@ if (!open || !job) return null;
                       </button>
                     </div>
                   </>
+                ) : !initialPaymentCompleted ? (
+                  <div className="rounded-xl border border-amber-300/60 bg-amber-50 p-5 dark:border-amber-900/40 dark:bg-amber-950/20">
+                    <p className="text-sm font-bold text-amber-900 dark:text-amber-200">Initial payment required</p>
+                    <p className="mt-1 text-xs text-amber-800/80 dark:text-amber-300/80">
+                      The homeowner approved the final quote. Contractor assignment will appear here after the selected 50% / 75% / 100% initial payment is successfully confirmed.
+                    </p>
+                  </div>
                 ) : (
                   <div className="space-y-3">
                     <div className="rounded-xl border border-[#FF4D1C]/20 bg-[#FF4D1C]/5 p-4">
@@ -671,7 +681,7 @@ if (!open || !job) return null;
                         <div className="min-w-0">
                           <p className="text-[11px] font-bold uppercase tracking-wider text-[#FF4D1C]">Approved contractor</p>
                           <p className="mt-1 truncate text-base font-semibold">
-                            {approvedContractor?.name || currentProposal?.contractorName || `Contractor #${approvedContractorUserId ?? "unknown"}`}
+                            {approvedContractor?.name || currentProposal?.contractorName || "Approved contractor"}
                           </p>
                           <p className="mt-1 text-xs text-muted-foreground">
                             {approvedContractor?.trade || "Contractor"}{approvedContractor?.email ? ` · ${approvedContractor.email}` : ""}
@@ -686,19 +696,15 @@ if (!open || !job) return null;
                       </div>
                     </div>
 
-                    <div className="rounded-xl border border-border p-4">
+                    <div className="rounded-xl border border-teal-200 bg-teal-50 p-4 dark:border-teal-900/40 dark:bg-teal-950/20">
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <p className="text-sm font-semibold">Initial payment</p>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {initialPaymentCompleted
-                              ? `PAID — ${formatMoney(dispatchInvoice?.initialPaymentAmount ?? job.invoiceInitialPaymentAmount ?? 0)}`
-                              : "Waiting for the homeowner to successfully complete the selected 50% / 75% / 100% payment."}
+                          <p className="text-sm font-semibold text-teal-900 dark:text-teal-200">Initial payment confirmed</p>
+                          <p className="mt-1 text-xs text-teal-800/80 dark:text-teal-300/80">
+                            {formatMoney(dispatchInvoice?.initialPaymentAmount ?? job.invoiceInitialPaymentAmount ?? 0)} paid — contractor assignment is now available.
                           </p>
                         </div>
-                        <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${initialPaymentCompleted ? "bg-teal-100 text-teal-700" : "bg-amber-100 text-amber-700"}`}>
-                          {initialPaymentCompleted ? "PAID" : "PAYMENT REQUIRED"}
-                        </span>
+                        <span className="rounded-full bg-teal-100 px-2 py-1 text-[10px] font-bold text-teal-700 dark:bg-teal-900/40 dark:text-teal-300">PAID</span>
                       </div>
                     </div>
 
@@ -714,7 +720,7 @@ if (!open || !job) return null;
                       ) : (
                         <button
                           type="button"
-                          disabled={readOnly || busy || assigningContractor || !initialPaymentCompleted || !approvedContractorUserId}
+                          disabled={readOnly || busy || assigningContractor || !approvedContractorUserId}
                           onClick={async () => {
                             if (!approvedContractorUserId) return;
                             setAssigningContractor(true);
@@ -729,7 +735,7 @@ if (!open || !job) return null;
                           className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
                         >
                           <UserPlus className="h-4 w-4" />
-                          {assigningContractor ? "Assigning…" : initialPaymentCompleted ? "Assign Contractor" : "Awaiting Initial Payment"}
+                          {assigningContractor ? "Assigning…" : "Assign Contractor"}
                         </button>
                       )}
                     </div>

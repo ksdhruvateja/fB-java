@@ -380,8 +380,8 @@ export async function processSuccessfulPayment(pool, {
             const { rows: paidRows } = await client.query(
               `SELECT COALESCE(SUM(
                  CASE
-                   WHEN payment_type='dispatch_fee'
-                     THEN COALESCE(amount,0)
+                   WHEN payment_type IN ('dispatch_fee','professional_fee','pending_professional_fee')
+                     THEN COALESCE(service_amount, amount, 0)
                    WHEN payment_type IN ('invoice_payment','invoice_manual')
                      AND (meta->>'invoiceId') = $2
                      THEN COALESCE(service_amount, amount, 0)
@@ -414,6 +414,16 @@ export async function processSuccessfulPayment(pool, {
               [nextStatus, cumulativePaid, remainingDue, paymentMethod, stripePaymentIntentId, stripeSessionId, invoiceId]
             );
             invoiceRow = { ...inv, status: nextStatus, paid: cumulativePaid, amount_due: remainingDue };
+            console.log('[INVOICE SETTLEMENT]', {
+              invoiceId,
+              jobId,
+              previousPaid: existingPaid,
+              cumulativePaid,
+              total: invTotal,
+              amountDue: remainingDue,
+              paymentType,
+              paymentStage: stripeMetadata?.paymentStage || null,
+            });
             const propId = proposalId || inv.proposal_id;
             if (propId && nextStatus === 'paid') {
               await client.query(`UPDATE proposals SET status='paid' WHERE id=$1`, [propId]);

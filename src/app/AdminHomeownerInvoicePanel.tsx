@@ -126,6 +126,24 @@ export default function AdminHomeownerInvoicePanel({
         <p className="text-lg font-bold tabular-nums text-[#FF4D1C]">{formatMoney(invoice.amountDue)} due</p>
       </div>
 
+      <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm">
+        <p className="font-semibold">Estimate & negotiation</p>
+        <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
+          <div>
+            <p className="text-muted-foreground">Original Estimate</p>
+            <p className="mt-1 font-semibold tabular-nums">{formatMoney(Number(invoice.originalEstimateTotal ?? invoice.total ?? invoice.subtotal ?? 0))}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">Negotiation Adjustment</p>
+            <p className="mt-1 font-semibold tabular-nums">{formatMoney(Number(invoice.negotiationAdjustment ?? 0))}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">Final Invoice Total</p>
+            <p className="mt-1 font-bold tabular-nums">{formatMoney(Number(invoice.total ?? invoice.subtotal ?? 0))}</p>
+          </div>
+        </div>
+      </div>
+
       <ul className="divide-y divide-border rounded-lg border border-border text-sm">
         {invoice.lineItems.map((item, i) => (
           <li key={i} className="flex justify-between gap-3 px-3 py-2">
@@ -172,10 +190,7 @@ export default function AdminHomeownerInvoicePanel({
             {(invoice.professionalFeePaid ?? 0) > 0 ? (
               <>
                 <p className="mt-1 text-muted-foreground">
-                  Hire a Professional ({formatMoney(invoice.professionalFeePaid ?? 0)}) is a separate final-settlement credit and is not deducted from the initial-payment calculation.
-                </p>
-                <p className="mt-1 font-semibold text-foreground">
-                  Final settlement after work: {formatMoney(Math.max(0, Number(invoice.amountDue || 0) - Number(invoice.professionalFeePaid || 0)))}
+                  All successful payments, including the upfront service fee, are already included in the remaining balance.
                 </p>
               </>
             ) : null}
