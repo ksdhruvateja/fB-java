@@ -27,6 +27,9 @@ export type ContractorInvite = {
   serviceTiming?: string;
   expectedNetLow?: number;
   expectedNetHigh?: number;
+  requestVersion?: number;
+  requestLabel?: string;
+  requestType?: string;
   jobStatus?: string;
   aiAssessment?: {
     summary?: string;
@@ -67,7 +70,7 @@ export default function ContractorInvitesPanel({
   focusId?: number | null;
   onRefresh: () => Promise<void>;
   onAccepted: () => void;
-  onBid: (jobId: number) => void;
+  onBid: (jobId: number, invitationId: number) => void;
 }) {
   const [filter, setFilter] = useState<Filter>("invited");
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -183,6 +186,10 @@ export default function ContractorInvitesPanel({
                       {tripFee ? ` + $${tripFee} trip fee` : ""}
                     </p>
                     <p>
+                      <span className="text-muted-foreground">Estimate request · </span>
+                      {inv.requestLabel || `Request #${inv.requestVersion || 1}`}
+                    </p>
+                    <p>
                       <span className="text-muted-foreground">FixBridge Job · </span>
                       {inv.bookingId || `FB-${inv.jobId}`}
                     </p>
@@ -237,7 +244,7 @@ export default function ContractorInvitesPanel({
                     {String(inv.status).toLowerCase() === "accepted" && (
                       <button
                         type="button"
-                        onClick={() => onBid(inv.jobId)}
+                        onClick={() => onBid(inv.jobId, inv.id)}
                         className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white"
                       >
                         Submit estimate <ArrowRight className="h-4 w-4" />

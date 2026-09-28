@@ -408,6 +408,9 @@ export type Bid = {
   exclusions?: string | null;
   notes?: string | null;
   status: string;
+  invitationId?: number | null;
+  requestVersion?: number | null;
+  requestLabel?: string | null;
 };
 
 export const STATUS_LABELS: Record<string, string> = {

@@ -194,9 +194,9 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
   });
 
   const snapshot = parseJson(existingInvoice?.document_snapshot, {}) || {};
-  const negotiation = snapshot.negotiation || {};
-  const originalEstimateTotal = Number(negotiation.originalEstimateTotal);
-  const negotiationAdjustment = Number(negotiation.negotiationAdjustment);
+  const negotiation = parseJson(existingInvoice?.negotiation_details, snapshot.negotiation || {}) || {};
+  const originalEstimateTotal = Number(existingInvoice?.original_quote_total ?? negotiation.originalEstimateTotal);
+  const negotiationAdjustment = Number(existingInvoice?.negotiation_adjustment ?? negotiation.negotiationAdjustment);
   const finalInvoiceTotal = Number(existingInvoice?.total ?? subtotal) || subtotal;
   const estimateBreakdown = {
     originalTotal: Number.isFinite(originalEstimateTotal) && originalEstimateTotal > 0

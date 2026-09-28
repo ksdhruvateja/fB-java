@@ -93,6 +93,11 @@ export function serializeInvoiceRow(row) {
     lineItems: totals.lineItems,
     subtotal: row.subtotal != null ? Number(row.subtotal) : totals.subtotal,
     versionNumber: parseJson(row.document_snapshot, {})?.versionNumber || null,
+    originalEstimateTotal: row.original_quote_total != null ? Number(row.original_quote_total) : null,
+    negotiationAdjustment: row.negotiation_adjustment != null ? Number(row.negotiation_adjustment) : 0,
+    finalAgreedTotal: row.final_agreed_total != null ? Number(row.final_agreed_total) : total,
+    negotiationId: row.negotiation_id != null ? Number(row.negotiation_id) : null,
+    negotiationDetails: parseJson(row.negotiation_details, null),
   };
 }
 
@@ -243,21 +248,52 @@ export async function convertProposalToInvoice(client, {
   const invoicePaid = Math.min(priorPaid, invoiceTotal);
   const invoiceAmountDue = Math.max(0, round2(invoiceTotal - invoicePaid));
   const invoiceStatus = invoiceAmountDue <= 0 ? 'paid' : 'due';
+  const { rows: negotiationRows } = await client.query(
+    `SELECT id, requested_amount, original_amount, admin_amount, action, created_at, resolved_at
+       FROM proposal_negotiations
+      WHERE proposal_id=$1 AND action IN ('accepted','countered_by_homeowner')
+      ORDER BY resolved_at DESC NULLS LAST, id DESC LIMIT 1`,
+    [quote.id]
+  );
+  const acceptedNegotiation = negotiationRows[0] || null;
+  const originalQuoteTotal = acceptedNegotiation
+    ? round2(Number(acceptedNegotiation.original_amount || quote.total))
+    : round2(quote.total);
+  const negotiationFinalTotal = acceptedNegotiation
+    ? round2(Number(acceptedNegotiation.admin_amount || acceptedNegotiation.requested_amount || quote.total))
+    : round2(quote.total);
+  const negotiationAdjustment = round2(negotiationFinalTotal - originalQuoteTotal);
+  const negotiationDetails = acceptedNegotiation ? {
+    negotiationId: Number(acceptedNegotiation.id),
+    action: acceptedNegotiation.action,
+    requestedAmount: acceptedNegotiation.requested_amount == null ? null : Number(acceptedNegotiation.requested_amount),
+    adminAmount: acceptedNegotiation.admin_amount == null ? null : Number(acceptedNegotiation.admin_amount),
+    originalEstimateTotal: originalQuoteTotal,
+    negotiationAdjustment,
+    finalAgreedTotal: negotiationFinalTotal,
+    createdAt: acceptedNegotiation.created_at,
+    resolvedAt: acceptedNegotiation.resolved_at,
+  } : null;
   const { rows: inv } = await client.query(
     `INSERT INTO homeowner_invoices
-      (invoice_number, job_id, homeowner_user_id, proposal_id, amount_due, subtotal, paid, total,
+      (invoice_number, job_id, homeowner_user_id, proposal_id, negotiation_id, original_quote_total, negotiation_adjustment, final_agreed_total, negotiation_details, amount_due, subtotal, paid, total,
        payment_plan_percent, initial_payment_amount, initial_payment_completed,
        line_items, additional_charges, discount_type, discount_value, discount_amount,
        shipping_amount, shipping_label, tax_mode, tax_value, tax_amount,
        customer_notes, terms_conditions, bill_to, status, custom_note, document_snapshot, due_date)
      VALUES
-       ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
+       ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
      RETURNING *`,
     [
       invoiceNumber,
       quote.jobId,
       quote.homeownerUserId,
       quote.id,
+      acceptedNegotiation ? Number(acceptedNegotiation.id) : null,
+      originalQuoteTotal,
+      negotiationAdjustment,
+      negotiationFinalTotal,
+      JSON.stringify(negotiationDetails),
       invoiceAmountDue,
       invoiceTotals.subtotal,
       invoicePaid,
@@ -286,6 +322,7 @@ export async function convertProposalToInvoice(client, {
         versionNumber: versionKey,
         acceptedSnapshotId: quote.acceptedSnapshotId || row.accepted_snapshot_id || null,
         priorPaid,
+        negotiation: negotiationDetails,
         approvedChangeOrders: changeOrderLines.map((l) => ({
           id: l.id,
           description: l.description,

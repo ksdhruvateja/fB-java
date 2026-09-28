@@ -320,7 +320,7 @@ async function attachAuthoritativeInvoices(pool, rows) {
     ({ rows: invoices } = await pool.query(
       `SELECT DISTINCT ON (hi.job_id)
           hi.job_id, hi.id, hi.invoice_number, hi.status,
-          hi.amount_due, hi.paid, hi.total, hi.line_items, hi.subtotal, hi.payment_plan_percent, hi.initial_payment_amount, hi.initial_payment_completed, p_inv.customer_line_items AS proposal_customer_line_items, hi.created_at
+          hi.amount_due, hi.paid, hi.total, hi.line_items, hi.subtotal, hi.original_quote_total, hi.negotiation_adjustment, hi.final_agreed_total, hi.negotiation_details, hi.payment_plan_percent, hi.initial_payment_amount, hi.initial_payment_completed, p_inv.customer_line_items AS proposal_customer_line_items, hi.created_at
        FROM homeowner_invoices hi
        LEFT JOIN proposals p_inv ON p_inv.converted_invoice_id = hi.id
        WHERE hi.job_id = ANY($1::bigint[])
@@ -370,6 +370,10 @@ async function attachAuthoritativeInvoices(pool, rows) {
       linked_invoice_total: inv.total,
       linked_invoice_line_items: effectiveInvoiceLines,
       linked_invoice_subtotal: inv.subtotal,
+      linked_invoice_original_quote_total: inv.original_quote_total,
+      linked_invoice_negotiation_adjustment: inv.negotiation_adjustment,
+      linked_invoice_final_agreed_total: inv.final_agreed_total,
+      linked_invoice_negotiation_details: inv.negotiation_details,
       linked_invoice_payment_plan_percent: inv.payment_plan_percent,
       linked_invoice_initial_payment_amount: inv.initial_payment_amount,
       linked_invoice_initial_payment_completed: inv.initial_payment_completed,
@@ -704,6 +708,14 @@ function serializeJob(row, viewer) {
         row.linked_invoice_total != null ? Number(row.linked_invoice_total) : null;
       base.invoiceLineItems = parseJson(row.linked_invoice_line_items, []) || [];
       base.invoiceSubtotal = row.linked_invoice_subtotal != null ? Number(row.linked_invoice_subtotal) : null;
+      base.invoiceOriginalEstimateTotal = row.linked_invoice_original_quote_total != null ? Number(row.linked_invoice_original_quote_total) : null;
+      base.invoiceNegotiationAdjustment = row.linked_invoice_negotiation_adjustment != null ? Number(row.linked_invoice_negotiation_adjustment) : null;
+      base.invoiceFinalAgreedTotal = row.linked_invoice_final_agreed_total != null ? Number(row.linked_invoice_final_agreed_total) : null;
+      base.invoiceEstimateBreakdown = {
+        originalTotal: base.invoiceOriginalEstimateTotal ?? base.invoiceTotal ?? 0,
+        negotiationAdjustment: base.invoiceNegotiationAdjustment ?? 0,
+        finalTotal: base.invoiceFinalAgreedTotal ?? base.invoiceTotal ?? 0,
+      };
       base.invoicePaymentPlanPercent = row.linked_invoice_payment_plan_percent != null ? Number(row.linked_invoice_payment_plan_percent) : null;
       base.invoiceInitialPaymentAmount = row.linked_invoice_initial_payment_amount != null ? Number(row.linked_invoice_initial_payment_amount) : null;
       base.invoiceInitialPaymentCompleted = row.linked_invoice_initial_payment_completed === true;
@@ -5717,9 +5729,10 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
            FROM proposals p
            LEFT JOIN bids b ON b.id = p.bid_id
           WHERE p.job_id=$1
-          ORDER BY p.created_at DESC, p.id DESC
+            AND p.status IN ('accepted','approved','paid')
+          ORDER BY CASE WHEN p.id=$2 THEN 0 ELSE 1 END, p.created_at DESC, p.id DESC
           LIMIT 1`,
-        [jobId]
+        [jobId, Number(job.active_proposal_id || 0)]
       );
       const approvedProposal = approvedProposalRows[0];
       const approvedContractorId = approvedProposal?.contractor_user_id != null
@@ -6096,12 +6109,27 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
       const { rows: jobs } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       if (!jobs[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
+      const requestedInvitationId = Number(b.invitationId || 0);
       const invited = await pool.query(
-        `SELECT id FROM job_invitations WHERE job_id=$1 AND contractor_user_id=$2`,
-        [jobId, req.authUser.id]
+        `SELECT id, status FROM job_invitations
+          WHERE job_id=$1 AND contractor_user_id=$2
+            AND ($3=0 OR id=$3)
+          ORDER BY id DESC LIMIT 1`,
+        [jobId, req.authUser.id, requestedInvitationId]
       );
-      if (!invited.rows.length && Number(jobs[0].assigned_contractor_user_id) !== Number(req.authUser.id)) {
+      if (!invited.rows.length) {
         return res.status(403).json({ ok: false, message: 'Not invited to this job.' });
+      }
+      if (String(invited.rows[0].status).toLowerCase() !== 'accepted') {
+        return res.status(409).json({ ok: false, code: 'INVITATION_NOT_ACCEPTED', message: 'Accept the contractor invitation before submitting an estimate.' });
+      }
+      const invitationId = Number(invited.rows[0].id);
+      const { rows: existingBid } = await pool.query(
+        `SELECT id FROM bids WHERE invitation_id=$1 LIMIT 1`,
+        [invitationId]
+      );
+      if (existingBid[0]) {
+        return res.status(409).json({ ok: false, code: 'BID_ALREADY_SUBMITTED', message: 'Only one estimate can be submitted for this contractor invitation.', bidId: Number(existingBid[0].id) });
       }
 
       const { rows } = await pool.query(
@@ -6113,7 +6141,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         [
           jobId,
           req.authUser.id,
-          invited.rows[0]?.id || null,
+          invitationId,
           labor,
           materials,
           equipment,
@@ -6174,6 +6202,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
       q += ` ORDER BY b.created_at DESC`;
       const { rows } = await pool.query(q, params);
+      console.log('[BIDS API]', { jobId, actorUserId: req.authUser.id, actorRole: req.authUser.role, count: rows.length });
       res.json({
         ok: true,
         bids: rows
@@ -6549,6 +6578,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           )
         `);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_proposal_negotiations_proposal ON proposal_negotiations(proposal_id)`);
+        await pool.query(`ALTER TABLE proposal_negotiations ADD COLUMN IF NOT EXISTS original_amount NUMERIC`);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_proposal_negotiations_job ON proposal_negotiations(job_id)`);
         negotiationSchemaReady = true;
       })().catch((e) => {
@@ -6558,6 +6588,59 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
     await negotiationSchemaPromise;
   };
+
+  app.post('/api/managed/jobs/:id/select-proposal', requireAuth, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      const proposalId = Number(req.body?.proposalId || 0);
+      if (!Number.isFinite(jobId) || !Number.isFinite(proposalId) || proposalId <= 0) {
+        return res.status(400).json({ ok: false, message: 'Valid job and estimate are required.' });
+      }
+      const { rows: jobs } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      if (!jobs[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
+      if (Number(jobs[0].homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      const { rows: proposals } = await pool.query(
+        `SELECT p.*, b.contractor_user_id
+           FROM proposals p LEFT JOIN bids b ON b.id=p.bid_id
+          WHERE p.id=$1 AND p.job_id=$2 LIMIT 1`,
+        [proposalId, jobId]
+      );
+      const proposal = proposals[0];
+      if (!proposal) return res.status(404).json({ ok: false, message: 'Estimate not found for this request.' });
+      if (!['sent','viewed','finalized'].includes(String(proposal.status || '').toLowerCase())) {
+        return res.status(409).json({ ok: false, code: 'ESTIMATE_NOT_SELECTABLE', message: 'This estimate is not available for selection.' });
+      }
+      await pool.query(`UPDATE proposals SET option_selection_status='not_selected', status=CASE WHEN status IN ('sent','viewed','finalized') THEN 'sent' ELSE status END WHERE job_id=$1 AND id<>$2 AND option_group IS NOT NULL AND option_group=(SELECT option_group FROM proposals WHERE id=$2)`, [jobId, proposalId]);
+      await pool.query(`UPDATE proposals SET option_selection_status='selected' WHERE id=$1`, [proposalId]);
+      await pool.query(`UPDATE managed_jobs SET active_proposal_id=$1, updated_at=NOW() WHERE id=$2`, [proposalId, jobId]);
+      await logQuoteActivity(pool, { proposalId, jobId, actorUserId: req.authUser.id, action: 'estimate_selected', detail: { contractorUserId: proposal.contractor_user_id || null } });
+      const { rows: fresh } = await pool.query(`SELECT * FROM proposals WHERE id=$1`, [proposalId]);
+      return res.json({ ok: true, proposal: serializeProposal(fresh[0], req.authUser) });
+    } catch (e) {
+      console.error('[SELECT PROPOSAL]', e);
+      return res.status(500).json({ ok: false, message: 'Could not select estimate.' });
+    }
+  });
+
+  app.post('/api/admin/managed/jobs/:id/finalize-estimate', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      const { rows } = await pool.query(`SELECT * FROM proposals WHERE job_id=$1 AND status IN ('sent','viewed','negotiation_pending') ORDER BY created_at DESC, id DESC LIMIT 1`, [jobId]);
+      if (!rows[0]) return res.status(409).json({ ok: false, code: 'NO_ESTIMATE_TO_FINALIZE', message: 'No customer-facing estimate is available to finalize.' });
+      const proposal = rows[0];
+      await pool.query(`UPDATE proposals SET status='finalized', updated_at=NOW() WHERE id=$1`, [proposal.id]);
+      await pool.query(`UPDATE managed_jobs SET active_proposal_id=$1, updated_at=NOW() WHERE id=$2`, [proposal.id, jobId]);
+      await logQuoteActivity(pool, { proposalId: proposal.id, jobId, actorUserId: req.authUser.id, action: 'estimate_finalized', detail: { versionNumber: Number(proposal.version_number || 1), total: Number(proposal.retail_amount || 0) } });
+      await audit(pool, req.authUser.id, 'estimate_finalized', 'proposal', proposal.id, { jobId, readyForHomeownerApproval: true });
+      const { rows: fresh } = await pool.query(`SELECT * FROM proposals WHERE id=$1`, [proposal.id]);
+      return res.json({ ok: true, proposal: serializeProposal(fresh[0], req.authUser), message: 'Estimate finalized and ready for homeowner approval.' });
+    } catch (e) {
+      console.error('[FINALIZE ESTIMATE]', e);
+      return res.status(500).json({ ok: false, message: 'Could not finalize estimate.' });
+    }
+  });
 
   app.get('/api/managed/jobs/:id/negotiations', requireAuth, async (req, res) => {
       await ensureNegotiationSchema();
@@ -6675,10 +6758,10 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
       const { rows: inserted } = await pool.query(
         `INSERT INTO proposal_negotiations
-          (job_id, proposal_id, homeowner_user_id, requested_amount, requested_scope, homeowner_message, action)
-         VALUES ($1,$2,$3,$4,$5,$6,'pending')
+          (job_id, proposal_id, homeowner_user_id, requested_amount, original_amount, requested_scope, homeowner_message, action)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'pending')
          RETURNING *`,
-        [jobId, proposalId, req.authUser.id, requestedAmount, requestedScope || null, homeownerMessage || null]
+        [jobId, proposalId, req.authUser.id, requestedAmount, Number(proposal.retail_amount || 0), requestedScope || null, homeownerMessage || null]
       );
 
       await pool.query(
@@ -6850,7 +6933,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         let originalItems = parseJson(negotiation.customer_line_items, []) || [];
         if (!Array.isArray(originalItems)) originalItems = [];
         originalItems = originalItems.filter((item) => !/negotiation\s*(adjustment|discount)/i.test(String(item?.label || item?.name || item?.description || '')));
-        const originalTotal = Number(negotiation.retail_amount || 0);
+        const originalTotal = Number(negotiation.original_amount ?? negotiation.retail_amount ?? 0);
         const adjustment = Math.round((finalAmount - originalTotal) * 100) / 100;
         const adjustedItems = [...originalItems];
         if (Math.abs(adjustment) >= 0.005) {
@@ -6925,9 +7008,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           if (invoice) {
             const paid = Number(invoice.paid || 0);
             const due = Math.max(0, Math.round((finalAmount - paid) * 100) / 100);
+            const negotiationAdjustment = Math.round((finalAmount - Number(negotiation.original_amount || invoice.total || finalAmount)) * 100) / 100;
             await client.query(
-              `UPDATE homeowner_invoices SET total=$1, subtotal=$1, amount_due=$2, status=$3, line_items=$4 WHERE id=$5`,
-              [finalAmount, due, due <= 0 ? 'paid' : 'due', JSON.stringify(adjustedItems), invoice.id]
+              `UPDATE homeowner_invoices SET total=$1, subtotal=$1, amount_due=$2, status=$3, line_items=$4,
+                 original_quote_total=$5, negotiation_adjustment=$6, final_agreed_total=$1,
+                 negotiation_id=$7, negotiation_details=$8, updated_at=NOW()
+               WHERE id=$9`,
+              [finalAmount, due, due <= 0 ? 'paid' : 'due', JSON.stringify(adjustedItems), Number(negotiation.original_amount || invoice.total || finalAmount), negotiationAdjustment, negotiationId, JSON.stringify({ negotiationId, originalEstimateTotal: Number(negotiation.original_amount || invoice.total || finalAmount), negotiationAdjustment, finalAgreedTotal: finalAmount }), invoice.id]
             );
             console.log(logPrefix, 'existing invoice synchronized', {
               jobId, negotiationId, invoiceId: invoice.id,
@@ -6969,7 +7056,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         let items = parseJson(negotiation.customer_line_items, []) || [];
         if (!Array.isArray(items)) items = [];
         items = items.filter((item) => !/negotiation\s*(adjustment|discount)/i.test(String(item?.label || item?.name || item?.description || '')));
-        const originalTotal = Number(negotiation.retail_amount || 0);
+        const originalTotal = Number(negotiation.original_amount ?? negotiation.retail_amount ?? 0);
         const adjustment = Math.round((finalAmount - originalTotal) * 100) / 100;
         if (Math.abs(adjustment) >= 0.005) items.push({ id: `negotiation-adjustment-${negotiationId}`, name: 'Negotiation adjustment', label: 'Negotiation adjustment', description: 'Final agreed price adjustment', qty: 1, quantity: 1, unit: 'Flat Rate', unitPrice: adjustment, amount: adjustment, total: adjustment, visible: true, kind: 'negotiation_adjustment' });
         const totals = parseJson(negotiation.document_totals, {}) || {};
@@ -6998,9 +7085,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
       await client.query(`UPDATE proposal_negotiations SET action='countered_by_homeowner', resolved_at=NOW() WHERE id=$1`, [negotiationId]);
       const { rows: nextRows } = await client.query(
-        `INSERT INTO proposal_negotiations (job_id, proposal_id, homeowner_user_id, requested_amount, requested_scope, homeowner_message, action)
-         VALUES ($1,$2,$3,$4,$5,$6,'pending') RETURNING *`,
-        [jobId, negotiation.proposal_id, req.authUser.id, nextAmount, null, message || null]
+        `INSERT INTO proposal_negotiations (job_id, proposal_id, homeowner_user_id, requested_amount, original_amount, requested_scope, homeowner_message, action)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'pending') RETURNING *`,
+        [jobId, negotiation.proposal_id, req.authUser.id, nextAmount, Number(negotiation.original_amount || negotiation.retail_amount || 0), null, message || null]
       );
       await client.query(`UPDATE proposals SET status='negotiation_pending' WHERE id=$1`, [negotiation.proposal_id]);
       await logQuoteActivity(client, { proposalId: negotiation.proposal_id, jobId, actorUserId: req.authUser.id, action: 'negotiation_countered_by_homeowner', detail: { previousNegotiationId: negotiationId, newNegotiationId: Number(nextRows[0].id), counterAmount: nextAmount } });
@@ -7039,7 +7126,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           `SELECT * FROM proposals WHERE id=$1 AND job_id=$2`,
           [requestedProposalId, jobId]
         );
-        if (byId[0] && ['sent','viewed'].includes(String(byId[0].status || '').toLowerCase())) {
+        if (byId[0] && ['sent','viewed','finalized'].includes(String(byId[0].status || '').toLowerCase())) {
           prop = byId[0];
         }
       }
@@ -7049,7 +7136,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         const { rows: props } = await client.query(
           `SELECT * FROM proposals
            WHERE job_id=$1
-             AND status IN ('sent','viewed')
+             AND status IN ('sent','viewed','finalized')
            ORDER BY published_at DESC NULLS LAST, created_at DESC
            LIMIT 1`,
           [jobId]
@@ -7087,7 +7174,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
               : 'This quote is no longer available for approval.',
         });
       }
-      if (!['sent', 'viewed', 'accepted', 'approved'].includes(propStatus)) {
+      if (!['sent', 'viewed', 'finalized', 'accepted', 'approved'].includes(propStatus)) {
         return res.status(409).json({
           ok: false,
           code: 'quote_not_sent',
@@ -7306,7 +7393,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
       const job = rows[0];
-      if (job.status !== 'approved') {
+      if (!['approved', 'paid_for_dispatch'].includes(String(job.status || '').toLowerCase())) {
         return res.status(400).json({
           ok: false,
           message: 'Dispatch can only be requested after the homeowner approves the final quote.',
@@ -7498,11 +7585,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (!isAdmin && !isContractor) {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
-      if (toStatus === 'contractor_en_route' && !['approved', 'scheduled'].includes(String(job.status))) {
+      if (toStatus === 'contractor_en_route' && !['approved', 'paid_for_dispatch', 'scheduled'].includes(String(job.status))) {
         return res.status(400).json({ ok: false, message: 'Dispatch requires homeowner approval, successful initial payment, and an assigned contractor.' });
       }
       if (toStatus === 'work_started' && !['contractor_en_route', 'scheduled'].includes(String(job.status))) {
         return res.status(400).json({ ok: false, message: 'Work can only start after the contractor has been dispatched.' });
+      }
+      if (toStatus === 'work_completed' && !['work_started', 'change_order_pending'].includes(String(job.status))) {
+        return res.status(400).json({ ok: false, code: 'WORK_NOT_STARTED', message: 'Work can only be completed after the contractor has started the job.' });
       }
       if (toStatus === 'contractor_en_route' || toStatus === 'work_started') {
         const { rows: initialInvoices } = await pool.query(
@@ -8075,6 +8165,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const jobId = Number(req.params.id);
       if (!Number.isFinite(jobId) || jobId <= 0) {
         return res.status(400).json({ ok: false, message: 'Invalid job.' });
+      }
+      const { rows: payoutInvoices } = await pool.query(
+        `SELECT id, amount_due, status FROM homeowner_invoices WHERE job_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+        [jobId]
+      );
+      if (!payoutInvoices[0] || Number(payoutInvoices[0].amount_due || 0) > 0.009 || String(payoutInvoices[0].status || '').toLowerCase() !== 'paid') {
+        return res.status(409).json({ ok: false, code: 'INVOICE_NOT_FULLY_PAID', message: 'Contractor payout is locked until the canonical invoice is fully paid.' });
       }
       const payout = await ensurePayoutRecordForJob(pool, jobId, {
         initialStatus: PAYOUT_STATUS.PENDING_APPROVAL,

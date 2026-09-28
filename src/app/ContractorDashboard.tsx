@@ -177,6 +177,7 @@ export default function ContractorDashboard({
   );
 
   const [bidJobId, setBidJobId] = useState<number | null>(null);
+  const [bidInvitationId, setBidInvitationId] = useState<number | null>(null);
   const [labor, setLabor] = useState("200");
   const [materials, setMaterials] = useState("75");
   const [travel, setTravel] = useState("50");
@@ -465,6 +466,7 @@ export default function ContractorDashboard({
     try {
       const r = await submitBid({
         jobId: bidJobId,
+        ...(bidInvitationId != null ? { invitationId: bidInvitationId } : {}),
         labor: Number(labor),
         materials: Number(materials),
         travelDiagnostic: Number(travel),
@@ -477,6 +479,7 @@ export default function ContractorDashboard({
         return;
       }
       setBidJobId(null);
+      setBidInvitationId(null);
       await refresh();
       setTab("jobs");
     } finally {
@@ -678,7 +681,10 @@ export default function ContractorDashboard({
               focusId={focusInviteId}
               onRefresh={refresh}
               onAccepted={() => go("jobs")}
-              onBid={(jobId) => setBidJobId(jobId)}
+              onBid={(jobId, invitationId) => {
+                setBidJobId(jobId);
+                setBidInvitationId(invitationId);
+              }}
             />
           )}
 
@@ -688,7 +694,10 @@ export default function ContractorDashboard({
               busy={busy}
               onRefresh={refresh}
               onError={setError}
-              onBid={(jobId) => setBidJobId(jobId)}
+              onBid={(jobId) => {
+                setBidJobId(jobId);
+                setBidInvitationId(null);
+              }}
               payoutByJobId={payoutByJobId}
               payoutAccount={payoutAccount}
               onViewPayouts={() => go("payouts")}
@@ -1064,7 +1073,9 @@ export default function ContractorDashboard({
               <button type="button" className="absolute inset-0 bg-black/40" aria-label="Close" onClick={() => setBidJobId(null)} />
               <form onSubmit={onBid} className="relative z-10 w-full max-w-lg space-y-3 rounded-2xl border border-border bg-card p-5 shadow-xl">
                 <p className="font-semibold">Submit confidential estimate</p>
-                <p className="text-xs text-muted-foreground">Job #{bidJobId} — net amounts only.</p>
+                <p className="text-xs text-muted-foreground">
+                  Job #{bidJobId} · {bidInvitationId != null ? `Estimate request #${invites.find((i) => i.id === bidInvitationId)?.requestVersion || 1}` : "Latest accepted request"} — net amounts only.
+                </p>
                 <div className="grid gap-2 sm:grid-cols-3">
                   <label className="text-xs">Labor<input className="mt-1 w-full rounded-xl border border-border px-3 py-2 text-sm" value={labor} onChange={(e) => setLabor(e.target.value)} /></label>
                   <label className="text-xs">Materials<input className="mt-1 w-full rounded-xl border border-border px-3 py-2 text-sm" value={materials} onChange={(e) => setMaterials(e.target.value)} /></label>

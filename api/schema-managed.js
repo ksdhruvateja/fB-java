@@ -279,6 +279,7 @@ export async function initManagedSchema(pool) {
       proposal_id         INT NOT NULL,
       homeowner_user_id   INT NOT NULL,
       requested_amount    NUMERIC,
+      original_amount     NUMERIC,
       requested_scope     TEXT,
       homeowner_message   TEXT,
       admin_amount        NUMERIC,
@@ -512,6 +513,9 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS coupon_discount_amount NUMERIC`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS final_customer_amount NUMERIC`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS payment_completed_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS initial_payment_percent INT`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS initial_payment_amount NUMERIC DEFAULT 0`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS initial_payment_completed_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS work_queue_status TEXT`);
 
   // Address segregation columns
@@ -1375,6 +1379,7 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS company_name TEXT`);
   await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS bill_to JSONB`);
   await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE proposals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS quote_activity (
@@ -1467,6 +1472,12 @@ export async function initManagedSchema(pool) {
     ON homeowner_invoices (homeowner_user_id, created_at DESC)
   `);
   await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS proposal_id INT`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS negotiation_id BIGINT`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS original_quote_total NUMERIC DEFAULT 0`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS negotiation_adjustment NUMERIC DEFAULT 0`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS final_agreed_total NUMERIC`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS negotiation_details JSONB`);
+  await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
   // Managed repair payment plan: homeowner selects 50%, 75%, or 100% after quote approval.
   await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS payment_plan_percent INT`);
   await pool.query(`ALTER TABLE homeowner_invoices ADD COLUMN IF NOT EXISTS initial_payment_amount NUMERIC DEFAULT 0`);

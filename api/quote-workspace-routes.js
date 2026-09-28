@@ -351,9 +351,9 @@ function serializeInvoiceRow(row) {
     ? Math.max(0, round2(Number(row.amount_due)))
     : total <= 0 ? 0 : Math.max(0, round2(total - paid));
   const snapshot = parseJson(row.document_snapshot, {}) || {};
-  const negotiation = snapshot.negotiation || {};
-  const originalEstimateTotal = Number(negotiation.originalEstimateTotal);
-  const negotiationAdjustment = Number(negotiation.negotiationAdjustment);
+  const negotiation = parseJson(row.negotiation_details, snapshot.negotiation || {}) || {};
+  const originalEstimateTotal = Number(row.original_quote_total ?? negotiation.originalEstimateTotal);
+  const negotiationAdjustment = Number(row.negotiation_adjustment ?? negotiation.negotiationAdjustment);
   return {
     id: Number(row.id),
     invoiceNumber: row.invoice_number,
