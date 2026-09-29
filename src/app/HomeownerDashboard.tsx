@@ -1567,7 +1567,7 @@ export default function HomeownerDashboard({
     let timer: number | null = null;
     let stopped = false;
     let inFlight = false;
-    let delayMs = 12000;
+    let delayMs = 8000;
 
     const refreshJobsOnly = async (reason: string) => {
       if (stopped || inFlight || document.visibilityState !== "visible") return;
@@ -1577,7 +1577,7 @@ export default function HomeownerDashboard({
         const status = Number((result as unknown as { status?: number }).status || 0);
         if (result.ok) {
           setJobs(result.jobs || []);
-          delayMs = 12000;
+          delayMs = 8000;
         } else if (status === 429) {
           // Back off rather than creating a retry loop while the server is
           // protecting the API. The central fetch monitor also logs 429.
@@ -1587,10 +1587,10 @@ export default function HomeownerDashboard({
           delayMs = 20000;
           console.warn("[FixBridge lifecycle] homeowner jobs refresh denied", { reason, status });
         } else {
-          delayMs = 15000;
+          delayMs = 10000;
         }
       } catch (error) {
-        delayMs = 15000;
+        delayMs = 10000;
         console.warn("[FixBridge lifecycle] homeowner jobs refresh failed", error);
       } finally {
         inFlight = false;

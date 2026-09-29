@@ -143,7 +143,7 @@ export default function ServiceTrackingCard({
   const current = stepIndexForStatus(job.status, hasTech);
   const arrival = arrivalWindowLabel(job);
   const phone = tech?.phone || null;
-  const displayName = tech?.name || (hasTech ? "Assigned technician" : null);
+  const displayName = tech?.name || job.contractorName || (hasTech ? "Assigned contractor" : null);
   const company = tech?.company || tech?.trade || null;
   const rating = tech?.rating ?? null;
   const editable = canEditHomeownerJob(job.status);
@@ -277,7 +277,13 @@ export default function ServiceTrackingCard({
                   </p>
                 )}
                 {active && i === 2 && !hasTech && (
-                  <p className="mt-0.5 text-xs text-muted-foreground">Matching a verified technician nearby…</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">Waiting for FixBridge to assign the approved contractor.</p>
+                )}
+                {active && i === 2 && hasTech && (
+                  <p className="mt-0.5 text-xs text-muted-foreground">Contractor assigned. Waiting for dispatch.</p>
+                )}
+                {active && i === 3 && (
+                  <p className="mt-0.5 text-xs text-muted-foreground">Contractor dispatched and on the way.</p>
                 )}
                 {active && i === 3 && arrival && (
                   <p className="mt-0.5 text-xs text-muted-foreground">Expected {arrival}</p>

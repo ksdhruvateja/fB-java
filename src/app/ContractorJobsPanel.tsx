@@ -225,6 +225,42 @@ export default function ContractorJobsPanel({
                 <h2 className="mt-1 text-2xl font-semibold">{selected.title || selected.category}</h2>
               </div>
 
+              <div className="rounded-xl border border-border/70 bg-background p-4">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Lifecycle</p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-4">
+                  <div className="rounded-lg border border-border bg-muted/20 p-2.5">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Assignment</p>
+                    <p className="mt-1 text-xs font-semibold">{selected.assignedContractorUserId ? "Assigned ✓" : "Not assigned"}</p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-muted/20 p-2.5">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Dispatch</p>
+                    <p className="mt-1 text-xs font-semibold">{
+                      ["contractor_en_route", "contractor_arrived", "work_started", "change_order_pending", "work_completed", "customer_review_pending", "admin_review_pending", "payout_pending", "paid_out", "closed"].includes(selected.status)
+                        ? "Dispatched ✓"
+                        : "Not dispatched"
+                    }</p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-muted/20 p-2.5">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Work</p>
+                    <p className="mt-1 text-xs font-semibold">{
+                      ["work_started", "change_order_pending", "work_completed", "customer_review_pending", "admin_review_pending", "payout_pending", "paid_out", "closed"].includes(selected.status)
+                        ? "Started ✓"
+                        : "Not started"
+                    }</p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-muted/20 p-2.5">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Completion</p>
+                    <p className="mt-1 text-xs font-semibold">{
+                      selected.status === "customer_review_pending" || selected.status === "admin_review_pending"
+                        ? "Submitted · awaiting confirmation"
+                        : ["work_completed", "payout_pending", "paid_out", "closed"].includes(selected.status)
+                          ? "Completed ✓"
+                          : "Not submitted"
+                    }</p>
+                  </div>
+                </div>
+              </div>
+
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5">
                   <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Status</p>

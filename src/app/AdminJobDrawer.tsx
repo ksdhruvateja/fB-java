@@ -20,6 +20,7 @@ import {
   formatMoney,
   getProposal,
   adminAssignContractor,
+  adminMarkJobDispatched,
   adminGetJobInvoice,
   retailRangeLabel,
   type Bid,
@@ -779,8 +780,53 @@ if (!open || !job) return null;
                         Only the contractor connected to the homeowner-approved estimate can be assigned to this job.
                       </p>
                       {assignedContractor ? (
-                        <div className="mt-3 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-800">
-                          Assigned: <span className="font-semibold">{assignedContractor.name}</span>
+                        <div className="mt-3 space-y-3">
+                          <div className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-800">
+                            Assigned: <span className="font-semibold">{assignedContractor.name}</span>
+                          </div>
+                          {job.status === "paid_for_dispatch" || job.status === "approved" || job.status === "scheduled" ? (
+                            <div className="rounded-lg border border-border bg-muted/20 px-3 py-3">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Dispatch status</p>
+                              <p className="mt-1 text-sm font-medium">{job.status === "scheduled" ? "Dispatch requested" : "Waiting for dispatch"}</p>
+                              <button
+                                type="button"
+                                disabled={readOnly || busy || assigningContractor}
+                                onClick={async () => {
+                                  setAssigningContractor(true);
+                                  try {
+                                    const r = await adminMarkJobDispatched(job.id, job.assignedEmployeeId || undefined);
+                                    onMessage(r.ok ? "Contractor dispatched." : r.message || "Could not dispatch contractor.");
+                                    if (r.ok) await onRefresh();
+                                  } finally {
+                                    setAssigningContractor(false);
+                                  }
+                                }}
+                                className="mt-2 inline-flex items-center justify-center rounded-xl bg-[#FF4D1C] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                              >
+                                {assigningContractor ? "Dispatching…" : "Dispatch Contractor"}
+                              </button>
+                            </div>
+                          ) : null}
+                          {job.status === "contractor_en_route" ? (
+                            <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+                              Contractor dispatched · on the way
+                            </div>
+                          ) : null}
+                          {job.status === "contractor_arrived" ? (
+                            <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+                              Contractor arrived · waiting for Start Work
+                            </div>
+                          ) : null}
+                          {job.status === "work_started" || job.status === "change_order_pending" ? (
+                            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                              Work started · in progress
+                            </div>
+                          ) : null}
+                          {job.status === "customer_review_pending" ? (
+                            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                              Completion submitted · waiting for confirmation
+                            </div>
+                          ) : null}
                         </div>
                       ) : (
                         <button

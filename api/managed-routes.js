@@ -5729,6 +5729,66 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
       const job = rows[0];
 
+      // Idempotency guard: a double-click/retry must never create a second
+      // assignment or rerun lifecycle transitions. If this exact contractor is
+      // already assigned to this exact job, return the current authoritative
+      // state instead of treating the request as a new assignment.
+      const alreadyAssignedContractorId = Number(job.assigned_contractor_user_id || 0);
+      if (alreadyAssignedContractorId > 0) {
+        console.log('[ASSIGN DEBUG] EXISTING ASSIGNMENT', JSON.stringify({
+          jobId,
+          existingContractorUserId: alreadyAssignedContractorId,
+          requestedContractorUserId: contractorUserId,
+          sameContractor: alreadyAssignedContractorId === contractorUserId,
+          jobStatus: job.status,
+        }, null, 2));
+
+        if (alreadyAssignedContractorId !== contractorUserId) {
+          return res.status(409).json({
+            ok: false,
+            code: 'JOB_ALREADY_ASSIGNED',
+            message: 'This job is already assigned to another contractor.',
+            diagnostics: {
+              jobId,
+              assignedContractorUserId: alreadyAssignedContractorId,
+              requestedContractorUserId: contractorUserId,
+            },
+          });
+        }
+
+        const { rows: existingContractors } = await pool.query(
+          `SELECT id, name, email, company_name FROM users WHERE id=$1 AND role='contractor'`,
+          [alreadyAssignedContractorId]
+        );
+        const existingContractor = existingContractors[0] || null;
+        const freshExisting = await fetchJobWithTech(pool, jobId);
+        console.log('[ASSIGN DEBUG] ALREADY ASSIGNED - IDEMPOTENT SUCCESS', JSON.stringify({
+          jobId,
+          contractorUserId: alreadyAssignedContractorId,
+          status: freshExisting?.status || job.status,
+        }, null, 2));
+        return res.json({
+          ok: true,
+          alreadyAssigned: true,
+          job: serializeJob(freshExisting, req.authUser),
+          contractor: existingContractor
+            ? {
+                id: Number(existingContractor.id),
+                name: existingContractor.name,
+                email: existingContractor.email,
+                companyName: existingContractor.company_name || null,
+              }
+            : { id: alreadyAssignedContractorId, name: null, email: null, companyName: null },
+          assignment: {
+            jobId,
+            contractorUserId: alreadyAssignedContractorId,
+            status: 'assigned',
+            alreadyAssigned: true,
+            dispatchReady: true,
+          },
+        });
+      }
+
       // GATE 2: successful initial payment for THIS job.
       const { rows: initialInvoices } = await pool.query(
         `SELECT id, invoice_number, status, total, paid, amount_due,
@@ -5950,14 +6010,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         });
       }
 
-      const { rows: fresh } = await pool.query(
-        `SELECT * FROM managed_jobs WHERE id=$1`,
-        [jobId]
-      );
+      const fresh = await fetchJobWithTech(pool, jobId);
 
       const response = {
         ok: true,
-        job: serializeJob(fresh[0], req.authUser),
+        job: serializeJob(fresh, req.authUser),
         contractor: {
           id: Number(contractor.id),
           name: contractor.name,

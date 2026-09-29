@@ -443,7 +443,7 @@ export default function ContractorDashboard({
     let stopped = false;
     let inFlight = false;
     let timer: number | null = null;
-    let delayMs = 12000;
+    let delayMs = 8000;
 
     const refreshLifecycle = async (reason: string) => {
       if (stopped || inFlight || document.visibilityState !== "visible") return;
@@ -454,7 +454,7 @@ export default function ContractorDashboard({
         const statusI = Number((i as unknown as { status?: number }).status || 0);
         if (j.ok) setJobs(j.jobs || []);
         if (i.ok) setInvites((i.invitations || []) as ContractorInvite[]);
-        if (j.ok || i.ok) delayMs = 12000;
+        if (j.ok || i.ok) delayMs = 8000;
         else if ([statusJ, statusI].includes(429)) {
           delayMs = 30000;
           console.warn("[FixBridge lifecycle] contractor refresh backed off after 429", { reason });
@@ -462,10 +462,10 @@ export default function ContractorDashboard({
           delayMs = 20000;
           console.warn("[FixBridge lifecycle] contractor refresh denied", { reason, statusJ, statusI });
         } else {
-          delayMs = 15000;
+          delayMs = 10000;
         }
       } catch (error) {
-        delayMs = 15000;
+        delayMs = 10000;
         console.warn("[FixBridge lifecycle] contractor refresh failed", error);
       } finally {
         inFlight = false;

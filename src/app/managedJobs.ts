@@ -510,39 +510,6 @@ async function apiRequest<T>(path: string, init?: RequestInit & { timeoutMs?: nu
       if (!parsed.message) parsed.message = assessmentUnavailableMessage();
     }
 
-    // Workflow mutations must invalidate the Admin UI immediately.  Previously
-    // callers had to manually refresh because a successful POST/PUT/PATCH/DELETE
-    // only changed the server state; React's cached job/proposal/bid state stayed
-    // stale.  Emit one scoped browser event after a successful workflow mutation.
-    // GET requests are intentionally excluded.
-    if (
-      res.ok &&
-      method !== 'GET' &&
-      parsed?.ok !== false &&
-      (path.startsWith('/api/admin/managed/jobs/') ||
-        path.startsWith('/api/managed/jobs/') ||
-        path.startsWith('/api/admin/quotes/') ||
-        path.startsWith('/api/admin/invoices/'))
-    ) {
-      try {
-        window.dispatchEvent(
-          new CustomEvent('fixbridge:workflow-mutated', {
-            detail: {
-              method,
-              path,
-              status: res.status,
-              jobId: (() => {
-                const match = path.match(/\/api\/(?:admin\/)?managed\/jobs\/(\d+)/);
-                return match ? Number(match[1]) : null;
-              })(),
-              at: Date.now(),
-            },
-          }),
-        );
-      } catch {
-        // Browser event support is non-critical to the API result.
-      }
-    }
 
     const denied = parseEntitlementDeniedResponse(res.status, parsed);
     if (denied?.disabled) {

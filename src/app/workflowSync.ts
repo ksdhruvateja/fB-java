@@ -58,21 +58,46 @@ function publish(detail: Record<string, unknown>) {
   }
 }
 
-function emitMutation(method: string, url: string, status: number, payload: unknown) {
+function isWorkflowMutationPath(pathname: string) {
+  return (
+    /^\/api\/(?:admin\/)?managed\//i.test(pathname) ||
+    /^\/api\/admin\/(?:quotes|invoices)\//i.test(pathname) ||
+    /^\/api\/homeowner\/invoices\//i.test(pathname) ||
+    /^\/api\/contractor\/(?:managed|bids|invitations)\//i.test(pathname)
+  );
+}
+
+let lastMutationKey = '';
+let lastMutationAt = 0;
+
+function emitMutation(method: string, url: string, status: number, payload: unknown = null) {
   if (typeof window === "undefined") return;
   try {
     const absolute = new URL(url, window.location.origin);
     if (absolute.origin !== window.location.origin || !absolute.pathname.startsWith("/api/")) return;
     if (/^\/api\/(auth|public|health)(?:\/|$)/i.test(absolute.pathname)) return;
+    if (!isWorkflowMutationPath(absolute.pathname)) return;
 
-    publish({
+    const pathJobId = getJobId(absolute.pathname, null);
+    const detail = {
       method,
       path: `${absolute.pathname}${absolute.search}`,
       status,
-      jobId: getJobId(absolute.pathname, payload),
+      jobId: pathJobId ?? getJobId(absolute.pathname, payload),
       at: Date.now(),
       source: "api-mutation",
-    });
+    };
+
+    // One mutation -> one browser event. The managedJobs API wrapper used to
+    // emit the same event as this global fetch monitor, causing two refreshes
+    // for one click. Deduplicate the tiny overlap window here.
+    const key = `${method}:${absolute.pathname}:${status}:${detail.jobId ?? "none"}`;
+    const now = Date.now();
+    if (key === lastMutationKey && now - lastMutationAt < 750) return;
+    lastMutationKey = key;
+    lastMutationAt = now;
+
+    publish(detail);
   } catch {
     // Synchronization is non-critical to the API response.
   }
@@ -137,12 +162,17 @@ export function installWorkflowMutationSync() {
     logApiStatus(method, response.url, response.status);
 
     if (response.ok && method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
-      // Clone before the caller consumes the original response body.
-      void response.clone().json().then((payload) => {
-        emitMutation(method, response.url, response.status, payload);
-      }).catch(() => {
-        emitMutation(method, response.url, response.status, null);
-      });
+      // Publish immediately when the mutation URL identifies the exact job.
+      // For endpoints such as bid/invitation responses that do not contain a
+      // job id, wait for the response JSON so we still publish one job-scoped
+      // event rather than an unscoped refresh followed by a second refresh.
+      if (getJobId(response.url, null) != null) {
+        emitMutation(method, response.url, response.status);
+      } else {
+        void response.clone().json().then((payload) => {
+          emitMutation(method, response.url, response.status, payload);
+        }).catch(() => undefined);
+      }
     }
     return response;
   };

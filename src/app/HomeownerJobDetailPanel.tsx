@@ -147,22 +147,6 @@ export default function HomeownerJobDetailPanel({
   const isMobile = useIsMobile();
   const editable = canEditHomeownerJob(job.status);
 
-  // If another FixBridge workflow action updates this exact job (for example
-  // Admin sends a quote, payment settles, contractor is assigned, dispatched,
-  // or work is completed), refresh the open detail immediately. The dashboard
-  // also listens globally; this listener protects the detail panel when it is
-  // mounted in a narrower workspace.
-  useEffect(() => {
-    const onWorkflowMutated = (event: Event) => {
-      const detail = (event as CustomEvent<{ jobId?: number | null }>).detail;
-      const changedJobId = detail?.jobId != null ? Number(detail.jobId) : null;
-      if (changedJobId != null && changedJobId !== Number(job.id)) return;
-      void onRefresh();
-    };
-    window.addEventListener("fixbridge:workflow-mutated", onWorkflowMutated);
-    return () => window.removeEventListener("fixbridge:workflow-mutated", onWorkflowMutated);
-  }, [job.id, onRefresh]);
-
   useEffect(() => {
     if (!focus) return;
     const id =
@@ -697,10 +681,10 @@ export default function HomeownerJobDetailPanel({
           )
         }
       >
-        {job.assignedContractorUserId && job.technician ? (
-          <div className="rounded-xl border border-border bg-muted/20 p-4">
+        {job.assignedContractorUserId ? (
+          <div className="space-y-3 rounded-xl border border-border bg-muted/20 p-4">
             <div className="flex items-start gap-3">
-              {job.technician.photoUrl ? (
+              {job.technician?.photoUrl ? (
                 <img
                   src={job.technician.photoUrl}
                   alt=""
@@ -708,20 +692,42 @@ export default function HomeownerJobDetailPanel({
                 />
               ) : (
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-bold">
-                  {String(job.technician.name || "C").slice(0, 1).toUpperCase()}
+                  {String(job.technician?.name || job.contractorName || "C").slice(0, 1).toUpperCase()}
                 </div>
               )}
               <div className="min-w-0">
-                <p className="font-semibold">{job.technician.name || "Assigned contractor"}</p>
-                {job.technician.company ? (
+                <p className="font-semibold">{job.technician?.name || job.contractorName || "Assigned contractor"}</p>
+                {job.technician?.company ? (
                   <p className="text-sm text-muted-foreground">{job.technician.company}</p>
                 ) : null}
-                {job.technician.trade ? (
+                {job.technician?.trade ? (
                   <p className="text-xs text-muted-foreground">{job.technician.trade}</p>
                 ) : null}
                 <p className="mt-2 text-xs font-medium text-emerald-600">
                   Your contractor has been assigned.
                 </p>
+              </div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <div className="rounded-lg border border-border bg-background p-2.5">
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Assignment</p>
+                <p className="mt-1 text-xs font-semibold text-emerald-700">Assigned ✓</p>
+              </div>
+              <div className="rounded-lg border border-border bg-background p-2.5">
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Dispatch</p>
+                <p className="mt-1 text-xs font-semibold">{
+                  ["contractor_en_route", "contractor_arrived", "work_started", "change_order_pending", "work_completed", "customer_review_pending", "admin_review_pending", "payout_pending", "paid_out", "closed"].includes(String(job.status))
+                    ? "Dispatched ✓"
+                    : "Waiting for dispatch"
+                }</p>
+              </div>
+              <div className="rounded-lg border border-border bg-background p-2.5">
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Work</p>
+                <p className="mt-1 text-xs font-semibold">{
+                  ["work_started", "change_order_pending", "work_completed", "customer_review_pending", "admin_review_pending", "payout_pending", "paid_out", "closed"].includes(String(job.status))
+                    ? "Started ✓"
+                    : "Not started"
+                }</p>
               </div>
             </div>
           </div>
