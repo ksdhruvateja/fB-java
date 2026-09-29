@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft, LogOut, Loader2, Shield, DollarSign, Users, Briefcase,
   Settings2, Link2, BarChart3, Sparkles, Menu, X, LayoutDashboard,
@@ -680,6 +680,28 @@ export default function AdminPanel({
     }
   }
 
+  useEffect(() => {
+    const handleWorkflowMutation = () => {
+      void refreshJobs();
+    };
+
+    window.addEventListener('fixbridge:workflow-mutated', handleWorkflowMutation);
+
+    // Some FixBridge API modules use their own fetch helpers and cannot emit
+    // the workflow-mutated event. Poll the Admin work queue while a request is
+    // open so successful negotiation/approval/payment/assignment/dispatch
+    // changes become visible without a browser refresh. The in-flight guard
+    // prevents overlapping refreshes and stale responses.
+    const timer = selectedJobId
+      ? window.setInterval(() => { void refreshJobs(); }, 2500)
+      : null;
+
+    return () => {
+      window.removeEventListener('fixbridge:workflow-mutated', handleWorkflowMutation);
+      if (timer != null) window.clearInterval(timer);
+    };
+  }, [selectedJobId]);
+
   const selectedJob = jobs.find((j) => j.id === selectedJobId) || null;
 
   const filteredInviteContractors = useMemo(() => {
@@ -713,9 +735,34 @@ export default function AdminPanel({
     setMarkupAmount(0);
   }, [selectedJobId, selectedJob?.aiAssessment, selectedJob?.customerRetailEstimateLow, selectedJob?.customerRetailEstimateHigh, selectedJob?.showRetailPrice]);
 
+  const refreshInFlightRef = useRef(false);
+
   async function refreshJobs() {
-    const r = await adminListJobs();
-    if (r.ok) setJobs(r.jobs || []);
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    try {
+      const requestJobId = Number(selectedJobId || 0);
+      const r = await adminListJobs();
+      if (r.ok) {
+        const nextJobs = r.jobs || [];
+        setJobs(nextJobs);
+
+        // Always refresh the currently opened request from the server. This is
+        // the fallback for APIs that do not use managedJobs.ts and therefore
+        // cannot emit the workflow-mutated browser event.
+        if (requestJobId > 0) {
+          const bidsResult = await listBids(requestJobId);
+          if (bidsResult.ok) {
+            const returned = bidsResult.bids || [];
+            setBids(returned.filter((bid) => Number(bid.jobId) === requestJobId));
+          } else {
+            setBids([]);
+          }
+        }
+      }
+    } finally {
+      refreshInFlightRef.current = false;
+    }
   }
 
   async function refreshContractors() {
@@ -748,10 +795,39 @@ export default function AdminPanel({
       setBids([]);
       return;
     }
-    void listBids(selectedJobId).then((r) => {
-      if (r.ok) setBids(r.bids || []);
-    });
-  }, [selectedJobId, jobs]);
+
+    const requestJobId = Number(selectedJobId);
+    let cancelled = false;
+
+    // A previous request can finish after the admin switches jobs. Never let
+    // that late response overwrite the bids for the currently opened job.
+    setBids([]);
+    void listBids(requestJobId)
+      .then((r) => {
+        if (cancelled) return;
+        if (!r.ok) {
+          setBids([]);
+          return;
+        }
+
+        const returned = r.bids || [];
+        const scoped = returned.filter((bid) => Number(bid.jobId) === requestJobId);
+        if (scoped.length !== returned.length) {
+          console.warn('[ADMIN JOB SCOPE] Ignored bid(s) returned for another job', {
+            selectedJobId: requestJobId,
+            returnedJobIds: Array.from(new Set(returned.map((bid) => Number(bid.jobId)))),
+          });
+        }
+        setBids(scoped);
+      })
+      .catch(() => {
+        if (!cancelled) setBids([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedJobId]);
 
   useEffect(() => {
     const contractorId = inviteContractorIds.length === 1
@@ -4204,6 +4280,7 @@ export default function AdminPanel({
         </AnimatePresence>
 
         <AdminJobDrawer
+          key={selectedJob ? `managed-job-${selectedJob.id}` : "managed-job-none"}
           job={selectedJob}
           bids={bids}
           contractors={contractors}

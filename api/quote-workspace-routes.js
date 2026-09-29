@@ -594,9 +594,29 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
   app.get('/api/admin/quotes/:id/workspace', requireAuth, requireAdmin, async (req, res) => {
     try {
       const idOrNum = String(req.params.id || '').trim();
-      const { rows } = await pool.query(quoteSelectSql(
-        `WHERE p.id::text = $1 OR LOWER(COALESCE(p.quote_number,'')) = LOWER($1) LIMIT 1`
-      ), [idOrNum]);
+      const expectedJobId = Number(req.query.jobId);
+      const hasExpectedJobId = Number.isFinite(expectedJobId) && expectedJobId > 0;
+      const whereSql = hasExpectedJobId
+        ? `WHERE (p.id::text = $1 OR LOWER(COALESCE(p.quote_number,'')) = LOWER($1)) AND p.job_id=$2 LIMIT 1`
+        : `WHERE p.id::text = $1 OR LOWER(COALESCE(p.quote_number,'')) = LOWER($1) LIMIT 1`;
+      const params = hasExpectedJobId ? [idOrNum, expectedJobId] : [idOrNum];
+      const { rows } = await pool.query(quoteSelectSql(whereSql), params);
+      if (!rows[0] && hasExpectedJobId) {
+        const { rows: mismatch } = await pool.query(
+          `SELECT id, job_id, quote_number FROM proposals WHERE id::text=$1 OR LOWER(COALESCE(quote_number,''))=LOWER($1) LIMIT 1`,
+          [idOrNum],
+        );
+        if (mismatch[0]) {
+          return res.status(409).json({
+            ok: false,
+            code: 'QUOTE_JOB_MISMATCH',
+            message: 'This quote does not belong to the selected request.',
+            quoteId: Number(mismatch[0].id),
+            quoteJobId: Number(mismatch[0].job_id),
+            requestedJobId: expectedJobId,
+          });
+        }
+      }
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Quote not found.' });
       if (!rows[0].quote_number) {
         const qn = `FBQ-${String(rows[0].id).padStart(5, '0')}`;
@@ -675,8 +695,26 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
   app.put('/api/admin/quotes/:id/document', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const id = Number(req.params.id);
+      const expectedJobId = Number(req.query.jobId ?? req.body?.jobId);
+      const hasExpectedJobId = Number.isFinite(expectedJobId) && expectedJobId > 0;
       const { rows } = await pool.query(`SELECT * FROM proposals WHERE id=$1`, [id]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Quote not found.' });
+      if (hasExpectedJobId && Number(rows[0].job_id) !== expectedJobId) {
+        console.warn('[QUOTE DOCUMENT SCOPE] job mismatch', {
+          quoteId: id,
+          quoteJobId: Number(rows[0].job_id),
+          requestedJobId: expectedJobId,
+          actorUserId: req.authUser?.id || null,
+        });
+        return res.status(409).json({
+          ok: false,
+          code: 'QUOTE_JOB_MISMATCH',
+          message: 'This quote does not belong to the selected request.',
+          quoteId: id,
+          quoteJobId: Number(rows[0].job_id),
+          requestedJobId: expectedJobId,
+        });
+      }
       if (rows[0].locked_at || ['accepted', 'approved', 'converted', 'paid', 'canceled', 'cancelled'].includes(String(rows[0].status).toLowerCase())) {
         return res.status(409).json({
           ok: false,
@@ -686,14 +724,19 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
       }
       const st = String(rows[0].status || '').toLowerCase();
       if (['sent', 'viewed'].includes(st)) {
-        const changeReason = String(req.body?.changeReason || req.body?.revisionReason || '').trim();
-        if (!changeReason) {
-          return res.status(409).json({
-            ok: false,
-            code: 'revision_required',
-            message: 'Sent quotes cannot be silently overwritten. Provide changeReason to create a revision.',
-          });
-        }
+        const changeReason = String(
+          req.body?.changeReason ||
+          req.body?.revisionReason ||
+          'Admin quote revision',
+        ).trim();
+        console.log('[QUOTE DOCUMENT REVISION] creating revision', {
+          quoteId: id,
+          jobId: Number(rows[0].job_id),
+          previousStatus: rows[0].status,
+          previousVersion: Number(rows[0].version_number || 1),
+          changeReason,
+          actorUserId: req.authUser?.id || null,
+        });
         await snapshotQuoteRevision(pool, rows[0], req.authUser.id, changeReason);
         const prevVersion = Number(rows[0].version_number || 1);
         await pool.query(

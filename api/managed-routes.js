@@ -5779,8 +5779,18 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (['suspended', 'rejected', 'blocked'].includes(compliance)) {
         return res.status(400).json({ ok: false, message: 'Contractor is suspended or rejected.' });
       }
-      const gateOk = await enforceContractorDispatchGate(pool, contractors[0], res, job);
-      if (!gateOk) return;
+      // Compliance is a LIVE-DISPATCH gate, not an assignment gate.
+      // Assignment must be allowed after homeowner approval + successful
+      // initial payment; the contractor's compliance is checked when Admin
+      // actually requests dispatch below. This keeps the workflow:
+      // approval -> initial payment -> assignment -> dispatch.
+      console.log('[ASSIGNMENT DEBUG] Assignment gates passed', JSON.stringify({
+        jobId,
+        requestedContractorUserId: contractorUserId,
+        initialPaymentConfirmed: true,
+        contractorComplianceStatus: contractors[0].compliance_status || null,
+        note: 'Compliance is enforced at dispatch, not assignment',
+      }, null, 2));
       // The homeowner's quote-approval acknowledgments plus successful initial
       // invoice payment are the gate for assignment. Dispatch itself is a later
       // Admin action after assignment.
@@ -7415,8 +7425,46 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         [jobId]
       );
       if (dispatchInvoices[0]?.initial_payment_completed !== true) {
+        console.warn('[DISPATCH GATE] Initial payment not confirmed', JSON.stringify({
+          jobId,
+          assignedContractorUserId: Number(job.assigned_contractor_user_id),
+          invoice: dispatchInvoices[0] || null,
+        }, null, 2));
         return res.status(409).json({ ok: false, code: 'INITIAL_PAYMENT_REQUIRED', message: 'Initial payment must be successfully completed before dispatch.' });
       }
+
+      const { rows: dispatchContractors } = await pool.query(
+        `SELECT * FROM users WHERE id=$1 AND role='contractor'`,
+        [job.assigned_contractor_user_id]
+      );
+      if (!dispatchContractors[0]) {
+        return res.status(404).json({ ok: false, message: 'Assigned contractor not found.' });
+      }
+
+      // Contractor compliance is intentionally enforced here, at LIVE DISPATCH.
+      // Missing compliance documents may exist while a contractor is assigned,
+      // but they must block the actual dispatch.
+      const dispatchGateOk = await enforceContractorDispatchGate(
+        pool,
+        dispatchContractors[0],
+        res,
+        job
+      );
+      if (!dispatchGateOk) {
+        console.warn('[DISPATCH GATE] Contractor not eligible', JSON.stringify({
+          jobId,
+          assignedContractorUserId: Number(job.assigned_contractor_user_id),
+          complianceStatus: dispatchContractors[0].compliance_status || null,
+        }, null, 2));
+        return;
+      }
+
+      console.log('[DISPATCH DEBUG] Dispatch gates passed', JSON.stringify({
+        jobId,
+        assignedContractorUserId: Number(job.assigned_contractor_user_id),
+        initialPaymentConfirmed: true,
+        complianceGatePassed: true,
+      }, null, 2));
 
       await pushStatus(pool, jobId, job.status, 'scheduled', req.authUser.id, 'Admin requested contractor dispatch');
 

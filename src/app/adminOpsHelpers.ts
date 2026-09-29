@@ -269,156 +269,198 @@ export function filterWorkQueue(
 }
 
 export function lifecycleForJob(job: ManagedJob): LifecycleStep[] {
-  const status = job.status;
+  const status = String(job.status || "").toLowerCase();
+  const initialPaymentCompleted = job.invoiceInitialPaymentCompleted === true;
+  const assigned = Number(job.assignedContractorUserId || 0) > 0;
+
+  const homeownerApproved = [
+    "approved",
+    "scheduled",
+    "contractor_en_route",
+    "diagnosing",
+    "work_started",
+    "change_order_pending",
+    "work_completed",
+    "customer_review_pending",
+    "admin_review_pending",
+    "payout_pending",
+    "paid_out",
+    "closed",
+  ].includes(status) || (status === "paid_for_dispatch" && initialPaymentCompleted);
+
+  const dispatchStarted = [
+    "scheduled",
+    "contractor_en_route",
+    "diagnosing",
+    "work_started",
+    "change_order_pending",
+    "work_completed",
+    "customer_review_pending",
+    "admin_review_pending",
+    "payout_pending",
+    "paid_out",
+    "closed",
+  ].includes(status);
+
+  const workStarted = [
+    "work_started",
+    "change_order_pending",
+    "work_completed",
+    "customer_review_pending",
+    "admin_review_pending",
+    "payout_pending",
+    "paid_out",
+    "closed",
+  ].includes(status);
+
+  const workCompleted = [
+    "work_completed",
+    "customer_review_pending",
+    "admin_review_pending",
+    "payout_pending",
+    "paid_out",
+    "closed",
+  ].includes(status);
+
+  const finalPaymentStage = [
+    "admin_review_pending",
+    "payout_pending",
+    "paid_out",
+    "closed",
+  ].includes(status);
+
   const order = [
-    { id: "request", label: "Request", match: () => true },
+    { id: "request", label: "Request", state: "done" as const },
     {
       id: "ai",
       label: "AI Estimate",
-      match: () =>
-        ![
-          "draft",
-        ].includes(status),
+      state: status === "draft" ? "current" as const : "done" as const,
     },
     {
       id: "dispatch_req",
       label: "Dispatch Requested",
-      match: () =>
-        ![
-          "draft",
-          "ai_review_complete",
-          "awaiting_service_payment",
-        ].includes(status),
+      state: ["draft", "ai_review_complete", "awaiting_service_payment"].includes(status)
+        ? "todo" as const
+        : "done" as const,
     },
     {
       id: "contractor_quote",
       label: "Contractor Quote",
-      match: () =>
-        [
-          "bid_received",
-          "proposal_sent",
-          "awaiting_customer_approval",
-          "approved",
-          "scheduled",
-          "contractor_en_route",
-          "diagnosing",
-          "work_started",
-          "change_order_pending",
-          "work_completed",
-          "customer_review_pending",
-          "admin_review_pending",
-          "payout_pending",
-          "paid_out",
-          "closed",
-        ].includes(status),
+      state: [
+        "bid_received",
+        "proposal_sent",
+        "awaiting_customer_approval",
+        "approved",
+        "paid_for_dispatch",
+        "scheduled",
+        "contractor_en_route",
+        "diagnosing",
+        "work_started",
+        "change_order_pending",
+        "work_completed",
+        "customer_review_pending",
+        "admin_review_pending",
+        "payout_pending",
+        "paid_out",
+        "closed",
+      ].includes(status) ? "done" as const : "current" as const,
     },
     {
       id: "admin_pricing",
       label: "Admin Pricing",
-      match: () =>
-        [
-          "proposal_sent",
-          "awaiting_customer_approval",
-          "approved",
-          "scheduled",
-          "contractor_en_route",
-          "diagnosing",
-          "work_started",
-          "change_order_pending",
-          "work_completed",
-          "customer_review_pending",
-          "admin_review_pending",
-          "payout_pending",
-          "paid_out",
-          "closed",
-        ].includes(status),
+      state: [
+        "proposal_sent",
+        "awaiting_customer_approval",
+        "approved",
+        "paid_for_dispatch",
+        "scheduled",
+        "contractor_en_route",
+        "diagnosing",
+        "work_started",
+        "change_order_pending",
+        "work_completed",
+        "customer_review_pending",
+        "admin_review_pending",
+        "payout_pending",
+        "paid_out",
+        "closed",
+      ].includes(status) ? "done" as const : "todo" as const,
     },
     {
       id: "homeowner",
       label: "Homeowner Approval",
-      match: () =>
-        [
-          "approved",
-          "scheduled",
-          "contractor_en_route",
-          "diagnosing",
-          "work_started",
-          "change_order_pending",
-          "work_completed",
-          "customer_review_pending",
-          "admin_review_pending",
-          "payout_pending",
-          "paid_out",
-          "closed",
-        ].includes(status),
+      state: homeownerApproved ? "done" as const : ["proposal_sent", "awaiting_customer_approval"].includes(status) ? "current" as const : "todo" as const,
+    },
+    {
+      id: "initial_payment",
+      label: "Initial Payment",
+      state: !homeownerApproved
+        ? "todo" as const
+        : initialPaymentCompleted
+          ? "done" as const
+          : "current" as const,
+    },
+    {
+      id: "assignment",
+      label: "Assignment",
+      state: !homeownerApproved || !initialPaymentCompleted
+        ? "todo" as const
+        : assigned
+          ? "done" as const
+          : "current" as const,
     },
     {
       id: "dispatch",
       label: "Dispatch",
-      match: () =>
-        [
-          "scheduled",
-          "contractor_en_route",
-          "diagnosing",
-          "work_started",
-          "change_order_pending",
-          "work_completed",
-          "customer_review_pending",
-          "admin_review_pending",
-          "payout_pending",
-          "paid_out",
-          "closed",
-        ].includes(status),
+      state: !assigned
+        ? "todo" as const
+        : dispatchStarted
+          ? "done" as const
+          : "current" as const,
     },
     {
       id: "work",
       label: "Work",
-      match: () =>
-        [
-          "work_started",
-          "change_order_pending",
-          "work_completed",
-          "customer_review_pending",
-          "admin_review_pending",
-          "payout_pending",
-          "paid_out",
-          "closed",
-        ].includes(status),
+      state: !dispatchStarted
+        ? "todo" as const
+        : workStarted
+          ? "done" as const
+          : "current" as const,
     },
     {
       id: "payment",
       label: "Payment",
-      match: () =>
-        ["admin_review_pending", "payout_pending", "paid_out", "closed"].includes(status) ||
-        (status === "customer_review_pending" && false),
+      state: !workCompleted
+        ? "todo" as const
+        : finalPaymentStage
+          ? "done" as const
+          : "current" as const,
     },
     {
       id: "payout",
       label: "Payout",
-      match: () => ["paid_out", "closed"].includes(status),
+      state: ["paid_out", "closed"].includes(status)
+        ? "done" as const
+        : finalPaymentStage
+          ? "current" as const
+          : "todo" as const,
     },
   ];
 
-  // Current step heuristic
-  let currentId = "request";
-  if (status === "bid_received") currentId = "admin_pricing";
-  else if (["proposal_sent", "awaiting_customer_approval"].includes(status)) currentId = "homeowner";
-  else if (["approved"].includes(status)) currentId = "dispatch";
-  else if (["scheduled", "contractor_en_route", "diagnosing"].includes(status)) currentId = "dispatch";
-  else if (["work_started", "change_order_pending"].includes(status)) currentId = "work";
-  else if (["work_completed", "customer_review_pending"].includes(status)) currentId = "payment";
-  else if (["admin_review_pending", "payout_pending"].includes(status)) currentId = "payout";
-  else if (["contractor_invited", "awaiting_bid", "contractor_accepted"].includes(status)) currentId = "contractor_quote";
-  else if (["paid_for_dispatch", "awaiting_contractor"].includes(status)) currentId = "contractor_quote";
-  else if (["ai_review_complete", "awaiting_service_payment"].includes(status)) currentId = "dispatch_req";
-  else if (status === "draft") currentId = "request";
-  else if (["paid_out", "closed"].includes(status)) currentId = "payout";
+  // Convert the declarative states above into a single current step while
+  // preserving completed milestones. This keeps the progress bar stable when
+  // the backend moves from approved -> paid_for_dispatch after the initial
+  // payment succeeds.
+  const currentIndex = order.findIndex((step) => step.state === "current");
+  if (currentIndex >= 0) {
+    return order.map((step, index) => ({
+      id: step.id,
+      label: step.label,
+      state: index < currentIndex ? "done" as const : index === currentIndex ? "current" as const : "todo" as const,
+    }));
+  }
 
-  return order.map((step) => {
-    if (step.id === currentId) return { id: step.id, label: step.label, state: "current" as const };
-    if (step.match()) return { id: step.id, label: step.label, state: "done" as const };
-    return { id: step.id, label: step.label, state: "todo" as const };
-  });
+  return order;
 }
 
 export function relativeTime(iso?: string | null) {

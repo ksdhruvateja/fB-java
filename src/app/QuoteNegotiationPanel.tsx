@@ -32,13 +32,36 @@ export default function QuoteNegotiationPanel({
   const [counterAmount, setCounterAmount] = useState("");
   const [adminMessage, setAdminMessage] = useState("");
 
-  async function load() {
-    const r = await listNegotiations(jobId);
-    if (r.ok) setItems(r.negotiations || []);
-    setLoading(false);
-  }
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setItems([]);
 
-  useEffect(() => { void load(); }, [jobId, proposal.id]);
+    void listNegotiations(jobId)
+      .then((r) => {
+        if (cancelled) return;
+        if (r.ok) {
+          setItems(
+            (r.negotiations || []).filter(
+              (n) => Number(n.jobId) === Number(jobId) && Number(n.proposalId) === Number(proposal.id),
+            ),
+          );
+        } else {
+          setItems([]);
+        }
+        setLoading(false);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setItems([]);
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId, proposal.id]);
 
   const latest = items[items.length - 1];
   const pending = items.find((n) => n.action === "pending");

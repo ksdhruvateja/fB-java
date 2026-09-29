@@ -80,7 +80,7 @@ export default function AdminQuoteOptionsPanel({
     const r = await adminSaveQuoteDocument(id, {
       quoteOptionTitle: e.title,
       scopeSummary: e.scope,
-    });
+    }, jobId);
     if (!r.ok) onMessage(r.message || "Could not save option.");
   };
 

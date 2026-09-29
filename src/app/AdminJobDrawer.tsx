@@ -127,10 +127,16 @@ export default function AdminJobDrawer({
   // The managed-job status is the authoritative homeowner-approval gate.
   // A proposal/bid status alone must never expose contractor assignment before
   // the homeowner has actually approved the final quote.
+  const proposalStatus = String(currentProposal?.status || "").toLowerCase();
+  const proposalApprovalConfirmed = ["accepted", "approved", "paid", "converted"].includes(proposalStatus);
   const homeownerApprovedProposal =
     ["approved", "scheduled", "contractor_en_route", "work_started", "work_completed", "customer_review_pending", "admin_review_pending", "payout_pending", "paid_out", "closed"].includes(
       String(job?.status || "")
-    );
+    ) ||
+    // After the successful initial payment the backend advances the job to
+    // paid_for_dispatch. Keep the approved-workflow gate open here so the
+    // contractor invitation UI cannot reappear after homeowner approval.
+    (String(job?.status || "") === "paid_for_dispatch" && proposalApprovalConfirmed);
   const approvedContractorUserId =
     currentProposal?.contractorUserId ??
     (currentProposal?.bidId != null
@@ -151,20 +157,60 @@ export default function AdminJobDrawer({
 
   useEffect(() => {
     if (!open || !job) return;
+
+    const requestJobId = Number(job.id);
+    let cancelled = false;
+
+    // Reset every request-scoped quote value immediately. This prevents a
+    // previous request's proposal from remaining visible while the new job is
+    // loading.
+    setProposalId(null);
+    setCurrentProposal(null);
+    setQuoteMode("build");
+    setSelectedBidId(null);
     setProposalLoading(true);
-    void getProposal(job.id)
+
+    void getProposal(requestJobId)
       .then((r) => {
-        const id = r.proposal?.id ?? job.activeProposalId ?? null;
+        if (cancelled) return;
+
+        const returnedProposal = r.proposal || null;
+        if (returnedProposal && Number(returnedProposal.jobId) !== requestJobId) {
+          console.error('[ADMIN JOB SCOPE] Refusing proposal from another job', {
+            selectedJobId: requestJobId,
+            returnedProposalId: returnedProposal.id,
+            returnedProposalJobId: returnedProposal.jobId,
+          });
+          setProposalId(null);
+          setCurrentProposal(null);
+          setQuoteMode("build");
+          onMessage('The quote returned for this request belongs to another request. It was blocked.');
+          return;
+        }
+
+        // Do not fall back to job.activeProposalId here. The API response is
+        // already scoped to this exact job; a stale activeProposalId can point
+        // at a different request in legacy data.
+        const id = returnedProposal?.id ?? null;
         setProposalId(id != null ? Number(id) : null);
-        setCurrentProposal(r.proposal || null);
-        if (id != null) {
-          setQuoteMode("document");
-        } else if (bids.length > 0) {
+        setCurrentProposal(returnedProposal);
+        setQuoteMode(id != null ? "document" : "build");
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProposalId(null);
+          setCurrentProposal(null);
           setQuoteMode("build");
         }
       })
-      .finally(() => setProposalLoading(false));
-  }, [open, job?.id, job?.activeProposalId, bids.length]);
+      .finally(() => {
+        if (!cancelled) setProposalLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, job?.id, job?.updatedAt]);
 
   useEffect(() => {
     if (!open || !job || tab !== "dispatch") return;
@@ -485,7 +531,14 @@ if (!open || !job) return null;
                     onChanged={async () => {
                       await onRefresh();
                       const r = await getProposal(job.id);
-                      if (r.proposal?.id) { setProposalId(Number(r.proposal.id)); setCurrentProposal(r.proposal); }
+                      if (r.proposal && Number(r.proposal.jobId) === Number(job.id)) {
+                        setProposalId(Number(r.proposal.id));
+                        setCurrentProposal(r.proposal);
+                      } else {
+                        setProposalId(null);
+                        setCurrentProposal(null);
+                        setQuoteMode("build");
+                      }
                     }}
                     onMessage={onMessage}
                   />
@@ -496,12 +549,20 @@ if (!open || !job) return null;
                 ) : quoteMode === "document" && proposalId ? (
                   <AdminQuoteDocumentPanel
                     quoteId={proposalId}
+                    expectedJobId={job.id}
                     embedded
                     onMessage={onMessage}
                     onChanged={async () => {
                       await onRefresh();
                       const r = await getProposal(job.id);
-                      if (r.proposal?.id) { setProposalId(Number(r.proposal.id)); setCurrentProposal(r.proposal); }
+                      if (r.proposal && Number(r.proposal.jobId) === Number(job.id)) {
+                        setProposalId(Number(r.proposal.id));
+                        setCurrentProposal(r.proposal);
+                      } else {
+                        setProposalId(null);
+                        setCurrentProposal(null);
+                        setQuoteMode("build");
+                      }
                     }}
                   />
                 ) : bids.length === 0 ? (
@@ -544,10 +605,14 @@ if (!open || !job) return null;
                         onPublished={async () => {
                           await onRefresh();
                           const r = await getProposal(job.id);
-                          if (r.proposal?.id) {
+                          if (r.proposal && Number(r.proposal.jobId) === Number(job.id)) {
                             setProposalId(Number(r.proposal.id));
                             setCurrentProposal(r.proposal);
                             setQuoteMode("document");
+                          } else {
+                            setProposalId(null);
+                            setCurrentProposal(null);
+                            setQuoteMode("build");
                           }
                         }}
                       />

@@ -105,12 +105,14 @@ function couponAlreadyApplied(
 /** Professional quote / invoice document editor. Use alone in Work Queue, or with the list workspace. */
 export function AdminQuoteDocumentPanel({
   quoteId,
+  jobId,
   onMessage,
   onOpenJob,
   onChanged,
   embedded = false,
 }: {
   quoteId: number;
+  jobId?: number;
   onMessage: (msg: string) => void;
   onOpenJob?: (jobId: number) => void;
   onChanged?: () => void | Promise<void>;
@@ -124,6 +126,7 @@ export function AdminQuoteDocumentPanel({
       onChanged={onChanged}
       embedded={embedded}
       showList={false}
+      expectedJobId={jobId}
     />
   );
 }
@@ -147,6 +150,7 @@ export default function AdminQuotesWorkspace({
 
 function QuoteDocumentEditor({
   quoteId: lockedQuoteId,
+  expectedJobId,
   onMessage,
   onOpenJob,
   onChanged,
@@ -154,6 +158,7 @@ function QuoteDocumentEditor({
   showList = true,
 }: {
   quoteId: number | null;
+  expectedJobId?: number;
   onMessage: (msg: string) => void;
   onOpenJob?: (jobId: number) => void;
   onChanged?: () => void | Promise<void>;
@@ -361,7 +366,7 @@ function QuoteDocumentEditor({
   const openQuote = async (id: number) => {
     setSelectedId(id);
     setWorkspaceLoading(true);
-    const r = await adminQuoteWorkspace(id);
+    const r = await adminQuoteWorkspace(id, expectedJobId);
     setWorkspaceLoading(false);
     if (!r.ok || !r.quote) {
       onMessage(r.message || "Could not open quote.");
@@ -382,7 +387,7 @@ function QuoteDocumentEditor({
       void openQuote(lockedQuoteId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lockedQuoteId]);
+  }, [lockedQuoteId, expectedJobId]);
 
   useEffect(() => {
     const token = getStoredToken();
@@ -453,7 +458,7 @@ function QuoteDocumentEditor({
   const saveDraft = async () => {
     if (!quote) return;
     setSaving(true);
-    const r = await adminSaveQuoteDocument(quote.id, { ...documentPayload(), status: quote.status === "draft" ? "draft" : quote.status });
+    const r = await adminSaveQuoteDocument(quote.id, { ...documentPayload(), status: quote.status === "draft" ? "draft" : quote.status }, quote.jobId || expectedJobId);
     setSaving(false);
     if (!r.ok || !r.quote) {
       onMessage(r.message || "Could not save quote.");
@@ -468,7 +473,7 @@ function QuoteDocumentEditor({
   const runSend = async () => {
     if (!quote) return;
     setBusyAction(true);
-    await adminSaveQuoteDocument(quote.id, documentPayload());
+    await adminSaveQuoteDocument(quote.id, documentPayload(), quote.jobId || expectedJobId);
     const r = await adminSendQuote(quote.id, {
       sendEmail,
       sendSms,
@@ -684,7 +689,7 @@ function QuoteDocumentEditor({
                       <ActionBtn
                         onClick={async () => {
                           setBusyAction(true);
-                          await adminSaveQuoteDocument(quote.id, documentPayload());
+                          await adminSaveQuoteDocument(quote.id, documentPayload(), quote.jobId || expectedJobId);
                           const r = await adminConvertQuoteToInvoice(quote.id);
                           setBusyAction(false);
                           if (!r.ok) {

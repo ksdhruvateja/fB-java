@@ -300,9 +300,23 @@ export async function validateToken(options?: { syncCheckout?: boolean }): Promi
       signal: controller.signal,
     });
     const data = await res.json();
-    if (!data.ok) {
-      clearSession();
-      return { ok: false, reason: "invalid" };
+    // Only an explicit authentication rejection invalidates the session.
+    // Previously any `{ ok:false }` response (including a transient 5xx/429
+    // from /api/auth/me) cleared the Admin session and looked like an
+    // unexpected logout. Keep the cached session for server/network failures.
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 403) {
+        clearSession();
+        return { ok: false, reason: "invalid" };
+      }
+      const cached = getStoredUser();
+      if (cached) return { ok: true, user: cached };
+      return { ok: false, reason: "network" };
+    }
+    if (!data.ok || !data.user) {
+      const cached = getStoredUser();
+      if (cached) return { ok: true, user: cached };
+      return { ok: false, reason: "network" };
     }
     storeSession(token, data.user);
     return { ok: true, user: data.user };
