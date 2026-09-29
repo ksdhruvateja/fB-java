@@ -37,7 +37,7 @@ import DeleteServiceRequestMenu from "./DeleteServiceRequestMenu";
 import QuoteNegotiationPanel from "./QuoteNegotiationPanel";
 import ContractorBidNegotiationPanel from "./ContractorBidNegotiationPanel";
 
-type DrawerTab = "overview" | "quotes" | "dispatch" | "invoice" | "evidence";
+type DrawerTab = "overview" | "quotes" | "dispatch" | "invoice" | "contractor" | "evidence";
 type QuoteSubMode = "document" | "build";
 
 export default function AdminJobDrawer({
@@ -325,6 +325,7 @@ if (!open || !job) return null;
                 ["quotes", "Quotes"],
                 ["dispatch", "Dispatch"],
                 ["invoice", "Invoice"],
+                ["contractor", "Contractor"],
                 ["evidence", "Legal / Evidence"],
               ] as const
             ).map(([id, label]) => (
@@ -632,6 +633,85 @@ if (!open || !job) return null;
                     )}
                   </>
                 )}
+              </div>
+            )}
+
+            {tab === "contractor" && (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-[#FF4D1C]/20 bg-[#FF4D1C]/5 p-4">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-[#FF4D1C]">Contractor</p>
+                  <div className="mt-2 flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-lg font-semibold">{assignedContractor?.name || "Not assigned yet"}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {assignedContractor?.trade || "Contractor"}{assignedContractor?.email ? ` · ${assignedContractor.email}` : ""}
+                      </p>
+                    </div>
+                    {assignedContractor && onOpenContractor ? (
+                      <button
+                        type="button"
+                        onClick={() => onOpenContractor(Number(assignedContractor.id))}
+                        className="rounded-xl border border-border px-3 py-2 text-xs font-semibold"
+                      >
+                        Open contractor
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-xl border border-border p-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Assignment</p>
+                    <p className="mt-1 text-sm font-semibold">{assignedContractor ? "Assigned ✓" : "Not assigned"}</p>
+                  </div>
+                  <div className="rounded-xl border border-border p-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Work status</p>
+                    <p className="mt-1 text-sm font-semibold">
+                      {job.status === "work_completed" || ["payout_pending", "paid_out", "closed"].includes(job.status)
+                        ? "Completed ✓"
+                        : job.status === "work_started" || job.status === "change_order_pending"
+                          ? "In progress"
+                          : job.status === "contractor_arrived"
+                            ? "Arrived · Start Work"
+                            : job.status === "contractor_en_route"
+                              ? "On the way"
+                              : assignedContractor
+                                ? "Assigned · waiting for dispatch"
+                                : "Not assigned"}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-border p-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Payment</p>
+                    <p className="mt-1 text-sm font-semibold">
+                      {job.status === "work_completed" && Number(job.invoiceAmountDue || 0) > 0
+                        ? `Final payment due ${formatMoney(Number(job.invoiceAmountDue || 0))}`
+                        : job.status === "payout_pending"
+                          ? "Paid · payout pending"
+                          : job.status === "paid_out" || job.status === "closed"
+                            ? "Paid · payout complete"
+                            : "Waiting for completion"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-border p-4">
+                  <p className="text-sm font-semibold">Contractor work lifecycle</p>
+                  <div className="mt-3 space-y-2 text-sm">
+                    {([
+                      ["Assigned", Boolean(assignedContractor)],
+                      ["Dispatched", ["contractor_en_route", "contractor_arrived", "work_started", "change_order_pending", "work_completed", "payout_pending", "paid_out", "closed"].includes(job.status)],
+                      ["Work started", ["work_started", "change_order_pending", "work_completed", "payout_pending", "paid_out", "closed"].includes(job.status)],
+                      ["Work completed", ["work_completed", "payout_pending", "paid_out", "closed"].includes(job.status)],
+                      ["Final payment", ["payout_pending", "paid_out", "closed"].includes(job.status) || (job.status === "work_completed" && Number(job.invoiceAmountDue || 0) <= 0.009)],
+                      ["Payout", ["paid_out", "closed"].includes(job.status)],
+                    ] as const).map(([label, done]) => (
+                      <div key={label} className="flex items-center gap-2">
+                        <span className={`h-2.5 w-2.5 rounded-full ${done ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                        <span className={done ? "font-medium" : "text-muted-foreground"}>{label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
 

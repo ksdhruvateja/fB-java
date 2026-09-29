@@ -8811,10 +8811,15 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         [JSON.stringify(report), jobId]
       );
 
-      // Contractor completion is a SUBMISSION, not final job completion.
-      // The homeowner/admin must confirm before the job becomes work_completed.
+      // Contractor completion is the authoritative WORK COMPLETED milestone.
+      // The homeowner's remaining invoice balance becomes available immediately;
+      // payout remains locked until the invoice is fully paid.
+      const completionNote = isAdmin
+        ? `Work completed by admin (user ${req.authUser.id})`
+        : 'Contractor completed the job and submitted completion proof';
+      await pushStatus(pool, jobId, job.status, 'work_completed', req.authUser.id, completionNote);
+
       if (isContractor && !isAdmin) {
-        await pushStatus(pool, jobId, job.status, 'customer_review_pending', req.authUser.id, 'Contractor submitted completion proof — waiting for confirmation');
         await recordJobOperationalEvent(pool, {
           jobId,
           eventType: 'completion_submitted',
@@ -8823,14 +8828,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           actorUserId: req.authUser.id,
           detail: { summary: report.summary || null },
         });
-        const { rows: freshSubmitted } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
-        return res.json({ ok: true, job: serializeJob(freshSubmitted[0], req.authUser) });
       }
-
-      const completionNote = isAdmin
-        ? `Work completed by admin (user ${req.authUser.id})`
-        : 'Work completed with proof';
-      await pushStatus(pool, jobId, job.status, 'work_completed', req.authUser.id, completionNote);
 
       // Completion does not create a second invoice. It refreshes the existing
       // authoritative invoice from successful payment records so the homeowner

@@ -328,6 +328,15 @@ export default function ContractorJobsPanel({
                 </div>
               )}
 
+              {selected.status === "work_completed" && (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                  <p className="text-sm font-semibold text-emerald-800">Work completed ✓</p>
+                  <p className="mt-1 text-xs text-emerald-700">
+                    Completion proof was submitted successfully. The homeowner can now pay the remaining invoice balance.
+                  </p>
+                </div>
+              )}
+
               <div className="rounded-xl border border-border p-4 space-y-3">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Work order</p>
                 <div className="grid gap-2 text-sm sm:grid-cols-2">
@@ -497,6 +506,7 @@ export default function ContractorJobsPanel({
                   {selected.status === "contractor_arrived" ? "Reached location · Start Work next" : null}
                   {["work_started", "change_order_pending"].includes(selected.status) ? "Work in progress · Submit Completion when finished" : null}
                   {selected.status === "customer_review_pending" ? "Completion submitted · waiting for confirmation" : null}
+                  {selected.status === "work_completed" ? "Work completed · homeowner final payment is now available" : null}
                 </div>
                 {notes !== "" && (
                   <textarea
