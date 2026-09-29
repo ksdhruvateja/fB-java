@@ -4,9 +4,11 @@ import './styles/index.css';
 import App from './app/App.tsx';
 import AppErrorBoundary from './app/AppErrorBoundary.tsx';
 import { clearChunkReloadFlag, installChunkLoadRecovery } from './app/chunkRecovery.ts';
+import { installWorkflowMutationSync } from './app/workflowSync.ts';
 
 installChunkLoadRecovery();
 clearChunkReloadFlag();
+installWorkflowMutationSync();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

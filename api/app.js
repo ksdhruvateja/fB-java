@@ -78,6 +78,7 @@ import {
   isPositiveInt,
 } from './security.js';
 import { postgresSslOptions } from './db-ssl.js';
+import { installJobDebugLogger } from './job-debug-log.js';
 import {
   requirePermission,
   resolveAdminPreset,
@@ -423,7 +424,7 @@ async function ensureDemoUsers() {
   }
 }
 
-const SCHEMA_READY_VERSION = 20260928;
+const SCHEMA_READY_VERSION = 20260927;
 
 async function readSchemaReadyVersion() {
   try {
@@ -1162,6 +1163,10 @@ app.use(
   })
 );
 
+// Debug-only tracing: keeps the baseline business logic unchanged while recording
+// job-scoped requests and database snapshots in one JSON store.
+installJobDebugLogger(app, { pool, requireAdmin });
+
 // ── Rate limiters ─────────────────────────────────────────────────────────────
 // Netlify/serverless sometimes has no req.ip. express-rate-limit v8 then throws
 // ValidationError, and Express's default handler returns HTML. The Google
@@ -1173,6 +1178,17 @@ function rateLimitKey(req) {
     : String(forwarded || '').split(',')[0].trim();
   const nfIp = String(req.headers['x-nf-client-connection-ip'] || '').trim();
   const clientIp = req.ip || fromHeader || nfIp || 'unknown';
+
+  // FixBridge is commonly tested with Admin + Homeowner + Contractor sessions
+  // from the same browser/IP. An IP-only limiter made those independent roles
+  // consume one shared 400-request bucket and eventually produced 429s. Keep
+  // the IP in the key, but also isolate authenticated sessions by token hash.
+  const auth = String(req.headers.authorization || '');
+  if (auth.startsWith('Bearer ')) {
+    const tokenHash = crypto.createHash('sha256').update(auth.slice(7)).digest('hex').slice(0, 20);
+    return `${clientIp}:${tokenHash}`;
+  }
+
   return clientIp === 'unknown' ? 'unknown' : ipKeyGenerator(clientIp);
 }
 
@@ -1186,7 +1202,7 @@ const rateLimitBase = {
 const apiLimiter = rateLimit({
   ...rateLimitBase,
   windowMs: 15 * 60 * 1000,
-  max: Number(process.env.API_RATE_LIMIT_MAX || 400),
+  max: Number(process.env.API_RATE_LIMIT_MAX || 800),
   message: { ok: false, message: 'Too many requests. Please slow down and try again.' },
 });
 

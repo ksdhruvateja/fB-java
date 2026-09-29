@@ -687,18 +687,11 @@ export default function AdminPanel({
 
     window.addEventListener('fixbridge:workflow-mutated', handleWorkflowMutation);
 
-    // Some FixBridge API modules use their own fetch helpers and cannot emit
-    // the workflow-mutated event. Poll the Admin work queue while a request is
-    // open so successful negotiation/approval/payment/assignment/dispatch
-    // changes become visible without a browser refresh. The in-flight guard
-    // prevents overlapping refreshes and stale responses.
-    const timer = selectedJobId
-      ? window.setInterval(() => { void refreshJobs(); }, 2500)
-      : null;
-
+    // All successful same-origin API mutations are captured by the global
+    // workflow sync installed in src/main.tsx. Do not poll the Admin queue
+    // every few seconds: that created the 429 storm that blocked other roles.
     return () => {
       window.removeEventListener('fixbridge:workflow-mutated', handleWorkflowMutation);
-      if (timer != null) window.clearInterval(timer);
     };
   }, [selectedJobId]);
 

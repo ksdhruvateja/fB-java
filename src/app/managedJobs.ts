@@ -497,6 +497,11 @@ async function apiRequest<T>(path: string, init?: RequestInit & { timeoutMs?: nu
         status: res.status,
       } as T;
     }
+    if (!res.ok && parsed) {
+      // Preserve the real HTTP status for lifecycle polling/backoff and for
+      // diagnostics. Do not turn 401/403/429 into a generic network error.
+      parsed.status = res.status;
+    }
     if (!res.ok && typeof parsed.message === "string") {
       parsed.message = sanitizeApiErrorMessage(String(parsed.message), res.status);
     }
@@ -526,6 +531,10 @@ async function apiRequest<T>(path: string, init?: RequestInit & { timeoutMs?: nu
               method,
               path,
               status: res.status,
+              jobId: (() => {
+                const match = path.match(/\/api\/(?:admin\/)?managed\/jobs\/(\d+)/);
+                return match ? Number(match[1]) : null;
+              })(),
               at: Date.now(),
             },
           }),

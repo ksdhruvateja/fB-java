@@ -436,6 +436,62 @@ export default function ContractorDashboard({
     }
   }, []);
 
+  // Contractor lifecycle sync: Admin/homeowner mutations arrive through the
+  // shared workflow event. Separate devices use a low-rate refresh so new
+  // assignments, dispatches and status changes appear without F5.
+  useEffect(() => {
+    let stopped = false;
+    let inFlight = false;
+    let timer: number | null = null;
+    let delayMs = 12000;
+
+    const refreshLifecycle = async (reason: string) => {
+      if (stopped || inFlight || document.visibilityState !== "visible") return;
+      inFlight = true;
+      try {
+        const [j, i] = await Promise.all([listMyManagedJobs(), listInvitations()]);
+        const statusJ = Number((j as unknown as { status?: number }).status || 0);
+        const statusI = Number((i as unknown as { status?: number }).status || 0);
+        if (j.ok) setJobs(j.jobs || []);
+        if (i.ok) setInvites((i.invitations || []) as ContractorInvite[]);
+        if (j.ok || i.ok) delayMs = 12000;
+        else if ([statusJ, statusI].includes(429)) {
+          delayMs = 30000;
+          console.warn("[FixBridge lifecycle] contractor refresh backed off after 429", { reason });
+        } else if ([statusJ, statusI].some((s) => s === 401 || s === 403)) {
+          delayMs = 20000;
+          console.warn("[FixBridge lifecycle] contractor refresh denied", { reason, statusJ, statusI });
+        } else {
+          delayMs = 15000;
+        }
+      } catch (error) {
+        delayMs = 15000;
+        console.warn("[FixBridge lifecycle] contractor refresh failed", error);
+      } finally {
+        inFlight = false;
+        if (!stopped) {
+          if (timer != null) window.clearTimeout(timer);
+          timer = window.setTimeout(() => void refreshLifecycle("poll"), delayMs);
+        }
+      }
+    };
+
+    const onWorkflowMutated = () => void refreshLifecycle("workflow-mutated");
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void refreshLifecycle("visible");
+    };
+    window.addEventListener("fixbridge:workflow-mutated", onWorkflowMutated);
+    document.addEventListener("visibilitychange", onVisibility);
+    void refreshLifecycle("mount");
+
+    return () => {
+      stopped = true;
+      window.removeEventListener("fixbridge:workflow-mutated", onWorkflowMutated);
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (timer != null) window.clearTimeout(timer);
+    };
+  }, []);
+
   const monthEarnings = useMemo(
     () => (payoutSummary?.paidThisMonthCents || 0) / 100,
     [payoutSummary]

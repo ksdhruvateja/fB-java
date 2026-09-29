@@ -5709,178 +5709,293 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
   });
 
   app.post('/api/admin/managed/jobs/:id/assign', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    const assignStartedAt = Date.now();
     try {
       const jobId = Number(req.params.id);
       const contractorUserId = Number(req.body?.contractorUserId);
+      console.log('[ASSIGN DEBUG] START', JSON.stringify({ jobId, requestedContractorUserId: contractorUserId, actorUserId: req.authUser?.id, actorRole: req.authUser?.role, body: req.body, timestamp: new Date().toISOString(), }, null, 2));
       if (!Number.isFinite(jobId) || jobId <= 0) {
-        return res.status(400).json({ ok: false, message: 'Invalid job.' });
+        return res.status(400).json({ ok: false, code: 'INVALID_JOB', message: 'Invalid job.' });
       }
       if (!Number.isFinite(contractorUserId) || contractorUserId <= 0) {
-        return res.status(400).json({ ok: false, message: 'Select a contractor to assign.' });
+        return res.status(400).json({ ok: false, code: 'CONTRACTOR_REQUIRED', message: 'Select a contractor to assign.' });
       }
 
+      // GATE 1: exact job
       const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
-      if (!rows[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
+      if (!rows[0]) {
+        return res.status(404).json({ ok: false, code: 'JOB_NOT_FOUND', message: 'Job not found.' });
+      }
       const job = rows[0];
+
+      // GATE 2: successful initial payment for THIS job.
       const { rows: initialInvoices } = await pool.query(
-        `SELECT initial_payment_completed FROM homeowner_invoices WHERE job_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+        `SELECT id, invoice_number, status, total, paid, amount_due,
+                initial_payment_completed, initial_payment_amount, payment_plan_percent,
+                updated_at, created_at
+           FROM homeowner_invoices
+          WHERE job_id=$1
+          ORDER BY updated_at DESC NULLS LAST, created_at DESC, id DESC`,
         [jobId]
       );
-      if (initialInvoices[0]?.initial_payment_completed !== true) {
-        return res.status(409).json({ ok: false, code: 'INITIAL_PAYMENT_REQUIRED', message: 'The homeowner must successfully complete the selected initial payment before a contractor can be assigned.' });
+      const latestInvoice = initialInvoices[0] || null;
+      const paymentGatePassed = initialInvoices.some(
+        (invoice) => invoice.initial_payment_completed === true
+      );
+
+      console.log('[ASSIGN DEBUG] PAYMENT GATE', JSON.stringify({
+        jobId,
+        jobStatus: job.status,
+        paymentGatePassed,
+        latestInvoice,
+        expected: { exactJobId: jobId, initialPaymentCompleted: true },
+      }, null, 2));
+
+      if (!paymentGatePassed) {
+        console.warn('[ASSIGN DEBUG] FAIL INITIAL_PAYMENT_REQUIRED', { jobId, latestInvoice });
+        return res.status(409).json({
+          ok: false,
+          code: 'INITIAL_PAYMENT_REQUIRED',
+          message: 'The homeowner must successfully complete the selected initial payment before a contractor can be assigned.',
+          diagnostics: {
+            jobId,
+            latestInvoiceId: latestInvoice?.id || null,
+            initialPaymentCompleted: latestInvoice?.initial_payment_completed === true,
+          },
+        });
       }
 
-      // Assignment is locked to the exact contractor whose estimate the
-      // homeowner approved.
+      // GATE 3: homeowner-approved proposal -> bid -> contractor.
       const { rows: approvedProposalRows } = await pool.query(
-        `SELECT p.id, p.status, p.bid_id, b.contractor_user_id
+        `SELECT p.id AS proposal_id,
+                p.status AS proposal_status,
+                p.bid_id,
+                p.retail_amount,
+                p.contractor_net,
+                b.job_id AS bid_job_id,
+                b.contractor_user_id,
+                b.net_total AS bid_net_total,
+                u.name AS contractor_name
            FROM proposals p
-           LEFT JOIN bids b ON b.id = p.bid_id
+           JOIN bids b ON b.id=p.bid_id AND b.job_id=p.job_id
+           LEFT JOIN users u ON u.id=b.contractor_user_id
           WHERE p.job_id=$1
-            AND p.status IN ('accepted','approved','paid')
-          ORDER BY CASE WHEN p.id=$2 THEN 0 ELSE 1 END, p.created_at DESC, p.id DESC
-          LIMIT 1`,
+          ORDER BY CASE WHEN p.id=$2 THEN 0 ELSE 1 END,
+                   p.updated_at DESC NULLS LAST,
+                   p.created_at DESC,
+                   p.id DESC`,
         [jobId, Number(job.active_proposal_id || 0)]
       );
-      const approvedProposal = approvedProposalRows[0];
-      const approvedContractorId = approvedProposal?.contractor_user_id != null
-        ? Number(approvedProposal.contractor_user_id)
-        : null;
-      const proposalStatus = String(approvedProposal?.status || '').toLowerCase();
-      if (!approvedProposal || !['accepted', 'approved', 'paid'].includes(proposalStatus)) {
-        return res.status(409).json({ ok: false, code: 'APPROVED_PROPOSAL_REQUIRED', message: 'A homeowner-approved contractor estimate is required before assignment.' });
-      }
-      if (!approvedContractorId || approvedContractorId !== contractorUserId) {
-        return res.status(409).json({ ok: false, code: 'APPROVED_CONTRACTOR_ONLY', message: 'Only the contractor connected to the homeowner-approved estimate can be assigned.' });
-      }
-      if (!approvedProposal.bid_id) {
-        return res.status(409).json({ ok: false, code: 'APPROVED_BID_REQUIRED', message: 'The approved estimate must be linked to a contractor bid before assignment.' });
+
+      const approvedProposal = approvedProposalRows.find((p) =>
+        ['accepted', 'approved', 'paid', 'converted'].includes(
+          String(p.proposal_status || '').toLowerCase()
+        )
+      );
+
+      console.log('[ASSIGN DEBUG] APPROVED CONTRACTOR RELATION', JSON.stringify({
+        jobId,
+        requestedContractorUserId: contractorUserId,
+        approvedProposal: approvedProposal ? {
+          proposalId: approvedProposal.proposal_id,
+          proposalStatus: approvedProposal.proposal_status,
+          bidId: approvedProposal.bid_id,
+          bidJobId: approvedProposal.bid_job_id,
+          contractorUserId: approvedProposal.contractor_user_id,
+          contractorName: approvedProposal.contractor_name,
+        } : null,
+        expected: {
+          proposalMustBelongToJob: jobId,
+          requestedContractorMustMatchApprovedBidContractor: true,
+        },
+      }, null, 2));
+
+      if (!approvedProposal) {
+        return res.status(409).json({
+          ok: false,
+          code: 'APPROVED_PROPOSAL_REQUIRED',
+          message: 'A homeowner-approved contractor estimate is required before assignment.',
+          diagnostics: {
+            jobId,
+            activeProposalId: job.active_proposal_id,
+            proposalStatusesFound: approvedProposalRows.map((p) => ({
+              proposalId: p.proposal_id,
+              status: p.proposal_status,
+            })),
+          },
+        });
       }
 
+      const approvedContractorId = Number(approvedProposal.contractor_user_id || 0);
+      if (!approvedContractorId) {
+        return res.status(409).json({
+          ok: false,
+          code: 'APPROVED_CONTRACTOR_MISSING',
+          message: 'The approved estimate is not linked to a contractor.',
+        });
+      }
+
+      if (approvedContractorId !== contractorUserId) {
+        console.warn('[ASSIGN DEBUG] FAIL APPROVED_CONTRACTOR_ONLY', {
+          jobId,
+          requestedContractorUserId: contractorUserId,
+          approvedContractorUserId: approvedContractorId,
+          proposalId: approvedProposal.proposal_id,
+          bidId: approvedProposal.bid_id,
+        });
+        return res.status(409).json({
+          ok: false,
+          code: 'APPROVED_CONTRACTOR_ONLY',
+          message: 'Only the contractor connected to the homeowner-approved estimate can be assigned.',
+          diagnostics: {
+            jobId,
+            requestedContractorUserId: contractorUserId,
+            approvedContractorUserId: approvedContractorId,
+            proposalId: approvedProposal.proposal_id,
+            bidId: approvedProposal.bid_id,
+          },
+        });
+      }
+
+      // GATE 4: contractor accepted THIS job invitation.
       const { rows: acceptedInvites } = await pool.query(
-        `SELECT id FROM job_invitations
-           WHERE job_id=$1 AND contractor_user_id=$2 AND status='accepted'
-           LIMIT 1`,
+        `SELECT id, status, responded_at
+           FROM job_invitations
+          WHERE job_id=$1 AND contractor_user_id=$2 AND status='accepted'
+          LIMIT 1`,
         [jobId, contractorUserId]
       );
       if (!acceptedInvites[0]) {
-        return res.status(409).json({ ok: false, code: 'CONTRACTOR_NOT_ACCEPTED', message: 'The approved contractor must accept the invitation before assignment.' });
+        return res.status(409).json({
+          ok: false,
+          code: 'CONTRACTOR_NOT_ACCEPTED',
+          message: 'The approved contractor must accept the invitation before assignment.',
+        });
       }
 
+      // GATE 5: contractor account is active enough to be assigned.
       const { rows: contractors } = await pool.query(
-        `SELECT * FROM users WHERE id=$1 AND role='contractor'`,
+        `SELECT id, name, email, company_name, role, is_blocked, compliance_status,
+                stripe_account_id, master_agreement_accepted_at AS agreement_accepted_at, license_expires_at, insurance_expires_at
+           FROM users
+          WHERE id=$1 AND role='contractor'`,
         [contractorUserId]
       );
-      if (!contractors[0]) return res.status(404).json({ ok: false, message: 'Contractor not found.' });
-      if (contractors[0].is_blocked === true) {
-        return res.status(400).json({ ok: false, message: 'This contractor account is blocked.' });
+      const contractor = contractors[0];
+      if (!contractor) {
+        return res.status(404).json({ ok: false, code: 'CONTRACTOR_NOT_FOUND', message: 'Contractor not found.' });
       }
-      const compliance = String(contractors[0].compliance_status || 'draft').toLowerCase();
+      if (contractor.is_blocked === true) {
+        return res.status(400).json({ ok: false, code: 'CONTRACTOR_BLOCKED', message: 'This contractor account is blocked.' });
+      }
+      const compliance = String(contractor.compliance_status || 'draft').toLowerCase();
       if (['suspended', 'rejected', 'blocked'].includes(compliance)) {
-        return res.status(400).json({ ok: false, message: 'Contractor is suspended or rejected.' });
+        return res.status(400).json({
+          ok: false,
+          code: 'CONTRACTOR_NOT_ELIGIBLE',
+          message: 'Contractor is suspended or rejected.',
+        });
       }
-      // Compliance is a LIVE-DISPATCH gate, not an assignment gate.
-      // Assignment must be allowed after homeowner approval + successful
-      // initial payment; the contractor's compliance is checked when Admin
-      // actually requests dispatch below. This keeps the workflow:
-      // approval -> initial payment -> assignment -> dispatch.
-      console.log('[ASSIGNMENT DEBUG] Assignment gates passed', JSON.stringify({
+
+      console.log('[ASSIGN DEBUG] ALL ASSIGNMENT GATES PASSED', JSON.stringify({
         jobId,
         requestedContractorUserId: contractorUserId,
+        contractorName: contractor.name,
+        proposalId: approvedProposal.proposal_id,
+        bidId: approvedProposal.bid_id,
         initialPaymentConfirmed: true,
-        contractorComplianceStatus: contractors[0].compliance_status || null,
-        note: 'Compliance is enforced at dispatch, not assignment',
+        invitationAccepted: true,
+        contractorEligible: true,
+        nextMilestone: 'assignment_complete',
+        dispatchGate: 'NOT_RUN_AT_ASSIGNMENT',
       }, null, 2));
-      // The homeowner's quote-approval acknowledgments plus successful initial
-      // invoice payment are the gate for assignment. Dispatch itself is a later
-      // Admin action after assignment.
-      // Ensure invitation row exists so contractor sees it in their portal
-      await pool.query(
-        `INSERT INTO job_invitations (job_id, contractor_user_id, status, expected_net_low, expected_net_high, invited_by)
-         VALUES ($1,$2,'accepted',$3,$4,$5)
-         ON CONFLICT (job_id, contractor_user_id) DO UPDATE SET
-           status='accepted',
-           responded_at=COALESCE(job_invitations.responded_at, NOW())`,
-        [
-          jobId,
-          contractorUserId,
-          rows[0].estimated_contractor_net_low,
-          rows[0].estimated_contractor_net_high,
-          req.authUser.id,
-        ]
-      );
 
+      // ASSIGNMENT ONLY. Do NOT dispatch here.
+      // Dispatch is a separate lifecycle step after assignment.
       await pool.query(
-        `UPDATE managed_jobs SET assigned_contractor_user_id=$1, updated_at=NOW() WHERE id=$2`,
+        `UPDATE managed_jobs
+            SET assigned_contractor_user_id=$1,
+                assigned_employee_id=NULL,
+                updated_at=NOW()
+          WHERE id=$2`,
         [contractorUserId, jobId]
       );
 
-      const employeeId = req.body?.employeeId != null ? Number(req.body.employeeId) : null;
-      if (employeeId) {
-        const empCheck = await assertEmployeeAssignable(pool, employeeId, contractorUserId);
-        if (!empCheck.ok) {
-          return res.status(empCheck.status || 400).json({ ok: false, message: empCheck.message });
-        }
-        await pool.query(`UPDATE managed_jobs SET assigned_employee_id=$1 WHERE id=$2`, [employeeId, jobId]);
+      await audit(pool, req.authUser.id, 'contractor_assigned', 'managed_job', jobId, {
+        contractorUserId,
+        contractorName: contractor.name || null,
+        proposalId: approvedProposal.proposal_id,
+        bidId: approvedProposal.bid_id,
+        initialPaymentConfirmed: true,
+      });
+
+      try {
         await recordJobOperationalEvent(pool, {
           jobId,
-          eventType: 'technician_assigned',
+          eventType: 'contractor_assigned',
           contractorUserId,
-          employeeId,
+          employeeId: null,
           actorUserId: req.authUser.id,
-          detail: { employeeName: empCheck.employee?.full_name || null },
+          detail: {
+            companyName: contractor.company_name || contractor.name || null,
+            proposalId: approvedProposal.proposal_id,
+            bidId: approvedProposal.bid_id,
+          },
         });
-      } else if (req.body?.clearEmployee === true) {
-        await pool.query(`UPDATE managed_jobs SET assigned_employee_id=NULL WHERE id=$1`, [jobId]);
+      } catch (eventError) {
+        console.warn('[ASSIGN DEBUG] operational event failed (non-fatal)', {
+          jobId,
+          error: eventError?.message || String(eventError),
+        });
       }
 
-      const current = rows[0].status;
-      if (!['awaiting_bid', 'bid_received', 'proposal_sent', 'awaiting_customer_approval', 'approved', 'scheduled', 'work_started', 'work_completed', 'payout_pending', 'paid_out', 'closed'].includes(current)) {
-        await pushStatus(pool, jobId, current, 'contractor_accepted', req.authUser.id, 'Contractor assigned');
-        await pushStatus(pool, jobId, 'contractor_accepted', 'awaiting_bid', req.authUser.id, 'Awaiting confidential net bid');
-      } else if (current === 'contractor_invited' || current === 'contractor_accepted') {
-        await pushStatus(pool, jobId, current, 'awaiting_bid', req.authUser.id, 'Awaiting confidential net bid');
-      }
-
-      await audit(pool, req.authUser.id, 'contractor_assigned', 'managed_job', jobId, { contractorUserId });
-      await recordJobOperationalEvent(pool, {
-        jobId,
-        eventType: 'contractor_assigned',
-        contractorUserId,
-        employeeId: employeeId || null,
-        actorUserId: req.authUser.id,
-        detail: { companyName: contractors[0].company_name || contractors[0].name || null },
-      });
-
-      const complianceDocs = await loadCurrentComplianceDocuments(pool, contractorUserId);
-      const { rows: dispatchSnaps } = await pool.query(
-        `SELECT id, authorized_now_cents FROM professional_dispatch_snapshots
-         WHERE job_id=$1 ORDER BY created_at DESC LIMIT 1`,
+      const { rows: fresh } = await pool.query(
+        `SELECT * FROM managed_jobs WHERE id=$1`,
         [jobId]
       );
-      await recordJobDispatchEvidence(pool, {
-        jobId,
-        homeownerUserId: rows[0].homeowner_user_id,
-        contractorUserId,
-        professionalDispatchSnapshotId: dispatchSnaps[0]?.id || null,
-        authorizedNowCents: dispatchSnaps[0]?.authorized_now_cents || rows[0].visit_fee_amount || null,
-        complianceDocumentIds: complianceDocs.map((d) => Number(d.id)),
-        complianceStatus: contractors[0].compliance_status || null,
-      });
 
-      const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
-      res.json({
+      const response = {
         ok: true,
         job: serializeJob(fresh[0], req.authUser),
         contractor: {
-          id: Number(contractors[0].id),
-          name: contractors[0].name,
-          email: contractors[0].email,
+          id: Number(contractor.id),
+          name: contractor.name,
+          email: contractor.email,
+          companyName: contractor.company_name || null,
         },
-      });
+        assignment: {
+          jobId,
+          contractorUserId,
+          proposalId: approvedProposal.proposal_id,
+          bidId: approvedProposal.bid_id,
+          status: 'assigned',
+          dispatchReady: true,
+        },
+      };
+
+      console.log('[ASSIGN DEBUG] SUCCESS', JSON.stringify({
+        jobId,
+        contractorUserId,
+        proposalId: approvedProposal.proposal_id,
+        bidId: approvedProposal.bid_id,
+        durationMs: Date.now() - assignStartedAt,
+      }, null, 2));
+
+      return res.json(response);
     } catch (e) {
-      console.error('assign:', e);
-      res.status(500).json({ ok: false, message: 'Could not assign contractor.' });
+      console.error('[ASSIGN DEBUG] ERROR', JSON.stringify({
+        jobId: req.params.id,
+        actorUserId: req.authUser?.id,
+        actorRole: req.authUser?.role,
+        error: e?.message || String(e),
+        stack: e?.stack,
+        durationMs: Date.now() - assignStartedAt,
+      }, null, 2));
+      return res.status(500).json({
+        ok: false,
+        code: 'ASSIGNMENT_FAILED',
+        message: 'Could not assign contractor.',
+      });
     }
   });
 

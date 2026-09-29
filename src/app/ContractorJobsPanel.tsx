@@ -404,6 +404,7 @@ export default function ContractorJobsPanel({
 
               {selected.status !== "canceled" ? (
               <div>
+                {/** Completion is only available after the job has actually started. */}
                 <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground mb-2">Job actions</p>
                 <div className="flex flex-wrap gap-2">
                   {[
@@ -416,16 +417,24 @@ export default function ContractorJobsPanel({
                     {
                       label: "Mark Complete",
                       icon: HardHat,
-                      action: () => setCompleteOpen(true),
+                      action: () => {
+                        if (["work_started", "change_order_pending"].includes(selected.status)) {
+                          setCompleteOpen(true);
+                        }
+                      },
                       primary: true,
+                      disabled: !["work_started", "change_order_pending"].includes(selected.status),
                     },
                   ].map((a) => (
                     <button
                       key={a.label}
                       type="button"
                       onClick={a.action}
+                      disabled={Boolean(a.disabled)}
+                      title={a.disabled ? "Mark Complete becomes available after the contractor starts work." : undefined}
                       className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold ${
-                        a.primary ? "bg-primary text-white" : "border border-border hover:border-primary/40"
+                        a.disabled ? "border border-border bg-muted text-muted-foreground opacity-60 cursor-not-allowed"
+                          : a.primary ? "bg-primary text-white" : "border border-border hover:border-primary/40"
                       }`}
                     >
                       <a.icon className="h-3.5 w-3.5" />
@@ -445,7 +454,9 @@ export default function ContractorJobsPanel({
               </div>
               ) : null}
 
-              {completeOpen && selected.status !== "canceled" && (
+              {completeOpen &&
+              selected.status !== "canceled" &&
+              ["work_started", "change_order_pending"].includes(selected.status) && (
                 <div className="space-y-3 rounded-xl border border-border p-4">
                   <p className="text-sm font-semibold">Mark complete + proof</p>
                   <textarea

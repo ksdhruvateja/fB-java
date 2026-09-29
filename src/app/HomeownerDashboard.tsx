@@ -1557,6 +1557,73 @@ export default function HomeownerDashboard({
     }));
   }
 
+  // Keep the homeowner lifecycle synchronized with Admin/Contractor changes.
+  // Same-tab/cross-tab mutations are event-driven; separate devices use ONE
+  // lightweight jobs request every 12s instead of refreshing properties +
+  // pending requests + jobs together. This prevents the previous 429 storm.
+  useEffect(() => {
+    if (!user?.id) return;
+
+    let timer: number | null = null;
+    let stopped = false;
+    let inFlight = false;
+    let delayMs = 12000;
+
+    const refreshJobsOnly = async (reason: string) => {
+      if (stopped || inFlight || document.visibilityState !== "visible") return;
+      inFlight = true;
+      try {
+        const result = await listMyManagedJobs();
+        const status = Number((result as unknown as { status?: number }).status || 0);
+        if (result.ok) {
+          setJobs(result.jobs || []);
+          delayMs = 12000;
+        } else if (status === 429) {
+          // Back off rather than creating a retry loop while the server is
+          // protecting the API. The central fetch monitor also logs 429.
+          delayMs = 30000;
+          console.warn("[FixBridge lifecycle] homeowner jobs refresh backed off after 429", { reason });
+        } else if (status === 401 || status === 403) {
+          delayMs = 20000;
+          console.warn("[FixBridge lifecycle] homeowner jobs refresh denied", { reason, status });
+        } else {
+          delayMs = 15000;
+        }
+      } catch (error) {
+        delayMs = 15000;
+        console.warn("[FixBridge lifecycle] homeowner jobs refresh failed", error);
+      } finally {
+        inFlight = false;
+        if (!stopped) {
+          if (timer != null) window.clearTimeout(timer);
+          timer = window.setTimeout(() => void refreshJobsOnly("poll"), delayMs);
+        }
+      }
+    };
+
+    const onWorkflowMutated = (event: Event) => {
+      const detail = (event as CustomEvent<{ jobId?: number | null }>).detail;
+      const changedJobId = detail?.jobId != null ? Number(detail.jobId) : null;
+      if (changedJobId != null && !Number.isFinite(changedJobId)) return;
+      void refreshJobsOnly("workflow-mutated");
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void refreshJobsOnly("visible");
+    };
+
+    window.addEventListener("fixbridge:workflow-mutated", onWorkflowMutated);
+    document.addEventListener("visibilitychange", onVisibility);
+    void refreshJobsOnly("mount");
+
+    return () => {
+      stopped = true;
+      window.removeEventListener("fixbridge:workflow-mutated", onWorkflowMutated);
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (timer != null) window.clearTimeout(timer);
+    };
+  }, [user?.id]);
+
   async function handleSaveZipAndProceed() {
     if (!showZipPromptPropertyId || !isValidUsZip(zipPromptInput)) {
       alert("Please enter a valid 5-digit US ZIP code.");

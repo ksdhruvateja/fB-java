@@ -147,6 +147,22 @@ export default function HomeownerJobDetailPanel({
   const isMobile = useIsMobile();
   const editable = canEditHomeownerJob(job.status);
 
+  // If another FixBridge workflow action updates this exact job (for example
+  // Admin sends a quote, payment settles, contractor is assigned, dispatched,
+  // or work is completed), refresh the open detail immediately. The dashboard
+  // also listens globally; this listener protects the detail panel when it is
+  // mounted in a narrower workspace.
+  useEffect(() => {
+    const onWorkflowMutated = (event: Event) => {
+      const detail = (event as CustomEvent<{ jobId?: number | null }>).detail;
+      const changedJobId = detail?.jobId != null ? Number(detail.jobId) : null;
+      if (changedJobId != null && changedJobId !== Number(job.id)) return;
+      void onRefresh();
+    };
+    window.addEventListener("fixbridge:workflow-mutated", onWorkflowMutated);
+    return () => window.removeEventListener("fixbridge:workflow-mutated", onWorkflowMutated);
+  }, [job.id, onRefresh]);
+
   useEffect(() => {
     if (!focus) return;
     const id =
@@ -668,6 +684,56 @@ export default function HomeownerJobDetailPanel({
           )}
         </DetailSection>
       ) : null}
+
+      <DetailSection
+        mobile={isMobile}
+        title="Assigned Contractor"
+        defaultOpen
+        badge={
+          job.assignedContractorUserId ? (
+            <span className="text-xs font-semibold text-emerald-600">Assigned</span>
+          ) : (
+            <span className="text-xs font-semibold text-muted-foreground">Not assigned yet</span>
+          )
+        }
+      >
+        {job.assignedContractorUserId && job.technician ? (
+          <div className="rounded-xl border border-border bg-muted/20 p-4">
+            <div className="flex items-start gap-3">
+              {job.technician.photoUrl ? (
+                <img
+                  src={job.technician.photoUrl}
+                  alt=""
+                  className="h-12 w-12 rounded-full object-cover border border-border"
+                />
+              ) : (
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-bold">
+                  {String(job.technician.name || "C").slice(0, 1).toUpperCase()}
+                </div>
+              )}
+              <div className="min-w-0">
+                <p className="font-semibold">{job.technician.name || "Assigned contractor"}</p>
+                {job.technician.company ? (
+                  <p className="text-sm text-muted-foreground">{job.technician.company}</p>
+                ) : null}
+                {job.technician.trade ? (
+                  <p className="text-xs text-muted-foreground">{job.technician.trade}</p>
+                ) : null}
+                <p className="mt-2 text-xs font-medium text-emerald-600">
+                  Your contractor has been assigned.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-border p-4">
+            <p className="font-medium">Contractor: Not assigned yet</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Your approved contractor will appear here after FixBridge assigns the work.
+            </p>
+          </div>
+        )}
+      </DetailSection>
 
       {showDispatch ? (
         <DetailSection mobile={isMobile} title="Payment" defaultOpen>
