@@ -8238,11 +8238,36 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const job = rows[0];
       const isContractor = Number(job.assigned_contractor_user_id) === Number(req.authUser.id);
       const isAdmin = String(req.authUser.role || '').toLowerCase() === 'admin' || req.authUser.isAdmin === true;
+      console.log('[COMPLETE DEBUG] START', JSON.stringify({
+        jobId,
+        jobStatus: job.status,
+        assignedContractorUserId: job.assigned_contractor_user_id,
+        actorUserId: req.authUser?.id,
+        actorRole: req.authUser?.role,
+        expected: {
+          assignmentRequired: true,
+          allowedStatuses: ['work_started', 'change_order_pending'],
+        },
+      }, null, 2));
       if (!isContractor && !isAdmin) {
         return res.status(403).json({ ok: false, code: 'JOB_COMPLETION_NOT_AUTHORIZED', message: 'Only the Admin or the assigned contractor can mark this job completed.' });
       }
+      if (!job.assigned_contractor_user_id) {
+        return res.status(409).json({
+          ok: false,
+          code: 'ASSIGNMENT_REQUIRED',
+          message: 'A contractor must be assigned before work can be completed.',
+        });
+      }
       if (!['work_started', 'change_order_pending'].includes(String(job.status))) {
-        return res.status(400).json({ ok: false, message: 'Work can only be completed after the contractor has started the job.' });
+        console.warn('[COMPLETE DEBUG] BLOCKED_STATUS', JSON.stringify({
+          jobId,
+          jobStatus: job.status,
+          assignedContractorUserId: job.assigned_contractor_user_id,
+          actorUserId: req.authUser?.id,
+          expectedStatuses: ['work_started', 'change_order_pending'],
+        }, null, 2));
+        return res.status(400).json({ ok: false, code: 'WORK_NOT_STARTED', message: 'Work can only be completed after the contractor has started the job.' });
       }
       const structuredRaw = req.body?.structuredEquipment || req.body?.equipmentUpdate || null;
       const structuredEquipment = structuredRaw
@@ -8319,6 +8344,16 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           const authoritativePaid = Math.min(total, Math.max(storedPaid, successfulPaid));
           const amountDue = Math.max(0, Math.round((total - authoritativePaid) * 100) / 100);
           const nextStatus = amountDue <= 0.009 ? 'paid' : 'partially_paid';
+          console.log('[COMPLETION INVOICE DEBUG]', JSON.stringify({
+            jobId,
+            invoiceId: invoice.id,
+            total,
+            storedPaid,
+            successfulPaid,
+            authoritativePaid,
+            amountDue,
+            expected: 'remaining balance = invoice total - all successful job credits/payments; $125 professional fee is counted once',
+          }, null, 2));
           await pool.query(
             `UPDATE homeowner_invoices
                 SET paid=$1, amount_due=$2, status=$3, updated_at=NOW()

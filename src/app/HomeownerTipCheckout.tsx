@@ -19,6 +19,7 @@ export function HomeownerTipCheckout({
   const serviceTotal = Math.max(0, Number(amountDue || 0));
   const [preset, setPreset] = useState<TipPreset>("none");
   const [customTip, setCustomTip] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   const tipAmount = useMemo(() => {
     if (preset === "none") return 0;
@@ -114,8 +115,16 @@ export function HomeownerTipCheckout({
 
       <button
         type="button"
-        disabled={busy || tipInvalid || serviceTotal <= 0}
-        onClick={() => onPay(tipAmount)}
+        disabled={busy || submitting || tipInvalid || serviceTotal <= 0}
+        onClick={async () => {
+          if (submitting || busy || serviceTotal <= 0 || tipInvalid) return;
+          setSubmitting(true);
+          try {
+            await onPay(tipAmount);
+          } finally {
+            setSubmitting(false);
+          }
+        }}
         className="w-full rounded-xl bg-primary px-3 py-2.5 text-sm font-semibold text-white hover:bg-primary/90 disabled:opacity-60"
       >
         Continue to Secure Payment

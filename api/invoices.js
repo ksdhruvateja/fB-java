@@ -166,7 +166,24 @@ export async function buildInvoiceForJob(pool, jobId, { customNote } = {}) {
   const resolvedPaid = existingInvoice?.paid != null
     ? Math.max(0, Number(existingInvoice.paid) || 0)
     : Math.max(0, invoiceLedgerPaid + professionalFeePaid);
-  const calculatedAmountDue = Math.max(0, Math.round((subtotal - resolvedPaid - professionalFeePaid) * 100) / 100);
+  // `resolvedPaid` already includes the one-time $125 professional/Hire-a-Professional
+  // payment when that payment is linked to this job. Subtracting professionalFeePaid
+  // again would double-credit the same money and make the invoice balance too low.
+  const calculatedAmountDue = Math.max(0, Math.round((subtotal - resolvedPaid) * 100) / 100);
+
+  console.log('[INVOICE BUILD DEBUG]', JSON.stringify({
+    jobId: Number(jobId),
+    invoiceId: existingInvoice?.id || null,
+    invoiceTotal: existingInvoice?.total != null ? Number(existingInvoice.total) : subtotal,
+    resolvedPaid,
+    invoiceLedgerPaid,
+    professionalFeePaid,
+    calculatedAmountDue,
+    expected: {
+      professionalFeeIsCreditNotExtraCharge: true,
+      amountDueFormula: 'invoiceTotal - all successful credits/payments',
+    },
+  }, null, 2));
   const storedAmountDue = existingInvoice?.amount_due != null
     ? Math.max(0, Number(existingInvoice.amount_due) || 0)
     : null;

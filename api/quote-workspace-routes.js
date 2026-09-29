@@ -1798,6 +1798,22 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
       }
 
       const serviceAmount = initialPaymentAmount;
+      console.log('[HOMEOWNER CHECKOUT DEBUG]', JSON.stringify({
+        invoiceId: id,
+        jobId: invoice.jobId,
+        invoiceTotal: Number(invoice.total || 0),
+        invoicePaid: Number(invoice.paid || 0),
+        invoiceAmountDue: Number(invoice.amountDue || 0),
+        initialPaymentCompleted: invoice.initialPaymentCompleted === true,
+        jobStatus,
+        finalPayment,
+        requestedPercent: requestedPercent || null,
+        serviceAmount,
+        tipAmount,
+        expected: finalPayment
+          ? 'final checkout may charge only the current remaining invoice balance'
+          : 'initial checkout charges selected percentage of invoice total; prior $125 remains a credit and is not charged again',
+      }, null, 2));
       const totals = calculateCustomerPaymentTotal({
         serviceAmountCents: dollarsToCents(serviceAmount),
         tipAmountCents: dollarsToCents(tipAmount),
