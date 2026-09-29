@@ -390,6 +390,22 @@ export type Negotiation = {
   createdAt?: string; resolvedAt?: string | null;
 };
 
+export type ContractorBidNegotiation = {
+  id: number;
+  jobId: number;
+  bidId: number;
+  contractorUserId: number;
+  contractorName?: string | null;
+  roundNumber: number;
+  adminAmount: number | null;
+  adminMessage: string;
+  contractorAmount: number | null;
+  contractorMessage: string;
+  action: "pending_contractor" | "contractor_countered" | "accepted" | "declined" | string;
+  createdAt?: string | null;
+  respondedAt?: string | null;
+};
+
 export type Bid = {
   id: number;
   jobId: number;
@@ -1171,6 +1187,75 @@ export async function submitBid(body: Record<string, unknown>) {
 
 export async function listBids(jobId: number) {
   return api<{ ok: boolean; bids: Bid[] }>(`/api/managed/jobs/${jobId}/bids`);
+}
+
+export async function listContractorBidNegotiations(jobId: number, bidId: number) {
+  return api<{
+    ok: boolean;
+    maxRounds?: number;
+    roundsUsed?: number;
+    roundsRemaining?: number;
+    latestAction?: string | null;
+    agreedAmount?: number | null;
+    bid?: Bid;
+    negotiations?: ContractorBidNegotiation[];
+    message?: string;
+  }>(`/api/managed/jobs/${jobId}/bid-negotiations?bidId=${encodeURIComponent(bidId)}`);
+}
+
+export async function adminStartContractorBidNegotiation(
+  jobId: number,
+  bidId: number,
+  body: { amount: number; message?: string },
+) {
+  return api<{
+    ok: boolean;
+    negotiation?: ContractorBidNegotiation;
+    roundsUsed?: number;
+    roundsRemaining?: number;
+    message?: string;
+  }>(`/api/admin/managed/jobs/${jobId}/bids/${bidId}/negotiate`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function adminRespondContractorBidNegotiation(
+  jobId: number,
+  bidId: number,
+  negotiationId: number,
+  body: { action: "accept" | "counter" | "decline"; counterAmount?: number; message?: string },
+) {
+  return api<{
+    ok: boolean;
+    negotiation?: ContractorBidNegotiation;
+    action?: string;
+    finalAmount?: number;
+    roundsUsed?: number;
+    roundsRemaining?: number;
+    message?: string;
+  }>(`/api/admin/managed/jobs/${jobId}/bids/${bidId}/negotiate/${negotiationId}/respond`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function contractorRespondContractorBidNegotiation(
+  jobId: number,
+  bidId: number,
+  negotiationId: number,
+  body: { action: "accept" | "counter" | "decline"; counterAmount?: number; message?: string },
+) {
+  return api<{
+    ok: boolean;
+    action?: string;
+    finalAmount?: number;
+    roundsRemaining?: number;
+    message?: string;
+  }>(`/api/contractor/managed/jobs/${jobId}/bids/${bidId}/negotiate/${negotiationId}/respond`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 export async function updateJobStatus(jobId: number, status: string, note?: string) {

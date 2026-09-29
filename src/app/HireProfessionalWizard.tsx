@@ -89,6 +89,22 @@ function addDaysFromToday(days: number) {
   return toDateInputValue(d);
 }
 
+function nextAvailableWeekday(daysFromToday = 1) {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() + daysFromToday);
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
+  return toDateInputValue(d);
+}
+
+function nextWeekWeekday() {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  const daysUntilMonday = (8 - d.getDay()) % 7 || 7;
+  d.setDate(d.getDate() + daysUntilMonday);
+  return toDateInputValue(d);
+}
+
 function nextWeekendDate() {
   const d = new Date();
   d.setHours(12, 0, 0, 0);
@@ -991,9 +1007,34 @@ function PendingHireProfessionalWizard({
               {TIME_WINDOW_OPTIONS.map((opt) => <button key={opt.value} type="button" onClick={() => setPreferredTimeSlot(opt.value)} className={`rounded-xl border px-3 py-3 text-left ${preferredTimeSlot === opt.value ? "border-[#FF4D1C] bg-[#FF4D1C]/10" : "border-border bg-background"}`}><span className="block text-[10px] uppercase text-muted-foreground">{opt.period}</span><span className="font-semibold">{opt.label}</span></button>)}
             </div>
           </fieldset>
-          <label className="block text-sm font-medium">Preferred date
-            <input type="date" value={preferredDate} min={toDateInputValue(new Date())} onChange={(e) => setPreferredDate(e.target.value)} className="mt-2 w-full rounded-xl border border-border bg-background px-3 py-3" />
-          </label>
+          <fieldset className="space-y-3">
+            <legend className="text-sm font-semibold">Preferred weekday <span className="font-normal text-muted-foreground">(optional)</span></legend>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Scheduled weekday means we match the next available weekday — only pick a date if you have a specific day in mind.
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                ["Tomorrow", nextAvailableWeekday(1)],
+                ["In 2 days", nextAvailableWeekday(2)],
+                ["Next week", nextWeekWeekday()],
+              ].map(([label, value]) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => setPreferredDate(value)}
+                  className={`rounded-xl border px-3 py-2.5 text-left text-xs font-semibold transition ${preferredDate === value ? "border-[#FF4D1C] bg-[#FF4D1C]/10 text-[#FF4D1C]" : "border-border bg-background hover:border-[#FF4D1C]/40"}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <label className="block text-sm font-medium">Pick a date
+              <input type="date" value={preferredDate} min={toDateInputValue(new Date())} onChange={(e) => setPreferredDate(e.target.value)} className="mt-2 w-full rounded-xl border border-border bg-background px-3 py-3" />
+            </label>
+            <p className="text-xs text-muted-foreground">
+              {preferredDate ? `Selected date: ${formatDisplayDate(preferredDate)}` : "No date selected — we'll use the next available weekday slot."}
+            </p>
+          </fieldset>
           <button type="button" onClick={() => setStep("info")} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white">Continue <ArrowRight className="h-4 w-4" /></button>
         </div>
       ) : null}

@@ -6744,6 +6744,522 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
+  // Contractor/admin estimate negotiation. A contractor submits ONE base bid;
+  // the Admin may negotiate that bid for up to four Admin offer rounds before
+  // the agreed contractor net is used to build the customer-facing quote.
+  let contractorBidNegotiationSchemaReady = false;
+  let contractorBidNegotiationSchemaPromise = null;
+  const ensureContractorBidNegotiationSchema = async () => {
+    if (contractorBidNegotiationSchemaReady) return;
+    if (!contractorBidNegotiationSchemaPromise) {
+      contractorBidNegotiationSchemaPromise = (async () => {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS contractor_bid_negotiations (
+            id BIGSERIAL PRIMARY KEY,
+            job_id BIGINT NOT NULL,
+            bid_id INT NOT NULL,
+            contractor_user_id INT NOT NULL,
+            admin_user_id INT,
+            round_number INT NOT NULL DEFAULT 1,
+            admin_amount NUMERIC NOT NULL,
+            admin_message TEXT,
+            contractor_amount NUMERIC,
+            contractor_message TEXT,
+            action TEXT NOT NULL DEFAULT 'pending_contractor',
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            responded_at TIMESTAMPTZ
+          )
+        `);
+        await pool.query(`ALTER TABLE contractor_bid_negotiations ADD COLUMN IF NOT EXISTS round_number INT NOT NULL DEFAULT 1`);
+        await pool.query(`ALTER TABLE contractor_bid_negotiations ADD COLUMN IF NOT EXISTS admin_amount NUMERIC`);
+        await pool.query(`ALTER TABLE contractor_bid_negotiations ADD COLUMN IF NOT EXISTS admin_message TEXT`);
+        await pool.query(`ALTER TABLE contractor_bid_negotiations ADD COLUMN IF NOT EXISTS contractor_amount NUMERIC`);
+        await pool.query(`ALTER TABLE contractor_bid_negotiations ADD COLUMN IF NOT EXISTS contractor_message TEXT`);
+        await pool.query(`ALTER TABLE contractor_bid_negotiations ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'pending_contractor'`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_contractor_bid_negotiations_bid ON contractor_bid_negotiations(bid_id, round_number DESC, id DESC)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_contractor_bid_negotiations_job ON contractor_bid_negotiations(job_id, created_at DESC)`);
+        contractorBidNegotiationSchemaReady = true;
+      })().catch((e) => {
+        contractorBidNegotiationSchemaPromise = null;
+        throw e;
+      });
+    }
+    await contractorBidNegotiationSchemaPromise;
+  };
+
+  app.get('/api/managed/jobs/:id/bid-negotiations', requireAuth, async (req, res) => {
+    try {
+      await ensureContractorBidNegotiationSchema();
+      const jobId = Number(req.params.id);
+      const bidId = Number(req.query?.bidId || 0);
+      if (!Number.isFinite(jobId) || jobId <= 0 || !Number.isFinite(bidId) || bidId <= 0) {
+        return res.status(400).json({ ok: false, message: 'Valid job and bid are required.' });
+      }
+
+      const { rows: bids } = await pool.query(
+        `SELECT b.id, b.job_id, b.contractor_user_id, b.net_total,
+                u.name AS contractor_name
+           FROM bids b
+           LEFT JOIN users u ON u.id=b.contractor_user_id
+          WHERE b.id=$1 AND b.job_id=$2
+          LIMIT 1`,
+        [bidId, jobId]
+      );
+      const bid = bids[0];
+      if (!bid) return res.status(404).json({ ok: false, message: 'Contractor estimate not found.' });
+
+      const isAdmin = String(req.authUser?.role || '').toLowerCase() === 'admin';
+      const isContractor = String(req.authUser?.role || '').toLowerCase() === 'contractor';
+      if (!isAdmin && !isContractor) {
+        return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      if (isContractor && Number(req.authUser.id) !== Number(bid.contractor_user_id)) {
+        return res.status(403).json({ ok: false, message: 'This estimate belongs to another contractor.' });
+      }
+
+      const { rows } = await pool.query(
+        `SELECT n.*, u.name AS contractor_name
+           FROM contractor_bid_negotiations n
+           LEFT JOIN users u ON u.id=n.contractor_user_id
+          WHERE n.job_id=$1 AND n.bid_id=$2
+          ORDER BY n.round_number ASC, n.id ASC`,
+        [jobId, bidId]
+      );
+
+      const maxRounds = 4;
+      const roundsUsed = rows.length;
+      const latest = rows[rows.length - 1] || null;
+
+      return res.json({
+        ok: true,
+        maxRounds,
+        roundsUsed,
+        roundsRemaining: Math.max(0, maxRounds - roundsUsed),
+        bid: {
+          id: Number(bid.id),
+          jobId: Number(bid.job_id),
+          contractorUserId: Number(bid.contractor_user_id),
+          contractorName: bid.contractor_name || null,
+          netTotal: Number(bid.net_total || 0),
+        },
+        negotiations: rows.map((row) => ({
+          id: Number(row.id),
+          jobId: Number(row.job_id),
+          bidId: Number(row.bid_id),
+          contractorUserId: Number(row.contractor_user_id),
+          contractorName: row.contractor_name || null,
+          roundNumber: Number(row.round_number || 1),
+          adminAmount: row.admin_amount == null ? null : Number(row.admin_amount),
+          adminMessage: row.admin_message || '',
+          contractorAmount: row.contractor_amount == null ? null : Number(row.contractor_amount),
+          contractorMessage: row.contractor_message || '',
+          action: row.action || 'pending_contractor',
+          createdAt: row.created_at,
+          respondedAt: row.responded_at,
+        })),
+        latestAction: latest?.action || null,
+        agreedAmount: latest?.action === 'accepted'
+          ? Number(latest.contractor_amount ?? latest.admin_amount ?? bid.net_total ?? 0)
+          : null,
+      });
+    } catch (e) {
+      console.error('[CONTRACTOR BID NEGOTIATIONS LIST]', e);
+      return res.status(500).json({ ok: false, message: 'Could not load contractor estimate negotiation.' });
+    }
+  });
+
+  app.post('/api/admin/managed/jobs/:id/bids/:bidId/negotiate', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    try {
+      await ensureContractorBidNegotiationSchema();
+      const jobId = Number(req.params.id);
+      const bidId = Number(req.params.bidId);
+      const adminAmount = Number(req.body?.amount ?? req.body?.counterAmount);
+      const message = String(req.body?.message || '').trim();
+
+      if (!Number.isFinite(jobId) || jobId <= 0 || !Number.isFinite(bidId) || bidId <= 0) {
+        return res.status(400).json({ ok: false, message: 'Valid job and contractor estimate are required.' });
+      }
+      if (!Number.isFinite(adminAmount) || adminAmount <= 0) {
+        return res.status(400).json({ ok: false, message: 'Negotiated contractor amount must be greater than zero.' });
+      }
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        // Lock only the bid row. Do NOT combine the lock with a LEFT JOIN: PostgreSQL
+        // rejects FOR UPDATE on the nullable side of an outer join, and the contractor
+        // name is informational only. Fetch it separately after the bid is locked.
+        const { rows: bids } = await client.query(
+          `SELECT b.*
+             FROM bids b
+            WHERE b.id=$1 AND b.job_id=$2
+            FOR UPDATE`,
+          [bidId, jobId]
+        );
+        const bid = bids[0];
+        if (bid) {
+          const { rows: contractorRows } = await client.query(
+            `SELECT name AS contractor_name
+               FROM users
+              WHERE id=$1`,
+            [bid.contractor_user_id]
+          );
+          bid.contractor_name = contractorRows[0]?.contractor_name || null;
+        }
+        if (!bid) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({ ok: false, message: 'Contractor estimate not found.' });
+        }
+
+        const { rows: history } = await client.query(
+          `SELECT * FROM contractor_bid_negotiations
+            WHERE job_id=$1 AND bid_id=$2
+            ORDER BY round_number DESC, id DESC
+            FOR UPDATE`,
+          [jobId, bidId]
+        );
+        const latest = history[0];
+        if (latest && latest.action === 'pending_contractor') {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ ok: false, code: 'CONTRACTOR_NEGOTIATION_PENDING', message: 'A negotiation offer is already waiting for the contractor.' });
+        }
+        if (latest && latest.action === 'accepted') {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ ok: false, code: 'CONTRACTOR_NEGOTIATION_FINALIZED', message: 'The contractor estimate negotiation is already finalized.' });
+        }
+        if (latest && latest.action === 'declined') {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ ok: false, code: 'CONTRACTOR_NEGOTIATION_CLOSED', message: 'This contractor estimate negotiation is closed.' });
+        }
+        const roundsUsed = history.length;
+        const maxRounds = 4;
+        if (roundsUsed >= maxRounds) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({
+            ok: false,
+            code: 'CONTRACTOR_NEGOTIATION_LIMIT_REACHED',
+            message: 'All 4 contractor negotiation rounds have been used.',
+            maxRounds,
+            roundsUsed,
+          });
+        }
+
+        if (latest && latest.action !== 'contractor_countered') {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ ok: false, message: 'The contractor has not returned a counter offer yet.' });
+        }
+
+        const roundNumber = roundsUsed + 1;
+        const { rows: inserted } = await client.query(
+          `INSERT INTO contractor_bid_negotiations
+             (job_id, bid_id, contractor_user_id, admin_user_id, round_number,
+              admin_amount, admin_message, action)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'pending_contractor')
+           RETURNING *`,
+          [jobId, bidId, bid.contractor_user_id, req.authUser.id, roundNumber, adminAmount, message || null]
+        );
+
+        await audit(client, req.authUser.id, 'contractor_estimate_negotiation_started', 'bid', bidId, {
+          jobId,
+          roundNumber,
+          contractorUserId: Number(bid.contractor_user_id),
+          originalAmount: Number(bid.net_total || 0),
+          adminAmount,
+          message: message || null,
+        });
+        await client.query('COMMIT');
+
+        return res.status(201).json({
+          ok: true,
+          negotiation: {
+            id: Number(inserted[0].id),
+            roundNumber,
+            adminAmount,
+            adminMessage: message,
+            contractorAmount: null,
+            contractorMessage: '',
+            action: 'pending_contractor',
+          },
+          roundsUsed: roundNumber,
+          roundsRemaining: Math.max(0, maxRounds - roundNumber),
+          message: `Contractor negotiation round ${roundNumber} of ${maxRounds} sent.`,
+        });
+      } catch (e) {
+        try { await client.query('ROLLBACK'); } catch {}
+        throw e;
+      } finally {
+        client.release();
+      }
+    } catch (e) {
+      console.error('[CONTRACTOR BID NEGOTIATION START]', e);
+      return res.status(500).json({ ok: false, message: 'Could not send contractor negotiation offer.' });
+    }
+  });
+
+  app.post('/api/admin/managed/jobs/:id/bids/:bidId/negotiate/:negotiationId/respond', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await ensureContractorBidNegotiationSchema();
+      const jobId = Number(req.params.id);
+      const bidId = Number(req.params.bidId);
+      const negotiationId = Number(req.params.negotiationId);
+      const action = String(req.body?.action || '').trim().toLowerCase();
+      const counterAmount = req.body?.counterAmount == null || req.body?.counterAmount === ''
+        ? null
+        : Number(req.body.counterAmount);
+      const message = String(req.body?.message || '').trim();
+
+      if (!['accept', 'counter', 'decline'].includes(action)) {
+        return res.status(400).json({ ok: false, message: 'Action must be accept, counter, or decline.' });
+      }
+      if (action === 'counter' && (!Number.isFinite(counterAmount) || counterAmount <= 0)) {
+        return res.status(400).json({ ok: false, message: 'Counter amount must be greater than zero.' });
+      }
+
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `SELECT n.*, b.net_total AS current_bid_total, b.contractor_user_id
+           FROM contractor_bid_negotiations n
+           JOIN bids b ON b.id=n.bid_id
+          WHERE n.id=$1 AND n.job_id=$2 AND n.bid_id=$3
+          FOR UPDATE`,
+        [negotiationId, jobId, bidId]
+      );
+      const negotiation = rows[0];
+      if (!negotiation) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ ok: false, message: 'Contractor negotiation round not found.' });
+      }
+      if (negotiation.action !== 'contractor_countered') {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ ok: false, code: 'CONTRACTOR_RESPONSE_NOT_READY', message: 'The contractor has not sent a counter offer for this round.' });
+      }
+
+      if (action === 'accept') {
+        const finalAmount = Number(negotiation.contractor_amount);
+        if (!Number.isFinite(finalAmount) || finalAmount <= 0) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ ok: false, message: 'Contractor counter amount is invalid.' });
+        }
+        await client.query(
+          `UPDATE contractor_bid_negotiations
+              SET action='accepted', responded_at=NOW()
+            WHERE id=$1`,
+          [negotiationId]
+        );
+        await client.query(
+          `UPDATE bids
+              SET net_total=$1, updated_at=NOW()
+            WHERE id=$2 AND job_id=$3`,
+          [finalAmount, bidId, jobId]
+        );
+        await audit(client, req.authUser.id, 'contractor_estimate_negotiation_accepted', 'bid', bidId, {
+          jobId,
+          negotiationId,
+          finalAmount,
+          contractorUserId: Number(negotiation.contractor_user_id),
+        });
+        await client.query('COMMIT');
+        return res.json({ ok: true, action: 'accepted', finalAmount, message: 'Contractor counter accepted. Final contractor estimate updated.' });
+      }
+
+      if (action === 'decline') {
+        await client.query(
+          `UPDATE contractor_bid_negotiations
+              SET action='declined', admin_message=COALESCE($1, admin_message), responded_at=NOW()
+            WHERE id=$2`,
+          [message || null, negotiationId]
+        );
+        await audit(client, req.authUser.id, 'contractor_estimate_negotiation_declined', 'bid', bidId, {
+          jobId,
+          negotiationId,
+          contractorUserId: Number(negotiation.contractor_user_id),
+          message: message || null,
+        });
+        await client.query('COMMIT');
+        return res.json({ ok: true, action: 'declined', message: 'Contractor negotiation declined. The previous contractor estimate remains available.' });
+      }
+
+      const { rows: history } = await client.query(
+        `SELECT id FROM contractor_bid_negotiations
+          WHERE job_id=$1 AND bid_id=$2
+          ORDER BY round_number ASC, id ASC`,
+        [jobId, bidId]
+      );
+      const roundsUsed = history.length;
+      const maxRounds = 4;
+      if (roundsUsed >= maxRounds) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          ok: false,
+          code: 'CONTRACTOR_NEGOTIATION_LIMIT_REACHED',
+          message: 'All 4 contractor negotiation rounds have been used. Admin may accept the contractor counter or decline it, but cannot send another counter.',
+          maxRounds,
+          roundsUsed,
+        });
+      }
+
+      await client.query(
+        `UPDATE contractor_bid_negotiations
+            SET responded_at=NOW()
+          WHERE id=$1`,
+        [negotiationId]
+      );
+      const nextRound = roundsUsed + 1;
+      const { rows: next } = await client.query(
+        `INSERT INTO contractor_bid_negotiations
+           (job_id, bid_id, contractor_user_id, admin_user_id, round_number,
+            admin_amount, admin_message, action)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'pending_contractor')
+         RETURNING *`,
+        [jobId, bidId, negotiation.contractor_user_id, req.authUser.id, nextRound, counterAmount, message || null]
+      );
+      await audit(client, req.authUser.id, 'contractor_estimate_negotiation_countered', 'bid', bidId, {
+        jobId,
+        negotiationId,
+        nextRound,
+        contractorCounter: Number(negotiation.contractor_amount),
+        adminCounter: counterAmount,
+        message: message || null,
+      });
+      await client.query('COMMIT');
+      return res.json({
+        ok: true,
+        action: 'counter',
+        negotiation: { id: Number(next[0].id), roundNumber: nextRound, adminAmount: counterAmount, action: 'pending_contractor' },
+        roundsUsed: nextRound,
+        roundsRemaining: Math.max(0, maxRounds - nextRound),
+        message: `Contractor negotiation round ${nextRound} of ${maxRounds} sent.`,
+      });
+    } catch (e) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('[CONTRACTOR BID NEGOTIATION ADMIN RESPOND]', e);
+      return res.status(500).json({ ok: false, message: 'Could not respond to contractor negotiation.' });
+    } finally {
+      client.release();
+    }
+  });
+
+  app.post('/api/contractor/managed/jobs/:id/bids/:bidId/negotiate/:negotiationId/respond', requireAuth, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await ensureContractorBidNegotiationSchema();
+      const jobId = Number(req.params.id);
+      const bidId = Number(req.params.bidId);
+      const negotiationId = Number(req.params.negotiationId);
+      const action = String(req.body?.action || '').trim().toLowerCase();
+      const counterAmount = req.body?.counterAmount == null || req.body?.counterAmount === ''
+        ? null
+        : Number(req.body.counterAmount);
+      const message = String(req.body?.message || '').trim();
+
+      if (!['accept', 'counter', 'decline'].includes(action)) {
+        return res.status(400).json({ ok: false, message: 'Action must be accept, counter, or decline.' });
+      }
+      if (action === 'counter' && (!Number.isFinite(counterAmount) || counterAmount <= 0)) {
+        return res.status(400).json({ ok: false, message: 'Counter amount must be greater than zero.' });
+      }
+
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `SELECT n.*, b.net_total AS current_bid_total, b.contractor_user_id
+           FROM contractor_bid_negotiations n
+           JOIN bids b ON b.id=n.bid_id
+          WHERE n.id=$1 AND n.job_id=$2 AND n.bid_id=$3
+          FOR UPDATE`,
+        [negotiationId, jobId, bidId]
+      );
+      const negotiation = rows[0];
+      if (!negotiation) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ ok: false, message: 'Contractor negotiation round not found.' });
+      }
+      if (Number(req.authUser.id) !== Number(negotiation.contractor_user_id)) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ ok: false, message: 'This estimate belongs to another contractor.' });
+      }
+      if (negotiation.action !== 'pending_contractor') {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ ok: false, code: 'CONTRACTOR_NEGOTIATION_NOT_PENDING', message: 'This negotiation round is no longer waiting for the contractor.' });
+      }
+
+      if (action === 'accept') {
+        const finalAmount = Number(negotiation.admin_amount);
+        if (!Number.isFinite(finalAmount) || finalAmount <= 0) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ ok: false, message: 'Admin offer amount is invalid.' });
+        }
+        await client.query(
+          `UPDATE contractor_bid_negotiations
+              SET contractor_amount=$1, contractor_message=$2, action='accepted', responded_at=NOW()
+            WHERE id=$3`,
+          [finalAmount, message || null, negotiationId]
+        );
+        await client.query(
+          `UPDATE bids
+              SET net_total=$1, updated_at=NOW()
+            WHERE id=$2 AND job_id=$3`,
+          [finalAmount, bidId, jobId]
+        );
+        await audit(client, req.authUser.id, 'contractor_estimate_negotiation_accepted', 'bid', bidId, {
+          jobId,
+          negotiationId,
+          finalAmount,
+          adminOffer: Number(negotiation.admin_amount),
+        });
+        await client.query('COMMIT');
+        return res.json({ ok: true, action: 'accepted', finalAmount, message: 'Admin offer accepted. Your contractor estimate is now final.' });
+      }
+
+      if (action === 'decline') {
+        await client.query(
+          `UPDATE contractor_bid_negotiations
+              SET contractor_message=$1, action='declined', responded_at=NOW()
+            WHERE id=$2`,
+          [message || null, negotiationId]
+        );
+        await audit(client, req.authUser.id, 'contractor_estimate_negotiation_declined', 'bid', bidId, {
+          jobId,
+          negotiationId,
+          message: message || null,
+        });
+        await client.query('COMMIT');
+        return res.json({ ok: true, action: 'declined', message: 'Negotiation declined. The original contractor estimate remains available.' });
+      }
+
+      const roundNumber = Number(negotiation.round_number || 1);
+      await client.query(
+        `UPDATE contractor_bid_negotiations
+            SET contractor_amount=$1, contractor_message=$2, action='contractor_countered', responded_at=NOW()
+          WHERE id=$3`,
+        [counterAmount, message || null, negotiationId]
+      );
+      await audit(client, req.authUser.id, 'contractor_estimate_negotiation_countered', 'bid', bidId, {
+        jobId,
+        negotiationId,
+        roundNumber,
+        contractorCounter: counterAmount,
+        message: message || null,
+      });
+      await client.query('COMMIT');
+      return res.json({
+        ok: true,
+        action: 'counter',
+        roundNumber,
+        roundsRemaining: Math.max(0, 4 - roundNumber),
+        message: roundNumber >= 4
+          ? 'Counter sent. This is the final negotiation round; Admin can accept or decline it.'
+          : 'Counter sent to Admin.',
+      });
+    } catch (e) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('[CONTRACTOR BID NEGOTIATION RESPOND]', e);
+      return res.status(500).json({ ok: false, message: 'Could not respond to contractor negotiation.' });
+    } finally {
+      client.release();
+    }
+  });
+
   // Homeowner negotiation support. Create the table lazily because
   // registerManagedRoutes is intentionally synchronous.
   let negotiationSchemaReady = false;

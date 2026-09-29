@@ -28,6 +28,7 @@ import {
 } from "./managedJobs";
 import StaleItemNotice from "./StaleItemNotice";
 import ChangeOrderPanel from "./ChangeOrderPanel";
+import ContractorBidNegotiationPanel from "./ContractorBidNegotiationPanel";
 import JobTimelinePanel from "./JobTimelinePanel";
 import { JobEarningsCard } from "./ContractorPayoutsPanel";
 import {
@@ -440,6 +441,16 @@ export default function ContractorJobsPanel({
                   )}
                 </div>
               </div>
+
+              {selected.status !== "canceled" &&
+              ["awaiting_bid", "contractor_accepted", "bid_received"].includes(selected.status) ? (
+                <ContractorBidNegotiationPanel
+                  jobId={selected.id}
+                  role="contractor"
+                  onChanged={onRefresh}
+                  onMessage={onError}
+                />
+              ) : null}
 
               {selected.status !== "canceled" &&
               ["work_started", "change_order_pending", "contractor_en_route"].includes(selected.status) ? (

@@ -35,6 +35,7 @@ import {
 import type { AuthUser } from "./auth";
 import DeleteServiceRequestMenu from "./DeleteServiceRequestMenu";
 import QuoteNegotiationPanel from "./QuoteNegotiationPanel";
+import ContractorBidNegotiationPanel from "./ContractorBidNegotiationPanel";
 
 type DrawerTab = "overview" | "quotes" | "dispatch" | "invoice" | "evidence";
 type QuoteSubMode = "document" | "build";
@@ -596,6 +597,17 @@ if (!open || !job) return null;
                         </button>
                       ))}
                     </div>
+                    {activeBid && (!proposalId || ["draft", "negotiation_pending"].includes(proposalStatus)) ? (
+                      <ContractorBidNegotiationPanel
+                        key={`contractor-negotiation-${job.id}-${activeBid.id}`}
+                        jobId={job.id}
+                        bid={activeBid}
+                        role="admin"
+                        onChanged={onRefresh}
+                        onMessage={onMessage}
+                      />
+                    ) : null}
+
                     {activeBid && (
                       <AdminQuoteBuilderPanel
                         key={`${job.id}-${activeBid.id}`}

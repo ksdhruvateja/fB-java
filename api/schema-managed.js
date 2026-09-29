@@ -273,6 +273,32 @@ export async function initManagedSchema(pool) {
 
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS contractor_bid_negotiations (
+      id                    BIGSERIAL PRIMARY KEY,
+      job_id                BIGINT NOT NULL,
+      bid_id                INT NOT NULL,
+      contractor_user_id    INT NOT NULL,
+      admin_user_id         INT,
+      round_number          INT NOT NULL,
+      admin_amount          NUMERIC NOT NULL,
+      admin_message         TEXT,
+      contractor_amount     NUMERIC,
+      contractor_message    TEXT,
+      action                TEXT NOT NULL DEFAULT 'pending_contractor',
+      created_at            TIMESTAMPTZ DEFAULT NOW(),
+      responded_at          TIMESTAMPTZ
+    )
+  `);
+  await pool.query(`ALTER TABLE contractor_bid_negotiations ADD COLUMN IF NOT EXISTS round_number INT NOT NULL DEFAULT 1`);
+  await pool.query(`ALTER TABLE contractor_bid_negotiations ADD COLUMN IF NOT EXISTS admin_amount NUMERIC`);
+  await pool.query(`ALTER TABLE contractor_bid_negotiations ADD COLUMN IF NOT EXISTS admin_message TEXT`);
+  await pool.query(`ALTER TABLE contractor_bid_negotiations ADD COLUMN IF NOT EXISTS contractor_amount NUMERIC`);
+  await pool.query(`ALTER TABLE contractor_bid_negotiations ADD COLUMN IF NOT EXISTS contractor_message TEXT`);
+  await pool.query(`ALTER TABLE contractor_bid_negotiations ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'pending_contractor'`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_contractor_bid_negotiations_bid ON contractor_bid_negotiations(bid_id, round_number DESC, id DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_contractor_bid_negotiations_job ON contractor_bid_negotiations(job_id, created_at DESC)`);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS proposal_negotiations (
       id                  BIGSERIAL PRIMARY KEY,
       job_id              BIGINT NOT NULL,
