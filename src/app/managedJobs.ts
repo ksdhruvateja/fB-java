@@ -1086,7 +1086,7 @@ export async function selectProposal(jobId: number, proposalId: number) {
 }
 
 export async function listNegotiations(jobId: number) {
-  return api<{ ok: boolean; negotiations?: Negotiation[]; message?: string }>(`/api/managed/jobs/${jobId}/negotiations`);
+  return api<{ ok: boolean; negotiations?: Negotiation[]; limits?: { maxHomeownerRequests: number; homeownerRequestsUsed: number; homeownerRequestsRemaining: number; maxAdminCounters: number; adminCountersUsed: number; adminCountersRemaining: number }; message?: string }>(`/api/managed/jobs/${jobId}/negotiations`);
 }
 
 export async function requestNegotiation(jobId: number, body: { proposalId: number; requestedAmount?: number | null; requestedScope?: string; message?: string }) {

@@ -6809,8 +6809,31 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         [jobId]
       );
 
+      const homeownerRequestsUsed = rows.length;
+      const adminCountersUsed = rows.filter((row) => row.admin_amount != null).length;
+      const MAX_HOMEOWNER_NEGOTIATIONS = 2;
+      const MAX_ADMIN_COUNTERS = 2;
+
+      console.log('[NEGOTIATION LIMIT DEBUG]', {
+        jobId,
+        actorUserId: req.authUser?.id,
+        actorRole: req.authUser?.role,
+        homeownerRequestsUsed,
+        homeownerRequestsRemaining: Math.max(0, MAX_HOMEOWNER_NEGOTIATIONS - homeownerRequestsUsed),
+        adminCountersUsed,
+        adminCountersRemaining: Math.max(0, MAX_ADMIN_COUNTERS - adminCountersUsed),
+      });
+
       return res.json({
         ok: true,
+        limits: {
+          maxHomeownerRequests: MAX_HOMEOWNER_NEGOTIATIONS,
+          homeownerRequestsUsed,
+          homeownerRequestsRemaining: Math.max(0, MAX_HOMEOWNER_NEGOTIATIONS - homeownerRequestsUsed),
+          maxAdminCounters: MAX_ADMIN_COUNTERS,
+          adminCountersUsed,
+          adminCountersRemaining: Math.max(0, MAX_ADMIN_COUNTERS - adminCountersUsed),
+        },
         negotiations: rows.map((row) => ({
           id: Number(row.id),
           jobId: Number(row.job_id),
@@ -6876,6 +6899,34 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           ok: false,
           code: 'NEGOTIATION_PENDING',
           message: 'A negotiation request is already pending for this quote.',
+        });
+      }
+
+      const { rows: negotiationCounts } = await pool.query(
+        `SELECT
+           COUNT(*)::int AS homeowner_requests_used,
+           COUNT(*) FILTER (WHERE admin_amount IS NOT NULL)::int AS admin_counters_used
+           FROM proposal_negotiations
+          WHERE job_id=$1 AND proposal_id=$2`,
+        [jobId, proposalId]
+      );
+      const homeownerRequestsUsed = Number(negotiationCounts[0]?.homeowner_requests_used || 0);
+      const adminCountersUsed = Number(negotiationCounts[0]?.admin_counters_used || 0);
+      const MAX_HOMEOWNER_NEGOTIATIONS = 2;
+      const MAX_ADMIN_COUNTERS = 2;
+
+      console.log('[NEGOTIATION LIMIT DEBUG] HOMEOWNER REQUEST CHECK', {
+        jobId, proposalId, actorUserId: req.authUser.id,
+        homeownerRequestsUsed, homeownerRequestsRemaining: Math.max(0, MAX_HOMEOWNER_NEGOTIATIONS - homeownerRequestsUsed),
+        adminCountersUsed, adminCountersRemaining: Math.max(0, MAX_ADMIN_COUNTERS - adminCountersUsed),
+      });
+
+      if (homeownerRequestsUsed >= MAX_HOMEOWNER_NEGOTIATIONS) {
+        return res.status(409).json({
+          ok: false,
+          code: 'HOMEOWNER_NEGOTIATION_LIMIT_REACHED',
+          message: 'The homeowner has used both allowed negotiation requests for this estimate.',
+          limits: { maxHomeownerRequests: MAX_HOMEOWNER_NEGOTIATIONS, homeownerRequestsUsed, homeownerRequestsRemaining: 0, maxAdminCounters: MAX_ADMIN_COUNTERS, adminCountersUsed, adminCountersRemaining: Math.max(0, MAX_ADMIN_COUNTERS - adminCountersUsed) },
         });
       }
 
@@ -7012,6 +7063,28 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         }
 
         if (action === 'counter') {
+          const { rows: counterCounts } = await client.query(
+            `SELECT COUNT(*) FILTER (WHERE admin_amount IS NOT NULL)::int AS admin_counters_used
+               FROM proposal_negotiations
+              WHERE job_id=$1 AND proposal_id=$2`,
+            [jobId, negotiation.proposal_id]
+          );
+          const adminCountersUsed = Number(counterCounts[0]?.admin_counters_used || 0);
+          const MAX_ADMIN_COUNTERS = 2;
+          console.log(logPrefix, 'ADMIN COUNTER LIMIT CHECK', {
+            jobId, negotiationId, proposalId: negotiation.proposal_id,
+            adminCountersUsed,
+            adminCountersRemaining: Math.max(0, MAX_ADMIN_COUNTERS - adminCountersUsed),
+          });
+          if (adminCountersUsed >= MAX_ADMIN_COUNTERS) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({
+              ok: false,
+              code: 'ADMIN_NEGOTIATION_LIMIT_REACHED',
+              message: 'The Admin has used both allowed counter offers for this estimate.',
+              limits: { maxAdminCounters: MAX_ADMIN_COUNTERS, adminCountersUsed, adminCountersRemaining: 0 },
+            });
+          }
           await client.query(
             `UPDATE proposal_negotiations
                 SET admin_amount=$1, admin_message=$2, action='countered', resolved_at=NOW()
@@ -7212,6 +7285,28 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
       // Homeowner counter to Admin's counter: close the current round and create
       // a new pending round so the complete negotiation history remains intact.
+      const { rows: homeownerCounterCounts } = await client.query(
+        `SELECT COUNT(*)::int AS homeowner_requests_used
+           FROM proposal_negotiations
+          WHERE job_id=$1 AND proposal_id=$2`,
+        [jobId, negotiation.proposal_id]
+      );
+      const homeownerRequestsUsed = Number(homeownerCounterCounts[0]?.homeowner_requests_used || 0);
+      const MAX_HOMEOWNER_NEGOTIATIONS = 2;
+      console.log(logPrefix, 'HOMEOWNER COUNTER LIMIT CHECK', {
+        jobId, negotiationId, proposalId: negotiation.proposal_id,
+        homeownerRequestsUsed,
+        homeownerRequestsRemaining: Math.max(0, MAX_HOMEOWNER_NEGOTIATIONS - homeownerRequestsUsed),
+      });
+      if (homeownerRequestsUsed >= MAX_HOMEOWNER_NEGOTIATIONS) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          ok: false,
+          code: 'HOMEOWNER_NEGOTIATION_LIMIT_REACHED',
+          message: 'The homeowner has used both allowed negotiation requests for this estimate.',
+          limits: { maxHomeownerRequests: MAX_HOMEOWNER_NEGOTIATIONS, homeownerRequestsUsed, homeownerRequestsRemaining: 0 },
+        });
+      }
       const nextAmount = counterAmount;
       if (!Number.isFinite(nextAmount) || nextAmount <= 0) {
         await client.query('ROLLBACK');

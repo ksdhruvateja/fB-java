@@ -435,6 +435,11 @@ export default function ContractorJobsPanel({
                       <button type="button" onClick={() => setCompleteOpen(true)} disabled={actionBusy !== null} className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"><HardHat className="h-3.5 w-3.5" /> Submit Completion</button>
                     </>
                   ) : null}
+                  {!selected.assignedContractorUserId && !["awaiting_bid", "contractor_accepted"].includes(selected.status) ? (
+                    <button type="button" disabled className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-muted px-3 py-2 text-xs font-semibold text-muted-foreground opacity-70">
+                      <HardHat className="h-3.5 w-3.5" /> Submit Completion — Assignment required
+                    </button>
+                  ) : null}
                   {selected.status === "customer_review_pending" || selected.status === "admin_review_pending" ? (
                     <span className="rounded-xl border border-border bg-muted px-3 py-2 text-xs font-semibold text-muted-foreground">Waiting for Admin / Homeowner confirmation</span>
                   ) : null}

@@ -63,10 +63,30 @@ export default function QuoteNegotiationPanel({
     };
   }, [jobId, proposal.id]);
 
-  const latest = items[items.length - 1];
+  // The API returns newest negotiation first. Keep the newest round as the source of truth.
+  const latest = items[0];
   const pending = items.find((n) => n.action === "pending");
-  const canRequest = role === "homeowner" && ["sent", "viewed"].includes(String(proposal.status));
+  const homeownerRequestsUsed = items.length;
+  const adminCountersUsed = items.filter((n) => n.adminAmount != null).length;
+  const maxNegotiations = 2;
+  const maxAdminCounters = 2;
+  const homeownerNegotiationsRemaining = Math.max(0, maxNegotiations - homeownerRequestsUsed);
+  const adminCountersRemaining = Math.max(0, maxAdminCounters - adminCountersUsed);
+  const canRequest = role === "homeowner" && ["sent", "viewed"].includes(String(proposal.status)) && !pending && homeownerNegotiationsRemaining > 0;
   const canFinalize = role === "admin" && proposal.status === "sent" && !pending;
+
+  async function load() {
+    const r = await listNegotiations(jobId);
+    if (!r.ok) {
+      setItems([]);
+      return;
+    }
+    setItems(
+      (r.negotiations || []).filter(
+        (n) => Number(n.jobId) === Number(jobId) && Number(n.proposalId) === Number(proposal.id),
+      ),
+    );
+  }
 
   async function homeownerSubmit() {
     setBusy(true);
@@ -139,6 +159,18 @@ export default function QuoteNegotiationPanel({
         </div>
       ) : null}
 
+      <div className="rounded-xl border border-border bg-background px-3 py-2 text-xs">
+        <b>Negotiation limit:</b> Homeowner {homeownerRequestsUsed}/{maxNegotiations} requests used · Admin {adminCountersUsed}/{maxAdminCounters} counter offers used.
+      </div>
+
+      {role === "homeowner" && homeownerNegotiationsRemaining === 0 ? (
+        <div className="rounded-xl border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-900">Homeowner negotiation limit reached. No more negotiation requests can be submitted for this estimate.</div>
+      ) : null}
+
+      {role === "admin" && adminCountersRemaining === 0 ? (
+        <div className="rounded-xl border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-900">Admin counter-offer limit reached. No more counter offers can be sent for this estimate.</div>
+      ) : null}
+
       {role === "homeowner" && pending ? (
         <div className="rounded-xl border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-900">Negotiation pending — approval is locked until Admin responds.</div>
       ) : null}
@@ -162,7 +194,7 @@ export default function QuoteNegotiationPanel({
             <button type="button" disabled={busy} onClick={() => void adminRespond("decline")} className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-border px-3 py-2.5 text-xs font-semibold disabled:opacity-60"><XCircle className="h-4 w-4" /> Decline</button>
             <div className="flex gap-1.5">
               <input className="min-w-0 flex-1 rounded-xl border border-border bg-background px-2.5 py-2 text-xs" type="number" min="1" step="0.01" placeholder="Counter" value={counterAmount} onChange={(e) => setCounterAmount(e.target.value)} />
-              <button type="button" disabled={busy || !counterAmount} onClick={() => void adminRespond("counter")} className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-white disabled:opacity-60">Counter</button>
+              <button type="button" disabled={busy || !counterAmount || homeownerNegotiationsRemaining <= 0} onClick={() => void adminRespond("counter")} className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-white disabled:opacity-60">Counter</button>
             </div>
           </div>
         </div>
@@ -176,7 +208,7 @@ export default function QuoteNegotiationPanel({
             <button type="button" disabled={busy} onClick={() => void adminRespond("decline")} className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-border px-3 py-2.5 text-xs font-semibold disabled:opacity-60"><XCircle className="h-4 w-4" /> Decline</button>
             <div className="flex gap-1.5">
               <input className="min-w-0 flex-1 rounded-xl border border-border bg-background px-2.5 py-2 text-xs" type="number" min="1" step="0.01" placeholder="Counter" value={counterAmount} onChange={(e) => setCounterAmount(e.target.value)} />
-              <button type="button" disabled={busy || !counterAmount} onClick={() => void adminRespond("counter")} className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-white disabled:opacity-60">Counter</button>
+              <button type="button" disabled={busy || !counterAmount || adminCountersRemaining <= 0} onClick={() => void adminRespond("counter")} className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-white disabled:opacity-60">Counter</button>
             </div>
           </div>
         </div>
