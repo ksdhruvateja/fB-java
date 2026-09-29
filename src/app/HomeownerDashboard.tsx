@@ -5231,6 +5231,11 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                           </div>
                         )}
                         <HomeownerJobDetailPanel
+                          key={
+                            (selectedJob || filteredJobs[0])
+                              ? `homeowner-job-${(selectedJob || filteredJobs[0]).id}-${(selectedJob || filteredJobs[0]).updatedAt || ""}-${proposal?.id || "none"}-${proposal?.status || ""}`
+                              : "homeowner-job-none"
+                          }
                           job={selectedJob || filteredJobs[0]}
                           proposal={proposal}
                           properties={properties}

@@ -3,7 +3,6 @@ import AppBackButton from "./AppBackButton";
 import { useIsMobile } from "./components/ui/use-mobile";
 import {
   Camera,
-  CheckCircle2,
   ClipboardList,
   FileText,
   HardHat,
@@ -105,6 +104,7 @@ export default function ContractorJobsPanel({
     }
   }, [initialJobId]);
   const [completeOpen, setCompleteOpen] = useState(false);
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [completeSummary, setCompleteSummary] = useState("");
   const [healthSystem, setHealthSystem] = useState("HVAC");
   const [healthStatus, setHealthStatus] = useState("good");
@@ -339,44 +339,59 @@ export default function ContractorJobsPanel({
                       </button>
                     </div>
                   ) : null}
-                  {selected.status !== "canceled" && ["scheduled", "approved"].includes(selected.status) && (
+                  {selected.status !== "canceled" && selected.assignedContractorUserId && ["paid_for_dispatch", "approved", "scheduled"].includes(selected.status) && (
                     <button
                       type="button"
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold"
+                      disabled={actionBusy !== null}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
                       onClick={async () => {
-                        const r = await contractorMarkTravel(selected.id);
-                        if (!r.ok) onError(r.message || "Could not start travel.");
-                        else await onRefresh();
+                        if (actionBusy) return;
+                        setActionBusy("travel");
+                        try {
+                          const r = await contractorMarkTravel(selected.id);
+                          if (!r.ok) onError(r.message || "Could not start travel.");
+                          else await onRefresh();
+                        } finally { setActionBusy(null); }
                       }}
                     >
-                      <Truck className="h-4 w-4" /> Start Travel
+                      <Truck className="h-4 w-4" /> {actionBusy === "travel" ? "Starting…" : "Start Travel"}
                     </button>
                   )}
                   {selected.status !== "canceled" && selected.status === "contractor_en_route" && (
-                    <>
-                      <button
-                        type="button"
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold"
-                        onClick={async () => {
+                    <button
+                      type="button"
+                      disabled={actionBusy !== null}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                      onClick={async () => {
+                        if (actionBusy) return;
+                        setActionBusy("arrived");
+                        try {
                           const r = await contractorMarkArrived(selected.id);
                           if (!r.ok) onError(r.message || "Could not mark arrived.");
                           else await onRefresh();
-                        }}
-                      >
-                        <MapPin className="h-4 w-4" /> Arrived
-                      </button>
-                      <button
-                        type="button"
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm font-semibold"
-                        onClick={async () => {
+                        } finally { setActionBusy(null); }
+                      }}
+                    >
+                      <MapPin className="h-4 w-4" /> {actionBusy === "arrived" ? "Updating…" : "Reached Location"}
+                    </button>
+                  )}
+                  {selected.status !== "canceled" && selected.status === "contractor_arrived" && (
+                    <button
+                      type="button"
+                      disabled={actionBusy !== null}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-sm font-semibold text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                      onClick={async () => {
+                        if (actionBusy) return;
+                        setActionBusy("start");
+                        try {
                           const r = await contractorMarkStarted(selected.id);
-                          if (!r.ok) onError(r.message || "Could not start job.");
+                          if (!r.ok) onError(r.message || "Could not start work.");
                           else await onRefresh();
-                        }}
-                      >
-                        <Navigation className="h-4 w-4" /> Start Job
-                      </button>
-                    </>
+                        } finally { setActionBusy(null); }
+                      }}
+                    >
+                      <Navigation className="h-4 w-4" /> {actionBusy === "start" ? "Starting…" : "Start Work"}
+                    </button>
                   )}
                   {selected.status !== "canceled" && ["awaiting_bid", "contractor_accepted"].includes(selected.status) && (
                     <button
@@ -407,40 +422,29 @@ export default function ContractorJobsPanel({
                 {/** Completion is only available after the job has actually started. */}
                 <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground mb-2">Job actions</p>
                 <div className="flex flex-wrap gap-2">
-                  {[
-                    { label: "Upload Photos", icon: ImagePlus, action: () => beforePhotoRef.current?.click() },
-                    { label: "Add Notes", icon: ClipboardList, action: () => setNotes((n) => n || " ") },
-                    { label: "Add Materials", icon: FileText, action: () => onBid(selected.id) },
-                    { label: "Request Approval", icon: CheckCircle2, action: () => onBid(selected.id) },
-                    { label: "Create Estimate", icon: FileText, action: () => onBid(selected.id) },
-                    { label: "Create Invoice", icon: FileText, action: () => onBid(selected.id) },
-                    {
-                      label: "Mark Complete",
-                      icon: HardHat,
-                      action: () => {
-                        if (["work_started", "change_order_pending"].includes(selected.status)) {
-                          setCompleteOpen(true);
-                        }
-                      },
-                      primary: true,
-                      disabled: !["work_started", "change_order_pending"].includes(selected.status),
-                    },
-                  ].map((a) => (
-                    <button
-                      key={a.label}
-                      type="button"
-                      onClick={a.action}
-                      disabled={Boolean(a.disabled)}
-                      title={a.disabled ? "Mark Complete becomes available after the contractor starts work." : undefined}
-                      className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold ${
-                        a.disabled ? "border border-border bg-muted text-muted-foreground opacity-60 cursor-not-allowed"
-                          : a.primary ? "bg-primary text-white" : "border border-border hover:border-primary/40"
-                      }`}
-                    >
-                      <a.icon className="h-3.5 w-3.5" />
-                      {a.label}
+                  {selected.status === "awaiting_bid" || selected.status === "contractor_accepted" ? (
+                    <button type="button" onClick={() => onBid(selected.id)} className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-white">
+                      <FileText className="h-3.5 w-3.5" /> Create Estimate
                     </button>
-                  ))}
+                  ) : null}
+                  {selected.assignedContractorUserId && ["work_started", "change_order_pending"].includes(selected.status) ? (
+                    <>
+                      <button type="button" onClick={() => beforePhotoRef.current?.click()} className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-xs font-semibold"><ImagePlus className="h-3.5 w-3.5" /> Upload Photos</button>
+                      <button type="button" onClick={() => setNotes((n) => n || " ")} className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-xs font-semibold"><ClipboardList className="h-3.5 w-3.5" /> Add Notes</button>
+                      <button type="button" onClick={() => onBid(selected.id)} className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-xs font-semibold"><FileText className="h-3.5 w-3.5" /> Add Materials</button>
+                      <button type="button" onClick={() => setCompleteOpen(true)} disabled={actionBusy !== null} className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"><HardHat className="h-3.5 w-3.5" /> Submit Completion</button>
+                    </>
+                  ) : null}
+                  {selected.status === "customer_review_pending" || selected.status === "admin_review_pending" ? (
+                    <span className="rounded-xl border border-border bg-muted px-3 py-2 text-xs font-semibold text-muted-foreground">Waiting for Admin / Homeowner confirmation</span>
+                  ) : null}
+                </div>
+                <div className="mt-2 text-xs text-muted-foreground">
+                  {selected.status === "paid_for_dispatch" && selected.assignedContractorUserId ? "Assigned · Start Travel" : null}
+                  {selected.status === "contractor_en_route" ? "Travel started · Reached Location next" : null}
+                  {selected.status === "contractor_arrived" ? "Reached location · Start Work next" : null}
+                  {["work_started", "change_order_pending"].includes(selected.status) ? "Work in progress · Submit Completion when finished" : null}
+                  {selected.status === "customer_review_pending" ? "Completion submitted · waiting for confirmation" : null}
                 </div>
                 {notes !== "" && (
                   <textarea
@@ -456,6 +460,7 @@ export default function ContractorJobsPanel({
 
               {completeOpen &&
               selected.status !== "canceled" &&
+              selected.assignedContractorUserId &&
               ["work_started", "change_order_pending"].includes(selected.status) && (
                 <div className="space-y-3 rounded-xl border border-border p-4">
                   <p className="text-sm font-semibold">Mark complete + proof</p>

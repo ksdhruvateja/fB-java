@@ -258,6 +258,7 @@ export const JOB_STATUSES = [
   'approved',
   'scheduled',
   'contractor_en_route',
+  'contractor_arrived',
   'work_started',
   'change_order_pending',
   'work_completed',
@@ -1650,7 +1651,7 @@ async function claimAssessmentProcessing(pool, jobId, homeownerUserId, { force =
 
 function addressUnlocked(status) {
   return [
-    'approved', 'scheduled', 'contractor_en_route', 'work_started',
+    'approved', 'scheduled', 'contractor_en_route', 'contractor_arrived', 'work_started',
     'change_order_pending', 'work_completed', 'customer_review_pending',
     'admin_review_pending', 'payout_pending', 'paid_out', 'closed',
   ].includes(status);
@@ -7890,12 +7891,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
   });
 
   const CONTRACTOR_STATUS_TRANSITIONS = {
+    paid_for_dispatch: ['contractor_en_route'],
     awaiting_bid: ['diagnosing'],
     contractor_accepted: ['diagnosing'],
     diagnosing: ['work_started'],
     approved: ['scheduled', 'contractor_en_route'],
     scheduled: ['contractor_en_route', 'work_started'],
-    contractor_en_route: ['work_started'],
+    contractor_en_route: ['contractor_arrived'],
+    contractor_arrived: ['work_started'],
     work_started: ['change_order_pending'],
     change_order_pending: ['work_started'],
   };
@@ -7910,6 +7913,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
       const employeeId = job.assigned_employee_id != null ? Number(job.assigned_employee_id) : null;
+      if (req.authUser.role !== 'admin') {
+        if (!job.assigned_contractor_user_id || Number(job.assigned_contractor_user_id) !== Number(req.authUser.id)) {
+          return res.status(403).json({ ok: false, code: 'CONTRACTOR_NOT_ASSIGNED', message: 'Only the assigned contractor can update this job lifecycle.' });
+        }
+        if (!['contractor_en_route', 'contractor_arrived', 'work_started'].includes(String(toStatus || ''))) {
+          return res.status(400).json({ ok: false, code: 'INVALID_CONTRACTOR_MILESTONE', message: 'Invalid contractor lifecycle action.' });
+        }
+      }
       if (toStatus) {
         const allowedNext = CONTRACTOR_STATUS_TRANSITIONS[job.status] || [];
         const isAdmin = req.authUser.role === 'admin';
@@ -7948,6 +7959,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
   app.post('/api/contractor/managed/jobs/:id/mark-arrived', requireAuth, async (req, res) => {
     await recordContractorMilestone(req, res, {
       eventType: 'technician_arrived',
+      toStatus: 'contractor_arrived',
       note: 'Technician arrived on site',
     });
   });
@@ -8105,6 +8117,23 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         `UPDATE managed_jobs SET completion_report=$1, updated_at=NOW() WHERE id=$2`,
         [JSON.stringify(report), jobId]
       );
+
+      // Contractor completion is a SUBMISSION, not final job completion.
+      // The homeowner/admin must confirm before the job becomes work_completed.
+      if (isContractor && !isAdmin) {
+        await pushStatus(pool, jobId, job.status, 'customer_review_pending', req.authUser.id, 'Contractor submitted completion proof — waiting for confirmation');
+        await recordJobOperationalEvent(pool, {
+          jobId,
+          eventType: 'completion_submitted',
+          contractorUserId: job.assigned_contractor_user_id,
+          employeeId: job.assigned_employee_id || null,
+          actorUserId: req.authUser.id,
+          detail: { summary: report.summary || null },
+        });
+        const { rows: freshSubmitted } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+        return res.json({ ok: true, job: serializeJob(freshSubmitted[0], req.authUser) });
+      }
+
       const completionNote = isAdmin
         ? `Work completed by admin (user ${req.authUser.id})`
         : 'Work completed with proof';

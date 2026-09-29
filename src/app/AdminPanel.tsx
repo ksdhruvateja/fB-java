@@ -4273,7 +4273,11 @@ export default function AdminPanel({
         </AnimatePresence>
 
         <AdminJobDrawer
-          key={selectedJob ? `managed-job-${selectedJob.id}` : "managed-job-none"}
+          key={
+            selectedJob
+              ? `managed-job-${selectedJob.id}-${selectedJob.updatedAt || ""}-${selectedJob.status || ""}-${selectedJob.assignedContractorUserId || "none"}`
+              : "managed-job-none"
+          }
           job={selectedJob}
           bids={bids}
           contractors={contractors}

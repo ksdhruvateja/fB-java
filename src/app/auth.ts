@@ -306,7 +306,10 @@ export async function validateToken(options?: { syncCheckout?: boolean }): Promi
     // unexpected logout. Keep the cached session for server/network failures.
     if (!res.ok) {
       if ([401, 403, 429].includes(res.status)) {
-        console.warn(`[FixBridge auth ${res.status}] /api/auth/me`, {status: res.status, at: new Date().toISOString()});
+        console.warn(`[FixBridge auth ${res.status}] /api/auth/me`, {
+          status: res.status,
+          at: new Date().toISOString(),
+        });
       }
       if (res.status === 401 || res.status === 403) {
         clearSession();

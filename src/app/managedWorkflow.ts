@@ -6,6 +6,7 @@ export const WORKFLOW_STATUS = {
   APPROVED: "approved",
   SCHEDULED: "scheduled",
   EN_ROUTE: "contractor_en_route",
+  ARRIVED: "contractor_arrived",
   WORK_STARTED: "work_started",
   CHANGE_ORDER_PENDING: "change_order_pending",
   WORK_COMPLETED: "work_completed",
@@ -37,7 +38,7 @@ export function canDispatchJob(job: ManagedJob | null | undefined) {
 
 export function canStartWork(job: ManagedJob | null | undefined) {
   if (!job || !hasAssignedContractor(job)) return false;
-  return [WORKFLOW_STATUS.SCHEDULED, WORKFLOW_STATUS.EN_ROUTE].includes(job.status as any);
+  return [WORKFLOW_STATUS.ARRIVED].includes(job.status as any);
 }
 
 export function canMarkComplete(job: ManagedJob | null | undefined) {
@@ -54,7 +55,8 @@ export function lifecycleLabel(job: ManagedJob | null | undefined) {
   if (!job) return "—";
   if (job.status === WORKFLOW_STATUS.PAID_FOR_DISPATCH && !hasAssignedContractor(job)) return "Initial payment received · waiting for assignment";
   if (hasAssignedContractor(job) && job.status === WORKFLOW_STATUS.PAID_FOR_DISPATCH) return "Contractor assigned · waiting for dispatch";
-  if (job.status === WORKFLOW_STATUS.EN_ROUTE) return "Contractor dispatched";
+  if (job.status === WORKFLOW_STATUS.EN_ROUTE) return "Contractor en route";
+  if (job.status === WORKFLOW_STATUS.ARRIVED) return "Contractor reached location";
   if (job.status === WORKFLOW_STATUS.WORK_STARTED) return "Work in progress";
   if (job.status === WORKFLOW_STATUS.WORK_COMPLETED || job.status === WORKFLOW_STATUS.CUSTOMER_REVIEW_PENDING) return "Work completed · final payment";
   if (job.status === WORKFLOW_STATUS.PAYOUT_PENDING || job.status === WORKFLOW_STATUS.PAID_OUT || job.status === WORKFLOW_STATUS.CLOSED) return "Completed · payout processing";

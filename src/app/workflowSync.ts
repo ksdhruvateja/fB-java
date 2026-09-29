@@ -12,8 +12,6 @@
 let installed = false;
 let originalFetch: typeof window.fetch | null = null;
 let channel: BroadcastChannel | null = null;
-const inflightGetRequests = new Map<string, Promise<Response>>();
-const inflightMutationRequests = new Map<string, Promise<Response>>();
 
 const CHANNEL_NAME = "fixbridge-workflow-sync-v1";
 const STORAGE_KEY = "fixbridge-workflow-sync-event";
@@ -135,58 +133,17 @@ export function installWorkflowMutationSync() {
       (request instanceof Request ? request.method : "GET"),
     ).toUpperCase();
 
-    const url = request instanceof Request ? request.url : String(request);
-    const body = init?.body == null ? "" : String(init.body);
-    const requestKey = `${method} ${url} ${body}`;
-    const isGetLike = method === "GET" || method === "HEAD" || method === "OPTIONS";
-    const inflightMap = isGetLike ? inflightGetRequests : inflightMutationRequests;
+    const response = await originalFetch!(...args);
+    logApiStatus(method, response.url, response.status);
 
-    // Do not let React StrictMode, double-clicks, or two lifecycle effects send
-    // the same request concurrently. The first network request owns the server
-    // mutation; duplicates receive a clone of its response. This is especially
-    // important for assignment/payment/complete actions and also reduces 429s.
-    const existing = inflightMap.get(requestKey);
-    if (existing) {
-      const shared = await existing;
-      return shared.clone();
+    if (response.ok && method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+      // Clone before the caller consumes the original response body.
+      void response.clone().json().then((payload) => {
+        emitMutation(method, response.url, response.status, payload);
+      }).catch(() => {
+        emitMutation(method, response.url, response.status, null);
+      });
     }
-
-    const requestPromise = originalFetch!(...args);
-    // Keep a pristine clone as the shared response for duplicate callers.
-    // The first caller receives the original response and may consume its body;
-    // duplicate callers always clone the pristine copy instead.
-    const sharedResponsePromise = requestPromise.then((response) => response.clone());
-    inflightMap.set(requestKey, sharedResponsePromise);
-
-    try {
-      const response = await requestPromise;
-      logApiStatus(method, response.url, response.status);
-
-      if (response.ok && !isGetLike) {
-        // Clone before the caller consumes the original response body.
-        void response.clone().json().then((payload) => {
-          emitMutation(method, response.url, response.status, payload);
-        }).catch(() => {
-          emitMutation(method, response.url, response.status, null);
-        });
-      }
-
-      // A duplicate caller must get an independent readable response body.
-      if (!isGetLike) {
-        // Keep the completed response briefly so an immediate double-click
-        // cannot issue a second POST/PUT/PATCH/DELETE. The first caller already
-        // receives `response`; duplicate callers use the original in-flight
-        // promise above while it is active.
-      }
-      return response;
-    } finally {
-      // GETs are only deduplicated while the request is in flight. Mutations are
-      // cleared shortly after completion so an intentional later action works.
-      if (isGetLike) {
-        inflightGetRequests.delete(requestKey);
-      } else {
-        window.setTimeout(() => inflightMutationRequests.delete(requestKey), 1200);
-      }
-    }
+    return response;
   };
 }
