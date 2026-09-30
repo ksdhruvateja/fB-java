@@ -578,7 +578,7 @@ function QuoteDocumentEditor({
                       className={`cursor-pointer hover:bg-muted/40 ${selectedId === row.id ? "bg-muted/60" : ""}`}
                     >
                       <td className="px-3 py-2.5 font-mono text-xs font-semibold text-[#FF4D1C]">
-                        {row.quoteNumber || `FBQ-${String(row.id).padStart(5, "0")}`}
+                        {row.bookingId || `#${row.jobId}`}
                       </td>
                       <td className="px-3 py-2.5">{row.homeownerName || "—"}</td>
                       <td className="px-3 py-2.5 text-muted-foreground">{row.jobCategory || row.jobTitle || "—"}</td>
@@ -617,7 +617,7 @@ function QuoteDocumentEditor({
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-mono text-sm font-semibold text-[#FF4D1C]">
-                          {row.quoteNumber || `FBQ-${String(row.id).padStart(5, "0")}`}
+                          {row.bookingId || `#${row.jobId}`}
                         </span>
                         <span className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase ${quoteStatusTone(row.status)}`}>
                           {formatStatusLabel(row.status)}
@@ -652,7 +652,7 @@ function QuoteDocumentEditor({
                     <img src={brand.logoMarkUrl} alt="" className="h-10 w-10 rounded-lg object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
                     <div>
                       <p className="text-xl font-black tracking-[0.14em] text-[#FF4D1C]">{brand.productName.toUpperCase()}</p>
-                      <p className="mt-1 font-mono text-lg font-bold">QUOTE #{quote.quoteNumber}</p>
+                      <p className="mt-1 font-mono text-lg font-bold">REQUEST #{quote.bookingId || quote.jobId}</p>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <span className={`rounded-md px-2.5 py-1 text-xs font-bold uppercase tracking-wide ${quoteStatusTone(quote.status)}`}>
                           {formatStatusLabel(quote.status)}
@@ -797,7 +797,7 @@ function QuoteDocumentEditor({
                             className="font-mono text-primary hover:underline"
                             onClick={() => void openQuote(h.id)}
                           >
-                            {h.quoteNumber || `FBQ-${h.id}`}
+                            {quote.bookingId || `#${quote.jobId}`}
                             {h.quoteOptionLabel ? ` · Option ${h.quoteOptionLabel}` : ""}
                             {h.quoteOptionTitle ? ` — ${h.quoteOptionTitle}` : ""} v{h.versionNumber}
                           </button>
@@ -1244,7 +1244,7 @@ function QuoteDocumentEditor({
       {modal === "preview" && quote ? (
         <Modal title="Preview quote" onClose={() => setModal(null)}>
           <QuotePreview
-            quoteNumber={quote.quoteNumber}
+            requestNumber={quote.bookingId || `#${quote.jobId}`}
             status={quote.status}
             createdAt={quote.createdAt}
             validUntil={validUntil || quote.quoteValidUntil}
@@ -1271,7 +1271,7 @@ function QuoteDocumentEditor({
         <Modal title={invoice ? "Send invoice" : "Send quote"} onClose={() => setModal(null)}>
           <div className="space-y-3 text-sm">
             <p><span className="text-muted-foreground">Customer</span><br /><strong>{billTo.name || quote.homeownerName}</strong></p>
-            <p><span className="text-muted-foreground">{invoice ? "Invoice" : "Quote"}</span><br /><strong className="font-mono">{invoice?.invoiceNumber || quote.quoteNumber}</strong></p>
+            <p><span className="text-muted-foreground">{invoice ? "Invoice" : "Service Request"}</span><br /><strong className="font-mono">{invoice?.invoiceNumber || quote.bookingId || `#${quote.jobId}`}</strong></p>
             <p><span className="text-muted-foreground">Amount</span><br /><strong className="text-lg">{formatMoney(invoice?.amountDue ?? totals.total)}</strong></p>
             <div className="flex gap-4">
               <label className="inline-flex items-center gap-2"><input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} /> Email</label>
@@ -1587,7 +1587,7 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
 }
 
 function QuotePreview({
-  quoteNumber,
+  requestNumber,
   status,
   createdAt,
   validUntil,
@@ -1603,7 +1603,7 @@ function QuotePreview({
   customerNotes,
   terms,
 }: {
-  quoteNumber: string;
+  requestNumber: string;
   status: string;
   createdAt?: string | null;
   validUntil?: string | null;
@@ -1636,8 +1636,8 @@ function QuotePreview({
           <img src={brand.logoMarkUrl} alt="" className="h-8 w-8 object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
           <p className="text-lg font-black tracking-[0.12em] text-[#FF4D1C]">{brand.productName.toUpperCase()}</p>
         </div>
-        <p className="mt-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Quote</p>
-        <p className="font-mono text-base font-bold">#{quoteNumber}</p>
+        <p className="mt-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Service Request</p>
+        <p className="font-mono text-base font-bold">{requestNumber}</p>
         <p className="mt-1 text-xs text-muted-foreground">
           {fmtDate(createdAt)} · Valid until {fmtDate(validUntil)} · {formatStatusLabel(status)}
         </p>

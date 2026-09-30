@@ -79,7 +79,7 @@ export default function AdminJobEvidencePanel({ jobId }: { jobId: number }) {
           evidence.quoteSnapshots.map((q) => (
             <div key={q.id} className="text-xs">
               <p>
-                Quote {q.quoteNumber || `#${q.id}`} v{q.versionNumber} · Total{" "}
+                Request {q.bookingId || `#${q.jobId || q.id}`} · v{q.versionNumber} · Total{" "}
                 {q.total != null ? formatMoney(q.total) : "—"} · {formatUtcTimestamp(q.acceptedAt)}
               </p>
             </div>

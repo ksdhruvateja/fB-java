@@ -255,7 +255,7 @@ export default function AdminHomeownerProfile({
               </>
             )}
             <div><dt className="text-xs uppercase text-muted-foreground">Recent service</dt><dd className="mt-1">{data.serviceHistory?.[0]?.title || "—"}</dd></div>
-            <div><dt className="text-xs uppercase text-muted-foreground">Recent quote</dt><dd className="mt-1">{quotes[0]?.quoteNumber || "—"}</dd></div>
+            <div><dt className="text-xs uppercase text-muted-foreground">Recent request</dt><dd className="mt-1">{quotes[0]?.bookingId || (quotes[0]?.jobId ? `#${quotes[0].jobId}` : "—")}</dd></div>
             <div><dt className="text-xs uppercase text-muted-foreground">Recent invoice</dt><dd className="mt-1">{invoices[0]?.invoiceNumber || "—"}</dd></div>
             <div><dt className="text-xs uppercase text-muted-foreground">Recent payment</dt><dd className="mt-1">{txns[0] ? formatMoney(Number(txns[0].amount)) : "—"}</dd></div>
             <div><dt className="text-xs uppercase text-muted-foreground">Open support</dt><dd className="mt-1">{tickets.find((t) => !["resolved", "closed"].includes(String(t.status)))?.subject || "None"}</dd></div>
@@ -386,7 +386,7 @@ export default function AdminHomeownerProfile({
         <div className="overflow-x-auto rounded-2xl border border-border">
           <table className="w-full text-left text-sm">
             <thead className="bg-muted/30 text-xs uppercase text-muted-foreground">
-              <tr><th className="px-4 py-3">Quote #</th><th className="px-4 py-3">Job #</th><th className="px-4 py-3">Service</th><th className="px-4 py-3 text-right">Amount</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Created</th></tr>
+              <tr><th className="px-4 py-3">Request #</th><th className="px-4 py-3">Job #</th><th className="px-4 py-3">Service</th><th className="px-4 py-3 text-right">Amount</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Created</th></tr>
             </thead>
             <tbody className="divide-y divide-border/60">
               {quotes.map((q) => (
@@ -395,7 +395,7 @@ export default function AdminHomeownerProfile({
                   className={onOpenQuote ? "hover:bg-muted/10 cursor-pointer" : ""}
                   onClick={() => onOpenQuote?.(q.id)}
                 >
-                  <td className="px-4 py-3">{q.quoteNumber}</td><td className="px-4 py-3">#{q.jobId}</td><td className="px-4 py-3">{q.service}</td><td className="px-4 py-3 text-right">{q.amount != null ? formatMoney(q.amount) : "—"}</td><td className="px-4 py-3 capitalize">{q.status}</td><td className="px-4 py-3">{fmtDate(q.createdAt)}</td>
+                  <td className="px-4 py-3">{q.bookingId || `#${q.jobId}`}</td><td className="px-4 py-3">#{q.jobId}</td><td className="px-4 py-3">{q.service}</td><td className="px-4 py-3 text-right">{q.amount != null ? formatMoney(q.amount) : "—"}</td><td className="px-4 py-3 capitalize">{q.status}</td><td className="px-4 py-3">{fmtDate(q.createdAt)}</td>
                 </tr>
               ))}
             </tbody>
@@ -449,7 +449,7 @@ export default function AdminHomeownerProfile({
 
       {tab === "documents" && (
         <div className="grid gap-3 sm:grid-cols-2">
-          {quotes.map((q) => <div key={`q-${q.id}`} className="rounded-xl border border-border p-4 text-sm"><p className="font-semibold">Quote {q.quoteNumber}</p><p className="text-muted-foreground">{q.service} · {q.status}</p></div>)}
+          {quotes.map((q) => <div key={`q-${q.id}`} className="rounded-xl border border-border p-4 text-sm"><p className="font-semibold">Request {q.bookingId || `#${q.jobId}`}</p><p className="text-muted-foreground">{q.service} · {q.status}</p></div>)}
           {invoices.map((inv) => <div key={`i-${inv.id}`} className="rounded-xl border border-border p-4 text-sm"><p className="font-semibold">Invoice {inv.invoiceNumber}</p><p className="text-muted-foreground">{formatMoney(inv.total)} · {inv.status}</p></div>)}
           {quotes.length === 0 && invoices.length === 0 && <p className="text-sm text-muted-foreground">No documents yet.</p>}
         </div>

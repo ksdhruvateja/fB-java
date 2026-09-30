@@ -413,24 +413,21 @@ export async function ensurePayoutRecordForJob(pool, jobId, { initialStatus, act
     `SELECT * FROM proposals WHERE job_id=$1 ORDER BY created_at DESC LIMIT 1`,
     [jobId]
   );
-  // The payout base must follow the final agreed contractor bid. Contractor
-  // negotiation acceptance updates bids.net_total, regardless of whether the
-  // Admin or Contractor accepted the final round.
-  const { rows: finalBidRows } = await pool.query(
-    `SELECT net_total
-       FROM bids
-      WHERE job_id=$1 AND contractor_user_id=$2
-      ORDER BY updated_at DESC NULLS LAST, created_at DESC, id DESC
-      LIMIT 1`,
-    [jobId, job.assigned_contractor_user_id]
-  );
-  const finalContractorBid = finalBidRows[0]?.net_total != null
-    ? Number(finalBidRows[0].net_total)
-    : null;
-  const payoutProposal =
-    finalContractorBid != null && Number.isFinite(finalContractorBid) && finalContractorBid > 0
-      ? { ...(props[0] || {}), contractor_net: finalContractorBid }
-      : (props[0] || null);
+  // The final contractor amount is the amount stored on the finalized
+  // customer-facing proposal. This prevents a later/raw bid row from
+  // silently changing the contractor payout after Admin finalization.
+  // Fall back to the latest assigned contractor bid only for legacy proposals
+  // that do not yet have contractor_quote_amount/contractor_net.
+  let payoutProposal = props[0] || null;
+  if (payoutProposal?.contractor_quote_amount == null && payoutProposal?.contractor_net == null) {
+    const { rows: finalBidRows } = await pool.query(`SELECT net_total FROM bids WHERE job_id=$1 AND contractor_user_id=$2
+        ORDER BY updated_at DESC NULLS LAST, created_at DESC, id DESC 
+        LIMIT 1`, [jobId, job.assigned_contractor_user_id]);
+    const finalContractorBid = finalBidRows[0]?.net_total != null ? Number(finalBidRows[0].net_total) : null;
+    if (Number.isFinite(finalContractorBid) && finalContractorBid >= 0) {
+      payoutProposal = { ...(payoutProposal || {}), contractor_quote_amount: finalContractorBid };
+    }
+  }
   const { rows: existing } = await pool.query(`SELECT * FROM contractor_payouts WHERE job_id=$1`, [jobId]);
   const tipDollars = await getPaidTipAmountDollars(pool, jobId);
   const changeOrderTotals = await sumApprovedChangeOrderAmounts(pool, jobId);

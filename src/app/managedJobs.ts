@@ -324,6 +324,7 @@ export type Property = {
 export type Proposal = {
   id: number;
   quoteNumber?: string;
+  bookingId?: string | null;
   jobId: number;
   scopeSummary?: string;
   retailAmount?: number;

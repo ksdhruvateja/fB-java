@@ -292,7 +292,7 @@ export function applicationFromUser(user: {
     companyEmail: saved.companyEmail || user.email || "",
     companyPhone: saved.companyPhone || user.phone || "",
     businessAddress: saved.businessAddress || user.address || "",
-    businessCountry: String(saved.businessCountry || user.businessCountry || "US").trim().toUpperCase(),
+    businessCountry: String(saved.businessCountry || user.businessCountry || "").trim().toUpperCase(),
     addressVerified: saved.addressVerified ?? user.addressVerified ?? false,
     postalCodePlus4: saved.postalCodePlus4 ?? user.postalCodePlus4 ?? null,
     primaryServices: (

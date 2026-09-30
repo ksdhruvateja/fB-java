@@ -378,6 +378,7 @@ export async function getAdminHomeownerProfile(userId: number) {
     quotes?: Array<{
       id: number;
       quoteNumber?: string | null;
+      bookingId?: string | null;
       jobId: number;
       service?: string | null;
       amount?: number | null;

@@ -114,18 +114,20 @@ async function loadPayoutEconomics(pool, jobId, payoutRow = null) {
       ? null
       : 0;
 
-  const proposalContractorCents =
-    proposal?.contractor_net != null ? Math.round(Number(proposal.contractor_net) * 100) : null;
+  const proposalContractorCents =proposal?.contractor_quote_amount != null
+      ? Math.round(Number(proposal.contractor_quote_amount) * 100)
+      : proposal?.contractor_net != null ? Math.round(Number(proposal.contractor_net) * 100) : null;
   const originalAgreedCents =
-    proposalContractorCents != null
-      ? proposalContractorCents + changeOrderContractorCents
-      : payoutRow
-        ? Math.max(0, Number(payoutRow.net_amount_cents || 0) - Number(payoutRow.adjustments_cents || 0))
-        : null;
+    proposalContractorCents != null ? proposalContractorCents + changeOrderContractorCents : payoutRow
+        ? Math.max(0, Number(payoutRow.net_amount_cents || 0) - Number(payoutRow.adjustments_cents || 0)) : null;
 
   const adminAdjustmentCents = payoutRow ? Number(payoutRow.adjustments_cents || 0) : 0;
   const contractorPayableCents = payoutRow ? Number(payoutRow.net_amount_cents || 0) : null;
-  const grossMarginCents = payoutRow ? Number(payoutRow.platform_fee_cents || 0) : null;
+  const customerContractCents = (proposalRetailCents || 0) + changeOrderRetailCents;
+  const grossMarginCents =
+    contractorPayableCents != null && customerContractCents > 0
+      ? Math.max(0, customerContractCents - contractorPayableCents)
+      : null;
 
   const isInstant = payoutRow?.payout_method === 'instant';
   const instantPayoutFeeCents = isInstant
@@ -142,7 +144,10 @@ async function loadPayoutEconomics(pool, jobId, payoutRow = null) {
 
   let fixbridgeNetCents = null;
   if (totalReceivedCents != null && contractorPayableCents != null) {
-    fixbridgeNetCents = totalReceivedCents - refundCents - contractorPayableCents;
+    // Customer revenue is gross customer money received. Stripe fees are a
+    // separate FixBridge expense and are deducted only once below.
+    const customerReceivedGrossCents = totalChargedCents - refundCents;
+    fixbridgeNetCents = customerReceivedGrossCents - contractorPayableCents - (stripeProcessingFeeCents || 0);
     if (!stripeFeesKnown && totalChargedCents > 0) {
       fixbridgeNetCents = null;
     }

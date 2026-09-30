@@ -185,7 +185,7 @@ export default function AdminOrderLedgerPanel({ onMessage }: { onMessage: (msg: 
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="font-mono text-sm font-semibold text-primary">
-                        {o.quoteNumber || o.bookingId || `Job ${o.jobId}`}
+                        {o.bookingId || `Job ${o.jobId}`}
                       </span>
                       <span className="text-[10px] uppercase text-muted-foreground">{o.jobStatus}</span>
                     </div>
@@ -239,9 +239,7 @@ export default function AdminOrderLedgerPanel({ onMessage }: { onMessage: (msg: 
                       </div>
                       <p className="mt-0.5 text-xs text-muted-foreground">{e.description}</p>
                       <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
-                        {e.quoteNumber ? (
-                          <span className="font-mono font-semibold text-primary">{e.quoteNumber}</span>
-                        ) : null}
+                        <span className="font-mono font-semibold text-primary">{e.bookingId || `#${e.jobId}`}</span>
                         {e.bookingId ? <span>{e.bookingId}</span> : null}
                         {e.createdByName ? <span>By {e.createdByName}</span> : null}
                         {e.contractorName ? <span>{e.contractorName}</span> : null}

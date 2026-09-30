@@ -137,18 +137,20 @@ export async function createConnectAccountLink(accountId, refreshPath, returnPat
 }
 
 export async function createConnectAccountUpdateLink(accountId, refreshPath, returnPath) {
-  const stripe = await getStripe();
-  if (!stripe) {
-    const err = new Error('Stripe is not configured.');
-    err.status = 503;
-    err.code = 'STRIPE_NOT_CONFIGURED';
-    throw err;
-  }
-  const link = await stripe.accountLinks.create({
+  // Stripe Connect V2 onboarding/update flow. For Express recipient accounts,
+  // reuse the V2 onboarding flow so Stripe can collect any outstanding payout
+  // requirements (including bank details) instead of calling the legacy V1
+  // accountLinks API.
+  const link = await stripeV2Request('/v2/core/account_links', {
     account: accountId,
-    refresh_url: `${appBaseUrl()}${refreshPath}`,
-    return_url: `${appBaseUrl()}${returnPath}`,
-    type: 'account_update',
+    use_case: {
+      type: 'account_onboarding',
+      account_onboarding: {
+        configurations: ['recipient'],
+        refresh_url: `${appBaseUrl()}${refreshPath}`,
+        return_url: `${appBaseUrl()}${returnPath}`,
+      },
+    },
   });
   return { url: link.url };
 }

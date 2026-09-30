@@ -898,11 +898,9 @@ export default function HomeownerJobDetailPanel({
           <HomeownerQuoteOptionsPanel job={job} onRefresh={onRefresh} onError={onError} onBusy={onBusy} />
         </DetailSection>
         <DetailSection mobile={isMobile} title="Quote" defaultOpen badge={quoteBadge}>
-          {proposal.quoteNumber ? (
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              {proposal.quoteNumber}
-            </p>
-          ) : null}
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            REQUEST #{(proposal as typeof proposal & { bookingId?: string | null }).bookingId || job.bookingId || job.id}
+          </p>
           <p className="mt-1 tabular-nums text-2xl font-semibold">{formatMoney(proposal.retailAmount)}</p>
           {(proposal.customerLineItems || []).length > 0 ? (
             <ul className="mt-3 space-y-1.5 rounded-lg border border-border bg-muted/20 p-3 text-sm">

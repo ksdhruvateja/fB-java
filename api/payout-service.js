@@ -173,9 +173,9 @@ export function amountsFromJobProposal(job, proposal) {
         ? dollarsToCents(job.customer_retail_estimate_high)
         : 0;
 
-  const contractorNetCents =
-    proposal?.contractor_net != null
-      ? dollarsToCents(proposal.contractor_net)
+  const contractorNetCents = 
+    proposal?.contractor_quote_amount != null || proposal?.contractor_net != null
+      ? dollarsToCents(proposal.contractor_quote_amount ?? proposal.contractor_net)
       : job?.estimated_contractor_net_high != null
         ? dollarsToCents(job.estimated_contractor_net_high)
         : job?.estimated_contractor_net_low != null

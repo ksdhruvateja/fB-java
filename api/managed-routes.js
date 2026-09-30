@@ -7344,10 +7344,30 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
   app.post('/api/admin/managed/jobs/:id/finalize-estimate', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
-      const { rows } = await pool.query(`SELECT * FROM proposals WHERE job_id=$1 AND status IN ('sent','viewed','negotiation_pending') ORDER BY created_at DESC, id DESC LIMIT 1`, [jobId]);
+      const { rows } = await pool.query(`
+        SELECT p.*, b.net_total AS bid_net_total
+        FROM proposals p
+        LEFT JOIN bids b ON b.id=p.bid_id
+        WHERE p.job_id=$1 AND p.status IN ('sent','viewed','negotiation_pending')
+        ORDER BY p.created_at DESC, p.id DESC LIMIT 1`, [jobId]);
       if (!rows[0]) return res.status(409).json({ ok: false, code: 'NO_ESTIMATE_TO_FINALIZE', message: 'No customer-facing estimate is available to finalize.' });
       const proposal = rows[0];
-      await pool.query(`UPDATE proposals SET status='finalized', updated_at=NOW() WHERE id=$1`, [proposal.id]);
+      const finalContractorQuote = proposal.contractor_quote_amount != null
+        ? Number(proposal.contractor_quote_amount)
+        : proposal.contractor_net != null
+          ? Number(proposal.contractor_net)
+          : proposal.bid_net_total != null
+            ? Number(proposal.bid_net_total)
+            : null;
+      if (finalContractorQuote == null || !Number.isFinite(finalContractorQuote) || finalContractorQuote < 0) {
+        return res.status(409).json({
+          ok: false,
+          code: 'FINAL_CONTRACTOR_BID_REQUIRED',
+          message: 'A final contractor bid amount is required before the customer quote can be finalized.',
+        });
+      }
+      await pool.query(`UPDATE proposals SET status='finalized', contractor_quote_amount=$1, updated_at=NOW()
+          WHERE id=$2`, [finalContractorQuote, proposal.id]);
       await pool.query(`UPDATE managed_jobs SET active_proposal_id=$1, updated_at=NOW() WHERE id=$2`, [proposal.id, jobId]);
       await logQuoteActivity(pool, { proposalId: proposal.id, jobId, actorUserId: req.authUser.id, action: 'estimate_finalized', detail: { versionNumber: Number(proposal.version_number || 1), total: Number(proposal.retail_amount || 0) } });
       await audit(pool, req.authUser.id, 'estimate_finalized', 'proposal', proposal.id, { jobId, readyForHomeownerApproval: true });
@@ -10501,7 +10521,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
                 hw.name AS homeowner_name, hw.email AS homeowner_email,
                 p.id AS proposal_id, p.quote_number, p.retail_amount, p.contractor_net, p.platform_gross,
                 p.processing_cost, p.expected_margin_pct, p.published_at, p.approved_at, p.status AS quote_status,
-                p.scope_summary, p.timeline, p.service_charge, p.admin_discount,
+                p.scope_summary, p.timeline, p.service_charge, p.admin_discount, p.contractor_quote_amount,
                 cr.name AS created_by_name, cr.email AS created_by_email,
                 ct.name AS contractor_name
          FROM managed_jobs j
@@ -10529,7 +10549,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         );
         payments = payRows;
         const { rows: payoutRows } = await pool.query(
-          `SELECT id, job_id, contractor_id, status, gross_amount_cents, net_amount_cents, fee_amount_cents,
+          `SELECT id, job_id, contractor_id, status, gross_amount_cents, net_amount_cents, instant_payout_fee_cents,
                   created_at, approved_at, paid_at, stripe_transfer_id
            FROM contractor_payouts WHERE job_id = ANY($1::bigint[]) ORDER BY created_at DESC`,
           [jobIds]
@@ -10537,6 +10557,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         payouts = payoutRows;
       }
 
+      // A payment may exist first as pending and later as succeeded for the
+      // same Stripe session. The succeeded row is authoritative for the ledger.
+      const settledSessionIds = new Set(
+        payments.filter((p) => p.stripe_session_id && ['succeeded','paid'].includes(String(p.status)))
+          .map((p) => String(p.stripe_session_id))
+      );
+      payments = payments.filter((p) => !(p.stripe_session_id && String(p.status) === 'pending' && settledSessionIds.has(String(p.stripe_session_id))));
       const paymentsByJob = new Map();
       for (const p of payments) {
         if (!paymentsByJob.has(p.job_id)) paymentsByJob.set(p.job_id, []);
@@ -10571,7 +10598,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         totalIncoming += incoming;
         totalPending += pending;
         totalPaidOut += paidOut;
-        if (row.platform_gross != null) totalQuotedProfit += Number(row.platform_gross);
+        const finalContractorQuote = row.contractor_quote_amount != null
+          ? Number(row.contractor_quote_amount)
+          : row.contractor_net != null ? Number(row.contractor_net) : 0;
+        const customerQuote = row.retail_amount != null ? Number(row.retail_amount) : 0;
+        const finalQuoteMargin = Math.max(0, customerQuote - finalContractorQuote);
+        totalQuotedProfit += finalQuoteMargin;
 
         if (row.proposal_id) {
           ledger.push({
@@ -10587,9 +10619,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
             createdByName: row.created_by_name || row.created_by_email || '—',
             aiEstimateLow: row.ai_low != null ? Number(row.ai_low) : null,
             aiEstimateHigh: row.ai_high != null ? Number(row.ai_high) : null,
-            contractorQuote: row.contractor_net != null ? Number(row.contractor_net) : null,
+            contractorQuote: row.contractor_quote_amount != null
+              ? Number(row.contractor_quote_amount)
+              : row.contractor_net != null ? Number(row.contractor_net) : null,
             customerQuote: row.retail_amount != null ? Number(row.retail_amount) : null,
-            platformMargin: row.platform_gross != null ? Number(row.platform_gross) : null,
+            platformMargin: row.retail_amount != null
+              ? Math.max(0, Number(row.retail_amount) - (row.contractor_quote_amount != null ? Number(row.contractor_quote_amount) : Number(row.contractor_net || 0)))
+              : null,
             expectedMarginPct: row.expected_margin_pct != null ? Number(row.expected_margin_pct) : null,
             processingCost: row.processing_cost != null ? Number(row.processing_cost) : null,
             amount: row.retail_amount != null ? Number(row.retail_amount) : null,
@@ -10622,7 +10658,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
             status: p.status,
             amount: Number(p.net_amount_cents || 0) / 100,
             grossAmount: Number(p.gross_amount_cents || 0) / 100,
-            feeAmount: Number(p.fee_amount_cents || 0) / 100,
+            feeAmount: Number(p.instant_payout_fee_cents || 0) / 100,
             contractorName: row.contractor_name,
             description: `Contractor payout — ${p.status}`,
           });
@@ -10655,9 +10691,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           approvedAt: row.approved_at,
           aiEstimateLow: row.ai_low != null ? Number(row.ai_low) : null,
           aiEstimateHigh: row.ai_high != null ? Number(row.ai_high) : null,
-          contractorQuote: row.contractor_net != null ? Number(row.contractor_net) : null,
+          contractorQuote: row.contractor_quote_amount != null
+            ? Number(row.contractor_quote_amount)
+            : row.contractor_net != null ? Number(row.contractor_net) : null,
           customerQuote: row.retail_amount != null ? Number(row.retail_amount) : null,
-          platformMargin: row.platform_gross != null ? Number(row.platform_gross) : null,
+          platformMargin: row.retail_amount != null
+            ? Math.max(0, Number(row.retail_amount) - (row.contractor_quote_amount != null ? Number(row.contractor_quote_amount) : Number(row.contractor_net || 0)))
+            : null,
           expectedMarginPct: row.expected_margin_pct != null ? Number(row.expected_margin_pct) : null,
           moneyReceived: (paymentsByJob.get(row.job_id) || [])
             .filter((p) => p.status === 'succeeded')
@@ -10695,8 +10735,8 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const { rows: props } = await pool.query(
         `SELECT
            COALESCE(SUM(ROUND(retail_amount::numeric * 100)),0)::bigint AS retail_cents,
-           COALESCE(SUM(ROUND(contractor_net::numeric * 100)),0)::bigint AS contractor_net_cents,
-           COALESCE(SUM(ROUND(COALESCE(platform_gross,0)::numeric * 100)),0)::bigint AS platform_gross_cents
+           COALESCE(SUM(ROUND(COALESCE(contractor_quote_amount, contractor_net, 0)::numeric * 100)),0)::bigint AS contractor_net_cents,
+           COALESCE(SUM(ROUND((retail_amount - COALESCE(contractor_quote_amount, contractor_net, 0))::numeric * 100)),0)::bigint AS platform_gross_cents
          FROM proposals WHERE status IN ('sent','approved','accepted','paid') OR published_at IS NOT NULL`
       );
       const { rows: visit } = await pool.query(
@@ -10709,12 +10749,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
            j.status,
            j.category,
            ROUND(COALESCE(p.retail_amount,0)::numeric * 100)::bigint AS retail_cents,
-           ROUND(COALESCE(p.contractor_net,0)::numeric * 100)::bigint AS contractor_net_cents,
-           ROUND(COALESCE(p.platform_gross,0)::numeric * 100)::bigint AS platform_gross_cents,
+           ROUND(COALESCE(p.contractor_quote_amount, p.contractor_net, 0)::numeric * 100)::bigint AS contractor_net_cents,
+           ROUND((COALESCE(p.retail_amount,0) - COALESCE(p.contractor_quote_amount, p.contractor_net, 0))::numeric * 100)::bigint AS platform_gross_cents,
            ROUND(COALESCE(j.visit_fee_amount,0)::numeric * 100)::bigint AS visit_fee_cents
          FROM managed_jobs j
          LEFT JOIN LATERAL (
-           SELECT retail_amount, contractor_net, platform_gross
+           SELECT retail_amount, contractor_net, contractor_quote_amount
            FROM proposals WHERE job_id=j.id ORDER BY created_at DESC LIMIT 1
          ) p ON TRUE
          WHERE j.status NOT IN ('draft','canceled')

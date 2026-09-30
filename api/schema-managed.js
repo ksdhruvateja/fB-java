@@ -1687,6 +1687,8 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE contractor_payouts ADD COLUMN IF NOT EXISTS reversal_required BOOLEAN DEFAULT FALSE`);
   await pool.query(`ALTER TABLE contractor_payouts ADD COLUMN IF NOT EXISTS service_amount_cents INT DEFAULT 0`);
   await pool.query(`ALTER TABLE contractor_payouts ADD COLUMN IF NOT EXISTS tip_amount_cents INT DEFAULT 0`);
+  await pool.query(`ALTER TABLE contractor_payouts ADD COLUMN IF NOT EXISTS platform_fee_cents INT DEFAULT 0`);
+  await pool.query(`ALTER TABLE contractor_payouts ADD COLUMN IF NOT EXISTS instant_payout_fee_cents INT DEFAULT 0`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS payment_settlements (
@@ -1767,6 +1769,7 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS stripe_balance_transaction_id TEXT`);
   await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS stripe_processing_fee_cents INT`);
   await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS stripe_net_received_cents INT`);
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS simulated BOOLEAN DEFAULT FALSE`);
   await pool.query(`ALTER TABLE refunds ADD COLUMN IF NOT EXISTS refund_amount_cents INT`);
   await pool.query(`ALTER TABLE refunds ADD COLUMN IF NOT EXISTS stripe_fee_refund_cents INT`);
 

@@ -6,6 +6,20 @@ import { dollarsToCents, calculateContractorPayout, calculateInstantPayoutFee, n
 
 export { dollarsToCents };
 
+/** Final contractor bid stored on the customer-facing proposal.
+ * contractor_quote_amount is authoritative after Admin finalization;
+ * contractor_net is retained as the legacy fallback.
+ */
+export function getFinalContractorQuoteDollars(proposal, fallback = 0) {
+  const value = proposal?.contractor_quote_amount ?? proposal?.contractor_net;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : Number(fallback) || 0;
+}
+
+export function getFinalContractorQuoteCents(proposal, fallback = 0) {
+  return dollarsToCents(getFinalContractorQuoteDollars(proposal, fallback));
+}
+
 /** Customer checkout total = service + optional tip. */
 export function calculateCustomerPaymentTotal({ serviceAmountCents, tipAmountCents = 0 }) {
   const service = Math.max(0, Math.round(Number(serviceAmountCents || 0)));
@@ -90,8 +104,8 @@ export function amountsFromJobProposalAndTip(job, proposal, tipDollars = 0, chan
         : 0;
 
   const baseContractorNetCents =
-    proposal?.contractor_net != null
-      ? dollarsToCents(proposal.contractor_net)
+    proposal?.contractor_quote_amount != null || proposal?.contractor_net != null
+      ? getFinalContractorQuoteCents(proposal)
       : job?.estimated_contractor_net_high != null
         ? dollarsToCents(job.estimated_contractor_net_high)
         : job?.estimated_contractor_net_low != null

@@ -187,7 +187,7 @@ export default function AdminQuoteOptionsPanel({
                   <button type="button" className="text-left" onClick={() => onOpenQuote(opt.id)}>
                     <p className="text-[11px] font-bold uppercase tracking-wider text-primary">Option {letter}</p>
                     <p className="text-sm font-semibold">
-                      {opt.quoteNumber} v{opt.versionNumber || 1} · {opt.status}
+                      {opt.bookingId || `#${opt.jobId}`} · v{opt.versionNumber || 1} · {opt.status}
                       {historical ? " · Superseded" : ""}
                     </p>
                   </button>

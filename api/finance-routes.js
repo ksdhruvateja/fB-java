@@ -44,29 +44,23 @@ export function registerFinanceRoutes(app, { pool, requireAuth, requireAdmin }) 
       const { rows: payRows } = await pool.query(
         `SELECT
            COALESCE(SUM(CASE WHEN status='succeeded' AND amount > 0 THEN amount ELSE 0 END), 0) AS customer_payments,
-           COALESCE(SUM(CASE WHEN status='succeeded' AND amount < 0 THEN ABS(amount) ELSE 0 END), 0) AS refunds
+           COALESCE(SUM(CASE WHEN status='succeeded' AND amount < 0 THEN ABS(amount) ELSE 0 END), 0) AS refunds,
+           COALESCE(SUM(CASE WHEN status='succeeded' THEN COALESCE(stripe_processing_fee_cents,0) ELSE 0 END), 0)::bigint AS stripe_fees_cents
          FROM payments WHERE created_at >= $1 AND created_at <= $2`,
         [from, to]
       );
 
-      let contractorPayables = 0;
-      let contractorPayouts = 0;
-      let payoutFees = 0;
-      try {
-        const { rows: payoutRows } = await pool.query(
-          `SELECT
-             COALESCE(SUM(CASE WHEN status IN ('available','requested','processing','on_hold') THEN net_amount ELSE 0 END), 0) AS payables,
-             COALESCE(SUM(CASE WHEN status='paid' THEN net_amount ELSE 0 END), 0) AS paid_out,
-             COALESCE(SUM(CASE WHEN status='paid' THEN fee_amount ELSE 0 END), 0) AS fees
-           FROM contractor_payouts WHERE created_at >= $1 AND created_at <= $2`,
-          [from, to]
-        );
-        contractorPayables = Number(payoutRows[0]?.payables || 0);
-        contractorPayouts = Number(payoutRows[0]?.paid_out || 0);
-        payoutFees = Number(payoutRows[0]?.fees || 0);
-      } catch {
-        /* payout table optional */
-      }
+      const { rows: payoutRows } = await pool.query(
+        `SELECT
+           COALESCE(SUM(CASE WHEN status IN ('pending_job_completion','pending_approval','eligible','approved','processing','on_hold') THEN net_amount_cents ELSE 0 END), 0)::bigint AS payables_cents,
+           COALESCE(SUM(CASE WHEN status IN ('paid','succeeded','transferred') THEN net_amount_cents ELSE 0 END), 0)::bigint AS paid_out_cents,
+           COALESCE(SUM(CASE WHEN status IN ('paid','succeeded','transferred') THEN instant_payout_fee_cents ELSE 0 END), 0)::bigint AS fees_cents
+         FROM contractor_payouts WHERE created_at >= $1 AND created_at <= $2`,
+        [from, to]
+      );
+      const contractorPayables = Number(payoutRows[0]?.payables_cents || 0) / 100;
+      const contractorPayouts = Number(payoutRows[0]?.paid_out_cents || 0) / 100;
+      const payoutFees = Number(payoutRows[0]?.fees_cents || 0) / 100;
 
       const { rows: invRows } = await pool.query(
         `SELECT COALESCE(SUM(amount_due), 0) AS outstanding
@@ -75,10 +69,13 @@ export function registerFinanceRoutes(app, { pool, requireAuth, requireAdmin }) 
 
       const customerPayments = Number(payRows[0]?.customer_payments || 0);
       const refunds = Number(payRows[0]?.refunds || 0);
+      const stripeProcessingFees = Number(payRows[0]?.stripe_fees_cents || 0) / 100;
       const grossRevenue = customerPayments;
-      const directContractorCost = contractorPayouts;
+      const directContractorCost = contractorPayables;
+      // Business rule: customer final quote - final contractor bid = gross
+      // FixBridge contribution. Stripe fees and payout fees are separate costs.
       const platformContribution = grossRevenue - directContractorCost - refunds;
-      const estimatedNetProfit = platformContribution - payoutFees;
+      const estimatedNetProfit = platformContribution - stripeProcessingFees - payoutFees;
 
       res.json({
         ok: true,
@@ -94,6 +91,7 @@ export function registerFinanceRoutes(app, { pool, requireAuth, requireAdmin }) 
           platformContribution,
           estimatedNetProfit,
           payoutFees,
+          stripeProcessingFees,
         },
       });
     } catch (e) {
