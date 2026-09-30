@@ -61,7 +61,8 @@ export function securityHeaders(_req, res, next) {
   res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
   if (process.env.NODE_ENV === 'production') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-    // Light CSP: allow Stripe.js / self. Avoid breaking Checkout.
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+    // Google Identity Services loads its client, styles, and popup from accounts.google.com.
     res.setHeader(
       'Content-Security-Policy',
       [
@@ -71,10 +72,10 @@ export function securityHeaders(_req, res, next) {
         "object-src 'none'",
         "img-src 'self' data: blob: https:",
         "font-src 'self' data: https:",
-        "style-src 'self' 'unsafe-inline' https:",
-        "script-src 'self' 'unsafe-inline' https://js.stripe.com https://cdn.jsdelivr.net",
-        "connect-src 'self' https://api.stripe.com https://*.stripe.com https://*.neon.tech https:",
-        "frame-src 'self' https://js.stripe.com https://hooks.stripe.com",
+        "style-src 'self' 'unsafe-inline' https: https://accounts.google.com/gsi/style",
+        "script-src 'self' 'unsafe-inline' https://js.stripe.com https://cdn.jsdelivr.net https://accounts.google.com/gsi/client",
+        "connect-src 'self' https://api.stripe.com https://*.stripe.com https://*.neon.tech https: https://accounts.google.com/gsi/",
+        "frame-src 'self' https://js.stripe.com https://hooks.stripe.com https://accounts.google.com/gsi/",
       ].join('; ')
     );
   }
