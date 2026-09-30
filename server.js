@@ -4,7 +4,7 @@ import app, { initDb, pool } from './api/app.js';
 import { processDueServiceReminders } from './api/service-reminders.js';
 import { processComplianceExpirationAlerts } from './api/contractor-compliance-alerts.js';
 
-const PORT = process.env.API_PORT || 3001;
+const PORT = process.env.PORT || process.env.API_PORT || 3001;
 
 // 🔥 HOTFIX MIDDLWARE: Intercepts public incoming route requests and assigns a unique ID string
 app.use((req, res, next) => {
@@ -14,7 +14,7 @@ app.use((req, res, next) => {
 
 initDb()
   .then(() => {
-    app.listen(PORT, () => {
+    app.listen(PORT, '0.0.0.0', () => {
       console.log(`[FixBridge API] Running on http://localhost:${PORT}`);
       if (process.env.ENABLE_SERVICE_REMINDER_POLL === 'true') {
         const intervalMs = Number(process.env.SERVICE_REMINDER_POLL_MS || 15 * 60 * 1000);
