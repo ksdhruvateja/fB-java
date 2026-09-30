@@ -64,9 +64,31 @@ export async function notifyContractorPayout(pool, { contractorId, jobId, type, 
 }
 
 export async function buildContractorPayoutAccountView(pool, contractorId) {
-  const { rows } = await pool.query(`SELECT * FROM users WHERE id=$1 AND role='contractor'`, [contractorId]);
+  const { rows } = await pool.query(
+    `SELECT u.*, ca.stripe_account_id AS contractor_stripe_account_id,
+            ca.stripe_account_status AS contractor_stripe_account_status,
+            ca.payouts_enabled AS contractor_payouts_enabled,
+            ca.instant_payouts_eligible AS contractor_instant_payouts_eligible,
+            ca.bank_account_status AS contractor_bank_account_status,
+            ca.verification_status AS contractor_verification_status
+       FROM users u
+       LEFT JOIN contractor_accounts ca ON ca.contractor_id=u.id
+      WHERE u.id=$1 AND u.role='contractor'`,
+    [contractorId]
+  );
   const user = rows[0];
   if (!user) return null;
+
+  // users is the primary runtime source today, but older onboarding records may
+  // exist only in contractor_accounts. Recover that account ID before querying Stripe.
+  const stripeAccountId = user.stripe_account_id || user.contractor_stripe_account_id || null;
+  if (stripeAccountId && user.stripe_account_id !== stripeAccountId) {
+    await pool.query(
+      `UPDATE users SET stripe_account_id=$1, stripe_onboarding_status=COALESCE(NULLIF(stripe_onboarding_status,''),'pending') WHERE id=$2`,
+      [stripeAccountId, contractorId]
+    );
+    user.stripe_account_id = stripeAccountId;
+  }
 
   let external = { accounts: [] };
   let summary = {
@@ -79,10 +101,10 @@ export async function buildContractorPayoutAccountView(pool, contractorId) {
   };
   let accountStatus = user.stripe_onboarding_status || 'not_connected';
 
-  if (user.stripe_account_id) {
+  if (stripeAccountId) {
     if (stripeConfigured()) {
-      const { account } = await retrieveConnectAccount(user.stripe_account_id);
-      external = await listConnectExternalAccounts(user.stripe_account_id);
+      const { account } = await retrieveConnectAccount(stripeAccountId);
+      external = await listConnectExternalAccounts(stripeAccountId);
       if (account) {
         summary = summarizeConnectAccount(account, external.accounts);
         accountStatus = account.details_submitted ? 'active' : 'pending';
@@ -92,7 +114,7 @@ export async function buildContractorPayoutAccountView(pool, contractorId) {
         );
       }
     } else {
-      external = await listConnectExternalAccounts(user.stripe_account_id);
+      external = await listConnectExternalAccounts(stripeAccountId);
       accountStatus = 'simulated';
       summary = {
         payoutsEnabled: true,
@@ -120,7 +142,7 @@ export async function buildContractorPayoutAccountView(pool, contractorId) {
        updated_at=NOW()`,
     [
       contractorId,
-      user.stripe_account_id || null,
+      stripeAccountId,
       accountStatus,
       summary.payoutsEnabled,
       summary.instantPayoutsEligible,
@@ -130,14 +152,14 @@ export async function buildContractorPayoutAccountView(pool, contractorId) {
   );
 
   const readyToReceive =
-    Boolean(user.stripe_account_id) &&
+    Boolean(stripeAccountId) &&
     summary.connectStatus?.transfersEligible === true &&
     summary.connectStatus?.onboardingComplete === true &&
     summary.bankAccountStatus === 'connected';
 
   return {
     connected: Boolean(user.stripe_account_id),
-    stripeAccountId: user.stripe_account_id || null,
+    stripeAccountId: stripeAccountId,
     onboardingStatus: accountStatus,
     payoutsEnabled: summary.payoutsEnabled,
     bankAccountStatus: summary.bankAccountStatus,
@@ -148,7 +170,7 @@ export async function buildContractorPayoutAccountView(pool, contractorId) {
     bankAccounts: external.accounts,
     readyToReceivePayouts: readyToReceive,
     connectStatus: summary.connectStatus || null,
-    simulated: !stripeConfigured() && Boolean(user.stripe_account_id),
+    simulated: !stripeConfigured() && Boolean(stripeAccountId),
   };
 }
 
@@ -214,6 +236,12 @@ export async function validatePayoutEligibility(pool, payout, { contractor: cont
     [payout.job_id]
   );
   if (!retailPaid.length) {
+    console.warn('[PAYOUT ELIGIBILITY BLOCKED]', {
+      payoutId: payout?.id,
+      jobId: payout?.job_id,
+      code: 'PAYMENT_NOT_RECEIVED',
+      message: 'Homeowner payment must be received before releasing contractor payout.',
+    });
     return {
       eligible: false,
       code: 'PAYMENT_NOT_RECEIVED',
@@ -243,8 +271,25 @@ export async function validatePayoutEligibility(pool, payout, { contractor: cont
     contractor = contractors[0];
   }
   if (!contractor) {
+    console.warn('[PAYOUT ELIGIBILITY BLOCKED]', {
+      payoutId: payout?.id,
+      jobId: payout?.job_id,
+      code: 'CONTRACTOR_NOT_FOUND',
+    });
     return { eligible: false, code: 'CONTRACTOR_NOT_FOUND', message: 'Contractor not found.' };
   }
+
+  console.log('[PAYOUT STRIPE CHECK]', {
+    payoutId: payout?.id,
+    jobId: payout?.job_id,
+    contractorId: contractor.id,
+    contractorName: contractor.name,
+    hasStripeAccount: Boolean(contractor.stripe_account_id),
+    stripeAccountId: contractor.stripe_account_id ? `${String(contractor.stripe_account_id).slice(0, 8)}…` : null,
+    stripeConfigured: stripeConfigured(),
+    nodeEnv: process.env.NODE_ENV || 'development',
+    allowSimulatedPayouts: process.env.ALLOW_SIMULATED_PAYOUTS === 'true',
+  });
 
   const isProduction = process.env.NODE_ENV === 'production';
   if (isProduction && !stripeConfigured()) {
@@ -259,7 +304,21 @@ export async function validatePayoutEligibility(pool, payout, { contractor: cont
     process.env.ALLOW_SIMULATED_PAYOUTS === 'true' ||
     shouldSimulatePayment(false) ||
     (!contractor.stripe_account_id && !stripeConfigured());
+  console.log('[PAYOUT STRIPE MODE]', {
+    payoutId: payout?.id,
+    simulate,
+    hasStripeAccount: Boolean(contractor.stripe_account_id),
+    stripeConfigured: stripeConfigured(),
+  });
+
   if (!simulate && !contractor.stripe_account_id) {
+    console.warn('[PAYOUT ELIGIBILITY BLOCKED]', {
+      payoutId: payout?.id,
+      jobId: payout?.job_id,
+      contractorId: contractor.id,
+      code: 'STRIPE_NOT_CONNECTED',
+      message: 'Contractor has not connected Stripe payouts yet.',
+    });
     return {
       eligible: false,
       code: 'STRIPE_NOT_CONNECTED',
@@ -269,9 +328,20 @@ export async function validatePayoutEligibility(pool, payout, { contractor: cont
 
   if (!simulate && contractor.stripe_account_id && stripeConfigured()) {
     const accountView = await buildContractorPayoutAccountView(pool, contractor.id);
+    console.log('[PAYOUT STRIPE ACCOUNT STATUS]', {
+      payoutId: payout?.id,
+      contractorId: contractor.id,
+      stripeAccountId: `${String(contractor.stripe_account_id).slice(0, 8)}…`,
+      connected: Boolean(accountView?.connected),
+      payoutsEnabled: Boolean(accountView?.payoutsEnabled),
+      readyToReceivePayouts: Boolean(accountView?.readyToReceivePayouts),
+      blockedReason: accountView?.connectStatus?.blockedReason || null,
+      verificationStatus: accountView?.verificationStatus || null,
+      requirementsDueCount: Array.isArray(accountView?.requirementsDue) ? accountView.requirementsDue.length : 0,
+    });
     if (!accountView?.readyToReceivePayouts) {
       const blocked = accountView?.connectStatus?.blockedReason;
-      return {
+      const result = {
         eligible: false,
         code: 'STRIPE_NOT_READY',
         message:
@@ -280,11 +350,26 @@ export async function validatePayoutEligibility(pool, payout, { contractor: cont
             : 'Contractor Stripe account is not eligible for transfers yet.',
         connectStatus: accountView?.connectStatus || null,
       };
+      console.warn('[PAYOUT ELIGIBILITY BLOCKED]', {
+        payoutId: payout?.id,
+        jobId: payout?.job_id,
+        contractorId: contractor.id,
+        code: result.code,
+        message: result.message,
+        blockedReason: blocked || null,
+      });
+      return result;
     }
   }
 
   const netAmountCents = Math.max(0, Number(payout.net_amount_cents || 0));
   if (netAmountCents <= 0) {
+    console.warn('[PAYOUT ELIGIBILITY BLOCKED]', {
+      payoutId: payout?.id,
+      jobId: payout?.job_id,
+      code: 'ZERO_AMOUNT',
+      netAmountCents,
+    });
     return { eligible: false, code: 'ZERO_AMOUNT', message: 'Payout amount must be greater than zero.' };
   }
 
@@ -328,10 +413,28 @@ export async function ensurePayoutRecordForJob(pool, jobId, { initialStatus, act
     `SELECT * FROM proposals WHERE job_id=$1 ORDER BY created_at DESC LIMIT 1`,
     [jobId]
   );
+  // The payout base must follow the final agreed contractor bid. Contractor
+  // negotiation acceptance updates bids.net_total, regardless of whether the
+  // Admin or Contractor accepted the final round.
+  const { rows: finalBidRows } = await pool.query(
+    `SELECT net_total
+       FROM bids
+      WHERE job_id=$1 AND contractor_user_id=$2
+      ORDER BY updated_at DESC NULLS LAST, created_at DESC, id DESC
+      LIMIT 1`,
+    [jobId, job.assigned_contractor_user_id]
+  );
+  const finalContractorBid = finalBidRows[0]?.net_total != null
+    ? Number(finalBidRows[0].net_total)
+    : null;
+  const payoutProposal =
+    finalContractorBid != null && Number.isFinite(finalContractorBid) && finalContractorBid > 0
+      ? { ...(props[0] || {}), contractor_net: finalContractorBid }
+      : (props[0] || null);
   const { rows: existing } = await pool.query(`SELECT * FROM contractor_payouts WHERE job_id=$1`, [jobId]);
   const tipDollars = await getPaidTipAmountDollars(pool, jobId);
   const changeOrderTotals = await sumApprovedChangeOrderAmounts(pool, jobId);
-  const amounts = amountsFromJobProposalAndTip(job, props[0] || null, tipDollars, changeOrderTotals);
+  const amounts = amountsFromJobProposalAndTip(job, payoutProposal, tipDollars, changeOrderTotals);
 
   if (existing[0]) {
     if (!existing[0].stripe_transfer_id) {

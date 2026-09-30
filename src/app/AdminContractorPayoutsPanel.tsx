@@ -3,6 +3,7 @@ import { Loader2, Check, AlertCircle } from "lucide-react";
 import StaleItemNotice from "./StaleItemNotice";
 import {
   adminApprovePayout,
+  adminPayoutV2,
   adminAdjustPayout,
   adminGetPayoutDetail,
   adminListPayouts,
@@ -150,13 +151,16 @@ export default function AdminContractorPayoutsPanel({
         return;
       }
     }
-    const r = await adminApprovePayout(id, undefined, adjustmentReason.trim() || undefined);
+    const r = selected?.jobId
+      ? await adminPayoutV2(selected.jobId, undefined, { note: adjustmentReason.trim() || undefined })
+      : await adminApprovePayout(id, undefined, adjustmentReason.trim() || undefined);
     setBusy(false);
     if (!r.ok) {
-      setMessage("Could not approve payout.");
+      const detail = [r.message, r.code ? `Code: ${r.code}` : null].filter(Boolean).join(" · ");
+      setMessage(detail || "Could not release contractor payout.");
       return;
     }
-    setMessage("Payout approved and transfer initiated.");
+    setMessage("Contractor payout released and transfer initiated.");
     setSelected(null);
     setAdjustment("");
     setAdjustmentReason("");
@@ -184,7 +188,7 @@ export default function AdminContractorPayoutsPanel({
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Contractor Payouts</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Review, approve, and track contractor earnings.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Release contractor payouts directly after work completion and payment confirmation.</p>
       </div>
 
       {summary && (
@@ -441,7 +445,7 @@ export default function AdminContractorPayoutsPanel({
                   className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
                 >
                   {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                  Approve payout
+                  Pay contractor
                 </button>
               </div>
             </div>

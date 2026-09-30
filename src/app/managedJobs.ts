@@ -2122,6 +2122,7 @@ export type ContractorPayout = {
   completionDate: string | null;
   grossAmountCents: number;
   platformFeeCents: number;
+  serviceContractorNetCents: number;
   instantPayoutFeeCents: number;
   adjustmentsCents: number;
   netAmountCents: number;

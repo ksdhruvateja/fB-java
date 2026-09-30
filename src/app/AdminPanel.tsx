@@ -4324,8 +4324,11 @@ export default function AdminPanel({
             setDrawerOpen(false);
             setTab("finance");
           }}
-          onOpenPayouts={() => {
+          onOpenPayouts={(amount) => {
             setDrawerOpen(false);
+            if (amount != null && Number.isFinite(Number(amount))) {
+              setPayoutAmount(Number(amount));
+            }
             setTab("finance");
           }}
           onOpenAiEstimate={() => {

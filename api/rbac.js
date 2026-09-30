@@ -64,6 +64,7 @@ export const ROLE_PRESETS = {
       'partners.view',
       'payments.view',
       'payouts.view',
+      'payouts.approve',
       'ai.override',
       'audit.view',
       'homecare.view',

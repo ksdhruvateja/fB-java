@@ -101,7 +101,7 @@ export const ROLE_PRESETS: Record<
   },
   operations_admin: {
     label: "Operations Admin",
-    description: "Jobs, dispatch, quotes, contractors, and homeowners. No pricing/payout settings.",
+    description: "Jobs, dispatch, quotes, contractors, homeowners, and contractor payout approval.",
     permissions: [
       ...WORK_OPS,
       "contractors.edit",
@@ -111,6 +111,7 @@ export const ROLE_PRESETS: Record<
       "partners.view",
       "payments.view",
       "payouts.view",
+      "payouts.approve",
       "ai.override",
       "audit.view",
       "homecare.view",

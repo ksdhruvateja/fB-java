@@ -394,10 +394,13 @@ export async function processSuccessfulPayment(pool, {
               [jobId, String(invoiceId)]
             );
             const successfulPaymentsPaid = Math.max(0, Number(paidRows[0]?.paid) || 0);
-            const cumulativePaid = Math.min(
-              invTotal,
-              roundMoney(Math.max(existingPaid, successfulPaymentsPaid))
-            );
+            // Successful payment ledger is authoritative for the amount actually
+            // received. Do not let a stale homeowner_invoices.paid value keep an
+            // invoice permanently marked as fully paid after quote/payment changes.
+            // If no successful ledger rows exist (legacy/manual data), preserve the
+            // stored paid value as a backwards-compatible fallback.
+            const authoritativePaid = successfulPaymentsPaid > 0 ? successfulPaymentsPaid : existingPaid;
+            const cumulativePaid = Math.min(invTotal, roundMoney(authoritativePaid));
             const remainingDue = Math.max(0, roundMoney(invTotal - cumulativePaid));
             const nextStatus = remainingDue <= 0.009 ? 'paid' : 'partially_paid';
             await client.query(

@@ -24,6 +24,7 @@ import { isAdminRole, isHomeownerOwner } from './auth-helpers.js';
 import { formatAddressLines, normalizeBillToAddress } from './address-format.js';
 import { convertProposalToInvoice } from './quote-invoice-service.js';
 import { createInAppNotification } from './in-app-notifications.js';
+import { randomUUID } from 'node:crypto';
 
 async function audit(pool, actorUserId, action, entityType, entityId, detail) {
   try {
@@ -1742,6 +1743,45 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
           invoice.homeownerUserId = jobHomeownerUserId;
         }
       }
+      // Reconcile the invoice paid/amount-due fields from successful payment
+      // records before deciding whether checkout is available. Older invoice rows
+      // can retain a stale paid value after a quote/negotiation update; that must
+      // never block a legitimate remaining payment.
+      {
+        const { rows: paidRows } = await pool.query(
+          `SELECT COALESCE(SUM(
+             CASE
+               WHEN payment_type IN ('dispatch_fee','professional_fee','pending_professional_fee')
+                 THEN COALESCE(service_amount, amount, 0)
+               WHEN payment_type IN ('invoice_payment','invoice_manual')
+                 AND (meta->>'invoiceId') = $2
+                 THEN COALESCE(service_amount, amount, 0)
+               ELSE 0
+             END
+           ),0) AS paid
+             FROM payments
+            WHERE job_id=$1
+              AND status IN ('succeeded','paid','captured','completed')`,
+          [invoice.jobId, String(id)]
+        );
+        const successfulPaid = Math.max(0, Number(paidRows[0]?.paid) || 0);
+        const authoritativePaid = Math.min(
+          Math.max(0, Number(invoice.total) || 0),
+          successfulPaid > 0 ? successfulPaid : Math.max(0, Number(invoice.paid) || 0)
+        );
+        const reconciledDue = Math.max(0, round2(Number(invoice.total || 0) - authoritativePaid));
+        const reconciledStatus = reconciledDue <= 0.009 ? 'paid' : authoritativePaid > 0 ? 'partially_paid' : 'due';
+        if (Math.abs(Number(invoice.paid || 0) - authoritativePaid) > 0.009 || Math.abs(Number(invoice.amountDue || 0) - reconciledDue) > 0.009 || String(invoice.status || '').toLowerCase() !== reconciledStatus) {
+          await pool.query(
+            `UPDATE homeowner_invoices SET paid=$1, amount_due=$2, status=$3, updated_at=NOW() WHERE id=$4`,
+            [authoritativePaid, reconciledDue, reconciledStatus, id]
+          );
+          invoice.paid = authoritativePaid;
+          invoice.amountDue = reconciledDue;
+          invoice.status = reconciledStatus;
+        }
+      }
+
       if (invoice.status === 'paid') {
         return res.status(400).json({ ok: false, message: 'Invoice is already paid.' });
       }
@@ -1868,10 +1908,61 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
         lineItems.push({ amountCents: totals.tipAmountCents, description: 'Tip for contractor (100% to pro)' });
       }
 
-      const session = await createCheckoutSession({
-        amountCents: totals.customerTotalCents,
-        lineItems,
-        customerEmail: invoice.billTo?.email || req.authUser.email || undefined,
+      // Reuse an already-open Checkout Session for this invoice when it represents
+      // the same amount. This makes repeated clicks safe and avoids creating
+      // multiple pending Stripe sessions for the same payment attempt.
+      let session = null;
+      let reusedExistingSession = false;
+      const existingSessionId = invoice.stripeSessionId || row.stripe_session_id || null;
+      if (existingSessionId) {
+        try {
+          const stripe = await getStripe();
+          const existingSession = await stripe.checkout.sessions.retrieve(existingSessionId);
+          const existingAmountCents = Number(existingSession?.amount_total || 0);
+          const sameAmount = existingAmountCents === Number(totals.customerTotalCents);
+          const reusable = existingSession?.status === 'open' &&
+            existingSession?.payment_status !== 'paid' &&
+            sameAmount;
+
+          if (reusable && existingSession?.url) {
+            session = {
+              url: existingSession.url,
+              sessionId: existingSession.id,
+            };
+            reusedExistingSession = true;
+            console.log('[HOMEOWNER CHECKOUT REUSE]', JSON.stringify({
+              invoiceId: id,
+              sessionId: existingSession.id,
+              amountCents: totals.customerTotalCents,
+              paymentStage: finalPayment ? 'final' : 'initial',
+            }));
+          }
+        } catch (sessionLookupError) {
+          // A stale/expired/missing Stripe session must not block creation of
+          // a fresh checkout session.
+          console.warn('[HOMEOWNER CHECKOUT SESSION LOOKUP]', JSON.stringify({
+            invoiceId: id,
+            sessionId: existingSessionId,
+            message: sessionLookupError?.message || String(sessionLookupError),
+          }));
+        }
+      }
+
+      if (!session) {
+        const idempotencyKey =
+          `checkout-${id}-homeowner-${finalPayment ? 'final' : 'initial'}-${randomUUID()}`;
+
+        console.log('[HOMEOWNER CHECKOUT STRIPE]', JSON.stringify({
+          invoiceId: id,
+          amountCents: totals.customerTotalCents,
+          paymentStage: finalPayment ? 'final' : 'initial',
+          idempotencyKey,
+        }));
+
+        session = await createCheckoutSession({
+          amountCents: totals.customerTotalCents,
+          lineItems,
+          customerEmail: invoice.billTo?.email || req.authUser.email || undefined,
         successPath: `/homeowner?invoicePaid=${encodeURIComponent(invoice.invoiceNumber)}`,
         cancelPath: `/homeowner?invoice=${encodeURIComponent(invoice.invoiceNumber)}`,
         description: `${brand.productName} Invoice ${invoice.invoiceNumber}`,
@@ -1887,28 +1978,32 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
           tipAmountCents: String(totals.tipAmountCents),
           paymentPercent: finalPayment ? '100' : String(requestedPercent),
           initialPaymentAmount: String(initialPaymentAmount),
+          targetAmount: String(initialPaymentAmount),
           paymentStage: finalPayment ? 'final' : 'initial',
         },
-        idempotencyKey: `checkout-${id}-homeowner-v2-${totals.serviceAmountCents}-${totals.tipAmountCents}`,
-      });
+          idempotencyKey,
+        });
+      }
 
       await pool.query(
         `UPDATE homeowner_invoices SET stripe_session_id=$1, stripe_payment_link_url=$2 WHERE id=$3`,
         [session.sessionId, session.url, id]
       );
-      await pool.query(
-        `INSERT INTO payments (job_id, user_id, payment_type, amount, currency, status, stripe_session_id, simulated, meta, service_amount, tip_amount)
-         VALUES ($1,$2,'invoice_payment',$3,'usd','pending',$4,false,$5,$6,$7)`,
-        [
-          invoice.jobId,
-          req.authUser.id,
-          serviceAmount + tipAmount,
-          session.sessionId,
-          JSON.stringify({ invoiceId: id, serviceAmount, tipAmount, source: 'homeowner_checkout', paymentPercent: finalPayment ? 100 : requestedPercent, initialPaymentAmount, paymentStage: finalPayment ? 'final' : 'initial' }),
-          serviceAmount,
-          tipAmount,
-        ]
-      );
+      if (!reusedExistingSession) {
+        await pool.query(
+          `INSERT INTO payments (job_id, user_id, payment_type, amount, currency, status, stripe_session_id, simulated, meta, service_amount, tip_amount)
+           VALUES ($1,$2,'invoice_payment',$3,'usd','pending',$4,false,$5,$6,$7)`,
+          [
+            invoice.jobId,
+            req.authUser.id,
+            serviceAmount + tipAmount,
+            session.sessionId,
+            JSON.stringify({ invoiceId: id, serviceAmount, tipAmount, source: 'homeowner_checkout', paymentPercent: finalPayment ? 100 : requestedPercent, initialPaymentAmount, paymentStage: finalPayment ? 'final' : 'initial' }),
+            serviceAmount,
+            tipAmount,
+          ]
+        );
+      }
 
       res.json({
         ok: true,

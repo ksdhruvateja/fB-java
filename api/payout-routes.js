@@ -466,6 +466,43 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, req
       const blocked = rejectClientMoneyFields(req.body || {});
       if (blocked.rejected) return res.status(400).json({ ok: false, message: blocked.message });
       const jobId = Number(req.params.id);
+
+      // Payout release is a post-completion action. Keep this gate server-side
+      // so a direct API call cannot release contractor money before work is complete.
+      const { rows: payoutJobs } = await pool.query(
+        `SELECT id, status, assigned_contractor_user_id
+           FROM managed_jobs
+          WHERE id=$1
+          LIMIT 1`,
+        [jobId]
+      );
+      const payoutJob = payoutJobs[0];
+      if (!payoutJob) {
+        return res.status(404).json({ ok: false, code: 'JOB_NOT_FOUND', message: 'Job not found.' });
+      }
+      if (!payoutJob.assigned_contractor_user_id) {
+        return res.status(409).json({
+          ok: false,
+          code: 'CONTRACTOR_NOT_ASSIGNED',
+          message: 'A contractor must be assigned before payout can be released.',
+        });
+      }
+      const completedStatuses = [
+        'work_completed',
+        'customer_review_pending',
+        'admin_review_pending',
+        'payout_pending',
+        'paid_out',
+        'closed',
+      ];
+      if (!completedStatuses.includes(String(payoutJob.status))) {
+        return res.status(409).json({
+          ok: false,
+          code: 'WORK_NOT_COMPLETED',
+          message: 'Contractor payout is available only after the job is marked work completed.',
+        });
+      }
+
       let payout = await ensurePayoutRecordForJob(pool, jobId, { actorUserId: req.authUser.id });
       if (!payout) return res.status(400).json({ ok: false, message: 'Could not create payout for job. Assign a contractor first.' });
 
@@ -692,10 +729,20 @@ export function registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, req
   app.post('/api/contractor/payout-account/connect', requireAuth, async (req, res) => {
     try {
       if (req.authUser.role !== 'contractor') return res.status(403).json({ ok: false, message: 'Contractors only.' });
-      const { rows } = await pool.query(`SELECT * FROM users WHERE id=$1`, [req.authUser.id]);
-      let accountId = rows[0]?.stripe_account_id;
+      const { rows } = await pool.query(`
+        SELECT *, contractor_application->>'businessCountry' AS contractor_business_country FROM users WHERE id=$1 `, [req.authUser.id]);
+      const contractor = rows[0] || {};
+      let accountId = contractor.stripe_account_id;
       if (!accountId) {
-        const created = await createExpressAccount(req.authUser.email);
+        const country = String(contractor.contractor_business_country || req.body?.country || '' ).trim().toUpperCase();
+        if (!/^[A-Z]{2}$/.test(country)) {
+          return res.status(400).json({
+            ok: false,
+            code: 'CONTRACTOR_COUNTRY_REQUIRED',
+            message: 'Please add the contractor business country (ISO 2-letter code) to the contractor profile before setting up Stripe payouts.',
+          });
+        }
+        const created = await createExpressAccount(req.authUser.email, country);
         accountId = created.accountId;
         await pool.query(
           `UPDATE users SET stripe_account_id=$1, stripe_onboarding_status=$2 WHERE id=$3`,

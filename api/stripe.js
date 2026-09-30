@@ -122,18 +122,16 @@ export async function createCheckoutSession({
 }
 
 export async function createConnectAccountLink(accountId, refreshPath, returnPath) {
-  const stripe = await getStripe();
-  if (!stripe) {
-    const err = new Error('Stripe is not configured.');
-    err.status = 503;
-    err.code = 'STRIPE_NOT_CONFIGURED';
-    throw err;
-  }
-  const link = await stripe.accountLinks.create({
+  const link = await stripeV2Request('/v2/core/account_links', {
     account: accountId,
-    refresh_url: `${appBaseUrl()}${refreshPath}`,
-    return_url: `${appBaseUrl()}${returnPath}`,
-    type: 'account_onboarding',
+    use_case: {
+      type: 'account_onboarding',
+      account_onboarding: {
+        configurations: ['recipient'],
+        refresh_url: `${appBaseUrl()}${refreshPath}`,
+        return_url: `${appBaseUrl()}${returnPath}`,
+      },
+    },
   });
   return { url: link.url };
 }
@@ -353,20 +351,64 @@ export async function persistStripeProcessingFees(pool, paymentId, feeData) {
   return rows[0] || null;
 }
 
-export async function createExpressAccount(email) {
-  const stripe = await getStripe();
-  if (!stripe) {
+async function stripeV2Request(path, body) {
+  const secret = process.env.STRIPE_SECRET_KEY?.trim();
+  if (!secret) {
     const err = new Error('Stripe is not configured.');
     err.status = 503;
     err.code = 'STRIPE_NOT_CONFIGURED';
     throw err;
   }
-  const account = await stripe.accounts.create({
-    type: 'express',
-    email: email || undefined,
-    capabilities: {
-      transfers: { requested: true },
+  const response = await fetch(`https://api.stripe.com${path}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${secret}`,
+      'Content-Type': 'application/json',
+      'Stripe-Version': '2026-08-26.dahlia',
     },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = payload?.error?.message || `Stripe request failed (${response.status})`;
+    const err = new Error(message);
+    err.status = response.status;
+    err.code = payload?.error?.code || 'STRIPE_V2_REQUEST_FAILED';
+    err.raw = payload?.error || payload;
+    throw err;
+  }
+  return payload;
+}
+
+export async function createExpressAccount(email, country) {
+  const normalizedCountry = String(country || '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(normalizedCountry)) {
+    const err = new Error('A valid two-letter contractor country code is required before creating the Stripe payout account.');
+    err.status = 400;
+    err.code = 'CONTRACTOR_COUNTRY_REQUIRED';
+    throw err;
+  }
+  const account = await stripeV2Request('/v2/core/accounts', {
+    contact_email: email || undefined,
+    display_name: email ? `FixBridge Contractor - ${email}` : 'FixBridge Contractor',
+    dashboard: 'express',
+    identity: { country: normalizedCountry },
+    defaults: {
+      responsibilities: {
+        losses_collector: 'application',
+        fees_collector: 'application',
+      },
+    },
+    configuration: {
+      recipient: {
+        capabilities: {
+          stripe_balance: {
+            stripe_transfers: { requested: true },
+          },
+        },
+      },
+    },
+    include: ['configuration.recipient', 'identity', 'requirements'],
   });
   return { accountId: account.id };
 }

@@ -270,7 +270,7 @@ export default function HomeownerJobDetailPanel({
   const initialPaymentCompleted =
     job.invoiceInitialPaymentCompleted === true || initialPaymentPaidByAmount;
   const showInitialPayment = proposalApproved && !initialPaymentCompleted && !invoiceIsPaid && Number(job.invoiceAmountDue || 0) > 0 && String(job.status) === "approved";
-  const showRemainingPayment = proposalApproved && initialPaymentCompleted && !invoiceIsPaid && Number(job.invoiceAmountDue || 0) > 0 && ["work_completed", "customer_review_pending"].includes(String(job.status));
+  const showRemainingPayment = proposalApproved && initialPaymentCompleted && !invoiceIsPaid && Number(job.invoiceAmountDue || 0) > 0 && ["work_completed", "customer_review_pending", "payout_pending"].includes(String(job.status));
   const showCompletionReport = Boolean(job.completionReport);
   const showReviewForm = job.status === "customer_review_pending";
   const showLegacyComplete = job.status === "completed";

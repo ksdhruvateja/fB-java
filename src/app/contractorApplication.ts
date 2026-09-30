@@ -292,6 +292,7 @@ export function applicationFromUser(user: {
     companyEmail: saved.companyEmail || user.email || "",
     companyPhone: saved.companyPhone || user.phone || "",
     businessAddress: saved.businessAddress || user.address || "",
+    businessCountry: String(saved.businessCountry || user.businessCountry || "US").trim().toUpperCase(),
     addressVerified: saved.addressVerified ?? user.addressVerified ?? false,
     postalCodePlus4: saved.postalCodePlus4 ?? user.postalCodePlus4 ?? null,
     primaryServices: (
@@ -349,6 +350,7 @@ export function validateContractorApplication(
     req(app.businessCity, "City"),
     req(app.businessState, "State"),
     req(app.businessZip, "ZIP"),
+    (() => { const country = String(app.businessCountry || "").trim().toUpperCase(); return /^[A-Z]{2}$/.test(country) ? null : "Business country must be a valid ISO 2-letter code (for example, US or IN)."; })(),
     req(app.contactName, "Primary contact name"),
     req(app.contactEmail, "Contact email"),
     req(app.contactPhone, "Contact phone"),
@@ -424,6 +426,7 @@ export function listContractorMissingInfo(user: {
   need(Boolean(app.businessCity.trim()), "Business city");
   need(Boolean(app.businessState.trim()), "Business state");
   need(Boolean(app.businessZip.trim()), "Business ZIP");
+  need(Boolean(/^[A-Z]{2}$/.test(String(app.businessCountry || "").trim().toUpperCase())), "Business country (ISO 2-letter code)");
   need(Boolean(app.contactName.trim()), "Primary contact name");
   need(Boolean(app.contactEmail.trim() || user.email), "Contact email");
   need(Boolean(app.contactPhone.trim() || user.phone), "Contact phone");

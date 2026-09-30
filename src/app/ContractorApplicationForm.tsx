@@ -497,6 +497,19 @@ export default function ContractorApplicationForm({
             })
           }
         />
+        <div className="mt-3 max-w-xs">
+          <Field label="Business country" required help="Use the ISO 2-letter country code used for Stripe payouts, for example US or IN.">
+            <input
+              className={inputClass}
+              value={value.businessCountry}
+              onChange={(e) => set("businessCountry", e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2))}
+              placeholder="US"
+              maxLength={2}
+              autoCapitalize="characters"
+              required
+            />
+          </Field>
+        </div>
       </div>
 
       {/* 4. Contact */}

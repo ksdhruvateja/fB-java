@@ -85,7 +85,7 @@ export default function AdminJobDrawer({
   onOpenContractor?: (contractorId: number) => void;
   onOpenHomeowner?: () => void;
   onOpenPayments?: () => void;
-  onOpenPayouts?: () => void;
+  onOpenPayouts?: (amount?: number) => void;
   onOpenAiEstimate?: () => void;
   onMessage: (msg: string) => void;
   onOpenComms?: (opts: {
@@ -116,15 +116,16 @@ export default function AdminJobDrawer({
   const filteredInviteContractors = useMemo(() => {
     const q = inviteSearch.trim().toLowerCase();
     const selected = new Set(inviteContractorIds.map(Number));
-    const list = contractors.slice().sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+    const list = contractors.slice().sort((leftContractor, rightContractor) => (leftContractor.name || "").localeCompare(rightContractor.name || ""));
     if (!q) return list;
     return list.filter((c) =>
       selected.has(Number(c.id)) ||
       `${c.name || ""} ${c.trade || ""} ${c.email || ""}`.toLowerCase().includes(q),
     );
   }, [contractors, inviteSearch, inviteContractorIds]);
-  const assignedContractor = job?.assignedContractorUserId
-    ? contractors.find((c) => Number(c.id) === Number(job.assignedContractorUserId))
+  const assignedContractorUserId = job?.assignedContractorUserId ?? null;
+  const assignedContractor = assignedContractorUserId
+    ? contractors.find((c) => Number(c.id) === Number(assignedContractorUserId))
     : null;
   // The managed-job status is the authoritative homeowner-approval gate.
   // A proposal/bid status alone must never expose contractor assignment before
@@ -156,6 +157,21 @@ export default function AdminJobDrawer({
       : approvedContractorUserId != null
         ? bids.find((b) => Number(b.contractorUserId) === Number(approvedContractorUserId))?.netTotal ?? null
         : null;
+  // Contractor payout is always based on the final agreed contractor bid.
+  // Contractor negotiation acceptance updates bids.net_total, so this remains
+  // correct whether Admin or Contractor accepted the final negotiation round.
+  const finalContractorBid =
+    (assignedContractorUserId != null
+      ? bids.find((b) => Number(b.contractorUserId) === Number(assignedContractorUserId))
+      : null) ||
+    (approvedContractorUserId != null
+      ? bids.find((b) => Number(b.contractorUserId) === Number(approvedContractorUserId))
+      : null) ||
+    latestBid;
+  const finalContractorBidAmount = finalContractorBid?.netTotal != null ? Number(finalContractorBid.netTotal) : null;
+  const finalPaymentReceived =
+    (job?.status === "payout_pending" || job?.status === "paid_out" || job?.status === "closed") ||
+    (job?.status === "work_completed" && Number(job?.invoiceAmountDue || 0) <= 0.009);
 
   useEffect(() => {
     if (!open || !job) return;
@@ -358,7 +374,7 @@ if (!open || !job) return null;
                   <div className="rounded-xl border border-border/70 p-3">
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Contractor quote</p>
                     <p className="mt-1 text-lg font-semibold tabular-nums">
-                      {latestBid ? formatMoney(latestBid.netTotal) : "Waiting"}
+                      {finalContractorBidAmount != null ? formatMoney(finalContractorBidAmount) : "Waiting"}
                     </p>
                   </div>
                 </div>
@@ -686,11 +702,41 @@ if (!open || !job) return null;
                       {job.status === "work_completed" && Number(job.invoiceAmountDue || 0) > 0
                         ? `Final payment due ${formatMoney(Number(job.invoiceAmountDue || 0))}`
                         : job.status === "payout_pending"
-                          ? "Paid · payout pending"
+                          ? "Payment received · payout ready"
                           : job.status === "paid_out" || job.status === "closed"
-                            ? "Paid · payout complete"
-                            : "Waiting for completion"}
+                            ? "Payment received · payout complete"
+                            : finalPaymentReceived
+                              ? "Payment received · payout ready"
+                              : "Waiting for completion"}
                     </p>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-[11px] font-bold uppercase tracking-wide text-emerald-700">Contractor payout</p>
+                      <p className="mt-1 text-sm font-semibold text-foreground">
+                        {finalContractorBidAmount != null
+                          ? `Final contractor bid · ${formatMoney(finalContractorBidAmount)}`
+                          : "Final contractor bid not available"}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {finalPaymentReceived
+                          ? "Payment received · payout ready"
+                          : job.status === "work_completed"
+                            ? "Work completed · waiting for homeowner final payment"
+                            : "Payout opens after work is completed and payment is received."}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-semibold text-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={!assignedContractor || finalContractorBidAmount == null || !finalPaymentReceived}
+                      onClick={() => onOpenPayouts?.(finalContractorBidAmount ?? undefined)}
+                    >
+                      Open contractor payout
+                    </button>
                   </div>
                 </div>
 

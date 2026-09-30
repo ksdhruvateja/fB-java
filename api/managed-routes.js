@@ -7060,6 +7060,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           contractorUserId: Number(negotiation.contractor_user_id),
         });
         await client.query('COMMIT');
+
+        // Keep any existing contractor payout synchronized with the newly
+        // finalized negotiation. This uses the authoritative final bid amount
+        // on the server and never trusts a client-supplied payout amount.
+        await ensurePayoutRecordForJob(pool, jobId, { actorUserId: req.authUser.id });
         return res.json({ ok: true, action: 'accepted', finalAmount, message: 'Contractor counter accepted. Final contractor estimate updated.' });
       }
 
@@ -7208,6 +7213,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           adminOffer: Number(negotiation.admin_amount),
         });
         await client.query('COMMIT');
+
+        // Final contractor amount changed; reconcile any payout record that
+        // may have been created before this negotiation was finalized.
+        await ensurePayoutRecordForJob(pool, jobId, { actorUserId: req.authUser.id });
+
         return res.json({ ok: true, action: 'accepted', finalAmount, message: 'Admin offer accepted. Your contractor estimate is now final.' });
       }
 
@@ -9206,16 +9216,42 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (req.authUser.role !== 'contractor') {
         return res.status(403).json({ ok: false, message: 'Contractors only.' });
       }
-      const { rows } = await pool.query(`SELECT * FROM users WHERE id=$1`, [req.authUser.id]);
-      let accountId = rows[0]?.stripe_account_id;
+      const { rows } = await pool.query(
+        `SELECT u.*, ca.stripe_account_id AS contractor_account_stripe_account_id
+         FROM users u
+         LEFT JOIN contractor_accounts ca ON ca.contractor_id=u.id
+         WHERE u.id=$1`,
+        [req.authUser.id]
+      );
+      let accountId =
+        rows[0]?.stripe_account_id ||
+        rows[0]?.contractor_account_stripe_account_id ||
+        null;
+
       if (!accountId) {
         const created = await createExpressAccount(req.authUser.email);
         accountId = created.accountId;
-        await pool.query(
-          `UPDATE users SET stripe_account_id=$1, stripe_onboarding_status=$2 WHERE id=$3`,
-          [accountId, 'pending', req.authUser.id]
-        );
       }
+
+      await pool.query(
+        `UPDATE users
+         SET stripe_account_id=$1,
+             stripe_onboarding_status='pending'
+         WHERE id=$2`,
+        [accountId, req.authUser.id]
+      );
+
+      await pool.query(
+        `INSERT INTO contractor_accounts
+           (contractor_id, stripe_account_id, stripe_account_status, payouts_enabled,
+            instant_payouts_eligible, bank_account_status, verification_status, updated_at)
+         VALUES ($1,$2,'pending',false,false,'unknown','unverified',NOW())
+         ON CONFLICT (contractor_id) DO UPDATE SET
+           stripe_account_id=EXCLUDED.stripe_account_id,
+           stripe_account_status=EXCLUDED.stripe_account_status,
+           updated_at=NOW()`,
+        [req.authUser.id, accountId]
+      );
       const link = await createConnectAccountLink(
         accountId,
         '/?stripe=refresh',

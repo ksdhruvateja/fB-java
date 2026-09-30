@@ -66,7 +66,11 @@ export default function ContractorPayoutAccountPanel({
   return (
     <div className="space-y-6">
       {message && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-300">
+        <div className={`rounded-xl border px-4 py-3 text-sm ${
+          /not enabled|could not|failed|error/i.test(message)
+            ? "border-red-200 bg-red-50 text-red-900 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300"
+            : "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-300"
+        }`}>
           {message}
         </div>
       )}
