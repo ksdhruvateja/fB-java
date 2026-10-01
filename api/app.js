@@ -428,7 +428,7 @@ async function ensureDemoUsers() {
   }
 }
 
-const SCHEMA_READY_VERSION = 20260927;
+const SCHEMA_READY_VERSION = 20261001;
 
 async function readSchemaReadyVersion() {
   try {
