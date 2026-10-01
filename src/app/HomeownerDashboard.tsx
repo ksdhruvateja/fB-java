@@ -3264,6 +3264,16 @@ export default function HomeownerDashboard({
       }
       setAssessmentMode("diy");
       await refresh();
+    } catch (error) {
+      console.error("[Fixera] Could not create or open the repair request", { path, error });
+      setHireScreenOpen(false);
+      setAssessmentMsg(null);
+      setError("We couldn't finish opening this request. Your details are still in the form. Check My Requests before trying again.");
+      if (path === "experts") {
+        setAssessmentMode("expert");
+        setReportPath("experts");
+        returnToIntakeDetails();
+      }
     } finally {
       setBusy(false);
     }
