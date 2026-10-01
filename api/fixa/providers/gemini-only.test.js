@@ -1,16 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-test('Gemini alone can complete a structured visual assessment', async () => {
+test('Gemini is preferred when configured and completes a structured visual assessment', async () => {
   const envNames = [
-    'FIXERA_AI_PROVIDER', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY',
+    'FIXERA_AI_PROVIDER', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'OPENROUTER_MODEL',
     'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GEMINI_MODEL',
   ];
   const previousEnv = Object.fromEntries(envNames.map((name) => [name, process.env[name]]));
   const previousFetch = globalThis.fetch;
-  process.env.FIXERA_AI_PROVIDER = 'gemini';
+  process.env.FIXERA_AI_PROVIDER = '';
   process.env.OPENAI_API_KEY = '';
-  process.env.OPENROUTER_API_KEY = '';
+  process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
+  process.env.OPENROUTER_MODEL = 'openrouter/test-fallback';
   process.env.ANTHROPIC_API_KEY = '';
   process.env.GEMINI_API_KEY = 'test-gemini-key';
   process.env.GEMINI_MODEL = 'gemini-test-model';
@@ -58,7 +59,7 @@ test('Gemini alone can complete a structured visual assessment', async () => {
   try {
     const { analyzeRepairStructured, resolveAiProvider } = await import('../../ai.js?gemini-only-test');
     assert.equal(resolveAiProvider().provider, 'gemini');
-    assert.equal(resolveAiProvider().fallback, null);
+    assert.equal(resolveAiProvider().fallback.provider, 'openrouter');
     const result = await analyzeRepairStructured({
       category: 'Appliances',
       description: 'My refrigerator is loud and not cooling properly.',

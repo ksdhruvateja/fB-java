@@ -582,8 +582,8 @@ export function resolveAiProvider() {
     openai: { configured: hasOpenAI(), adapter: openaiProvider },
     gemini: { configured: hasGemini(), adapter: geminiProvider },
   };
-  const defaultOrder = ['openrouter', 'anthropic', 'openai', 'gemini'];
-  const preferred = String(process.env.FIXERA_AI_PROVIDER || process.env.AI_PRIMARY_PROVIDER || '').trim().toLowerCase();
+  const defaultOrder = ['gemini', 'openrouter', 'anthropic', 'openai'];
+  const preferred = String(process.env.FIXERA_AI_PROVIDER || process.env.AI_PRIMARY_PROVIDER || 'gemini').trim().toLowerCase();
   const configuredOrder = [
     ...(defaultOrder.includes(preferred) ? [preferred] : []),
     ...defaultOrder.filter((id) => id !== preferred),
