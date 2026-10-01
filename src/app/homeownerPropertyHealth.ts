@@ -34,6 +34,16 @@ export type PreviousServiceRecord = {
   date?: string;
   cost?: string;
   notes?: string;
+  source?: string;
+  verification?: string;
+  relatedJobId?: number;
+  equipmentKey?: string;
+  equipment?: { name?: string | null; brand?: string | null; model?: string | null } | null;
+  actualAction?: string;
+  partsUsed?: string[];
+  toolsUsed?: string[];
+  evidenceNote?: string;
+  completedStepIndexes?: number[];
 };
 
 export type AiServiceSuggestion = {
@@ -152,6 +162,24 @@ export function normalizeHealthProfile(raw?: Partial<PropertyHealthProfile> | nu
           date: s.date ? String(s.date) : "",
           cost: s.cost != null ? String(s.cost) : "",
           notes: s.notes ? String(s.notes) : "",
+          source: s.source ? String(s.source) : undefined,
+          verification: s.verification ? String(s.verification) : undefined,
+          relatedJobId: Number.isInteger(Number(s.relatedJobId)) ? Number(s.relatedJobId) : undefined,
+          equipmentKey: s.equipmentKey ? String(s.equipmentKey) : undefined,
+          equipment: s.equipment && typeof s.equipment === "object"
+            ? {
+                name: s.equipment.name ? String(s.equipment.name) : null,
+                brand: s.equipment.brand ? String(s.equipment.brand) : null,
+                model: s.equipment.model ? String(s.equipment.model) : null,
+              }
+            : null,
+          actualAction: s.actualAction ? String(s.actualAction) : undefined,
+          partsUsed: Array.isArray(s.partsUsed) ? s.partsUsed.map(String).slice(0, 12) : undefined,
+          toolsUsed: Array.isArray(s.toolsUsed) ? s.toolsUsed.map(String).slice(0, 12) : undefined,
+          evidenceNote: s.evidenceNote ? String(s.evidenceNote) : undefined,
+          completedStepIndexes: Array.isArray(s.completedStepIndexes)
+            ? s.completedStepIndexes.map(Number).filter((index) => Number.isInteger(index) && index >= 0)
+            : undefined,
         }))
     : [];
   const aiSuggestions = Array.isArray(raw.aiSuggestions)

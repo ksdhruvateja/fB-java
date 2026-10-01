@@ -3,16 +3,14 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { analyzeRepairStructured, chatWithCustomer, extractPropertyDocumentFields } from '../ai.js';
+import { analyzeRepairStructured, chatWithCustomer, extractPropertyDocumentFields, getAiStatus } from '../ai.js';
 import { buildFixaContext } from './core/context.js';
 import { retrieveKnowledge } from './knowledge/retrieval.js';
 import { selectProvider } from './router/router.js';
-import { explabsProvider } from './providers/explabs.js';
 import { evaluateRepairAssessment } from './evaluator/responseEvaluator.js';
 import { recordFixaEvent, fixaObservabilitySummary } from './observability/events.js';
 import { recordLearningCandidate } from './learning/candidates.js';
 import { listFixaProviders } from './providers.js';
-import { readExplabsKey } from './providers/explabs.js';
 
 export const FIXA_UNAVAILABLE = "We couldn't complete the assessment right now. Please try again.";
 
@@ -20,13 +18,49 @@ function requestId() {
   return randomUUID();
 }
 
+function propertyMemoryText(property = {}) {
+  const lines = [];
+  if (property.label) lines.push(`Property label: ${property.label}`);
+  if (property.locality) lines.push(`Property area: ${property.locality}`);
+
+  for (const equipment of Array.isArray(property.equipment) ? property.equipment.slice(0, 12) : []) {
+    const identity = [equipment.name || equipment.key, equipment.brand, equipment.model]
+      .filter(Boolean)
+      .join(' ');
+    if (!identity) continue;
+    const verification = equipment.verification || equipment.source || 'USER_REPORTED';
+    const details = [
+      equipment.serialNumber ? `serial ${equipment.serialNumber}` : null,
+      equipment.installedYear ? `installed ${equipment.installedYear}` : null,
+      equipment.lastService ? `last service ${equipment.lastService}` : null,
+    ].filter(Boolean).join(', ');
+    lines.push(`Equipment (${verification}): ${identity}${details ? ` (${details})` : ''}`);
+  }
+
+  for (const service of Array.isArray(property.previousAssessments) ? property.previousAssessments.slice(0, 8) : []) {
+    const description = [service.title, service.diagnosis, service.repair]
+      .filter(Boolean)
+      .map((value) => String(value).slice(0, 180))
+      .join(' — ');
+    if (!description) continue;
+    lines.push(`Prior service (${service.verification || service.source || 'UNVERIFIED'}): ${description}`);
+    if (Array.isArray(service.partsUsed) && service.partsUsed.length) {
+      lines.push(`Reported parts: ${service.partsUsed.slice(0, 8).map((part) => typeof part === 'string' ? part : part?.name).filter(Boolean).join(', ')}`);
+    }
+  }
+
+  for (const fact of Array.isArray(property.confirmedFacts) ? property.confirmedFacts.slice(0, 12) : []) {
+    const value = typeof fact === 'string' ? fact : fact?.value || fact?.text;
+    if (value) lines.push(`Verified property fact: ${String(value).slice(0, 180)}`);
+  }
+  return lines.join('\n');
+}
+
 function publicAssessment(result) {
   return {
     ...result,
     source: result?.assessment ? 'fixera' : 'error',
     assistant: 'Fixera',
-    model: undefined,
-    provider: undefined,
   };
 }
 
@@ -38,65 +72,58 @@ export function getContext(input, task = 'repair_assessment') {
 }
 
 export function getFixaPublicStatus() {
+  const ai = getAiStatus();
   return {
     assistant: 'Fixera',
-    configured: Boolean(readExplabsKey()),
-    provider: 'experiential-labs',
-    model: 'gpt-6-astra',
+    configured: Boolean(ai.configured),
+    provider: ai.provider || null,
+    model: ai.model || null,
+    fallbackProvider: ai.fallbackProvider || null,
+    fallbackModel: ai.fallbackModel || null,
+    fallbackProviders: ai.fallbackProviders || [],
   };
 }
 
 export async function getFixaHealth() {
-  const health = await explabsProvider.healthCheck();
+  const ai = getAiStatus();
   return {
     assistant: 'Fixera',
-    provider: 'experiential-labs',
-    model: 'gpt-6-astra',
-    configured: Boolean(health.configured),
-    authenticated: Boolean(health.authenticated),
-    modelReachable: Boolean(health.modelReachable),
-    healthy: Boolean(health.healthy),
-    code: health.code,
-    ...(health.providerStatus ? { providerStatus: health.providerStatus, httpStatus: health.providerStatus } : {}),
-    ...(health.providerCode ? { providerCode: health.providerCode } : {}),
-    ...(health.modelsHttpStatus != null ? { modelsHttpStatus: health.modelsHttpStatus } : {}),
-    ...(health.modelListed != null ? { modelListed: health.modelListed } : {}),
-    ...(health.returnedModel ? { returnedModel: health.returnedModel } : {}),
-    ...(health.latencyMs != null ? { latencyMs: health.latencyMs } : {}),
-    ...(health.usage ? { usage: health.usage } : {}),
-    ...(health.text ? { text: health.text } : {}),
-    ...(health.keyShape ? {
-      keyShape: health.keyShape,
-      keyLength: health.keyLength,
-      matchesProviderFormat: health.matchesProviderFormat,
-      prefixXpl: health.prefixXpl,
-      bodyIsHex: health.bodyIsHex,
-    } : {}),
+    provider: ai.provider || null,
+    model: ai.model || null,
+    fallbackProvider: ai.fallbackProvider || null,
+    fallbackModel: ai.fallbackModel || null,
+    fallbackProviders: ai.fallbackProviders || [],
+      code,
+      caseId: packed.context.jobId,
+      propertyId: packed.context.propertyId,
+    code: ai.configured ? 'configured_not_probed' : 'not_connected',
   };
 }
 
 export async function getFixaAdminProviders() {
-  const health = await explabsProvider.healthCheck();
+  const ai = getAiStatus();
+  const health = await getFixaHealth();
+  const route = {
+    primary: ai.provider || null,
+    model: ai.model || null,
+    fallback: ai.fallbackProvider || null,
+    fallbackModel: ai.fallbackModel || null,
+  };
   return {
     assistant: 'Fixera',
     principle: 'Models may change. Fixera remains.',
-    currentProvider: 'Experiential Labs',
-    currentModel: 'gpt-6-astra',
-    connection: health.healthy ? 'connected' : health.configured ? 'error' : 'not_connected',
+    currentProvider: ai.provider || 'Not configured',
+    currentModel: ai.model || 'Not configured',
+    connection: ai.configured ? 'configured' : 'not_connected',
     health,
     routing: {
-      repair_assessment: { primary: 'Experiential Labs', model: 'gpt-6-astra', fallback: null },
-      diy_guidance: { primary: 'Experiential Labs', model: 'gpt-6-astra', fallback: null },
-      customer_support: { primary: 'Experiential Labs', model: 'gpt-6-astra', fallback: null },
+      repair_assessment: route,
+      diy_guidance: route,
+      customer_support: route,
     },
-    providers: listFixaProviders().map((provider) => ({
-      ...provider,
-      status: provider.id === 'explabs'
-        ? (health.healthy ? 'connected' : health.configured ? 'error' : 'not_connected')
-        : 'not_configured',
-    })),
+    providers: listFixaProviders(),
     observability: fixaObservabilitySummary(),
-    note: 'Provider secrets stay in server environment storage. This screen never returns a raw key.',
+    note: 'Provider secrets stay in server environment storage. Connectivity is not probed by this status endpoint.',
   };
 }
 
@@ -159,62 +186,106 @@ export async function getFixaAdminProviders() {
 export async function assessRepair(input) {
   const started = Date.now();
   const id = requestId();
-  const packed = getContext(input, 'repair_assessment');
+  const task = String(input.task || 'repair_assessment');
+  const packed = getContext(input, task);
+  const route = selectProvider(task);
+  const knowledgeContext = packed.knowledge.items.map((item) => `- ${item}`).join('\n');
+  const privatePropertyContext = propertyMemoryText(packed.context.property);
+  const locationContext = [
+    input.locationContext,
+    privatePropertyContext ? `Authorized property/equipment history:\n${privatePropertyContext}` : '',
+    knowledgeContext ? `Fixera safety and repair guidance:\n${knowledgeContext}` : '',
+  ].filter(Boolean).join('\n\n');
 
-  console.log('[Fixbridge Hotfix] Simulating successful Experiential Labs data structure...');
+  if (!route.configured) {
+    recordFixaEvent({
+      requestId: id,
+      task,
+      startedAt: new Date(started).toISOString(),
+      latencyMs: Date.now() - started,
+      ok: false,
+      homeownerId: packed.context.homeownerId,
+      jobId: packed.context.jobId,
+      caseId: packed.context.jobId,
+      propertyId: packed.context.propertyId,
+      code: 'no_provider_configured',
+    });
+    return {
+      assessment: null,
+      source: 'error',
+      assistant: 'Fixera',
+      error: FIXA_UNAVAILABLE,
+      code: 'no_provider_configured',
+    };
+  }
 
-  // Create a perfectly valid mock schema body that matches your evaluation requirements
-  const mockAssessmentResult = {
-    assessment: {
-      safe_diy_allowed: true,
-      professional_required: false,
-      diy_risk_level: "low",
-      diy_guide_steps: [
-        {
-          title: "Initial System Inspection",
-          instruction: "Carefully look over the visible service component connections to check for structural anomalies.",
-          expected_result: "The visible service area connection alignment matches standard operating parameters.",
-          if_not: "If anomalies are detected, clean out surface elements or tighten the secure bracket assemblies."
-        },
-        {
-          title: "Secure Fastener Adjustments",
-          instruction: "Utilize your local mounting tool set to turn the perimeter fastening screws clockwise.",
-          expected_result: "The baseline bracket housing sits completely flush against the mounting platform surface.",
-          if_not: "Loosen the mounting layout completely, check the tracks for blockages, and repeat secure sequence."
-        }
-      ]
-    }
-  };
+  let result;
+  try {
+    result = await analyzeRepairStructured({
+      ...input,
+      locationContext,
+    });
+  } catch (error) {
+    result = {
+      assessment: null,
+      source: 'error',
+      error: FIXA_UNAVAILABLE,
+      providerCode: error?.code || 'provider_exception',
+    };
+  }
 
-  // Pass our valid structural simulation object straight down into your evaluation engine
-  const evaluation = evaluateRepairAssessment(mockAssessmentResult.assessment);
+  const evaluation = result?.assessment
+    ? evaluateRepairAssessment(result.assessment)
+    : { ok: false, schemaValid: false, issues: ['missing_assessment'] };
+  const usableAssessment = result?.assessment && evaluation.ok ? result.assessment : null;
+  const code = !result?.assessment
+    ? result?.providerCode || 'provider_error'
+    : usableAssessment
+      ? 'ok'
+      : 'assessment_schema_invalid';
 
   recordFixaEvent({
     requestId: id,
-    task: 'repair_assessment',
-    provider: 'explabs',
-    model: 'gpt-6-astra',
+    task,
+    provider: result?.provider || result?.source || route.provider?.id || null,
+    model: result?.model || route.model || null,
+    providerRequestId: result?.requestId || null,
+    promptVersion: result?.promptVersion || null,
+    providerAttempts: result?.providerAttempts || [],
     startedAt: new Date(started).toISOString(),
     latencyMs: Date.now() - started,
-    ok: true,
+    ok: Boolean(usableAssessment),
+    homeownerId: packed.context.homeownerId,
     schemaValid: evaluation.schemaValid,
-    safety: mockAssessmentResult.assessment.diy_risk_level || null,
+    safety: result?.assessment?.diy_risk_level || null,
     evaluator: evaluation.ok ? 'pass' : 'fail',
     jobId: packed.context.jobId,
-    code: 'ok',
+    caseId: packed.context.jobId,
+    propertyId: packed.context.propertyId,
+    code,
   });
 
-  recordLearningCandidate({
-    requestId: id,
-    task: 'repair_assessment',
-    jobId: packed.context.jobId,
-    provider: 'explabs',
-    model: 'gpt-6-astra',
-    safety: mockAssessmentResult.assessment.diy_risk_level,
-    evaluator: evaluation.ok ? 'pass' : 'fail',
-  });
+  if (usableAssessment) {
+    recordLearningCandidate({
+      requestId: id,
+      task,
+      jobId: packed.context.jobId,
+      propertyId: packed.context.propertyId,
+      provider: result?.provider || route.provider?.id || null,
+      model: result?.model || route.model,
+      safety: usableAssessment.diy_risk_level,
+      evaluator: 'pass',
+    });
+    return publicAssessment({ ...result, assessment: usableAssessment });
+  }
 
-  return publicAssessment(mockAssessmentResult);
+  return publicAssessment({
+    assessment: null,
+    source: 'error',
+    error: FIXA_UNAVAILABLE,
+    code,
+    validationIssues: evaluation.issues,
+  });
 }
 
 export async function reassessRepair(input) {
@@ -230,19 +301,17 @@ export async function reassessRepair(input) {
 export async function chat(input) {
   const started = Date.now();
   const id = requestId();
-  const route = {
-    provider: { id: 'explabs' },
-    model: 'gpt-6-astra'
-  };
+  const task = String(input?.task || 'customer_support');
+  const route = selectProvider(task);
 
-  if (!route.provider) {
+  if (!route.configured) {
     return { reply: null, source: 'error', assistant: 'Fixera', error: FIXA_UNAVAILABLE };
   }
   const result = await chatWithCustomer(input);
   recordFixaEvent({
     requestId: id,
-    task: input?.task || 'customer_support',
-    provider: route.provider.id,
+    task,
+    provider: route.provider?.id || null,
     model: route.model,
     startedAt: new Date(started).toISOString(),
     latencyMs: Date.now() - started,

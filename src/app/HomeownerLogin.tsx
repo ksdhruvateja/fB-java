@@ -39,6 +39,7 @@ import {
  type ServiceTradeId,
 } from "./serviceRequestFlow";
 import { isValidUsZip, normalizeZip } from "./zipCode";
+import { compressImageForAssessment } from "./imageUpload";
 import { ConsentCheckbox, ConsentSection, consentsFromState } from "./ConsentCheckbox";
 import GoogleSignInButton from "./GoogleSignInButton";
 import AuthSigningOverlay from "./AuthSigningOverlay";
@@ -116,18 +117,27 @@ export default function HomeownerLogin({
  const [mediaDataUrl, setMediaDataUrl] = useState<string | null>(null);
  const [mediaType, setMediaType] = useState<string | null>(null);
  const [mediaName, setMediaName] = useState("");
+ const [photoConfirmed, setPhotoConfirmed] = useState(false);
  const authStyles = useAuthSurfaceStyles();
 
  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
  const file = e.target.files?.[0];
+ e.target.value = "";
  if (!file) return;
- const reader = new FileReader();
- reader.onload = () => {
- setMediaDataUrl(String(reader.result));
- setMediaType(file.type.startsWith("video") ? "video" : "image");
+ setError("");
+ setPhotoConfirmed(false);
+ if (!file.type.startsWith("image/") || file.type === "image/heic" || file.type === "image/heif") {
+ setError("Choose a JPG, PNG, or WEBP photo for repair analysis.");
+ return;
+ }
+ void compressImageForAssessment(file).then((dataUrl) => {
+ if (dataUrl.length > 6_000_000) throw new Error("This photo is too large to attach.");
+ setMediaDataUrl(dataUrl);
+ setMediaType("image");
  setMediaName(file.name);
- };
- reader.readAsDataURL(file);
+ }).catch((error) => {
+ setError(error instanceof Error ? error.message : "Could not prepare this photo.");
+ });
  };
 
  const goNextReport = () => {
@@ -141,6 +151,10 @@ export default function HomeownerLogin({
  return;
  }
  if (reportStep === 2) {
+ if (mediaDataUrl && !photoConfirmed) {
+ setError("Preview and confirm the photo before continuing.");
+ return;
+ }
  if (!reportDescription.trim()) {
  setError("Add a short description of the problem.");
  return;
@@ -183,6 +197,11 @@ export default function HomeownerLogin({
  setLoading(true);
  try {
  if (tab === "report") {
+ if (mediaDataUrl && !photoConfirmed) {
+ setError("Preview and confirm the photo before submitting.");
+ setLoading(false);
+ return;
+ }
  if (!reportTradeId || !reportLocation) {
  setError("Please select a service type and location.");
  setLoading(false);
@@ -481,6 +500,14 @@ export default function HomeownerLogin({
  mediaDataUrl={mediaDataUrl}
  mediaType={mediaType}
  mediaName={mediaName}
+ photoConfirmed={photoConfirmed}
+ setPhotoConfirmed={setPhotoConfirmed}
+ onClearMedia={() => {
+ setMediaDataUrl(null);
+ setMediaType(null);
+ setMediaName("");
+ setPhotoConfirmed(false);
+ }}
  onFileChange={handleFileChange}
  reportAddressLine1={reportAddressLine1}
  reportAddressLine2={reportAddressLine2}
@@ -666,7 +693,8 @@ export default function HomeownerLogin({
  </button>
  )}
  <button
- type="submit"
+         type={tab === "report" && reportStep < 3 ? "button" : "submit"}
+         onClick={tab === "report" && reportStep < 3 ? goNextReport : undefined}
  disabled={loading}
  className="group flex flex-1 items-center justify-center gap-2 rounded-full bg-primary py-4 text-[15px] font-bold text-white shadow-[0_12px_32px_rgba(255,77,28,0.35)] transition active:scale-[0.98] hover:brightness-105 disabled:opacity-60"
  >

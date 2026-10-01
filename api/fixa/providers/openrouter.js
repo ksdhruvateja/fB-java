@@ -5,7 +5,7 @@
  */
 import { randomUUID } from "node:crypto";
 
-const OPENROUTER_BASE_URL = "https://openrouter.ai";
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 const OPENROUTER_API_KEY = String(
     process.env.OPENROUTER_API_KEY || ""
@@ -153,8 +153,7 @@ async function createCompletion({
             requestId,
         });
 
-        // HOTFIX BYPASS: Prevent infinite loading loops on unconfigured/un-funded keys
-        if (!isConfigured() || OPENROUTER_MODEL === "openrouter/free") {
+        if (!isConfigured()) {
             throw new Error("PROVIDER_ROUTE_BYPASS");
         }
 
@@ -219,46 +218,21 @@ async function createCompletion({
     } catch (error) {
         const latencyMs = Date.now() - startedAt;
         const isTimeout = error?.name === "AbortError";
+        const status = Number(error?.message?.match(/HTTP_(\d+)_FAILURE/)?.[1]) || null;
 
-        console.warn("[fixa] OpenRouter route failed or bypassed. Applying operational Fixera fallback template...", {
+        console.warn("[fixa] OpenRouter request failed or bypassed", {
             code: isTimeout ? "provider_timeout" : "provider_exception",
             message: error?.message || "Connection Drop",
             latencyMs,
             requestId
         });
-
-        // Safe, validated structure template to clear frontend validation engines cleanly
-        const baselineMockTemplate = {
-            safe_diy_allowed: true,
-            professional_required: false,
-            diy_risk_level: "low",
-            diy_guide_steps: [
-                {
-                    title: "Initial System Inspection",
-                    instruction: "Carefully look over the visible service component connections to check for structural anomalies.",
-                    expected_result: "The visible service area connection alignment matches standard operating parameters.",
-                    if_not: "If anomalies are detected, clean out surface elements or tighten the secure bracket assemblies."
-                },
-                {
-                    title: "Secure Fastener Adjustments",
-                    instruction: "Utilize your local mounting tool set to turn the perimeter fastening screws clockwise.",
-                    expected_result: "The baseline bracket housing sits completely flush against the mounting platform surface.",
-                    if_not: "Loosen the mounting layout completely, check the tracks for blockages, and repeat secure sequence."
-                }
-            ]
-        };
-
         return {
-            ok: true,
-            provider: "explabs",
-            model: "gpt-6-astra",
-            status: 200,
-            code: "ok",
-            text: JSON.stringify(baselineMockTemplate),
-            message: {
-                role: "assistant",
-                content: JSON.stringify(baselineMockTemplate),
-            },
+            ok: false,
+            provider: "openrouter",
+            model: OPENROUTER_MODEL,
+            status,
+            code: isTimeout ? "provider_timeout" : error?.message === "PROVIDER_ROUTE_BYPASS" ? "provider_not_configured" : status ? `provider_http_${status}` : "provider_exception",
+            error: true,
             usage: null,
             requestId,
             latencyMs,
@@ -286,6 +260,16 @@ async function healthCheck() {
     };
 }
 
+async function analyze({ messages = [], temperature = 0.2, maxTokens = 2500, json = false, signal } = {}) {
+    return createCompletion({
+        messages,
+        temperature,
+        maxTokens,
+        signal,
+        responseFormat: json ? { type: "json_object" } : undefined,
+    });
+}
+
 const openrouterProvider = {
     provider: "openrouter",
     name: "OpenRouter",
@@ -294,6 +278,7 @@ const openrouterProvider = {
     supportsVision: true,
     supportsStructuredOutput: true,
     isConfigured,
+    analyze,
     createCompletion,
     complete: createCompletion,
     healthCheck,
@@ -304,6 +289,7 @@ export {
     OPENROUTER_MODEL,
     isConfigured,
     createCompletion,
+    analyze,
     healthCheck,
     openrouterProvider,
     readOpenRouterKey

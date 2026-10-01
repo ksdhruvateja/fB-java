@@ -98,6 +98,7 @@ export async function initManagedSchema(pool) {
       booking_id                      TEXT UNIQUE,
       homeowner_user_id               INT NOT NULL,
       property_id                     INT,
+      equipment_key                   TEXT,
       job_mode                        TEXT NOT NULL DEFAULT 'managed',
       status                          TEXT NOT NULL DEFAULT 'draft',
       category                        TEXT,
@@ -113,6 +114,7 @@ export async function initManagedSchema(pool) {
       contact_name                    TEXT,
       contact_phone                   TEXT,
       ai_assessment                   JSONB,
+      ai_assessment_history           JSONB NOT NULL DEFAULT '[]'::jsonb,
       pricing                         JSONB,
       show_retail_price               BOOLEAN DEFAULT TRUE,
       customer_retail_estimate_low    NUMERIC,
@@ -146,6 +148,8 @@ export async function initManagedSchema(pool) {
       updated_at                      TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS equipment_key TEXT`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS ai_assessment_history JSONB NOT NULL DEFAULT '[]'::jsonb`);
 
   // Pending Fixera requests are the source of truth for homeowners who do
   // not yet have an active HomeCare entitlement. They become managed_jobs only
@@ -155,6 +159,7 @@ export async function initManagedSchema(pool) {
       id                              BIGSERIAL PRIMARY KEY,
       homeowner_user_id               INT NOT NULL,
       property_id                     INT,
+      equipment_key                   TEXT,
       status                          TEXT NOT NULL DEFAULT 'pending',
       category                        TEXT,
       service_subcategory             TEXT,
@@ -192,6 +197,7 @@ export async function initManagedSchema(pool) {
       property_opportunity_notes      TEXT,
       discount_code                   TEXT,
       ai_assessment                   JSONB,
+      ai_assessment_history           JSONB NOT NULL DEFAULT '[]'::jsonb,
       assessment_result               JSONB,
       assessment_status               TEXT DEFAULT 'pending',
       assessment_error_code           TEXT,
@@ -220,6 +226,8 @@ export async function initManagedSchema(pool) {
       updated_at                      TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE pending_service_requests ADD COLUMN IF NOT EXISTS equipment_key TEXT`);
+  await pool.query(`ALTER TABLE pending_service_requests ADD COLUMN IF NOT EXISTS ai_assessment_history JSONB NOT NULL DEFAULT '[]'::jsonb`);
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_pending_service_requests_homeowner
@@ -742,6 +750,10 @@ export async function initManagedSchema(pool) {
       id SERIAL PRIMARY KEY,
       owner_user_id INT,
       job_id BIGINT,
+      pending_service_request_id BIGINT,
+      case_type TEXT,
+      property_id INT,
+      equipment_key TEXT,
       kind TEXT,
       storage_key TEXT,
       content_type TEXT,
@@ -749,6 +761,17 @@ export async function initManagedSchema(pool) {
       data_url TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
+  `);
+  await pool.query(`
+    ALTER TABLE media_objects
+      ADD COLUMN IF NOT EXISTS pending_service_request_id BIGINT,
+      ADD COLUMN IF NOT EXISTS case_type TEXT,
+      ADD COLUMN IF NOT EXISTS property_id INT,
+      ADD COLUMN IF NOT EXISTS equipment_key TEXT
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_media_objects_case
+      ON media_objects (case_type, job_id, pending_service_request_id)
   `);
 
   await pool.query(`
@@ -2119,8 +2142,11 @@ export async function initManagedSchema(pool) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fixera_interactions (
       id                      TEXT PRIMARY KEY,
+      user_id                 INT,
       user_role               TEXT,
       job_id                  BIGINT,
+      case_id                 BIGINT,
+      case_type               TEXT,
       property_id             INT,
       task_type               TEXT,
       input_summary           TEXT,
@@ -2138,6 +2164,18 @@ export async function initManagedSchema(pool) {
     )
   `);
   await pool.query(`
+    ALTER TABLE fixera_interactions
+      ADD COLUMN IF NOT EXISTS user_id INT,
+      ADD COLUMN IF NOT EXISTS case_id BIGINT,
+      ADD COLUMN IF NOT EXISTS case_type TEXT,
+      ADD COLUMN IF NOT EXISTS provider_request_id TEXT,
+      ADD COLUMN IF NOT EXISTS prompt_version TEXT,
+      ADD COLUMN IF NOT EXISTS latency_ms INT,
+      ADD COLUMN IF NOT EXISTS success BOOLEAN,
+      ADD COLUMN IF NOT EXISTS failure_code TEXT,
+      ADD COLUMN IF NOT EXISTS provider_attempts JSONB
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS fixera_training_candidates (
       id                    TEXT PRIMARY KEY,
       interaction_id        TEXT,
@@ -2153,6 +2191,25 @@ export async function initManagedSchema(pool) {
       payload               JSONB,
       created_at            TIMESTAMPTZ DEFAULT NOW()
     )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fixera_knowledge_entries (
+      id BIGSERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'general',
+      content TEXT NOT NULL,
+      tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+      source TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      created_by_user_id INT,
+      updated_by_user_id INT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_fixera_knowledge_status_category
+      ON fixera_knowledge_entries (status, category, updated_at DESC)
   `);
 
   try {

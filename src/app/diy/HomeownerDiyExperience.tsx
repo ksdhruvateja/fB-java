@@ -18,10 +18,18 @@ import {
   Zap,
 } from "lucide-react";
 import type { ChatMessage } from "../geminiAssessment";
+import type { AssessmentResource } from "../managedJobs";
 import DiySafetyFeedback from "../DiySafetyFeedback";
 import { asGuideSteps, guideVisual, type GuideStep } from "./diyGuideVisual";
 
 export type DiyView = "home" | "step" | "chat" | "ideas" | "complete";
+export type DiyRepairOutcomeDetails = {
+  actualAction: string;
+  partsUsed: string;
+  toolsUsed: string;
+  cost: string;
+  observation: string;
+};
 
 type Risk = "green" | "yellow" | "red";
 
@@ -40,8 +48,8 @@ type Props = {
   risk: Risk;
   steps: string[];
   guideSteps?: Array<Record<string, unknown>>;
-  tools: string[];
-  materials: string[];
+  tools: AssessmentResource[];
+  materials: AssessmentResource[];
   causes: string[];
   stopConditions: string[];
   completionChecks?: string[];
@@ -60,6 +68,8 @@ type Props = {
   onOpenIdeas: () => void;
   onCompleteStep: () => void;
   onStepFeedback?: (kind: "worked" | "failed" | "different") => void;
+  onConfirmFixed: (details: DiyRepairOutcomeDetails) => void;
+  onStillBroken: (details: DiyRepairOutcomeDetails) => void;
   onToggleBookmark: () => void;
   onHire: () => void;
   onNotComfortable: () => void;
@@ -84,6 +94,20 @@ function splitStep(raw: string) {
   if (match) return { title: match[1].trim(), body: match[2].trim() };
   if (text.length > 88) return { title: text.slice(0, 84).trim() + "…", body: text };
   return { title: text || "Next step", body: "" };
+}
+
+function resourceName(resource: AssessmentResource | string) {
+  return typeof resource === "string" ? resource : resource.name;
+}
+
+function resourceDetail(resource: AssessmentResource | string) {
+  if (typeof resource === "string") return "";
+  return [
+    resource.required ? "Required" : "Optional",
+    resource.reason,
+    resource.exact_part_confirmed === false ? "Exact part not confirmed" : "",
+    resource.information_needed?.length ? `Need: ${resource.information_needed.join(", ")}` : "",
+  ].filter(Boolean).join(" · ");
 }
 
 export function DIYCategoryCard({
@@ -421,6 +445,8 @@ export default function HomeownerDiyExperience(props: Props) {
     onOpenIdeas,
     onCompleteStep,
     onStepFeedback,
+    onConfirmFixed,
+    onStillBroken,
     onToggleBookmark,
     onHire,
     onNotComfortable,
@@ -435,6 +461,13 @@ export default function HomeownerDiyExperience(props: Props) {
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const [browseOpen, setBrowseOpen] = useState(false);
+  const [outcomeDetails, setOutcomeDetails] = useState<DiyRepairOutcomeDetails>({
+    actualAction: "",
+    partsUsed: "",
+    toolsUsed: "",
+    cost: "",
+    observation: "",
+  });
   const [confirmedId, setConfirmedId] = useState<string | null>(() => readConfirmedCategory(jobId)?.id || null);
   const doneCount = Object.values(completed).filter(Boolean).length;
   const guides = useMemo(() => asGuideSteps(guideSteps, steps), [guideSteps, steps]);
@@ -777,16 +810,22 @@ export default function HomeownerDiyExperience(props: Props) {
           <div>
             <p className="mb-2 text-[14px] font-semibold text-[#2c2926]">Tools needed</p>
             <div className="flex flex-wrap gap-2">
-              {(currentGuide?.tools?.length ? currentGuide.tools : toolList.length ? toolList : ["No special tools listed"]).map((tool) => (
-                <DIYToolChip key={tool} label={tool} />
+              {(currentGuide?.tools?.length ? currentGuide.tools : toolList.length ? toolList : ["No special tools listed"]).map((tool, index) => (
+                <div key={`${resourceName(tool)}-${index}`}>
+                  <DIYToolChip label={resourceName(tool)} />
+                  {resourceDetail(tool) ? <p className="mt-1 max-w-xs text-xs text-[#5c574f]">{resourceDetail(tool)}</p> : null}
+                </div>
               ))}
             </div>
             {currentGuide?.materials?.length ? (
               <div className="mt-3">
                 <p className="mb-2 text-[14px] font-semibold text-[#2c2926]">Materials</p>
                 <div className="flex flex-wrap gap-2">
-                  {currentGuide.materials.map((item) => (
-                    <DIYToolChip key={item} label={item} />
+                  {currentGuide.materials.map((item, index) => (
+                    <div key={`${resourceName(item)}-${index}`}>
+                      <DIYToolChip label={resourceName(item)} />
+                      {resourceDetail(item) ? <p className="mt-1 max-w-xs text-xs text-[#5c574f]">{resourceDetail(item)}</p> : null}
+                    </div>
                   ))}
                 </div>
               </div>
@@ -882,8 +921,11 @@ export default function HomeownerDiyExperience(props: Props) {
       </DIYRepairSummaryCard>
       <DIYRepairSummaryCard title="Tools Needed" tone="bg-[#F8E6AF]">
         <div className="flex flex-wrap gap-2">
-          {(toolList.length ? toolList : ["None listed"]).map((tool) => (
-            <DIYToolChip key={tool} label={tool} />
+          {(toolList.length ? toolList : ["None listed"]).map((tool, index) => (
+            <div key={`${resourceName(tool)}-${index}`}>
+              <DIYToolChip label={resourceName(tool)} />
+              {resourceDetail(tool) ? <p className="mt-1 max-w-xs text-xs text-[#5c574f]">{resourceDetail(tool)}</p> : null}
+            </div>
           ))}
         </div>
       </DIYRepairSummaryCard>
@@ -930,9 +972,36 @@ export default function HomeownerDiyExperience(props: Props) {
           ))}
         </ul>
       </div>
+      <div className="space-y-3 rounded-[22px] bg-white p-4">
+        <label className="grid gap-1.5 text-sm font-semibold">
+          What did you do?
+          <textarea value={outcomeDetails.actualAction} onChange={(event) => setOutcomeDetails((details) => ({ ...details, actualAction: event.target.value }))} maxLength={1000} rows={2} className="rounded-xl border border-[#eadfd4] px-3 py-2 font-normal" placeholder="Describe the repair action you completed" />
+        </label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="grid gap-1.5 text-sm font-semibold">
+            Parts used
+            <input value={outcomeDetails.partsUsed} onChange={(event) => setOutcomeDetails((details) => ({ ...details, partsUsed: event.target.value }))} maxLength={500} className="min-h-10 rounded-xl border border-[#eadfd4] px-3 font-normal" />
+          </label>
+          <label className="grid gap-1.5 text-sm font-semibold">
+            Tools used
+            <input value={outcomeDetails.toolsUsed} onChange={(event) => setOutcomeDetails((details) => ({ ...details, toolsUsed: event.target.value }))} maxLength={500} className="min-h-10 rounded-xl border border-[#eadfd4] px-3 font-normal" />
+          </label>
+          <label className="grid gap-1.5 text-sm font-semibold">
+            Cost (optional)
+            <input type="number" inputMode="decimal" min="0" max="500000" step="0.01" value={outcomeDetails.cost} onChange={(event) => setOutcomeDetails((details) => ({ ...details, cost: event.target.value }))} className="min-h-10 rounded-xl border border-[#eadfd4] px-3 font-normal" />
+          </label>
+          <label className="grid gap-1.5 text-sm font-semibold sm:col-span-2">
+            Final observation (optional)
+            <textarea value={outcomeDetails.observation} onChange={(event) => setOutcomeDetails((details) => ({ ...details, observation: event.target.value }))} maxLength={800} rows={2} className="rounded-xl border border-[#eadfd4] px-3 py-2 font-normal" placeholder="What changed, or what is still happening?" />
+          </label>
+        </div>
+      </div>
       <div className="grid gap-2">
-        <button type="button" onClick={onBack} className="rounded-[16px] bg-[#E07A4A] px-4 py-3 text-[15px] font-semibold text-white">
-          Issue Resolved
+        <button type="button" onClick={() => onConfirmFixed(outcomeDetails)} className="rounded-[16px] bg-[#E07A4A] px-4 py-3 text-[15px] font-semibold text-white">
+          Yes, the problem is fixed
+        </button>
+        <button type="button" onClick={() => onStillBroken(outcomeDetails)} className="rounded-[16px] bg-white px-4 py-3 text-[15px] font-semibold text-[#2c2926]">
+          No, it is still broken
         </button>
         <button type="button" onClick={onHire} className="rounded-[16px] bg-white px-4 py-3 text-[15px] font-semibold text-[#2c2926]">
           Hire a Professional

@@ -323,8 +323,10 @@ export function serviceHistoryForEquipment(
   }
 
   for (const s of previousServices || []) {
+    if (s.equipmentKey && s.equipmentKey !== equipment.key) continue;
     const mapped = String(s.system || "").toLowerCase();
     if (
+      s.equipmentKey === equipment.key ||
       mapped.includes(equipment.key) ||
       mapped.includes(equipment.name.toLowerCase()) ||
       String(s.title || "").toLowerCase().includes(equipment.name.toLowerCase())

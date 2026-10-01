@@ -12,6 +12,7 @@ import { HomeUpdatePreference } from "./homeUpdates";
 export type CheckoutBreakdown = {
   customerId?: number | null;
   propertyId?: number | null;
+  equipmentKey?: string | null;
   serviceRequestId?: number;
   bookingId?: string;
   serviceTitle?: string;
@@ -95,8 +96,8 @@ export type StructuredAssessment = {
   diy_difficulty?: string;
   diyRiskReasonCodes?: string[];
   diy_risk_reason_codes?: string[];
-  tools_required?: string[];
-  materials_needed?: string[];
+  tools_required?: AssessmentResource[];
+  materials_needed?: AssessmentResource[];
   diy_steps?: string[];
   diy_risk_level?:string;
   diy_guide_steps?: Array<{
@@ -104,7 +105,8 @@ export type StructuredAssessment = {
     title: string;
     instruction: string;
     explanation: string;
-    tools: string[];
+    tools: AssessmentResource[];
+    materials?: AssessmentResource[];
     safety_note: string;
     expected_result: string;
     if_not: string;
@@ -113,6 +115,14 @@ export type StructuredAssessment = {
   }>;
   stop_conditions?: string[];
   disclaimer?: string;
+};
+
+export type AssessmentResource = {
+  name: string;
+  required: boolean;
+  reason: string;
+  exact_part_confirmed?: boolean;
+  information_needed?: string[];
 };
 
 export type ManagedJob = {
@@ -719,6 +729,37 @@ export async function getPendingServiceRequestAssessmentStatus(
   }>(`/api/pending-service-requests/${pendingServiceRequestId}/assessment-status`);
 }
 
+export type FixeraDiyEvent = "step_completed" | "step_failed" | "step_different" | "fixed" | "still_broken" | "professional_requested";
+
+export async function recordFixeraDiyEvent(
+  jobId: number,
+  body: {
+    event: FixeraDiyEvent;
+    stepIndex?: number;
+    completedStepIndexes?: number[];
+    note?: string;
+    actualAction?: string;
+    partsUsed?: string;
+    toolsUsed?: string;
+    cost?: number | null;
+    observation?: string;
+  }
+) {
+  return api<{
+    ok: boolean;
+    jobId?: number;
+    propertyId?: number | null;
+    event?: FixeraDiyEvent;
+    outcome?: string | null;
+    completedStepIndexes?: number[];
+    code?: string;
+    message?: string;
+  }>(`/api/managed/jobs/${jobId}/fixera-diy`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export async function startManagedJobAssessment(
   jobId: number,
   {
@@ -836,6 +877,7 @@ function normalizePendingServiceRequest(raw: any) {
     ...raw,
     homeownerUserId: raw.homeownerUserId ?? raw.homeowner_user_id,
     propertyId: raw.propertyId ?? raw.property_id,
+    equipmentKey: raw.equipmentKey ?? raw.equipment_key ?? null,
     serviceSubcategory: raw.serviceSubcategory ?? raw.service_subcategory,
     mediaDataUrl: raw.mediaDataUrl ?? raw.media_data_url,
     mediaType: raw.mediaType ?? raw.media_type,

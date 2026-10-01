@@ -16,6 +16,7 @@ import {
   getStripe,
 } from './stripe.js';
 import { isAdminRole } from './auth-helpers.js';
+import { assertPropertyAccess } from './property-access.js';
 import { convertPendingServiceRequest } from './managed-routes.js';
 import { reconcileRefundForJob } from './payment-settlement.js';
 import { FINANCIAL_EVENT, recordFinancialEvent } from './financial-ledger.js';
@@ -2052,25 +2053,81 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
   app.post('/api/media/upload', requireAuth, async (req, res) => {
     try {
       const dataUrl = String(req.body?.dataUrl || '');
-      if (!dataUrl.startsWith('data:')) {
+      const parsedDataUrl = dataUrl.match(/^data:([^;,]+);base64,([A-Za-z0-9+/=\r\n]+)$/i);
+      if (!parsedDataUrl) {
         return res.status(400).json({ ok: false, message: 'dataUrl required.' });
       }
       if (dataUrl.length > 6_000_000) {
         return res.status(400).json({ ok: false, message: 'File too large.' });
       }
-      const key = `media_${req.authUser.id}_${Date.now()}`;
       const mode = process.env.MEDIA_STORAGE_MODE || 'inline';
+      if (mode !== 'inline') {
+        return res.status(503).json({ ok: false, code: 'MEDIA_STORAGE_UNAVAILABLE', message: 'Media storage is not configured for this deployment.' });
+      }
+      const jobId = req.body?.jobId == null ? null : Number(req.body.jobId);
+      const pendingId = req.body?.pendingServiceRequestId == null ? null : Number(req.body.pendingServiceRequestId);
+      if (jobId != null && pendingId != null) {
+        return res.status(400).json({ ok: false, code: 'AMBIGUOUS_REPAIR_CASE', message: 'Choose one repair case.' });
+      }
+      let caseType = null;
+      let propertyId = null;
+      let equipmentKey = null;
+      if (jobId != null) {
+        const { rows: cases } = await pool.query(
+          `SELECT id, property_id, equipment_key FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2`,
+          [jobId, req.authUser.id]
+        );
+        if (!cases[0]) return res.status(404).json({ ok: false, code: 'REPAIR_CASE_NOT_FOUND', message: 'Repair case not found.' });
+        caseType = 'managed_job';
+        propertyId = cases[0].property_id || null;
+        equipmentKey = cases[0].equipment_key || null;
+      } else if (pendingId != null) {
+        const { rows: cases } = await pool.query(
+          `SELECT id, property_id, equipment_key FROM pending_service_requests WHERE id=$1 AND homeowner_user_id=$2`,
+          [pendingId, req.authUser.id]
+        );
+        if (!cases[0]) return res.status(404).json({ ok: false, code: 'REPAIR_CASE_NOT_FOUND', message: 'Repair case not found.' });
+        caseType = 'pending_service_request';
+        propertyId = cases[0].property_id || null;
+        equipmentKey = cases[0].equipment_key || null;
+      } else if (req.body?.propertyId != null) {
+        propertyId = Number(req.body.propertyId);
+        if (!Number.isInteger(propertyId) || !(await assertPropertyAccess(pool, propertyId, req.authUser.id))) {
+          return res.status(403).json({ ok: false, code: 'PROPERTY_ACCESS_DENIED', message: 'You do not have access to this property.' });
+        }
+      }
+      if (caseType && propertyId != null && !(await assertPropertyAccess(pool, propertyId, req.authUser.id))) {
+        return res.status(403).json({ ok: false, code: 'PROPERTY_ACCESS_DENIED', message: 'You do not have access to this property.' });
+      }
+      if (caseType && req.body?.propertyId != null && Number(req.body.propertyId) !== Number(propertyId)) {
+        return res.status(403).json({ ok: false, code: 'PROPERTY_CASE_MISMATCH', message: 'The selected property does not match this repair case.' });
+      }
+      const requestedPropertyId = req.body?.propertyId == null ? propertyId : Number(req.body.propertyId);
+      if (propertyId != null && requestedPropertyId !== Number(propertyId)) {
+        return res.status(403).json({ ok: false, code: 'PROPERTY_CASE_MISMATCH', message: 'The selected property does not match this repair case.' });
+      }
+      if (req.body?.equipmentKey && String(req.body.equipmentKey) !== String(equipmentKey || '')) {
+        return res.status(403).json({ ok: false, code: 'EQUIPMENT_CASE_MISMATCH', message: 'The selected equipment does not match this repair case.' });
+      }
+      const key = `media_${crypto.randomUUID()}`;
       const { rows } = await pool.query(
-        `INSERT INTO media_objects (owner_user_id, job_id, kind, storage_key, content_type, byte_size, data_url)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, storage_key, created_at`,
+        `INSERT INTO media_objects (
+           owner_user_id, job_id, pending_service_request_id, case_type, property_id, equipment_key,
+           kind, storage_key, content_type, byte_size, data_url
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         RETURNING id, storage_key, created_at`,
         [
           req.authUser.id,
-          req.body?.jobId || null,
+          caseType === 'managed_job' ? jobId : null,
+          caseType === 'pending_service_request' ? pendingId : null,
+          caseType,
+          propertyId,
+          equipmentKey,
           req.body?.kind || 'upload',
           key,
-          req.body?.contentType || null,
-          dataUrl.length,
-          mode === 'inline' ? dataUrl : null,
+          parsedDataUrl[1].toLowerCase(),
+          Buffer.byteLength(parsedDataUrl[2], 'base64'),
+          dataUrl,
         ]
       );
       // Signed URL equivalent for inline mode
@@ -2090,10 +2147,12 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
     try {
       const { rows } = await pool.query(`SELECT * FROM media_objects WHERE id=$1`, [Number(req.params.id)]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
-      if (
-        Number(rows[0].owner_user_id) !== Number(req.authUser.id) &&
-        req.authUser.role !== 'admin'
-      ) {
+      const isOwner = Number(rows[0].owner_user_id) === Number(req.authUser.id);
+      const isAdmin = req.authUser.role === 'admin' || req.authUser.isAdmin === true;
+      const hasPropertyAccess = rows[0].property_id != null
+        ? await assertPropertyAccess(pool, rows[0].property_id, req.authUser.id)
+        : null;
+      if (!isOwner && !isAdmin && !hasPropertyAccess) {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
       res.json({ ok: true, media: { id: Number(rows[0].id), dataUrl: rows[0].data_url, contentType: rows[0].content_type } });

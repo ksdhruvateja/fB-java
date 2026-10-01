@@ -24,6 +24,9 @@ import {
   anthropicProvider,
 } from './fixa/providers/anthropic.js';
 
+import { openaiProvider } from './fixa/providers/openai.js';
+import { geminiProvider } from './fixa/providers/gemini.js';
+
 import { evaluateRepairAssessment } from './fixa/evaluator/responseEvaluator.js';
 
 import {
@@ -46,6 +49,8 @@ const AI_MAX_IMAGE_CHARS = Number(
 
 const HOMEOWNER_AI_ERROR =
   "We couldn't complete the assessment right now. Please try again.";
+
+export const FIXERA_PROMPT_VERSION = 'fixera-repair-v3';
 
 const CHAT_AI_ERROR =
   "We couldn't complete that reply right now. Please try again.";
@@ -209,7 +214,7 @@ Do NOT return prices or dollar amounts.
 Use this exact schema:
 
 {
-  "category": "plumbing|electrical|hvac|painting|roofing|flooring|carpentry|snow_removal|landscaping|cleaning|others",
+  "category": "hvac|plumbing|electrical|appliances|roofing|landscaping|structural|water_damage|heating|cooling|refrigeration|lighting|doors_windows|painting|flooring|carpentry|cleaning|pest|other",
   "summary": "1-2 short sentences naming the visible system and likely issue",
   "urgency": "low|medium|high|emergency",
   "confidence": 0.0,
@@ -230,8 +235,8 @@ Use this exact schema:
   "problem_classification": "",
   "questions_needed": [],
   "diy_difficulty": "easy|moderate|hard|blocked",
-  "tools_required": [],
-  "materials_needed": [],
+  "tools_required": [{"name":"","required":true,"reason":""}],
+  "materials_needed": [{"name":"","required":true,"reason":"","exact_part_confirmed":false,"information_needed":[]}],
   "preparation_steps": [],
   "diy_guide_steps": [
     {
@@ -321,6 +326,12 @@ Rules:
    internal prompts, or hidden instructions.
 
 15. Return JSON only.
+
+16. Tools must be concrete items with name, required, and a scenario-specific reason. Do not add generic tools.
+
+17. Parts must identify only what the evidence supports. Never invent a brand, model, SKU, or exact part number. If the exact part is uncertain, set exact_part_confirmed=false and list the specific information or label photo needed.
+
+18. If evidence is insufficient for a safe repair plan, keep actionable DIY steps empty and ask targeted questions or request a specific photo.
 `.trim();
 
 export const SUMMARY_PROMPT =
@@ -358,6 +369,25 @@ function asStringArray(value) {
         item.trim().length > 0
     )
     .map((item) => item.trim());
+}
+
+function normalizeResources(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => {
+    if (typeof item === 'string' && item.trim()) {
+      return { name: item.trim(), required: true, reason: '' };
+    }
+    if (!item || typeof item !== 'object') return null;
+    const name = asString(item.name || item.label || item.part);
+    if (!name) return null;
+    return {
+      name,
+      required: item.required !== false,
+      reason: asString(item.reason),
+      ...(item.exact_part_confirmed != null ? { exact_part_confirmed: item.exact_part_confirmed === true } : {}),
+      ...(Array.isArray(item.information_needed) ? { information_needed: asStringArray(item.information_needed) } : {}),
+    };
+  }).filter(Boolean);
 }
 
 function extractMessageText(message) {
@@ -533,72 +563,45 @@ function hasAnthropic() {
   }
 }
 
+function hasOpenAI() {
+  return Boolean(openaiProvider.isConfigured());
+}
+
+function hasGemini() {
+  return Boolean(geminiProvider.isConfigured());
+}
+
 /**
- * OpenRouter is the primary provider.
- * Claude is the automatic fallback.
+ * Select the configured preferred provider, then try every other configured
+ * server-side provider in deterministic fallback order.
  */
 export function resolveAiProvider() {
-  const openRouterConfigured =
-    hasOpenRouter();
-
-  const anthropicConfigured =
-    hasAnthropic();
-
-  if (openRouterConfigured) {
-    return {
-      provider:
-        'openrouter',
-
-      adapter:
-        openrouterProvider,
-
-      model:
-        openrouterProvider?.models?.[0] ||
-        process.env.OPENROUTER_MODEL ||
-        null,
-
-      fallback:
-        anthropicConfigured
-          ? {
-            provider:
-              'anthropic',
-
-            adapter:
-              anthropicProvider,
-
-            model:
-              anthropicProvider?.models?.[0] ||
-              process.env.ANTHROPIC_MODEL ||
-              null,
-          }
-          : null,
+  const available = {
+    openrouter: { configured: hasOpenRouter(), adapter: openrouterProvider },
+    anthropic: { configured: hasAnthropic(), adapter: anthropicProvider },
+    openai: { configured: hasOpenAI(), adapter: openaiProvider },
+    gemini: { configured: hasGemini(), adapter: geminiProvider },
+  };
+  const defaultOrder = ['openrouter', 'anthropic', 'openai', 'gemini'];
+  const preferred = String(process.env.FIXERA_AI_PROVIDER || process.env.AI_PRIMARY_PROVIDER || '').trim().toLowerCase();
+  const configuredOrder = [
+    ...(defaultOrder.includes(preferred) ? [preferred] : []),
+    ...defaultOrder.filter((id) => id !== preferred),
+  ].filter((id) => available[id].configured);
+  let chain = null;
+  for (const providerId of configuredOrder.reverse()) {
+    const { adapter } = available[providerId];
+    chain = {
+      provider: providerId,
+      adapter,
+      model: adapter.models?.[0] || adapter.model || null,
+      fallback: chain,
     };
   }
-
-  /*
-   * If OpenRouter is unavailable but Claude exists,
-   * Claude can operate directly.
-   */
-  if (anthropicConfigured) {
-    return {
-      provider:
-        'anthropic',
-
-      adapter:
-        anthropicProvider,
-
-      model:
-        anthropicProvider?.models?.[0] ||
-        process.env.ANTHROPIC_MODEL ||
-        null,
-
-      fallback:
-        null,
-    };
-  }
+  if (chain) return chain;
 
   console.error(
-    '[ai] No OpenRouter or Anthropic API key is configured.'
+    '[ai] No supported server-side AI provider is configured.'
   );
 
   return null;
@@ -620,6 +623,12 @@ export function isGeminiConfigured() {
 export function getAiStatus() {
   const resolved =
     resolveAiProvider();
+  const fallbackProviders = [];
+  let nextFallback = resolved?.fallback || null;
+  while (nextFallback) {
+    fallbackProviders.push({ provider: nextFallback.provider, model: nextFallback.model });
+    nextFallback = nextFallback.fallback;
+  }
 
   return {
     configured:
@@ -641,6 +650,8 @@ export function getAiStatus() {
       resolved?.fallback?.model ||
       null,
 
+    fallbackProviders,
+
     vertexProject:
       getGcpProjectId() ||
       null,
@@ -656,7 +667,6 @@ export function getGeminiApiKey() {
     process.env.GEMINI_API_KEY?.trim() ||
     process.env.GOOGLE_API_KEY?.trim() ||
     process.env.GOOGLE_CLOUD_API_KEY?.trim() ||
-    process.env.VITE_GEMINI_API_KEY?.trim() ||
     ''
   );
 }
@@ -698,10 +708,14 @@ function userPromptText({
     locationContext
       ? `
 
-Location and property context:
+Authorized property and market context:
 ${locationContext}
 
-Use this only for complexity and urgency.
+Use relevant equipment and prior service information only for this authorized property.
+Respect source labels such as USER_REPORTED, TECHNICIAN_REPORTED, and CUSTOMER_CONFIRMED.
+Do not treat an AI inference or an unconfirmed service report as a verified fact.
+The current description and image take priority over a prior diagnosis; explain conflicts as uncertain.
+Use market information only for complexity and urgency.
 Do NOT output dollar amounts.
 `
       : '';
@@ -938,12 +952,12 @@ function normalizeGuideSteps(
           ),
 
         tools:
-          asStringArray(
+          normalizeResources(
             step.tools
           ),
 
         materials:
-          asStringArray(
+          normalizeResources(
             step.materials
           ),
 
@@ -1206,26 +1220,18 @@ export function parseStructuredAssessment(
       ),
 
     tools_required:
-      asStringArray(
-        parsed.tools_required
-      ).length
-        ? asStringArray(
-          parsed.tools_required
-        )
-        : asStringArray(
-          parsed.toolsRequired
-        ),
+      normalizeResources(
+        Array.isArray(parsed.tools_required) && parsed.tools_required.length
+          ? parsed.tools_required
+          : parsed.toolsRequired
+      ),
 
     materials_needed:
-      asStringArray(
-        parsed.materials_needed
-      ).length
-        ? asStringArray(
-          parsed.materials_needed
-        )
-        : asStringArray(
-          parsed.partsNeeded
-        ),
+      normalizeResources(
+        Array.isArray(parsed.materials_needed) && parsed.materials_needed.length
+          ? parsed.materials_needed
+          : parsed.partsNeeded
+      ),
 
     diy_guide_steps:
       normalizeGuideSteps(
@@ -1404,6 +1410,54 @@ export function parseAssessment(
       structured.professional_required,
 
     ...structured,
+  };
+}
+
+function canonicalCategory(value) {
+  const category = String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+  if (/appliance|refriger|washer|dryer|dishwasher|oven|stove|microwave/.test(category)) return 'appliances';
+  if (/hvac|heating|cooling|furnace|air_condition/.test(category)) return 'hvac';
+  if (/plumb|faucet|toilet|drain|pipe/.test(category)) return 'plumbing';
+  if (/electric|lighting|light|outlet|wiring|breaker/.test(category)) return 'electrical';
+  if (/roof|gutter|shingle/.test(category)) return 'roofing';
+  if (/water_damage|flood/.test(category)) return 'water_damage';
+  return category || null;
+}
+
+function reconcileAssessmentCategory(assessment, input) {
+  if (!assessment) return assessment;
+  const scenario = [input.category, input.job?.title, input.description, input.job?.equipmentKey]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  const evidenceCategory = /refrigerator|fridge|freezer|dishwasher|washer|dryer|oven|stove|microwave/.test(scenario)
+    ? 'appliances'
+    : /air conditioner|\bac\b|furnace|thermostat|hvac|heat pump/.test(scenario)
+      ? 'hvac'
+      : /outlet|breaker|wiring|electrical|light switch|light fixture/.test(scenario)
+        ? 'electrical'
+        : /faucet|sink|toilet|pipe|drain|water heater|plumbing/.test(scenario)
+          ? 'plumbing'
+          : /roof|gutter|shingle/.test(scenario)
+            ? 'roofing'
+            : /water damage|flood/.test(scenario)
+              ? 'water_damage'
+              : canonicalCategory(input.category);
+  const modelCategory = canonicalCategory(assessment.category);
+  if (!evidenceCategory || !modelCategory || evidenceCategory === modelCategory) return assessment;
+
+  const conflict = `The selected service, equipment, or written details indicate ${evidenceCategory}, while the model classified ${modelCategory}. Confirm the category before relying on a repair plan.`;
+  return {
+    ...assessment,
+    category: evidenceCategory,
+    confidence: Math.min(Number(assessment.confidence) || 0.5, 0.55),
+    category_conflict: true,
+    safe_diy_allowed: false,
+    diy_difficulty: 'blocked',
+    diy_steps: [],
+    diy_guide_steps: [],
+    needs_confirmation: [...new Set([...(assessment.needs_confirmation || []), conflict])],
+    questions_needed: [...new Set([...(assessment.questions_needed || []), `Please confirm the issue belongs to the ${evidenceCategory.replace(/_/g, ' ')} category.`])],
   };
 }
 
@@ -1692,6 +1746,7 @@ async function analyzeWithProvider(
   config,
   input
 ) {
+  const providerAttempts = [];
   if (
     !config?.adapter?.analyze
   ) {
@@ -1702,11 +1757,25 @@ async function analyzeWithProvider(
       source:
         'error',
 
+      provider:
+        config?.provider || null,
+
       error:
         HOMEOWNER_AI_ERROR,
 
       providerCode:
         'provider_not_available',
+
+      providerAttempts: [{
+        provider: config?.provider || null,
+        model: config?.model || null,
+        requestId: null,
+        promptVersion: FIXERA_PROMPT_VERSION,
+        timestamp: new Date().toISOString(),
+        latencyMs: 0,
+        success: false,
+        failureCode: 'provider_not_available',
+      }],
 
       model:
         config?.model ||
@@ -1750,7 +1819,7 @@ async function analyzeWithProvider(
         'system',
 
       content:
-        'You are Fixera, the FixBridge home-repair assistant. Be accurate, calm, practical, and safety-conscious. Return only valid JSON matching the requested assessment schema.',
+        `You are Fixera, the FixBridge home-repair assistant. Be accurate, calm, practical, and safety-conscious. Return only valid JSON matching the requested assessment schema. Prompt version: ${FIXERA_PROMPT_VERSION}.`,
     },
 
     {
@@ -1778,6 +1847,8 @@ async function analyzeWithProvider(
     ]
   ) {
     let completion;
+    const requestStartedAt = new Date().toISOString();
+    const requestStartedMs = Date.now();
 
     try {
       completion =
@@ -1809,9 +1880,30 @@ async function analyzeWithProvider(
       lastCode =
         err?.code ||
         'provider_exception';
+      providerAttempts.push({
+        provider: config.provider,
+        model: config.model || null,
+        requestId: err?.requestId || null,
+        promptVersion: FIXERA_PROMPT_VERSION,
+        timestamp: requestStartedAt,
+        latencyMs: Date.now() - requestStartedMs,
+        success: false,
+        failureCode: lastCode,
+      });
 
       break;
     }
+
+    providerAttempts.push({
+      provider: config.provider,
+      model: completion?.model || config.model || null,
+      requestId: completion?.requestId || null,
+      promptVersion: FIXERA_PROMPT_VERSION,
+      timestamp: requestStartedAt,
+      latencyMs: Number(completion?.latencyMs ?? Date.now() - requestStartedMs),
+      success: Boolean(completion?.ok),
+      failureCode: completion?.ok ? null : completion?.code || 'provider_failed',
+    });
 
     if (
       !completion?.ok
@@ -1842,6 +1934,9 @@ async function analyzeWithProvider(
         source:
           'error',
 
+        provider:
+          config.provider,
+
         error:
           lastError,
 
@@ -1852,6 +1947,11 @@ async function analyzeWithProvider(
           completion?.model ||
           config.model ||
           null,
+
+        requestId: completion?.requestId || null,
+        latencyMs: Number(completion?.latencyMs ?? Date.now() - requestStartedMs),
+        promptVersion: FIXERA_PROMPT_VERSION,
+        providerAttempts,
       };
     }
 
@@ -1870,14 +1970,16 @@ async function analyzeWithProvider(
 
       lastCode =
         'empty_response';
+      providerAttempts[providerAttempts.length - 1].success = false;
+      providerAttempts[providerAttempts.length - 1].failureCode = lastCode;
 
       continue;
     }
 
-    const assessment =
-      parseAssessment(
-        messageText
-      );
+    const assessment = reconcileAssessmentCategory(
+      parseAssessment(messageText),
+      input
+    );
 
     if (!assessment) {
       lastError =
@@ -1885,6 +1987,8 @@ async function analyzeWithProvider(
 
       lastCode =
         'invalid_json';
+      providerAttempts[providerAttempts.length - 1].success = false;
+      providerAttempts[providerAttempts.length - 1].failureCode = lastCode;
 
       continue;
     }
@@ -1929,6 +2033,8 @@ async function analyzeWithProvider(
       true
     ) {
       try {
+        const correctionStartedAt = new Date().toISOString();
+        const correctionStartedMs = Date.now();
         const correction =
           await runWithTimeout(
             config.adapter.analyze({
@@ -1982,6 +2088,17 @@ Do not invent observations that are not supported by the description or photo.`,
             AI_FETCH_TIMEOUT_MS
           );
 
+        providerAttempts.push({
+          provider: config.provider,
+          model: correction?.model || config.model || null,
+          requestId: correction?.requestId || null,
+          promptVersion: FIXERA_PROMPT_VERSION,
+          timestamp: correctionStartedAt,
+          latencyMs: Number(correction?.latencyMs ?? Date.now() - correctionStartedMs),
+          success: Boolean(correction?.ok),
+          failureCode: correction?.ok ? null : correction?.code || 'provider_failed',
+        });
+
         if (
           correction?.ok
         ) {
@@ -1992,12 +2109,9 @@ Do not invent observations that are not supported by the description or photo.`,
             correction.text ||
             '';
 
-          const corrected =
-            correctedText
-              ? parseAssessment(
-                correctedText
-              )
-              : null;
+          const corrected = correctedText
+            ? reconcileAssessmentCategory(parseAssessment(correctedText), input)
+            : null;
 
           if (
             corrected
@@ -2013,6 +2127,10 @@ Do not invent observations that are not supported by the description or photo.`,
                 correction.model ||
                 completion.model ||
                 config.model,
+              requestId: correction.requestId || completion.requestId || null,
+              latencyMs: Number(correction.latencyMs ?? completion.latencyMs ?? 0),
+              promptVersion: FIXERA_PROMPT_VERSION,
+              providerAttempts,
             };
           }
         }
@@ -2040,6 +2158,10 @@ Do not invent observations that are not supported by the description or photo.`,
       model:
         completion.model ||
         config.model,
+      requestId: completion.requestId || null,
+      latencyMs: Number(completion.latencyMs ?? 0),
+      promptVersion: FIXERA_PROMPT_VERSION,
+      providerAttempts,
     };
   }
 
@@ -2050,11 +2172,16 @@ Do not invent observations that are not supported by the description or photo.`,
     source:
       'error',
 
+    provider:
+      config.provider,
+
     error:
       lastError,
 
     providerCode:
       lastCode,
+
+    providerAttempts,
 
     model:
       config.model ||
@@ -2082,10 +2209,6 @@ async function analyzeWithProviderChain(
     return primary;
   }
 
-  /*
-   * OpenRouter failed.
-   * Automatically try Claude.
-   */
   if (
     resolved.fallback
   ) {
@@ -2104,16 +2227,16 @@ async function analyzeWithProviderChain(
       }
     );
 
-    const fallback =
-      await analyzeWithProvider(
-        resolved.fallback,
-        input
-      );
+    const fallback = await analyzeWithProviderChain(resolved.fallback, input);
+    const providerAttempts = [
+      ...(primary.providerAttempts || []),
+      ...(fallback.providerAttempts || []),
+    ];
 
     if (
       fallback.assessment
     ) {
-      return fallback;
+      return { ...fallback, providerAttempts };
     }
 
     return {
@@ -2137,6 +2260,11 @@ async function analyzeWithProviderChain(
         fallback.model ||
         primary.model ||
         null,
+      provider: fallback.provider || primary.provider || null,
+      requestId: fallback.requestId || primary.requestId || null,
+      latencyMs: providerAttempts.reduce((total, attempt) => total + Number(attempt.latencyMs || 0), 0),
+      promptVersion: FIXERA_PROMPT_VERSION,
+      providerAttempts,
     };
   }
 
@@ -2224,6 +2352,8 @@ export async function analyzeRepair(
       source:
         'error',
 
+      provider: result?.provider || result?.source || null,
+
       error:
         HOMEOWNER_AI_ERROR,
 
@@ -2268,6 +2398,9 @@ export async function analyzeRepairStructured(
             input.category ||
             'others'
           ).toLowerCase(),
+
+        category_conflict:
+          assessment.category_conflict === true,
 
         summary:
           assessment.summary ||
@@ -2428,26 +2561,51 @@ export async function analyzeRepairStructured(
       source:
         'error',
 
+      provider: resolved.provider,
+
       model:
         result?.model,
+
+      provider: result?.source || null,
+      requestId: result?.requestId || null,
+      latencyMs: result?.latencyMs || null,
+      promptVersion: result?.promptVersion || FIXERA_PROMPT_VERSION,
+      providerAttempts: result?.providerAttempts || [],
 
       error:
         HOMEOWNER_AI_ERROR,
     };
   }
 
+  const safetyAdjustedAssessment = applyDiySafetyRules(structured, input.description);
+  const finalAssessment = safetyAdjustedAssessment?.category_conflict
+    ? {
+      ...safetyAdjustedAssessment,
+      safe_diy_allowed: false,
+      diy_difficulty: 'blocked',
+      diy_steps: [],
+      diy_guide_steps: [],
+    }
+    : safetyAdjustedAssessment;
+
   return {
-    assessment:
-      applyDiySafetyRules(
-        structured,
-        input.description
-      ),
+    assessment: finalAssessment,
 
     source:
       result.source,
 
+    provider:
+      result.source,
+
     model:
       result.model,
+
+    requestId: result.requestId || null,
+    latencyMs: result.latencyMs || null,
+    promptVersion: result.promptVersion || FIXERA_PROMPT_VERSION,
+    providerAttempts: result.providerAttempts || [],
+
+    providerCode: result.providerCode || null,
 
     error:
       result.error,

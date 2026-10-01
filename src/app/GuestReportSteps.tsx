@@ -1,5 +1,6 @@
+import { useRef } from "react";
 import { motion } from "motion/react";
-import { Camera, CheckCircle2, Check } from "lucide-react";
+import { Camera, CheckCircle2, Check, ImagePlus, X } from "lucide-react";
 import { AuthFieldLabel } from "./AuthShell";
 import AddressAutocompleteField from "./AddressAutocompleteField";
 import ServiceAdaptiveQuestions from "./ServiceAdaptiveQuestions";
@@ -27,6 +28,9 @@ type Props = {
   mediaDataUrl: string | null;
   mediaType: string | null;
   mediaName: string;
+  photoConfirmed: boolean;
+  setPhotoConfirmed: (confirmed: boolean) => void;
+  onClearMedia: () => void;
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   reportAddressLine1: string;
   reportAddressLine2: string;
@@ -90,6 +94,9 @@ export default function GuestReportSteps(props: Props) {
     mediaDataUrl,
     mediaType,
     mediaName,
+    photoConfirmed,
+    setPhotoConfirmed,
+    onClearMedia,
     onFileChange,
     reportAddressLine1,
     reportAddressLine2,
@@ -103,6 +110,8 @@ export default function GuestReportSteps(props: Props) {
     setReportZip,
     setError,
   } = props;
+  const cameraInput = useRef<HTMLInputElement | null>(null);
+  const photoInput = useRef<HTMLInputElement | null>(null);
 
   if (reportStep === 0) {
     return (
@@ -205,18 +214,38 @@ export default function GuestReportSteps(props: Props) {
           />
         </div>
         <div>
-          <AuthFieldLabel soft>Photo or video (optional)</AuthFieldLabel>
-          <label
-            className={`group flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-6 text-center transition active:scale-[0.99] ${s.uploadZone}`}
-          >
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary transition group-hover:scale-105">
-              {mediaDataUrl ? <CheckCircle2 size={20} /> : <Camera size={20} />}
-            </span>
-            <span className="text-sm font-medium">
-              {mediaDataUrl ? mediaName || "Media attached" : "Tap to add photo or video"}
-            </span>
-            <input type="file" accept="image/*,video/*" onChange={onFileChange} className="hidden" />
-          </label>
+          <AuthFieldLabel soft>Add a photo (optional)</AuthFieldLabel>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={() => cameraInput.current?.click()} className={`min-h-16 rounded-xl border px-3 py-3 text-sm font-semibold ${s.uploadZone}`}>
+              <Camera className="mx-auto mb-1 h-5 w-5 text-primary" aria-hidden />
+              Take Photo
+            </button>
+            <button type="button" onClick={() => photoInput.current?.click()} className={`min-h-16 rounded-xl border px-3 py-3 text-sm font-semibold ${s.uploadZone}`}>
+              <ImagePlus className="mx-auto mb-1 h-5 w-5 text-primary" aria-hidden />
+              Upload Photo
+            </button>
+          </div>
+          <input ref={cameraInput} type="file" accept="image/*" capture="environment" aria-label="Take a photo with the camera" onChange={(event) => { onFileChange(event); event.currentTarget.value = ""; }} className="sr-only" />
+          <input ref={photoInput} type="file" accept="image/jpeg,image/png,image/webp" aria-label="Choose a photo from this device" onChange={(event) => { onFileChange(event); event.currentTarget.value = ""; }} className="sr-only" />
+          {mediaDataUrl ? (
+            <div className={`space-y-2 rounded-xl border p-3 ${s.uploadZone}`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1.5 text-xs font-semibold">
+                  {photoConfirmed ? <CheckCircle2 size={15} /> : null}
+                  {photoConfirmed ? "Photo confirmed" : "Photo selected"}
+                </span>
+                <div className="flex gap-3">
+                  {!photoConfirmed ? <button type="button" onClick={() => setPhotoConfirmed(true)} className="text-xs font-semibold text-primary">Use this photo</button> : null}
+                  <button type="button" onClick={() => { onClearMedia(); setPhotoConfirmed(false); }} aria-label="Remove photo" className="text-xs font-semibold text-muted-foreground"><X size={14} /></button>
+                </div>
+              </div>
+              {mediaType?.startsWith("video") ? (
+                <video src={mediaDataUrl} controls className="max-h-44 w-full rounded-lg" aria-label={mediaName || "Existing attached video"} />
+              ) : (
+                <img src={mediaDataUrl} alt={mediaName || "Selected repair photo"} className="max-h-44 w-full rounded-lg object-contain" />
+              )}
+            </div>
+          ) : null}
         </div>
         {reportTradeId ? (
           <ServiceAdaptiveQuestions tradeId={reportTradeId} answers={adaptiveAnswers} onChange={setAdaptiveAnswers} />

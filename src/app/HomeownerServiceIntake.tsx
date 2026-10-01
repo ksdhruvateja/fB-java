@@ -5,6 +5,7 @@ import {
   Camera,
   CheckCircle,
   HardHat,
+  ImagePlus,
   Loader2,
   Mic,
   Sparkles,
@@ -122,12 +123,13 @@ type Props = {
   voiceRecRef: RefObject<{ stop: () => void } | null>;
   voiceBaseRef: RefObject<string>;
   fileRef: RefObject<HTMLInputElement | null>;
-  videoRef: RefObject<HTMLInputElement | null>;
-  onFile: (file: File | null) => void;
+  onFile: (file: File | null) => void | Promise<void>;
   mediaDataUrl: string | null;
   mediaType: string | null;
   propertyId: number | "";
   setPropertyId: (id: number | "") => void;
+  equipmentKey: string;
+  setEquipmentKey: (key: string) => void;
   properties: Property[];
   onAddAddress: () => void;
   partnerCode: string;
@@ -247,12 +249,13 @@ export default function HomeownerServiceIntake(props: Props) {
     voiceRecRef,
     voiceBaseRef,
     fileRef,
-    videoRef,
     onFile,
     mediaDataUrl,
     mediaType,
     propertyId,
     setPropertyId,
+    equipmentKey,
+    setEquipmentKey,
     properties,
     onAddAddress,
     partnerCode,
@@ -276,23 +279,45 @@ export default function HomeownerServiceIntake(props: Props) {
   const cameraRef = useRef<HTMLInputElement | null>(null);
   const [uploadState, setUploadState] = useState<"idle" | "adding" | "added">("idle");
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [photoConfirmed, setPhotoConfirmed] = useState(false);
   const safeIntakePhase = normalizeIntakePhase(intakePhase);
   const stepMeta = INTAKE_STEP_META[safeIntakePhase];
   const resolvedTradeId = resolveRequestTradeId(requestSystemId, description);
+  const selectedProperty = properties.find((property) => Number(property.id) === Number(propertyId));
+  const equipmentOptions = selectedProperty?.homeSystems || [];
 
   useEffect(() => {
     if (!mediaDataUrl) {
       setUploadState("idle");
       setPreviewOpen(false);
+      setPhotoConfirmed(false);
       return;
     }
     setUploadState("added");
+    setPhotoConfirmed(false);
   }, [mediaDataUrl]);
 
-  function addMedia(file: File | null) {
+  async function addMedia(file: File | null) {
     if (!file) return;
+    setError(null);
     setUploadState("adding");
-    onFile(file);
+    setPhotoConfirmed(false);
+    try {
+      await onFile(file);
+      setUploadState("added");
+    } catch {
+      setUploadState("idle");
+      setError("This photo could not be prepared. Choose a supported JPG, PNG, or WEBP and try again.");
+    }
+  }
+
+  function runAfterPhotoConfirmation(action: () => void) {
+    if (mediaType === "image" && !photoConfirmed) {
+      setError("Preview and confirm the photo before continuing.");
+      setPreviewOpen(true);
+      return;
+    }
+    action();
   }
 
   function goNextFromLocation() {
@@ -354,12 +379,29 @@ export default function HomeownerServiceIntake(props: Props) {
           <div>
             <p className="text-lg font-semibold">Tell us what happened</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              Type, speak, or upload photos or video. AI identifies the exact service and asks only what&apos;s missing.
+              Describe the issue and add a photo if it helps clarify what is happening.
             </p>
             {requestSystemId ? (
               <p className="mt-2 text-sm font-semibold">Selected service: {tradeToCategory(resolvedTradeId)}</p>
             ) : null}
           </div>
+          {equipmentOptions.length > 0 ? (
+            <label className="grid gap-1.5 text-sm">
+              <span className="font-semibold">Equipment (optional)</span>
+              <select
+                value={equipmentKey}
+                onChange={(event) => setEquipmentKey(event.target.value)}
+                className="min-h-11 rounded-xl border border-border bg-background px-3"
+              >
+                <option value="">Not sure / not listed</option>
+                {equipmentOptions.map((equipment) => (
+                  <option key={equipment.key} value={equipment.key}>
+                    {[equipment.name, equipment.model ? `Model ${equipment.model}` : "", equipment.location].filter(Boolean).join(" · ")}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <label className="grid gap-1.5 text-sm">
             <span className="font-semibold">What&apos;s going on?</span>
             <textarea
@@ -393,38 +435,29 @@ export default function HomeownerServiceIntake(props: Props) {
             {voiceListening ? "Listening…" : "Speak"}
           </button>
           <div className="space-y-2">
-            <p className="text-sm font-semibold">Add photos or videos</p>
+            <p className="text-sm font-semibold">Add a photo</p>
             <p className="text-sm text-muted-foreground">Help us understand what&apos;s happening.</p>
-            <div className="grid gap-2 sm:grid-cols-3">
-              <button type="button" onClick={() => cameraRef.current?.click()} className="min-h-24 rounded-2xl border border-dashed border-primary/40 bg-primary/5 px-3 py-4 text-sm font-semibold">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button type="button" title="Take Photo" onClick={() => cameraRef.current?.click()} className="min-h-16 rounded-xl border border-dashed border-primary/40 bg-primary/5 px-3 py-3 text-sm font-semibold">
                 <Camera className="mx-auto mb-1 h-5 w-5 text-primary" />
-                Take a photo
+                Take Photo
               </button>
-              <button type="button" onClick={() => fileRef.current?.click()} className="min-h-24 rounded-2xl border border-dashed border-border px-3 py-4 text-sm font-semibold">
-                Photo library
-              </button>
-              <button type="button" onClick={() => videoRef.current?.click()} className="min-h-24 rounded-2xl border border-dashed border-border px-3 py-4 text-sm font-semibold">
-                Add video
+              <button type="button" title="Upload Photo" onClick={() => fileRef.current?.click()} className="min-h-16 rounded-xl border border-dashed border-border px-3 py-3 text-sm font-semibold">
+                <ImagePlus className="mx-auto mb-1 h-5 w-5 text-primary" />
+                Upload Photo
               </button>
             </div>
           </div>
-          <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="sr-only" onChange={(e) => addMedia(e.target.files?.[0] || null)} />
-          <input ref={fileRef} type="file" accept="image/*" className="sr-only" onChange={(e) => addMedia(e.target.files?.[0] || null)} />
-          <input
-            ref={videoRef}
-            type="file"
-            accept="video/*"
-            className="sr-only"
-            onChange={(e) => addMedia(e.target.files?.[0] || null)}
-          />
+          <input ref={cameraRef} type="file" accept="image/*" capture="environment" aria-label="Take a photo with the camera" className="sr-only" onChange={(e) => { void addMedia(e.target.files?.[0] || null); e.currentTarget.value = ""; }} />
+          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" aria-label="Choose a photo from this device" className="sr-only" onChange={(e) => { void addMedia(e.target.files?.[0] || null); e.currentTarget.value = ""; }} />
           {uploadState === "adding" ? <p className="text-sm text-muted-foreground">Adding photo…</p> : null}
           {mediaDataUrl ? (
             <div className="rounded-xl border border-border bg-muted/20 p-3 motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <p className="text-xs font-medium text-emerald-700">Photo added</p>
+                <p className="text-xs font-medium text-emerald-700">{photoConfirmed ? "Photo confirmed" : "Photo selected"}</p>
                 <div className="flex gap-2">
                   <button type="button" onClick={() => setPreviewOpen(true)} className="text-xs font-semibold text-primary">
-                    View
+                    Preview and confirm
                   </button>
                   <button type="button" onClick={() => fileRef.current?.click()} className="text-xs font-semibold">
                     Replace
@@ -459,6 +492,11 @@ export default function HomeownerServiceIntake(props: Props) {
                       Remove
                     </button>
                   ) : null}
+                  {mediaType === "image" ? (
+                    <button type="button" onClick={() => { setPhotoConfirmed(true); setPreviewOpen(false); setError(null); }} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-semibold text-white">
+                      Use this photo
+                    </button>
+                  ) : null}
                   <button type="button" onClick={() => setPreviewOpen(false)} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-semibold text-white">
                     Close
                   </button>
@@ -469,8 +507,8 @@ export default function HomeownerServiceIntake(props: Props) {
           <IntakeActionButtons
             busy={busy}
             description={description}
-            onSubmitAi={onSubmitAi}
-            onHirePro={onHirePro}
+            onSubmitAi={() => runAfterPhotoConfirmation(onSubmitAi)}
+            onHirePro={() => runAfterPhotoConfirmation(onHirePro)}
             preferHire={preferHire}
           />
           <div className="hidden justify-end sm:flex">

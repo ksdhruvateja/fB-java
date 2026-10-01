@@ -15,10 +15,17 @@ function parseJson(value, fallback = null) {
 
 function equipmentSummary(homeSystems = []) {
   return (Array.isArray(homeSystems) ? homeSystems : [])
-    .filter((s) => s && (s.brand || s.installedYear || s.lastService || s.notes))
+    .filter((s) => s && (s.brand || s.model || s.serialNumber || s.serial || s.installedYear || s.lastService || s.notes))
     .slice(0, 20)
     .map((s) => {
-      const bits = [s.name || s.key, s.brand, s.installedYear ? `installed ${s.installedYear}` : null]
+      const bits = [
+        s.name || s.key,
+        s.brand,
+        s.model ? `model ${s.model}` : null,
+        s.serialNumber || s.serial ? `serial ${s.serialNumber || s.serial}` : null,
+        s.installedYear ? `installed ${s.installedYear}` : null,
+        s.lastService ? `last serviced ${s.lastService}` : null,
+      ]
         .filter(Boolean)
         .join(' ');
       return bits || s.name || s.key;
@@ -39,8 +46,13 @@ function confirmedEquipmentLines(homeSystems = []) {
     .filter(isConfirmedMemoryRecord)
     .slice(0, 12)
     .map((s) => {
-      const label = [s.name || s.key, s.brand, s.model].filter(Boolean).join(' ');
-      const extras = [s.installedYear ? `installed ${s.installedYear}` : null, s.lastService ? `last service ${s.lastService}` : null]
+      const label = [
+        s.name || s.key,
+        s.brand,
+        s.model ? `model ${s.model}` : null,
+        s.serialNumber || s.serial ? `serial ${s.serialNumber || s.serial}` : null,
+      ].filter(Boolean).join(' ');
+      const extras = [s.installedYear ? `installed ${s.installedYear}` : null, s.lastService ? `last serviced ${s.lastService}` : null]
         .filter(Boolean)
         .join(', ');
       return extras ? `${label} (${extras})` : label;
@@ -71,32 +83,50 @@ function detectIntentFromMessage(userMessage, jobContext = null) {
  * @param {number} propertyId
  * @param {number} userId
  */
-export async function buildPropertyAIContext(pool, propertyId, userId) {
+export async function buildPropertyAIContext(pool, propertyId, userId, options = {}) {
+  const { includeAddress = true, includeProDetails = true } = options;
+  const equipmentKey = String(options.equipmentKey || '').trim();
   const access = await assertPropertyAccess(pool, propertyId, userId);
   if (!access) return null;
-  const { rows } = await pool.query(`SELECT p.* FROM properties p WHERE p.id = $1`, [propertyId]);
+  const { rows } = await pool.query(
+    `SELECT p.* FROM properties p WHERE p.id = $1 AND p.owner_user_id = $2`,
+    [propertyId, access.owner_user_id]
+  );
   const property = rows[0];
   if (!property) return null;
 
   const health = parseJson(property.health_profile, {}) || {};
   const passport = health.passport || {};
-  const maintenance = Array.isArray(health.maintenance) ? health.maintenance.slice(0, 12) : [];
+  const maintenance = includeProDetails && Array.isArray(health.maintenance) ? health.maintenance.slice(0, 12) : [];
+  const previousServices = Array.isArray(health.previousServices) ? health.previousServices.slice(0, 20) : [];
   const homeSystems = parseJson(property.home_systems, []) || [];
   const confirmedSystems = confirmedEquipmentLines(homeSystems);
   const systems = confirmedSystems.length ? confirmedSystems : equipmentSummary(homeSystems);
 
   const { rows: jobRows } = await pool.query(
-    `SELECT id, title, category, status, created_at, customer_retail_estimate_high, completion_report
+    `SELECT id, title, category, equipment_key, status, created_at, customer_confirmed_at, completion_report
      FROM managed_jobs
      WHERE property_id = $1 AND homeowner_user_id = $2
+       AND ($3::text IS NULL OR equipment_key=$3 OR equipment_key IS NULL)
      ORDER BY created_at DESC LIMIT 12`,
-    [propertyId, property.owner_user_id]
+    [propertyId, property.owner_user_id, equipmentKey || null]
   );
+  const selectedEquipment = equipmentKey && Array.isArray(homeSystems)
+    ? homeSystems.find((item) => item?.key === equipmentKey)
+    : null;
+  const relevantPreviousServices = equipmentKey
+    ? previousServices.filter((service) => !service.equipmentKey || service.equipmentKey === equipmentKey)
+    : previousServices;
 
   const lines = [
     `Property: ${property.label || property.address_line1 || `Home #${property.id}`}`,
-    `Address: ${[property.address_line1, property.city, property.state, property.zip].filter(Boolean).join(', ')}`,
   ];
+  if (includeAddress) {
+    lines.push(`Address: ${[property.address_line1, property.city, property.state, property.zip].filter(Boolean).join(', ')}`);
+  } else {
+    const locality = [property.city, property.state, property.zip].filter(Boolean).join(', ');
+    if (locality) lines.push(`Market area: ${locality}`);
+  }
   if (property.year_built) lines.push(`Year built: ${property.year_built}`);
   if (property.beds != null) lines.push(`Beds: ${property.beds}`);
   if (property.baths != null) lines.push(`Baths: ${property.baths}`);
@@ -108,26 +138,60 @@ export async function buildPropertyAIContext(pool, propertyId, userId) {
         : `Systems/equipment: ${systems.join('; ')}`
     );
   }
+  if (selectedEquipment) {
+    const identity = [selectedEquipment.name, selectedEquipment.brand, selectedEquipment.model ? `model ${selectedEquipment.model}` : ''].filter(Boolean).join(' ');
+    const modelSource = selectedEquipment.modelConfirmed ? 'confirmed' : selectedEquipment.modelSource || 'homeowner-reported';
+    lines.push(`Selected equipment for this repair: ${identity || equipmentKey}${selectedEquipment.model ? ` (${modelSource})` : ''}`);
+  }
   if (maintenance.length) {
     lines.push(
       `Upcoming maintenance: ${maintenance.map((m) => `${m.label}${m.dueDate ? ` (due ${m.dueDate})` : ''}`).join('; ')}`
     );
   }
   if (jobRows.length) {
-    lines.push('Recent service history:');
+    lines.push('Recent service history (reported outcomes are not verified diagnoses):');
     for (const j of jobRows.slice(0, 8)) {
-      const amt = j.customer_retail_estimate_high != null ? ` ~$${j.customer_retail_estimate_high}` : '';
-      lines.push(`- ${j.title || j.category} (${j.status})${amt}`);
+      const report = parseJson(j.completion_report, {}) || {};
+      const diy = report.fixeraDiy && typeof report.fixeraDiy === 'object' ? report.fixeraDiy : {};
+      const diyOutcome = diy.outcome === 'CUSTOMER_CONFIRMED_FIXED'
+        ? 'HOMEOWNER_REPORTED_FIXED'
+        : diy.outcome === 'CUSTOMER_CONFIRMED_STILL_BROKEN'
+          ? 'HOMEOWNER_REPORTED_STILL_BROKEN'
+          : null;
+      const source = j.customer_confirmed_at ? 'CUSTOMER_CONFIRMED' : diyOutcome || 'TECHNICIAN_REPORTED';
+      const diagnosis = report.actualDiagnosis || report.diagnosis || report.findings || null;
+      const repair = report.actualRepair || report.repairPerformed || report.workPerformed || report.summary || null;
+      const parts = Array.isArray(report.partsUsed) ? report.partsUsed.map((p) => p?.name || p).filter(Boolean).join(', ') : '';
+      const diyDetails = diyOutcome
+        ? `Fixera DIY outcome: ${diyOutcome}; action: ${String(diy.latestOutcomeDetails?.actualAction || 'not specified').slice(0, 160)}; parts: ${(diy.latestOutcomeDetails?.partsUsed || []).slice(0, 8).join(', ') || 'not specified'}; homeowner-reported, not a verified diagnosis`
+        : '';
+      const equipment = Array.isArray(homeSystems)
+        ? homeSystems.find((item) => item?.key === j.equipment_key)
+        : null;
+      const equipmentDetail = equipment
+        ? `equipment: ${[equipment.name, equipment.brand, equipment.model ? `model ${equipment.model}` : ''].filter(Boolean).join(' ')}`
+        : j.equipment_key ? `equipment key: ${j.equipment_key}` : '';
+      const details = [diagnosis ? `finding: ${String(diagnosis).slice(0, 180)}` : '', repair ? `work: ${String(repair).slice(0, 180)}` : '', parts ? `parts: ${parts.slice(0, 120)}` : '', diyDetails]
+        .filter(Boolean)
+        .join('; ');
+      lines.push(`- ${j.title || j.category} (${j.status}; ${source})${equipmentDetail ? `; ${equipmentDetail}` : ''}${details ? ` — ${details}` : ''}`);
     }
   }
-  const warranties = Array.isArray(passport.warranties) ? passport.warranties.slice(0, 8) : [];
+  if (relevantPreviousServices.length) {
+    lines.push('Additional homeowner service history (use reported outcomes as context, not as a diagnosis):');
+    for (const service of relevantPreviousServices) {
+      const detail = [service.title, service.notes].filter(Boolean).map((value) => String(value).slice(0, 180)).join(' — ');
+      if (detail) lines.push(`- ${detail} (${service.verification || service.source || 'USER_REPORTED'})`);
+    }
+  }
+  const warranties = includeProDetails && Array.isArray(passport.warranties) ? passport.warranties.slice(0, 8) : [];
   if (warranties.length) {
     lines.push(
       `Warranties on file: ${warranties.map((w) => `${w.name}${w.expiresAt ? ` (expires ${w.expiresAt})` : ''}`).join('; ')}`
     );
   }
 
-  const docs = Array.isArray(passport.documents) ? passport.documents.slice(0, 6) : [];
+  const docs = includeProDetails && Array.isArray(passport.documents) ? passport.documents.slice(0, 6) : [];
   if (docs.length) {
     lines.push(`Documents on file: ${docs.map((d) => d.title || d.name || d.category).filter(Boolean).join('; ')}`);
   }
@@ -135,6 +199,48 @@ export async function buildPropertyAIContext(pool, propertyId, userId) {
   return {
     propertyId: Number(property.id),
     text: lines.join('\n'),
+    memory: {
+      id: Number(property.id),
+      label: property.label || null,
+      homeSystems: Array.isArray(homeSystems) ? homeSystems.slice(0, 20) : [],
+      previousServices: [
+        ...jobRows.slice(0, 8).map((j) => {
+        const report = parseJson(j.completion_report, {}) || {};
+        const diy = report.fixeraDiy && typeof report.fixeraDiy === 'object' ? report.fixeraDiy : {};
+        const diyVerification = diy.outcome === 'CUSTOMER_CONFIRMED_FIXED'
+          ? 'CUSTOMER_CONFIRMED_OUTCOME'
+          : diy.outcome === 'CUSTOMER_CONFIRMED_STILL_BROKEN'
+            ? 'CUSTOMER_REPORTED_STILL_BROKEN'
+            : null;
+        return {
+          id: Number(j.id),
+          title: j.title || j.category || 'FixBridge service',
+          category: j.category || null,
+          equipmentKey: j.equipment_key || null,
+          equipment: Array.isArray(homeSystems) ? homeSystems.find((item) => item?.key === j.equipment_key) || null : null,
+          status: j.status || null,
+          date: j.created_at || null,
+          source: j.customer_confirmed_at ? 'CUSTOMER_CONFIRMED' : diyVerification || 'TECHNICIAN_REPORTED',
+          verification: j.customer_confirmed_at ? 'CUSTOMER_CONFIRMED' : diyVerification || 'TECHNICIAN_REPORTED',
+          diagnosis: report.actualDiagnosis || report.diagnosis || report.findings || null,
+          repair: report.actualRepair || report.repairPerformed || report.workPerformed || report.summary || null,
+          partsUsed: Array.isArray(report.partsUsed) ? report.partsUsed.slice(0, 12) : [],
+          diyOutcome: diy.outcome || null,
+          diyActualAction: diy.latestOutcomeDetails?.actualAction || null,
+          diyPartsUsed: Array.isArray(diy.latestOutcomeDetails?.partsUsed) ? diy.latestOutcomeDetails.partsUsed.slice(0, 12) : [],
+          diyToolsUsed: Array.isArray(diy.latestOutcomeDetails?.toolsUsed) ? diy.latestOutcomeDetails.toolsUsed.slice(0, 12) : [],
+          diyReportedCost: diy.latestOutcomeDetails?.cost ?? null,
+          completedStepIndexes: Array.isArray(diy.completedStepIndexes) ? diy.completedStepIndexes.slice(0, 40) : [],
+        };
+        }),
+        ...relevantPreviousServices,
+      ].filter((service, index, all) => all.findIndex((item) => item.id === service.id) === index).slice(0, 20),
+      passport: includeProDetails ? {
+        warranties: Array.isArray(passport.warranties) ? passport.warranties.slice(0, 8) : [],
+        documents: Array.isArray(passport.documents) ? passport.documents.slice(0, 6) : [],
+        maintenance,
+      } : {},
+    },
     summary: {
       label: property.label,
       addressLine1: property.address_line1,

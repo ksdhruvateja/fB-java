@@ -42,8 +42,11 @@ export function minimizeTrainingPayload(input = {}) {
 export function recordFixeraInteraction(input = {}) {
   const row = {
     interaction_id: input.interactionId || input.requestId || `fxr_${Date.now()}`,
+    user_id: input.userId || null,
     user_role: input.userRole || null,
     job_id: input.jobId || null,
+    case_id: input.caseId || input.jobId || null,
+    case_type: input.caseType || (input.jobId ? 'managed_job' : null),
     property_id: input.propertyId || null,
     task_type: input.task || input.taskType || 'unknown',
     input_summary: clip(input.inputSummary, 180),
@@ -51,6 +54,12 @@ export function recordFixeraInteraction(input = {}) {
     retrieved_knowledge_references: input.knowledgeRefs || [],
     provider: input.provider || null,
     model: input.model || null,
+    provider_request_id: input.providerRequestId || null,
+    prompt_version: input.promptVersion || null,
+    latency_ms: Number.isFinite(Number(input.latencyMs)) ? Number(input.latencyMs) : null,
+    success: typeof input.success === 'boolean' ? input.success : null,
+    failure_code: input.failureCode || null,
+    provider_attempts: Array.isArray(input.providerAttempts) ? input.providerAttempts : [],
     assistant: displayAssistantName(input.assistant),
     output_summary: clip(input.outputSummary, 240),
     safety_classification: input.safety || null,
@@ -127,15 +136,19 @@ export async function persistFixeraInteraction(pool, row) {
   if (!pool || !row?.interaction_id) return { persisted: false };
   await pool.query(
     `INSERT INTO fixera_interactions (
-       id, user_role, job_id, property_id, task_type, input_summary, media_refs,
-       knowledge_refs, provider, model, output_summary, safety_classification,
-       evaluator_score, schema_quality, quality_status, professional_escalation, created_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+       id, user_id, user_role, job_id, case_id, case_type, property_id, task_type,
+       input_summary, media_refs, knowledge_refs, provider, model, output_summary, safety_classification,
+       evaluator_score, schema_quality, quality_status, professional_escalation, created_at,
+       provider_request_id, prompt_version, latency_ms, success, failure_code, provider_attempts
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26::jsonb)
      ON CONFLICT (id) DO NOTHING`,
     [
       row.interaction_id,
+      row.user_id,
       row.user_role,
       row.job_id,
+      row.case_id,
+      row.case_type,
       row.property_id,
       row.task_type,
       row.input_summary,
@@ -150,6 +163,12 @@ export async function persistFixeraInteraction(pool, row) {
       row.quality_status,
       row.professional_escalation,
       row.created_at,
+      row.provider_request_id,
+      row.prompt_version,
+      row.latency_ms,
+      row.success,
+      row.failure_code,
+      JSON.stringify(row.provider_attempts || []),
     ]
   );
   await pool.query(

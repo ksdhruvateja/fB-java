@@ -1,35 +1,32 @@
-import { explabsProvider } from '../providers/explabs.js';
+import { getAiStatus, resolveAiProvider } from '../../ai.js';
+import { listFixaProviders } from '../providers.js';
 import { policyForTask } from './policies.js';
-
-const REGISTRY = {
-  explabs: explabsProvider,
-};
 
 export function selectProvider(task) {
   const policy = policyForTask(task);
-  const provider = policy.primary ? REGISTRY[policy.primary] : null;
+  const runtime = resolveAiProvider();
+  const status = getAiStatus();
+  const provider = runtime?.provider
+    ? { id: runtime.provider, name: runtime.provider }
+    : null;
   return {
     task,
-    policy,
-    provider: provider || null,
-    model: policy.model || null,
-    fallback: null,
+    policy: {
+      ...policy,
+      primary: runtime?.provider || null,
+      model: runtime?.model || null,
+      fallback: runtime?.fallback?.provider || null,
+    },
+    provider,
+    model: runtime?.model || null,
+    fallback: runtime?.fallback
+      ? { id: runtime.fallback.provider, name: runtime.fallback.provider, model: runtime.fallback.model }
+      : null,
+    fallbacks: status.fallbackProviders || [],
+    configured: status.configured,
   };
 }
 
 export function listProviderContracts() {
-  return [
-    {
-      id: explabsProvider.id,
-      name: explabsProvider.name,
-      models: explabsProvider.models,
-      supportsVision: explabsProvider.supportsVision,
-      supportsVideo: explabsProvider.supportsVideo,
-      supportsStructuredOutput: explabsProvider.supportsStructuredOutput,
-    },
-    { id: 'openai', name: 'OpenAI', status: 'not_configured' },
-    { id: 'anthropic', name: 'Claude', status: 'not_configured' },
-    { id: 'gemini', name: 'Gemini', status: 'not_configured' },
-    { id: 'openrouter', name: 'OpenRouter', status: 'not_configured' },
-  ];
+  return listFixaProviders();
 }

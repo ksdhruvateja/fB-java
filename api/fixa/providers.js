@@ -1,119 +1,71 @@
-/**
- * Fixa provider registry.
- * Connection status comes from server secrets. Raw keys are never returned.
- * Only Experiential Labs is implemented. Other vendors stay disconnected
- * so a missing or failed primary provider cannot fall through.
- */
+/** Runtime provider registry. Status is derived from the server-side model router. */
 
-import { readExplabsKey } from './providers/explabs.js';
+import { getAiStatus } from '../ai.js';
 
-const EXPLABS_MODEL = 'gpt-6-astra';
-
-function explabsKey() {
-  return readExplabsKey();
-}
-
-function maskedKeyHint(key) {
-  if (!key || !key.startsWith('xpl_')) return null;
-  return 'xpl_••••';
-}
-
-function explabsRecord() {
-  const key = explabsKey();
-  const configured = Boolean(key);
-  return {
-    id: 'explabs',
-    name: 'Experiential Labs',
-    status: configured ? 'configured' : 'not_connected',
-    defaultModel: EXPLABS_MODEL,
-    models: [EXPLABS_MODEL],
-    supportsVision: true,
-    supportsVideo: false,
-    supportsStructuredOutput: true,
-    keyHint: maskedKeyHint(key),
-    secretStorage: 'server',
-  };
-}
-
-const DISCONNECTED = [
+const PROVIDERS = [
+  { id: 'openrouter', name: 'OpenRouter', envModel: 'OPENROUTER_MODEL', supportsVideo: false },
+  { id: 'anthropic', name: 'Anthropic', envModel: 'ANTHROPIC_MODEL', supportsVideo: false },
+  { id: 'openai', name: 'OpenAI', envModel: 'OPENAI_MODEL', supportsVideo: false },
+  { id: 'gemini', name: 'Gemini', envModel: 'GEMINI_MODEL', supportsVideo: false },
+  { id: 'explabs', name: 'Experiential Labs', envModel: null, supportsVideo: false },
   {
     id: 'fixera-local',
     name: 'Fixera Local',
-    status: 'not_deployed',
-    defaultModel: null,
-    models: [],
-    supportsVision: false,
+    envModel: null,
     supportsVideo: false,
-    supportsStructuredOutput: true,
-    keyHint: null,
-    secretStorage: 'separate_inference',
-    note: 'Not deployed. A self-hosted model requires separate inference infrastructure, not Netlify Functions.',
-  },
-  {
-    id: 'openai',
-    name: 'OpenAI',
-    status: 'not_connected',
-    defaultModel: null,
-    models: [],
-    supportsVision: true,
-    supportsVideo: false,
-    supportsStructuredOutput: true,
-    keyHint: null,
-    secretStorage: 'server',
-  },
-  {
-    id: 'anthropic',
-    name: 'Anthropic',
-    status: 'not_connected',
-    defaultModel: null,
-    models: [],
-    supportsVision: true,
-    supportsVideo: false,
-    supportsStructuredOutput: true,
-    keyHint: null,
-    secretStorage: 'server',
-  },
-  {
-    id: 'gemini',
-    name: 'Gemini',
-    status: 'not_connected',
-    defaultModel: null,
-    models: [],
-    supportsVision: true,
-    supportsVideo: true,
-    supportsStructuredOutput: true,
-    keyHint: null,
-    secretStorage: 'server',
-  },
-  {
-    id: 'openrouter',
-    name: 'OpenRouter',
-    status: 'not_connected',
-    defaultModel: null,
-    models: [],
-    supportsVision: true,
-    supportsVideo: false,
-    supportsStructuredOutput: true,
-    keyHint: null,
-    secretStorage: 'server',
+    note: 'Not deployed. A self-hosted model requires separate inference infrastructure.',
   },
 ];
 
+function providerStatus(provider, runtime) {
+  if (provider.id === runtime.provider) return 'connected';
+  if ((runtime.fallbackProviders || []).some((entry) => entry.provider === provider.id)
+    || provider.id === runtime.fallbackProvider) return 'fallback_configured';
+  return provider.id === 'fixera-local' ? 'not_deployed' : 'not_configured';
+}
+
 export function listFixaProviders() {
-  return [explabsRecord(), ...DISCONNECTED];
+  const runtime = getAiStatus();
+  return PROVIDERS.map((provider) => {
+    const status = providerStatus(provider, runtime);
+    const fallback = (runtime.fallbackProviders || []).find((entry) => entry.provider === provider.id);
+    const defaultModel = provider.id === runtime.provider
+      ? runtime.model
+      : fallback?.model || (provider.id === runtime.fallbackProvider ? runtime.fallbackModel : null)
+        || (provider.envModel ? process.env[provider.envModel] || null : null);
+    return {
+      id: provider.id,
+      name: provider.name,
+      status,
+      defaultModel,
+      models: defaultModel ? [defaultModel] : [],
+      supportsVision: ['openrouter', 'anthropic', 'openai', 'gemini'].includes(provider.id),
+      supportsVideo: provider.supportsVideo,
+      supportsStructuredOutput: true,
+      keyHint: null,
+      secretStorage: provider.id === 'fixera-local' ? 'separate_inference' : 'server',
+      ...(provider.note ? { note: provider.note } : {}),
+    };
+  });
 }
 
-export function getConnectedProvider(id = 'explabs') {
-  return listFixaProviders().find((provider) => provider.id === id && provider.status === 'configured') || null;
+export function getConnectedProvider(id) {
+  const runtime = getAiStatus();
+  const selectedId = id || runtime.provider;
+  return listFixaProviders().find(
+    (provider) => provider.id === selectedId && ['connected', 'fallback_configured'].includes(provider.status)
+  ) || null;
 }
 
+export const FIXA_MODEL = process.env.OPENROUTER_MODEL || process.env.ANTHROPIC_MODEL || process.env.OPENAI_MODEL || process.env.GEMINI_MODEL || null;
 
-export const FIXA_MODEL = EXPLABS_MODEL;
-
-export function getProviderConfig(task) {
+export function getProviderConfig() {
+  const runtime = getAiStatus();
   return {
-    primary: 'explabs',
-    fallback: 'explabs',
-    model: EXPLABS_MODEL
+    primary: runtime.provider,
+    fallback: runtime.fallbackProvider,
+    model: runtime.model,
+    fallbackModel: runtime.fallbackModel,
+    fallbacks: runtime.fallbackProviders || [],
   };
 }

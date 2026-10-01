@@ -7,14 +7,20 @@ export function recordFixaEvent(event) {
     task: event.task,
     provider: event.provider || null,
     model: event.model || null,
+    providerRequestId: event.providerRequestId || null,
+    promptVersion: event.promptVersion || null,
+    providerAttempts: Array.isArray(event.providerAttempts) ? event.providerAttempts : [],
     startedAt: event.startedAt,
     latencyMs: event.latencyMs,
     ok: Boolean(event.ok),
+    homeownerId: event.homeownerId || null,
+    propertyId: event.propertyId || null,
     schemaValid: event.schemaValid ?? null,
     safety: event.safety || null,
     retryCount: event.retryCount || 0,
     evaluator: event.evaluator || null,
     jobId: event.jobId || null,
+    caseId: event.caseId || event.jobId || null,
     code: event.code || null,
   };
   events.unshift(row);
@@ -23,11 +29,16 @@ export function recordFixaEvent(event) {
     task: row.task,
     provider: row.provider,
     model: row.model,
+    providerRequestId: row.providerRequestId,
+    promptVersion: row.promptVersion,
     ok: row.ok,
     latencyMs: row.latencyMs,
+    homeownerId: row.homeownerId,
+    propertyId: row.propertyId,
     schemaValid: row.schemaValid,
     code: row.code,
     jobId: row.jobId,
+    caseId: row.caseId,
   });
   return row;
 }

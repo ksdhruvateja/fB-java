@@ -1,11 +1,15 @@
+import type { AssessmentResource } from "../managedJobs";
+
+type GuideResource = AssessmentResource | string;
+
 export type GuideStep = {
   step_number: number;
   title: string;
   goal: string;
   instruction: string;
   explanation: string;
-  tools: string[];
-  materials: string[];
+  tools: GuideResource[];
+  materials: GuideResource[];
   safety_note: string;
   what_to_look_for: string;
   expected_result: string;
@@ -72,8 +76,8 @@ export function asGuideSteps(value: unknown, fallback: string[]): GuideStep[] {
           goal: String(row.goal || ""),
           instruction,
           explanation: String(row.explanation || row.why || ""),
-          tools: Array.isArray(row.tools) ? row.tools.map(String) : [],
-          materials: Array.isArray(row.materials) ? row.materials.map(String) : [],
+          tools: Array.isArray(row.tools) ? row.tools as GuideResource[] : [],
+          materials: Array.isArray(row.materials) ? row.materials as GuideResource[] : [],
           safety_note: String(row.safety_note || row.safety_notes || ""),
           what_to_look_for: String(row.what_to_look_for || ""),
           expected_result: String(row.expected_result || ""),

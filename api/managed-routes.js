@@ -40,6 +40,11 @@ import {
   resolveFeatureEntitlement,
 } from './homecare-config.js';
 import { buildPropertyAIContext } from './property-ai-context.js';
+import { storeFixeraCaseMedia } from './fixera/case-media.js';
+import { recordFixeraInteraction, persistFixeraInteraction } from './fixera/experience/store.js';
+import { retrieveGlobalKnowledge } from './fixa/knowledge/knowledgeWriter.js';
+import { appendAssessmentRevision } from './fixera/assessment-history.js';
+import { assertPropertyAccess } from './property-access.js';
 import { assessRepair, extractDocument } from './fixa/index.js';
 import { resolveJobPricingMode } from './contractor-agreement.js';
 import { createJobAuthorization } from './job-authorization.js';
@@ -537,6 +542,7 @@ function serializeJob(row, viewer) {
     description: row.description,
     mediaDataUrl: row.media_data_url,
     mediaType: row.media_type,
+    equipmentKey: row.equipment_key || null,
     preferredDate: row.preferred_date,
     preferredTimeSlot: row.preferred_time_slot,
     serviceTiming: row.service_timing,
@@ -1017,8 +1023,14 @@ async function loadAssessContext(pool, job, rules, assessment = null) {
   const zip = job.zip ? String(job.zip).trim().slice(0, 5) : null;
   let property = null;
   if (job.property_id) {
-    const { rows } = await pool.query(`SELECT * FROM properties WHERE id=$1`, [job.property_id]);
-    property = rows[0] || null;
+    const access = await assertPropertyAccess(pool, job.property_id, job.homeowner_user_id);
+    if (access) {
+      const { rows } = await pool.query(
+        `SELECT * FROM properties WHERE id=$1 AND owner_user_id=$2`,
+        [job.property_id, access.owner_user_id]
+      );
+      property = rows[0] || null;
+    }
   }
 
   const { jobs: localJobs, bids, completedPayments, zipPlace } = await loadMarketData(pool, {
@@ -1110,34 +1122,29 @@ async function runManagedJobAssessment(pool, job, viewer) {
   });
 
   let propertyAiContext = '';
+  let propertyMemory = null;
 
-  if (homeCarePro && job.property_id) {
-    const ctx = await buildPropertyAIContext(
+  if (job.property_id) {
+    const passport = await buildPropertyAIContext(
       pool,
       job.property_id,
-      job.homeowner_user_id
+      job.homeowner_user_id,
+      { includeAddress: false, includeProDetails: homeCarePro, equipmentKey: job.equipment_key || null }
     );
-
-    const raw = ctx?.text || '';
-    const trade = String(job.category || '').toLowerCase();
-
-    const keep = /plumb/.test(trade)
-      ? /plumb|water|heater|address|property/i
-      : /hvac|heat|cool/.test(trade)
-        ? /hvac|heat|cool|filter|furnace|address|property/i
-        : /electr/.test(trade)
-          ? /electr|panel|address|property/i
-          : /address|property|year|type/i;
-
-    propertyAiContext = raw
-      .split('\n')
-      .filter(
-        (line, index) =>
-          index < 2 || keep.test(line)
-      )
-      .slice(0, 12)
-      .join('\n');
+    if (!passport) {
+      return { ok: false, code: 'PROPERTY_ACCESS_DENIED', error: 'Property access could not be verified.' };
+    }
+    propertyAiContext = passport.text || '';
+    propertyMemory = passport.memory || null;
   }
+
+  const globalKnowledge = await retrieveGlobalKnowledge(pool, {
+    category: job.category,
+    query: [job.title, job.description, job.equipment_key].filter(Boolean).join(' '),
+  });
+  const globalKnowledgeContext = globalKnowledge.items.length
+    ? `Approved general FixBridge repair knowledge (global, not property-specific):\n${globalKnowledge.items.map((item) => `- ${item}`).join('\n')}`
+    : '';
 
   const aiStarted = Date.now();
 
@@ -1149,13 +1156,62 @@ async function runManagedJobAssessment(pool, job, viewer) {
     category: job.category,
     description: job.description,
     imageDataUrl: job.media_data_url,
-    locationContext: propertyAiContext
-      ? `${preCtx.locationContext}\n\nProperty Passport (HomeCare Pro):\n${propertyAiContext}`
-      : preCtx.locationContext,
+    task: 'repair_assessment',
+    jobId: recordId,
+    homeownerId: job.homeowner_user_id,
+    propertyId: propertyMemory?.id || null,
+    property: propertyMemory,
+    job: {
+      id: recordId,
+      homeownerUserId: job.homeowner_user_id,
+      propertyId: propertyMemory?.id || null,
+      category: job.category,
+      title: job.title,
+      description: job.description,
+      aiAssessment: job.ai_assessment,
+      mediaType: job.media_type,
+      equipmentKey: job.equipment_key || null,
+    },
+    locationContext: [
+      preCtx.locationContext,
+      propertyAiContext ? `Authorized Property Passport context:\n${propertyAiContext}` : '',
+      globalKnowledgeContext,
+    ].filter(Boolean).join('\n\n'),
     zip: preCtx.zip,
     city: preCtx.city,
     state: preCtx.state,
   });
+
+  try {
+    const interaction = recordFixeraInteraction({
+      requestId: crypto.randomUUID(),
+      userId: job.homeowner_user_id,
+      userRole: viewer?.role || 'homeowner',
+      jobId: isPending ? null : recordId,
+      caseId: recordId,
+      caseType: isPending ? 'pending_service_request' : 'managed_job',
+      propertyId: propertyMemory?.id || null,
+      task: 'repair_assessment',
+      inputSummary: `${job.category || 'repair'}: ${String(job.description || '').slice(0, 120)}`,
+      provider: result?.provider || null,
+      model: result?.model || null,
+      providerRequestId: result?.requestId || null,
+      promptVersion: result?.promptVersion || null,
+      latencyMs: result?.latencyMs ?? Date.now() - aiStarted,
+      success: Boolean(result?.assessment),
+      failureCode: result?.providerCode || result?.code || null,
+      providerAttempts: result?.providerAttempts || [],
+      knowledgeRefs: globalKnowledge.references,
+      outputSummary: result?.assessment?.summary || result?.error || null,
+      safety: result?.assessment?.diy_risk_level || null,
+      evaluator: result?.assessment ? 'recorded' : 'fail',
+      schemaQuality: result?.assessment ? 'present' : 'missing',
+      professionalEscalation: Boolean(result?.assessment?.professional_required),
+    });
+    await persistFixeraInteraction(pool, interaction);
+  } catch (captureError) {
+    console.warn('[fixera] assessment audit persistence failed', captureError?.message || captureError);
+  }
 
   console.log('[assessment] AI complete', {
     jobId: recordId,
@@ -1171,6 +1227,20 @@ async function runManagedJobAssessment(pool, job, viewer) {
       error: result.error || 'Assessment failed.',
       code: 'AI_ASSESSMENT_FAILED',
     };
+  }
+
+  if (job.ai_assessment) {
+    const assessmentHistory = appendAssessmentRevision(job.ai_assessment_history, job.ai_assessment);
+    try {
+      await pool.query(
+        isPending
+          ? `UPDATE pending_service_requests SET ai_assessment_history=$1::jsonb WHERE id=$2`
+          : `UPDATE managed_jobs SET ai_assessment_history=$1::jsonb WHERE id=$2`,
+        [JSON.stringify(assessmentHistory), recordId]
+      );
+    } catch (historyError) {
+      console.warn('[assessment] previous hypothesis history could not be persisted', historyError?.message || historyError);
+    }
   }
 
   // Phase 2: refine market profile with AI service classification
@@ -2066,11 +2136,26 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
     await client.query(
       `UPDATE managed_jobs
           SET booking_id=$1,
+              equipment_key=$3,
               updated_at=NOW()
         WHERE id=$2`,
-      [bookingId, job.id]
+      [bookingId, job.id, pending.equipment_key || null]
     );
+    if (Array.isArray(pending.ai_assessment_history) && pending.ai_assessment_history.length) {
+      await client.query(
+        `UPDATE managed_jobs SET ai_assessment_history=$1::jsonb WHERE id=$2`,
+        [JSON.stringify(pending.ai_assessment_history), job.id]
+      );
+    }
     job.booking_id = bookingId;
+    job.equipment_key = pending.equipment_key || null;
+
+    await client.query(
+      `UPDATE media_objects
+          SET job_id=$1, pending_service_request_id=NULL, case_type='managed_job'
+        WHERE pending_service_request_id=$2 AND owner_user_id=$3`,
+      [job.id, pendingId, pending.homeowner_user_id]
+    );
 
     // The payment belongs to the newly-created managed job. This makes a webhook
     // retry safely idempotent even though the pending row is now gone.
@@ -3424,6 +3509,19 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const bookingId = formatBookingId(job.id, job.created_at);
       await pool.query(`UPDATE managed_jobs SET booking_id=$1 WHERE id=$2`, [bookingId, job.id]);
       job.booking_id = bookingId;
+      if (b.mediaDataUrl) {
+        try {
+          await storeFixeraCaseMedia(pool, {
+            userId: user.id,
+            caseType: 'managed_job',
+            caseId: job.id,
+            propertyId,
+            dataUrl: b.mediaDataUrl,
+          });
+        } catch (mediaError) {
+          console.error('[public guest media] case image is present on the job but media indexing failed', mediaError?.message || mediaError);
+        }
+      }
 
       // 4. Queue structured AI assessment (async — avoids Netlify inactivity timeout)
       await pool.query(
@@ -3533,21 +3631,30 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       let state = b.state || '';
       let zip = b.zip || '';
       let country = b.country || 'US';
+      let selectedProperty = null;
 
       if (b.propertyId) {
+        const requestedPropertyId = Number(b.propertyId);
+        if (!Number.isInteger(requestedPropertyId) || requestedPropertyId <= 0) {
+          return res.status(400).json({ ok: false, code: 'INVALID_PROPERTY_ID', message: 'Select a valid property.' });
+        }
+        const propertyAccess = await assertPropertyAccess(pool, requestedPropertyId, req.authUser.id);
+        if (!propertyAccess) {
+          return res.status(403).json({ ok: false, code: 'PROPERTY_ACCESS_DENIED', message: 'You do not have access to this property.' });
+        }
         const { rows: props } = await pool.query(
           `SELECT *
            FROM properties
-          WHERE id=$1
-            AND owner_user_id=$2`,
+          WHERE id=$1 AND owner_user_id=$2`,
           [
-            b.propertyId,
-            req.authUser.id,
+            requestedPropertyId,
+            propertyAccess.owner_user_id,
           ]
         );
-
-        if (props[0]) {
-          const p = props[0];
+        if (!props[0]) return res.status(404).json({ ok: false, code: 'PROPERTY_NOT_FOUND', message: 'The selected property was not found.' });
+        selectedProperty = props[0];
+        {
+          const p = selectedProperty;
 
           fullAddress = [
             p.address_line1,
@@ -3586,6 +3693,19 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
             state,
             zip,
           ].filter(Boolean).join(', ') || 'TBD';
+      }
+
+      const requestedEquipmentKey = String(b.equipmentKey || '').trim().slice(0, 120);
+      let equipmentKey = null;
+      if (requestedEquipmentKey) {
+        const homeSystems = parseJsonSafe(selectedProperty?.home_systems, []) || [];
+        const matchedEquipment = Array.isArray(homeSystems)
+          ? homeSystems.find((item) => String(item?.key || '') === requestedEquipmentKey)
+          : null;
+        if (!matchedEquipment) {
+          return res.status(400).json({ ok: false, code: 'EQUIPMENT_NOT_IN_PROPERTY', message: 'Select equipment listed for this property.' });
+        }
+        equipmentKey = matchedEquipment.key;
       }
 
       // ------------------------------------------------------------
@@ -3854,6 +3974,31 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
         const pending = pendingRows[0];
 
+        if (equipmentKey) {
+          await pool.query(
+            `UPDATE pending_service_requests SET equipment_key=$1 WHERE id=$2 AND homeowner_user_id=$3`,
+            [equipmentKey, pending.id, req.authUser.id]
+          );
+          pending.equipment_key = equipmentKey;
+        }
+        let mediaObject = null;
+        try {
+          mediaObject = await storeFixeraCaseMedia(pool, {
+            userId: req.authUser.id,
+            caseType: 'pending_service_request',
+            caseId: pending.id,
+            propertyId: selectedProperty?.id || null,
+            equipmentKey,
+            dataUrl: b.mediaDataUrl,
+          });
+        } catch (mediaError) {
+          await pool.query(
+            `DELETE FROM pending_service_requests WHERE id=$1 AND homeowner_user_id=$2`,
+            [pending.id, req.authUser.id]
+          );
+          throw mediaError;
+        }
+
         console.log(
           '[PENDING SERVICE REQUEST] CREATED:',
           {
@@ -3870,6 +4015,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           pendingServiceRequestId:
             pending.id,
           pendingServiceRequest: pending,
+          media: mediaObject,
           entitlement: {
             hasAccess: false,
             plan: entitlement.plan,
@@ -3979,6 +4125,31 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
       let job = rows[0];
 
+      if (equipmentKey) {
+        await pool.query(
+          `UPDATE managed_jobs SET equipment_key=$1 WHERE id=$2 AND homeowner_user_id=$3`,
+          [equipmentKey, job.id, req.authUser.id]
+        );
+        job.equipment_key = equipmentKey;
+      }
+      let mediaObject = null;
+      try {
+        mediaObject = await storeFixeraCaseMedia(pool, {
+          userId: req.authUser.id,
+          caseType: 'managed_job',
+          caseId: job.id,
+          propertyId: selectedProperty?.id || null,
+          equipmentKey,
+          dataUrl: b.mediaDataUrl,
+        });
+      } catch (mediaError) {
+        await pool.query(
+          `DELETE FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2`,
+          [job.id, req.authUser.id]
+        );
+        throw mediaError;
+      }
+
       // ------------------------------------------------------------
       // EXISTING MANAGED-JOB LOGIC
       // ------------------------------------------------------------
@@ -4063,6 +4234,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           fresh[0],
           req.authUser
         ),
+        media: mediaObject,
         entitlement: {
           hasAccess: hasActiveHomeCare,
           plan: entitlement.plan,
@@ -4080,6 +4252,152 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         ok: false,
         message: 'Could not create job.',
       });
+    }
+  });
+
+  app.post('/api/managed/jobs/:id/fixera-diy', requireAuth, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      if (!Number.isInteger(jobId) || jobId <= 0) {
+        return res.status(400).json({ ok: false, code: 'INVALID_JOB_ID', message: 'A valid repair case is required.' });
+      }
+      const { rows } = await pool.query(
+        `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, ai_assessment, completion_report
+         FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2`,
+        [jobId, req.authUser.id]
+      );
+      const job = rows[0];
+      if (!job) return res.status(404).json({ ok: false, code: 'JOB_NOT_FOUND', message: 'Repair case not found.' });
+
+      const event = String(req.body?.event || '').trim().toLowerCase();
+      const allowedEvents = new Set(['step_completed', 'step_failed', 'step_different', 'fixed', 'still_broken', 'professional_requested']);
+      if (!allowedEvents.has(event)) {
+        return res.status(400).json({ ok: false, code: 'INVALID_DIY_EVENT', message: 'Unsupported repair outcome event.' });
+      }
+      const stepIndex = req.body?.stepIndex == null ? null : Number(req.body.stepIndex);
+      if (event.startsWith('step_') && (!Number.isInteger(stepIndex) || stepIndex < 0 || stepIndex > 40)) {
+        return res.status(400).json({ ok: false, code: 'INVALID_STEP_INDEX', message: 'A valid repair step is required.' });
+      }
+      const assessment = parseJsonSafe(job.ai_assessment, {}) || {};
+      const diySteps = Array.isArray(assessment.diy_steps) ? assessment.diy_steps : [];
+      if (event.startsWith('step_') && stepIndex >= diySteps.length) {
+        return res.status(400).json({ ok: false, code: 'STEP_NOT_IN_ASSESSMENT', message: 'That repair step is not part of this assessment.' });
+      }
+      const propertyAccess = event === 'fixed' && job.property_id
+        ? await assertPropertyAccess(pool, job.property_id, req.authUser.id)
+        : null;
+      if (event === 'fixed' && job.property_id && !propertyAccess) {
+        return res.status(403).json({ ok: false, code: 'PROPERTY_ACCESS_DENIED', message: 'Property access could not be verified.' });
+      }
+      const outcomeList = (value) => [...new Set(String(value || '').split(/[,;\n]/).map((item) => item.trim().slice(0, 100)).filter(Boolean))].slice(0, 12);
+      const actualAction = typeof req.body?.actualAction === 'string' ? req.body.actualAction.trim().slice(0, 1000) : '';
+      const partsUsed = outcomeList(req.body?.partsUsed);
+      const toolsUsed = outcomeList(req.body?.toolsUsed);
+      const observation = typeof req.body?.observation === 'string' ? req.body.observation.trim().slice(0, 800) : '';
+      const costValue = req.body?.cost == null || req.body.cost === '' ? null : Number(req.body.cost);
+      if (costValue != null && (!Number.isFinite(costValue) || costValue < 0 || costValue > 500000)) {
+        return res.status(400).json({ ok: false, code: 'INVALID_DIY_COST', message: 'Enter a valid repair cost.' });
+      }
+
+      const report = parseJsonSafe(job.completion_report, {}) || {};
+      const current = report.fixeraDiy && typeof report.fixeraDiy === 'object' ? report.fixeraDiy : {};
+      const completedStepIndexes = Array.isArray(req.body?.completedStepIndexes)
+        ? [...new Set(req.body.completedStepIndexes.map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n <= 40))].slice(0, 40)
+        : Array.isArray(current.completedStepIndexes) ? current.completedStepIndexes : [];
+      if (event === 'step_completed' && !completedStepIndexes.includes(stepIndex)) completedStepIndexes.push(stepIndex);
+      const outcome = event === 'fixed'
+        ? 'CUSTOMER_CONFIRMED_FIXED'
+        : event === 'still_broken'
+          ? 'CUSTOMER_CONFIRMED_STILL_BROKEN'
+          : event === 'professional_requested'
+            ? 'PROFESSIONAL_REQUESTED'
+            : current.outcome || null;
+      const aiHypothesis = assessment.summary || assessment.diagnosis || null;
+      const attemptedSteps = Array.isArray(current.attemptedSteps) ? [...current.attemptedSteps] : [];
+      if (event.startsWith('step_')) {
+        attemptedSteps.push({
+          stepIndex,
+          event,
+          note: typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 500) || null : null,
+          createdAt: new Date().toISOString(),
+        });
+      }
+      const fixeraDiy = {
+        ...current,
+        status: event === 'fixed' ? 'COMPLETED' : event === 'still_broken' ? 'FAILED' : event === 'professional_requested' ? 'PROFESSIONAL_REQUESTED' : 'DIY_IN_PROGRESS',
+        outcome,
+        completedStepIndexes,
+        attemptedSteps: attemptedSteps.slice(-40),
+        latestOutcomeDetails: event === 'fixed' || event === 'still_broken' ? {
+          actualAction,
+          partsUsed,
+          toolsUsed,
+          cost: costValue,
+          observation,
+          outcome,
+          recordedAt: new Date().toISOString(),
+        } : current.latestOutcomeDetails || null,
+        aiHypothesis: aiHypothesis ? String(aiHypothesis).slice(0, 500) : current.aiHypothesis || null,
+        customerConfirmedAt: event === 'fixed' || event === 'still_broken' ? new Date().toISOString() : current.customerConfirmedAt || null,
+        updatedAt: new Date().toISOString(),
+      };
+      const nextReport = { ...report, fixeraDiy };
+      await pool.query(
+        `UPDATE managed_jobs SET completion_report=$1::jsonb, updated_at=NOW()
+         WHERE id=$2 AND homeowner_user_id=$3`,
+        [JSON.stringify(nextReport), jobId, req.authUser.id]
+      );
+
+      if (event === 'fixed' && job.property_id) {
+        const { rows: propertyRows } = await pool.query(
+          `SELECT health_profile, home_systems FROM properties WHERE id=$1 AND owner_user_id=$2`,
+          [job.property_id, propertyAccess.owner_user_id]
+        );
+        const property = propertyRows[0];
+        if (!property) return res.status(404).json({ ok: false, code: 'PROPERTY_NOT_FOUND', message: 'Property not found.' });
+        const health = parseJsonSafe(property.health_profile, {}) || {};
+        const previousServices = Array.isArray(health.previousServices) ? [...health.previousServices] : [];
+        const homeSystems = parseJsonSafe(property.home_systems, []) || [];
+        const equipment = Array.isArray(homeSystems) ? homeSystems.find((item) => item?.key === job.equipment_key) : null;
+        const systemKey = homeSystemKeyFromJob(job);
+        const outcomeDetails = fixeraDiy.latestOutcomeDetails;
+        const serviceNotes = [
+          actualAction ? `Homeowner-reported action: ${actualAction}` : 'Homeowner completed the guided repair steps.',
+          partsUsed.length ? `Parts: ${partsUsed.join(', ')}` : '',
+          toolsUsed.length ? `Tools: ${toolsUsed.join(', ')}` : '',
+          costValue != null ? `Reported cost: $${costValue.toFixed(2)}` : '',
+          observation ? `Homeowner observation: ${observation}` : '',
+          `Fixera hypothesis (not independently verified): ${aiHypothesis || 'not recorded'}`,
+        ].filter(Boolean).join(' ').slice(0, 1000);
+        const entry = {
+          id: `fixera-diy-${jobId}`,
+          system: propertySystemLabelFromKey(systemKey) || systemKey || 'Other',
+          title: job.title || job.category || 'Fixera guided DIY repair',
+          date: new Date().toISOString().slice(0, 10),
+          notes: serviceNotes,
+          source: 'HOMEOWNER_DIY',
+          verification: 'CUSTOMER_CONFIRMED_OUTCOME',
+          relatedJobId: jobId,
+          equipmentKey: job.equipment_key || null,
+          equipment: equipment ? { name: equipment.name || null, brand: equipment.brand || null, model: equipment.model || null } : null,
+          actualAction: outcomeDetails.actualAction || null,
+          partsUsed,
+          toolsUsed,
+          cost: costValue == null ? null : costValue.toFixed(2),
+          evidenceNote: observation || null,
+          completedStepIndexes,
+        };
+        const updatedServices = [entry, ...previousServices.filter((item) => item?.id !== entry.id)].slice(0, 80);
+        await pool.query(
+          `UPDATE properties SET health_profile=$1::jsonb WHERE id=$2 AND owner_user_id=$3`,
+          [JSON.stringify({ ...health, previousServices: updatedServices }), job.property_id, propertyAccess.owner_user_id]
+        );
+      }
+
+      return res.json({ ok: true, jobId, propertyId: job.property_id || null, event, outcome, completedStepIndexes });
+    } catch (e) {
+      console.error('[fixera-diy] outcome save failed', { jobId: req.params.id, error: e?.message || String(e) });
+      return res.status(500).json({ ok: false, code: 'DIY_OUTCOME_SAVE_FAILED', message: 'Could not save the repair outcome.' });
     }
   });
 

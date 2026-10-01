@@ -10,6 +10,7 @@ export type IntakeDraft = {
   description: string;
   adaptiveAnswers: AdaptiveAnswers;
   propertyId: number | "";
+  equipmentKey?: string;
   partnerCode: string;
   mediaDataUrl: string | null;
   mediaType: string | null;

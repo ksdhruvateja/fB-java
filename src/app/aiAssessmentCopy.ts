@@ -1,7 +1,7 @@
 export const AI_ASSESSMENT_MODAL_TITLE = "Fixera Assessment";
 
 export const AI_ASSESSMENT_INTRO =
-  "Fixera provides an informational assessment based on the details, photos, videos, and other information you provide. The assessment is intended to help you better understand the reported issue and possible next steps.";
+  "Fixera provides an informational assessment based on the details, photos, and other information you provide. The assessment is intended to help you better understand the reported issue and possible next steps.";
 
 export const AI_ASSESSMENT_DISCLAIMER_BODY =
   "AI-generated information is not a guaranteed diagnosis, inspection, professional opinion, or guarantee of the condition of your property. Actual conditions discovered on-site may differ.";

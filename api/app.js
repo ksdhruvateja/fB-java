@@ -1,3 +1,6 @@
+import { listKnowledgeEntries, retrieveGlobalKnowledge, writeKnowledgeEntry } from './fixa/knowledge/knowledgeWriter.js';
+import { storeFixeraCaseMedia } from './fixera/case-media.js';
+import { appendAssessmentRevision } from './fixera/assessment-history.js';
 import express from 'express';
 import cors from 'cors';
 import pg from 'pg';
@@ -78,6 +81,7 @@ import {
   isPositiveInt,
 } from './security.js';
 import { postgresSslOptions } from './db-ssl.js';
+import { buildPropertyAIContext } from './property-ai-context.js';
 import { installJobDebugLogger } from './job-debug-log.js';
 import {
   requirePermission,
@@ -3045,8 +3049,8 @@ async function sendFixeraHealth(_req, res) {
     console.error('fixera health:', e);
     return res.status(500).json({
       assistant: 'Fixera',
-      provider: 'experiential-labs',
-      model: 'gpt-6-astra',
+      provider: null,
+      model: null,
       configured: false,
       authenticated: false,
       modelReachable: false,
@@ -3070,6 +3074,26 @@ async function sendFixeraAdminProviders(_req, res) {
 
 app.get('/api/admin/fixera/providers', requireAuth, requireAdmin, requirePermission('settings.view'), sendFixeraAdminProviders);
 app.get('/api/admin/fixa/providers', requireAuth, requireAdmin, requirePermission('settings.view'), sendFixeraAdminProviders);
+
+app.get('/api/admin/fixera/knowledge', requireAuth, requireAdmin, requirePermission('settings.view'), async (_req, res) => {
+  try {
+    return res.json({ entries: await listKnowledgeEntries(pool) });
+  } catch (error) {
+    console.error('fixera knowledge list:', error?.message || error);
+    return res.status(500).json({ ok: false, message: 'Fixera knowledge is unavailable.' });
+  }
+});
+
+app.post('/api/admin/fixera/knowledge', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+  try {
+    const entry = await writeKnowledgeEntry(pool, req.body || {}, req.authUser.id);
+    return res.json({ ok: true, entry });
+  } catch (error) {
+    const status = error?.code === 'KNOWLEDGE_CONTENT_REQUIRED' ? 400 : error?.code === 'KNOWLEDGE_ENTRY_NOT_FOUND' ? 404 : 500;
+    if (status === 500) console.error('fixera knowledge save:', error?.message || error);
+    return res.status(status).json({ ok: false, code: error?.code || 'KNOWLEDGE_SAVE_FAILED', message: error?.message || 'Fixera knowledge could not be saved.' });
+  }
+});
 
 app.get('/api/admin/fixera/pricing', requireAuth, requireAdmin, requirePermission('settings.view'), async (req, res) => {
   try {
@@ -3150,9 +3174,68 @@ async function handleFixaAssessment(req, res) {
       });
     }
 
-    const { category, description, imageDataUrl, mode } = req.body || {};
-    const desc = clampString(description, 4000);
-    const cat = clampString(category, 80);
+    const body = req.body || {};
+    const directJobId = body.jobId == null ? null : Number(body.jobId);
+    let authorizedCase = null;
+    let caseType = null;
+    let propertyId = null;
+
+    if (directJobId != null) {
+      if (!Number.isInteger(directJobId) || directJobId <= 0) {
+        return res.status(400).json({ ok: false, code: 'INVALID_CASE_ID', message: 'A valid repair case is required.' });
+      }
+      const managed = await pool.query(
+        `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_type, ai_assessment, ai_assessment_history
+         FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2`,
+        [directJobId, req.authUser.id]
+      );
+      if (managed.rows[0]) {
+        authorizedCase = managed.rows[0];
+        caseType = 'managed_job';
+      } else {
+        const pending = await pool.query(
+          `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_type, ai_assessment, ai_assessment_history
+           FROM pending_service_requests WHERE id=$1 AND homeowner_user_id=$2`,
+          [directJobId, req.authUser.id]
+        );
+        if (pending.rows[0]) {
+          authorizedCase = pending.rows[0];
+          caseType = 'pending_service_request';
+        }
+      }
+      if (!authorizedCase) {
+        return res.status(404).json({ ok: false, code: 'CASE_NOT_FOUND', message: 'The repair case could not be found.' });
+      }
+      propertyId = authorizedCase.property_id == null ? null : Number(authorizedCase.property_id);
+      if (body.propertyId != null && Number(body.propertyId) !== propertyId) {
+        return res.status(403).json({ ok: false, code: 'PROPERTY_CASE_MISMATCH', message: 'The selected property does not match this repair case.' });
+      }
+    } else if (body.propertyId != null) {
+      propertyId = Number(body.propertyId);
+      if (!Number.isInteger(propertyId) || propertyId <= 0) {
+        return res.status(400).json({ ok: false, code: 'INVALID_PROPERTY_ID', message: 'A valid property is required.' });
+      }
+    }
+
+    const passportContext = propertyId
+      ? await buildPropertyAIContext(pool, propertyId, req.authUser.id, {
+        includeAddress: false,
+        includeProDetails: false,
+        equipmentKey: authorizedCase?.equipment_key || null,
+      })
+      : null;
+    if (propertyId && !passportContext) {
+      return res.status(403).json({ ok: false, code: 'PROPERTY_ACCESS_DENIED', message: 'You do not have access to this property.' });
+    }
+
+    const globalKnowledge = await retrieveGlobalKnowledge(pool, {
+      category: authorizedCase?.category || body.category,
+      query: [authorizedCase?.title, body.description || authorizedCase?.description].filter(Boolean).join(' '),
+    });
+
+    const desc = clampString(body.description || authorizedCase?.description, 4000);
+    const cat = clampString(body.category || authorizedCase?.category, 80);
+    const imageDataUrl = body.imageDataUrl || authorizedCase?.media_data_url || null;
     const hasImage = typeof imageDataUrl === 'string' && imageDataUrl.startsWith('data:');
     if (hasImage && imageDataUrl.length > 6_000_000) {
       return res.status(400).json({ ok: false, message: 'Image is too large.' });
@@ -3168,18 +3251,51 @@ async function handleFixaAssessment(req, res) {
       category: cat,
       description: desc || 'No written description provided. Analyze the attached photo and infer the repair issue.',
       imageDataUrl: hasImage ? imageDataUrl : null,
-      jobId: req.body?.jobId || null,
+      task: 'repair_assessment',
+      jobId: authorizedCase?.id || null,
+      homeownerId: req.authUser.id,
+      propertyId: passportContext?.propertyId || null,
+      property: passportContext?.memory || null,
+      job: authorizedCase ? {
+        id: authorizedCase.id,
+        homeownerUserId: authorizedCase.homeowner_user_id,
+        propertyId: authorizedCase.property_id,
+        equipmentKey: authorizedCase.equipment_key || null,
+        category: authorizedCase.category,
+        title: authorizedCase.title,
+        description: authorizedCase.description,
+        aiAssessment: authorizedCase.ai_assessment,
+        mediaType: authorizedCase.media_type,
+      } : null,
+      locationContext: [
+        passportContext?.text || '',
+        globalKnowledge.items.length
+          ? `Approved general FixBridge repair knowledge (global, not property-specific):\n${globalKnowledge.items.map((item) => `- ${item}`).join('\n')}`
+          : '',
+      ].filter(Boolean).join('\n\n'),
     });
     const a = structured.assessment;
+    const providerStatus = getFixeraPublicStatus();
     try {
       const interaction = recordFixeraInteraction({
         requestId: invocationId,
+        userId: req.authUser.id,
         userRole: req.authUser?.role || 'homeowner',
-        jobId: req.body?.jobId || null,
+        jobId: authorizedCase?.id || null,
+        caseId: authorizedCase?.id || null,
+        caseType,
+        propertyId: passportContext?.propertyId || null,
         task: 'repair_assessment',
         inputSummary: `${cat}: ${String(desc || 'photo assessment').slice(0, 120)}`,
-        provider: 'explabs',
-        model: structured.model || 'gpt-6-astra',
+        provider: structured.provider || structured.source || providerStatus.provider,
+        model: structured.model || providerStatus.model,
+        providerRequestId: structured.requestId,
+        promptVersion: structured.promptVersion,
+        latencyMs: structured.latencyMs,
+        success: Boolean(a),
+        failureCode: structured.providerCode || null,
+        providerAttempts: structured.providerAttempts,
+          knowledgeRefs: globalKnowledge.references,
         outputSummary: a?.summary || structured.error || null,
         safety: a?.diy_risk_level || null,
         evaluator: a ? 'recorded' : 'fail',
@@ -3189,6 +3305,29 @@ async function handleFixaAssessment(req, res) {
       await persistFixeraInteraction(pool, interaction);
     } catch (captureError) {
       console.warn('fixera experience capture:', captureError?.message || captureError);
+    }
+    if (a && authorizedCase) {
+      const serialized = JSON.stringify(a);
+      const assessmentHistory = appendAssessmentRevision(authorizedCase.ai_assessment_history, authorizedCase.ai_assessment);
+      if (caseType === 'managed_job') {
+        await pool.query(
+          `UPDATE managed_jobs
+           SET ai_assessment=$1::jsonb, ai_assessment_history=$2::jsonb,
+               assessment_status='ready', assessment_error_code=NULL,
+               assessment_completed_at=NOW(), updated_at=NOW()
+           WHERE id=$3 AND homeowner_user_id=$4`,
+          [serialized, JSON.stringify(assessmentHistory), authorizedCase.id, req.authUser.id]
+        );
+      } else {
+        await pool.query(
+          `UPDATE pending_service_requests
+           SET ai_assessment=$1::jsonb, ai_assessment_history=$2::jsonb,
+               assessment_result=$1::jsonb, assessment_status='ready',
+               assessment_error_code=NULL, assessment_completed_at=NOW(), updated_at=NOW()
+           WHERE id=$3 AND homeowner_user_id=$4`,
+          [serialized, JSON.stringify(assessmentHistory), authorizedCase.id, req.authUser.id]
+        );
+      }
     }
     return res.json({
       assessment: a
@@ -3215,7 +3354,7 @@ async function handleFixaAssessment(req, res) {
       source: structured.source || 'fixera',
       assistant: 'Fixera',
       error: structured.error,
-      mode: mode === 'detail' ? 'detail' : 'summary',
+      mode: body.mode === 'detail' ? 'detail' : 'summary',
     });
   } catch (e) {
     console.error('ai assess:', e);
@@ -3245,15 +3384,142 @@ async function handleFixeraReassess(req, res) {
     if (!observation) {
       return res.status(400).json({ ok: false, message: 'A new observation is required.' });
     }
+    const caseId = Number(req.body?.jobId);
+    if (!Number.isInteger(caseId) || caseId <= 0) {
+      return res.status(400).json({ ok: false, code: 'INVALID_CASE_ID', message: 'A valid repair case is required.' });
+    }
+    let authorizedCase = null;
+    let caseType = null;
+    const { rows: managedRows } = await pool.query(
+      `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_type, ai_assessment, ai_assessment_history
+         FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2`,
+      [caseId, req.authUser.id]
+    );
+    if (managedRows[0]) {
+      authorizedCase = managedRows[0];
+      caseType = 'managed_job';
+    } else {
+      const { rows: pendingRows } = await pool.query(
+        `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_type, ai_assessment, ai_assessment_history
+           FROM pending_service_requests WHERE id=$1 AND homeowner_user_id=$2`,
+        [caseId, req.authUser.id]
+      );
+      if (pendingRows[0]) {
+        authorizedCase = pendingRows[0];
+        caseType = 'pending_service_request';
+      }
+    }
+    if (!authorizedCase) {
+      return res.status(404).json({ ok: false, code: 'CASE_NOT_FOUND', message: 'Repair case not found.' });
+    }
+
+    let imageDataUrl = authorizedCase.media_data_url || null;
+    if (req.body?.imageDataUrl != null) {
+      if (typeof req.body.imageDataUrl !== 'string' || !req.body.imageDataUrl.startsWith('data:image/') || req.body.imageDataUrl.length > 6_000_000) {
+        return res.status(400).json({ ok: false, code: 'INVALID_REASSESSMENT_IMAGE', message: 'Choose a supported photo under 6 MB.' });
+      }
+      try {
+        await storeFixeraCaseMedia(pool, {
+          userId: req.authUser.id,
+          caseType,
+          caseId,
+          propertyId: authorizedCase.property_id,
+          equipmentKey: authorizedCase.equipment_key || null,
+          dataUrl: req.body.imageDataUrl,
+        });
+      } catch (mediaError) {
+        return res.status(400).json({ ok: false, code: 'REASSESSMENT_IMAGE_SAVE_FAILED', message: mediaError?.message || 'The new photo could not be attached to this case.' });
+      }
+      imageDataUrl = req.body.imageDataUrl;
+      await pool.query(
+        caseType === 'managed_job'
+          ? `UPDATE managed_jobs SET media_data_url=$1, media_type='image', updated_at=NOW() WHERE id=$2 AND homeowner_user_id=$3`
+          : `UPDATE pending_service_requests SET media_data_url=$1, media_type='image', updated_at=NOW() WHERE id=$2 AND homeowner_user_id=$3`,
+        [imageDataUrl, caseId, req.authUser.id]
+      );
+    }
+
+    const propertyContext = authorizedCase.property_id
+      ? await buildPropertyAIContext(pool, authorizedCase.property_id, req.authUser.id, {
+        includeAddress: false,
+        includeProDetails: false,
+        equipmentKey: authorizedCase.equipment_key || null,
+      })
+      : null;
+    if (authorizedCase.property_id && !propertyContext) {
+      return res.status(403).json({ ok: false, code: 'PROPERTY_ACCESS_DENIED', message: 'Property access could not be verified.' });
+    }
+    const globalKnowledge = await retrieveGlobalKnowledge(pool, {
+      category: authorizedCase.category,
+      query: [authorizedCase.title, authorizedCase.description, observation, authorizedCase.equipment_key].filter(Boolean).join(' '),
+    });
     const result = await reassessRepair({
-      category: clampString(req.body?.category, 80),
-      description: clampString(req.body?.description, 4000),
+      category: authorizedCase.category,
+      description: authorizedCase.description,
       observation,
       currentStep: req.body?.currentStep ?? null,
-      jobId: req.body?.jobId || null,
+      imageDataUrl,
+      propertyId: propertyContext?.propertyId || null,
+      property: propertyContext?.memory || null,
+      jobId: caseId,
       actor: 'homeowner',
       homeownerId: req.authUser.id,
+      task: 'reassessment',
+      job: {
+        id: caseId,
+        homeownerUserId: authorizedCase.homeowner_user_id,
+        propertyId: authorizedCase.property_id,
+        equipmentKey: authorizedCase.equipment_key || null,
+        category: authorizedCase.category,
+        title: authorizedCase.title,
+        description: authorizedCase.description,
+        aiAssessment: authorizedCase.ai_assessment,
+        mediaType: req.body?.imageDataUrl ? 'image' : authorizedCase.media_type,
+      },
+      locationContext: [
+        propertyContext?.text || '',
+        globalKnowledge.items.length
+          ? `Approved general FixBridge repair knowledge (global, not property-specific):\n${globalKnowledge.items.map((item) => `- ${item}`).join('\n')}`
+          : '',
+      ].filter(Boolean).join('\n\n'),
     });
+    const interaction = recordFixeraInteraction({
+      requestId: randomUUID(),
+      userId: req.authUser.id,
+      userRole: req.authUser.role || 'homeowner',
+      jobId: caseType === 'managed_job' ? caseId : null,
+      caseId,
+      caseType,
+      propertyId: propertyContext?.propertyId || null,
+      task: 'reassessment',
+      inputSummary: `${authorizedCase.category || 'repair'}: ${observation.slice(0, 120)}`,
+      provider: result?.provider || null,
+      model: result?.model || null,
+      providerRequestId: result?.requestId || null,
+      promptVersion: result?.promptVersion || null,
+      latencyMs: result?.latencyMs ?? null,
+      success: Boolean(result?.assessment),
+      failureCode: result?.providerCode || result?.code || null,
+      providerAttempts: result?.providerAttempts || [],
+      knowledgeRefs: globalKnowledge.references,
+      outputSummary: result?.assessment?.summary || result?.error || null,
+      safety: result?.assessment?.diy_risk_level || null,
+      evaluator: result?.assessment ? 'recorded' : 'fail',
+      schemaQuality: result?.assessment ? 'present' : 'missing',
+      professionalEscalation: Boolean(result?.assessment?.professional_required),
+    });
+    await persistFixeraInteraction(pool, interaction).catch((error) => {
+      console.warn('[fixera] reassessment audit persistence failed', error?.message || error);
+    });
+    if (result.assessment) {
+      const assessmentHistory = appendAssessmentRevision(authorizedCase.ai_assessment_history, authorizedCase.ai_assessment);
+      await pool.query(
+        caseType === 'managed_job'
+          ? `UPDATE managed_jobs SET ai_assessment=$1::jsonb, ai_assessment_history=$2::jsonb, assessment_status='ready', assessment_error_code=NULL, assessment_completed_at=NOW(), updated_at=NOW() WHERE id=$3 AND homeowner_user_id=$4`
+          : `UPDATE pending_service_requests SET ai_assessment=$1::jsonb, ai_assessment_history=$2::jsonb, assessment_result=$1::jsonb, assessment_status='ready', assessment_error_code=NULL, assessment_completed_at=NOW(), updated_at=NOW() WHERE id=$3 AND homeowner_user_id=$4`,
+        [JSON.stringify(result.assessment), JSON.stringify(assessmentHistory), caseId, req.authUser.id]
+      );
+    }
     return res.json({
       ok: Boolean(result.assessment),
       assessment: result.assessment,

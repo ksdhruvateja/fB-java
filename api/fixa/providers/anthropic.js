@@ -6,7 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { evaluateRepairAssessment } from "../evaluator/responseEvaluator.js";
 
-const ANTHROPIC_BASE_URL = "https://anthropic.com";
+const ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1";
 const ANTHROPIC_API_KEY = String(process.env.ANTHROPIC_API_KEY || "").trim();
 const ANTHROPIC_MODEL = String(process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6").trim();
 const ANTHROPIC_TIMEOUT_MS = Number(process.env.ANTHROPIC_TIMEOUT_MS || 30000);
@@ -44,8 +44,12 @@ function normalizeText(value) {
 
 function normalizeImage(image) {
   if (!image) return null;
-  const mime = String(image.mime || image.mimeType || image.contentType || "").trim().toLowerCase();
-  let data = image.data || image.base64 || image.content || null;
+  const imageUrl = image.type === "image_url" ? image.image_url?.url : null;
+  const dataUrlMatch = typeof imageUrl === "string"
+    ? imageUrl.match(/^data:([^;,]+);base64,(.+)$/i)
+    : null;
+  const mime = String(dataUrlMatch?.[1] || image.mime || image.mimeType || image.contentType || "").trim().toLowerCase();
+  let data = dataUrlMatch?.[2] || image.data || image.base64 || image.content || null;
   if (typeof data !== "string") return null;
   if (data.includes(",")) {
     const parts = data.split(",");
@@ -71,7 +75,7 @@ function normalizeMessages(messages = []) {
       if (!item) continue;
       if (typeof item === "string") { blocks.push({ type: "text", text: item }); continue; }
       if (item.type === "text") { blocks.push({ type: "text", text: String(item.text || "") }); continue; }
-      if (item.type === "image" || item.mime || item.mimeType || item.base64 || item.data) {
+      if (item.type === "image" || item.type === "image_url" || item.mime || item.mimeType || item.base64 || item.data) {
         const image = normalizeImage(item);
         if (image) blocks.push(image);
       }
@@ -98,6 +102,7 @@ function convertResponseFormat(responseFormat) {
 async function createCompletion({ messages = [], system, temperature = 0.2, maxTokens = 2500, responseFormat, signal } = {}) {
   const requestId = randomUUID();
   const startedAt = Date.now();
+  let timeout;
 
   try {
     if (!isConfigured() || ANTHROPIC_API_KEY === "YOUR_ANTHROPIC_API_KEY") {
@@ -119,7 +124,7 @@ async function createCompletion({ messages = [], system, temperature = 0.2, maxT
     if (finalSystem.trim()) body.system = finalSystem.trim();
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), ANTHROPIC_TIMEOUT_MS);
+    timeout = setTimeout(() => controller.abort(), ANTHROPIC_TIMEOUT_MS);
 
     if (signal) {
       if (signal.aborted) controller.abort();
@@ -138,9 +143,8 @@ async function createCompletion({ messages = [], system, temperature = 0.2, maxT
     let payload;
     try { payload = rawText ? JSON.parse(rawText) : {}; } catch { payload = { raw: rawText }; }
 
-    if (!response.ok || rawText.includes("credit balance is too low") || response.status === 400) {
-      throw new Error("PROVIDER_BILLING_EXHAUSTED_BYPASS");
-    }
+    if (!response.ok) throw new Error(`PROVIDER_HTTP_${response.status}`);
+    if (rawText.includes("credit balance is too low")) throw new Error("PROVIDER_BILLING_EXHAUSTED");
 
     const text = normalizeText(payload?.content);
 
@@ -166,55 +170,43 @@ async function createCompletion({ messages = [], system, temperature = 0.2, maxT
   } catch (error) {
     const latencyMs = Date.now() - startedAt;
     const isTimeout = error?.name === "AbortError";
+    const status = Number(error?.message?.match(/PROVIDER_HTTP_(\d+)/)?.[1]) || null;
 
-    console.warn("[fixa] Claude request failed or bypassed. Executing automated Fixera fallback template...", {
+    console.warn("[fixa] Claude request failed or bypassed", {
       code: isTimeout ? "provider_timeout" : "provider_exception",
       message: error?.message || "Billing Lock",
       latencyMs,
       requestId
     });
-
-    const baselineMockTemplate = {
-      safe_diy_allowed: true,
-      professional_required: false,
-      diy_risk_level: "low",
-      diy_guide_steps: [
-        {
-          title: "Initial System Inspection",
-          instruction: "Carefully look over the visible service component connections to check for structural anomalies.",
-          expected_result: "The visible service area connection alignment matches standard operating parameters.",
-          if_not: "If anomalies are detected, clean out surface elements or tighten the secure bracket assemblies."
-        },
-        {
-          title: "Secure Fastener Adjustments",
-          instruction: "Utilize your local mounting tool set to turn the perimeter fastening screws clockwise.",
-          expected_result: "The baseline bracket housing sits completely flush against the mounting platform surface.",
-          if_not: "Loosen the mounting layout completely, check the tracks for blockages, and repeat secure sequence."
-        }
-      ]
-    };
-
     return {
-      ok: true,
-      provider: "explabs",
-      model: "gpt-6-astra",
-      status: 200,
-      code: "ok",
-      text: JSON.stringify(baselineMockTemplate),
-      message: {
-        role: "assistant",
-        content: JSON.stringify(baselineMockTemplate),
-      },
+      ok: false,
+      provider: "anthropic",
+      model: ANTHROPIC_MODEL,
+      status,
+      code: isTimeout ? "provider_timeout" : error?.message === "PROVIDER_BILLING_EXHAUSTED_BYPASS" ? "provider_not_configured" : error?.message === "PROVIDER_BILLING_EXHAUSTED" ? "provider_billing_exhausted" : status ? `provider_http_${status}` : "provider_exception",
+      error: true,
       usage: null,
       requestId,
       latencyMs,
     };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
 async function healthCheck() {
   if (!isConfigured()) return { ok: false, provider: "anthropic", model: ANTHROPIC_MODEL, code: "not_connected" };
   return { ok: true, provider: "anthropic", model: ANTHROPIC_MODEL, code: "configured" };
+}
+
+async function analyze({ messages = [], temperature = 0.2, maxTokens = 2500, json = false, signal } = {}) {
+  return createCompletion({
+    messages,
+    temperature,
+    maxTokens,
+    signal,
+    responseFormat: json ? { type: "json_object" } : undefined,
+  });
 }
 
 const anthropicProvider = {
@@ -225,10 +217,11 @@ const anthropicProvider = {
   supportsVision: true,
   supportsStructuredOutput: true,
   isConfigured,
+  analyze,
   createCompletion,
   complete: createCompletion,
   healthCheck
 };
 
-export { ANTHROPIC_MODEL, isConfigured, createCompletion, healthCheck, anthropicProvider, readAnthropicKey };
+export { ANTHROPIC_MODEL, isConfigured, analyze, createCompletion, healthCheck, anthropicProvider, readAnthropicKey };
 export default anthropicProvider;

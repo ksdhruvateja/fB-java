@@ -18,8 +18,13 @@ type FixeraAdmin = {
   connection?: string;
   health?: {
     configured?: boolean;
-    authenticated?: boolean;
-    modelReachable?: boolean;
+    authenticated?: boolean | null;
+    modelReachable?: boolean | null;
+    provider?: string | null;
+    model?: string | null;
+    fallbackProvider?: string | null;
+    fallbackModel?: string | null;
+    fallbackProviders?: Array<{ provider: string; model?: string | null }>;
     healthy?: boolean;
     providerStatus?: number;
     providerCode?: string;
@@ -60,6 +65,36 @@ type TrainingOverview = {
   exportReady?: boolean;
 };
 
+type KnowledgeEntry = {
+  id: number;
+  title: string;
+  category: string;
+  content: string;
+  tags: string[];
+  source?: string | null;
+  status: "draft" | "active" | "archived";
+  updated_at?: string;
+};
+
+type KnowledgeForm = {
+  id?: number;
+  title: string;
+  category: string;
+  content: string;
+  tags: string;
+  source: string;
+  status: "draft" | "active" | "archived";
+};
+
+const EMPTY_KNOWLEDGE_FORM: KnowledgeForm = {
+  title: "",
+  category: "general",
+  content: "",
+  tags: "",
+  source: "",
+  status: "draft",
+};
+
 const TABS = ["Overview", "Providers", "Health", "Experience", "Knowledge", "Pricing", "Evaluations", "Training", "Models"] as const;
 
 function Card({ title, children }: { title: string; children: ReactNode }) {
@@ -79,6 +114,11 @@ export default function AdminFixeraPanel() {
   const [error, setError] = useState("");
   const [zip, setZip] = useState("");
   const [category, setCategory] = useState("");
+  const [knowledgeEntries, setKnowledgeEntries] = useState<KnowledgeEntry[]>([]);
+  const [knowledgeForm, setKnowledgeForm] = useState<KnowledgeForm>(EMPTY_KNOWLEDGE_FORM);
+  const [knowledgeSaving, setKnowledgeSaving] = useState(false);
+  const [knowledgeError, setKnowledgeError] = useState("");
+  const [knowledgeMessage, setKnowledgeMessage] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -106,12 +146,53 @@ export default function AdminFixeraPanel() {
     };
   }, []);
 
+  useEffect(() => {
+    if (tab !== "Knowledge") return;
+    let cancelled = false;
+    api<{ entries?: KnowledgeEntry[]; message?: string }>("/api/admin/fixera/knowledge")
+      .then((result) => {
+        if (cancelled) return;
+        setKnowledgeEntries(result.entries || []);
+        setKnowledgeError(result.message || "");
+      })
+      .catch(() => {
+        if (!cancelled) setKnowledgeError("Could not load Fixera knowledge.");
+      });
+    return () => { cancelled = true; };
+  }, [tab]);
+
   async function loadPricing() {
     const params = new URLSearchParams();
     if (zip.trim()) params.set("zip", zip.trim());
     if (category.trim()) params.set("category", category.trim());
     const res = await api<PricingIntel>(`/api/admin/fixera/pricing?${params.toString()}`);
     setPricing(res);
+  }
+
+  async function saveKnowledgeEntry() {
+    setKnowledgeSaving(true);
+    setKnowledgeError("");
+    setKnowledgeMessage("");
+    try {
+      const result = await api<{ ok: boolean; entry?: KnowledgeEntry; message?: string }>("/api/admin/fixera/knowledge", {
+        method: "POST",
+        body: JSON.stringify({
+          ...knowledgeForm,
+          tags: knowledgeForm.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
+        }),
+      });
+      if (!result.ok || !result.entry) {
+        setKnowledgeError(result.message || "Could not save this knowledge entry.");
+        return;
+      }
+      setKnowledgeEntries((current) => [result.entry!, ...current.filter((entry) => entry.id !== result.entry!.id)]);
+      setKnowledgeForm(EMPTY_KNOWLEDGE_FORM);
+      setKnowledgeMessage(result.entry.status === "active" ? "Knowledge entry is active for Fixera retrieval." : "Knowledge entry saved for review.");
+    } catch {
+      setKnowledgeError("Could not save this knowledge entry.");
+    } finally {
+      setKnowledgeSaving(false);
+    }
   }
 
   return (
@@ -140,10 +221,13 @@ export default function AdminFixeraPanel() {
         <div className="grid gap-3 sm:grid-cols-2">
           <Card title="Fixera status">
             <p className="font-semibold">{data?.connection === "connected" ? "Healthy" : data?.connection || "Unknown"}</p>
-            <p>Provider: {data?.currentProvider || "Experiential Labs"}</p>
-            <p>Model: {data?.currentModel || "gpt-6-astra"}</p>
-            <p>Authenticated: {data?.health?.authenticated ? "Yes" : "No"}</p>
-            <p>Model reachable: {data?.health?.modelReachable ? "Yes" : "No"}</p>
+            <p>Provider: {data?.currentProvider || "Not configured"}</p>
+            <p>Model: {data?.currentModel || "Not configured"}</p>
+            <p>Fallbacks: {data?.health?.fallbackProviders?.length
+              ? data.health.fallbackProviders.map((fallback) => `${fallback.provider}${fallback.model ? ` (${fallback.model})` : ""}`).join(", ")
+              : data?.health?.fallbackProvider || "None configured"}</p>
+            <p>Authentication probe: {data?.health?.authenticated == null ? "Not checked" : data.health.authenticated ? "Passed" : "Failed"}</p>
+            <p>Model probe: {data?.health?.modelReachable == null ? "Not checked" : data.health.modelReachable ? "Passed" : "Failed"}</p>
           </Card>
           <Card title="Signals">
             <p>Success rate: {data?.observability?.successRate ?? "—"}%</p>
@@ -199,10 +283,60 @@ export default function AdminFixeraPanel() {
       ) : null}
 
       {tab === "Knowledge" ? (
-        <Card title="Fixera Knowledge">
-          <p>Retrieval uses approved repair patterns, safety policy, and service taxonomy. AI-inferred facts are not treated as verified.</p>
-          <p>Professional-confirmed outcomes carry more weight than model speculation.</p>
-        </Card>
+        <div className="space-y-4">
+          <div className="rounded-xl border border-border bg-card p-4">
+            <h3 className="text-sm font-semibold">Global Repair Knowledge</h3>
+            <p className="mt-1 text-xs text-muted-foreground">Only active, reviewed entries are retrieved for matching assessments. Keep customer and property details out of global guidance.</p>
+            {knowledgeError ? <p className="mt-3 text-sm text-destructive">{knowledgeError}</p> : null}
+            {knowledgeMessage ? <p className="mt-3 text-sm text-emerald-700">{knowledgeMessage}</p> : null}
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <label className="grid gap-1 text-xs font-semibold">Title
+                <input value={knowledgeForm.title} onChange={(event) => setKnowledgeForm((form) => ({ ...form, title: event.target.value }))} maxLength={160} className="min-h-10 rounded-lg border border-border bg-background px-3 text-sm font-normal" />
+              </label>
+              <label className="grid gap-1 text-xs font-semibold">Category
+                <input value={knowledgeForm.category} onChange={(event) => setKnowledgeForm((form) => ({ ...form, category: event.target.value }))} maxLength={80} className="min-h-10 rounded-lg border border-border bg-background px-3 text-sm font-normal" />
+              </label>
+              <label className="grid gap-1 text-xs font-semibold">Tags
+                <input value={knowledgeForm.tags} onChange={(event) => setKnowledgeForm((form) => ({ ...form, tags: event.target.value }))} placeholder="appliance, cooling" className="min-h-10 rounded-lg border border-border bg-background px-3 text-sm font-normal" />
+              </label>
+              <label className="grid gap-1 text-xs font-semibold">Source
+                <input value={knowledgeForm.source} onChange={(event) => setKnowledgeForm((form) => ({ ...form, source: event.target.value }))} maxLength={240} className="min-h-10 rounded-lg border border-border bg-background px-3 text-sm font-normal" />
+              </label>
+              <label className="grid gap-1 text-xs font-semibold">Review status
+                <select value={knowledgeForm.status} onChange={(event) => setKnowledgeForm((form) => ({ ...form, status: event.target.value as KnowledgeForm["status"] }))} className="min-h-10 rounded-lg border border-border bg-background px-3 text-sm font-normal">
+                  <option value="draft">Draft</option>
+                  <option value="active">Active</option>
+                  <option value="archived">Archived</option>
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs font-semibold sm:col-span-2">Guidance
+                <textarea value={knowledgeForm.content} onChange={(event) => setKnowledgeForm((form) => ({ ...form, content: event.target.value }))} maxLength={12000} rows={5} className="rounded-lg border border-border bg-background px-3 py-2 text-sm font-normal" />
+              </label>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" disabled={knowledgeSaving || !knowledgeForm.title.trim() || !knowledgeForm.content.trim()} onClick={() => void saveKnowledgeEntry()} className="min-h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60">
+                {knowledgeSaving ? "Saving…" : knowledgeForm.id ? "Save changes" : "Add entry"}
+              </button>
+              {knowledgeForm.id ? <button type="button" onClick={() => setKnowledgeForm(EMPTY_KNOWLEDGE_FORM)} className="min-h-10 rounded-lg border border-border px-4 text-sm font-semibold">Cancel edit</button> : null}
+            </div>
+          </div>
+          <div className="divide-y divide-border rounded-xl border border-border bg-card px-4">
+            {knowledgeEntries.length ? knowledgeEntries.map((entry) => (
+              <div key={entry.id} className="flex flex-wrap items-start justify-between gap-3 py-4">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold">{entry.title}</p>
+                    <span className="rounded-full border border-border px-2 py-0.5 text-[11px] font-semibold">{entry.status}</span>
+                    <span className="text-xs text-muted-foreground">{entry.category}</span>
+                  </div>
+                  <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">{entry.content}</p>
+                  {entry.tags?.length ? <p className="mt-1 text-xs text-muted-foreground">Tags: {entry.tags.join(", ")}</p> : null}
+                </div>
+                <button type="button" onClick={() => setKnowledgeForm({ id: entry.id, title: entry.title, category: entry.category, content: entry.content, tags: (entry.tags || []).join(", "), source: entry.source || "", status: entry.status })} className="min-h-9 rounded-lg border border-border px-3 text-xs font-semibold">Edit</button>
+              </div>
+            )) : <p className="py-4 text-sm text-muted-foreground">No global knowledge entries yet.</p>}
+          </div>
+        </div>
       ) : null}
 
       {tab === "Evaluations" ? (

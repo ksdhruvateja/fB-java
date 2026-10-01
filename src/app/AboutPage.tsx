@@ -54,7 +54,7 @@ function pickPhoto<T>(pool: T[], salt = 0): T {
 }
 
 const FIXERA_HELPS = [
-  "Analyze photos and videos of home problems",
+  "Analyze photos of home problems",
   "Identify visible signs and likely causes",
   "Understand the type of repair you may be dealing with",
   "Evaluate whether Guided DIY is appropriate",
@@ -69,7 +69,7 @@ const FIXERA_HELPS = [
 const SUPER_FIXBRIDGE = [
   "Fixera Intelligence",
   "Guided DIY",
-  "Photo & Video Analysis",
+  "Photo Analysis",
   "Professional Home Services",
   "Property History",
   "Property Passport",
@@ -83,7 +83,7 @@ const SUPER_FIXBRIDGE = [
 const HOW_IT_WORKS = [
   {
     title: "You show Fixera the problem",
-    body: "Upload a photo or video and explain what you're experiencing.",
+    body: "Take a photo or choose one from your device, then explain what you're experiencing.",
   },
   {
     title: "Fixera understands the situation",
@@ -109,7 +109,7 @@ const DIY_DETAIL = [
 const HANDOFF = [
   "The original issue",
   "Property information",
-  "Uploaded photos or videos",
+  "Uploaded issue photos",
   "Fixera's assessment",
   "Repair category",
   "Risk information",
@@ -244,7 +244,7 @@ export default function AboutPage({
               From understanding what is wrong to figuring out what to do next, {brand.productName} brings homeowners, intelligent technology, guided DIY support, property information, and trusted professionals together in one connected experience.
             </p>
             <p>
-              Upload a photo or video, describe what is happening, understand the problem, follow guided repair steps when appropriate, or move the same assessment to a professional when expert help is needed.
+              Take or upload a photo, describe what is happening, understand the problem, follow guided repair steps when appropriate, or move the same assessment to a professional when expert help is needed.
             </p>
             <p className="text-foreground font-medium">Our goal is simple: Real help. A more livable you.</p>
           </div>
@@ -261,7 +261,7 @@ export default function AboutPage({
             The intelligence behind {brand.productName}
           </h2>
           <p className="max-w-3xl text-sm sm:text-base text-muted-foreground leading-relaxed mb-8">
-            Fixera is the central AI assistant powering Super FixBridge. Fixera understands your repair, your property, your uploaded photos and videos, your current job, your previous repair context, and what should happen next. Models may change. Fixera remains.
+            Fixera is the central AI assistant powering Super FixBridge. Fixera understands your repair, your property, your uploaded photos, your current job, your previous repair context, and what should happen next. Models may change. Fixera remains.
           </p>
         </ScrollReveal>
         <ul className="grid grid-cols-1 sm:grid-cols-2 gap-3">

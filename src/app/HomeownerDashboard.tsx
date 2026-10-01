@@ -34,6 +34,7 @@ import {
   updatePropertyHealth,
   updateProperty,
   type HomeSystemRecord,
+  type AssessmentResource,
   type ManagedJob,
   type PendingProfessionalRequest,
   type Property,
@@ -41,6 +42,7 @@ import {
   assessPendingServiceRequest,
   listPendingServiceRequests,
   getPendingProfessionalRequest,
+  recordFixeraDiyEvent,
 } from "./managedJobs";
 import { cancelHomeCareSubscription, openHomeCareBillingPortal, resumeHomeCareSubscription, startSubscription } from "./platformApi";
 import { listGoProPlans } from "./subscriptionPlansApi";
@@ -130,7 +132,7 @@ import DiyStopProfessionalBar from "./DiyStopProfessionalBar";
 import DiySafetyFeedback from "./DiySafetyFeedback";
 import DiyIncidentReportForm from "./DiyIncidentReportForm";
 import { DIY_PROFESSIONAL_HANDOFF_MESSAGE, DIY_SESSION_REMINDER, riskStatusLabel } from "./diySafetyCopy";
-import HomeownerDiyExperience, { type DiyView } from "./diy/HomeownerDiyExperience";
+import HomeownerDiyExperience, { type DiyRepairOutcomeDetails, type DiyView } from "./diy/HomeownerDiyExperience";
 import { readDiyChat, readDiyProgress, writeDiyChat, writeDiyProgress } from "./diy/diyProgressStore";
 import { stopDiyAndEscalate } from "./diySafetyApi";
 import { fetchHomeownerConsentStatus, recordConsentAction } from "./homeownerConsentApi";
@@ -144,6 +146,7 @@ import { normalizeUsStateCode } from "./UsLocationFields";
 import { isAddressComplete } from "./addressFormat";
 import { useIsMobile } from "./components/ui/use-mobile";
 import { isValidUsZip, normalizeZip, zipInputProps } from "./zipCode";
+import { compressImageForAssessment } from "./imageUpload";
 
 function formatChatMessage(text: string): string {
   if (!text) return "";
@@ -154,7 +157,29 @@ function formatChatMessage(text: string): string {
 
 function assessmentStringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  return value.map((item) => {
+    if (typeof item === "string") return item.trim();
+    if (item && typeof item === "object" && "name" in item) return String((item as { name?: unknown }).name || "").trim();
+    return "";
+  }).filter(Boolean);
+}
+
+function assessmentResources(value: unknown): AssessmentResource[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => {
+    if (typeof item === "string" && item.trim()) return { name: item.trim(), required: true, reason: "" };
+    if (!item || typeof item !== "object" || !("name" in item)) return null;
+    const resource = item as Partial<AssessmentResource>;
+    const name = String(resource.name || "").trim();
+    if (!name) return null;
+    return {
+      name,
+      required: resource.required !== false,
+      reason: typeof resource.reason === "string" ? resource.reason : "",
+      ...(typeof resource.exact_part_confirmed === "boolean" ? { exact_part_confirmed: resource.exact_part_confirmed } : {}),
+      ...(Array.isArray(resource.information_needed) ? { information_needed: resource.information_needed.map(String) } : {}),
+    };
+  }).filter((item): item is AssessmentResource => Boolean(item));
 }
 
 function hasRenderableAssessment(job: ManagedJob | null | undefined): job is ManagedJob & { aiAssessment: NonNullable<ManagedJob["aiAssessment"]> } {
@@ -191,40 +216,6 @@ function markHirePerf(stage: string, startedAt?: number) {
     stage,
     ms: startedAt == null ? Math.round(now) : Math.round(now - startedAt),
   }));
-}
-
-/** Shrink phone photos so create+assess don't hang on multi'MB data URLs. */
-function compressImageForAssessment(file: File, maxEdge = 1440, quality = 0.82): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Could not read image"));
-    reader.onload = () => {
-      const src = String(reader.result || "");
-      const img = new Image();
-      img.onerror = () => reject(new Error("Could not decode image"));
-      img.onload = () => {
-        const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
-        const w = Math.max(1, Math.round(img.width * scale));
-        const h = Math.max(1, Math.round(img.height * scale));
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          reject(new Error("Canvas unavailable"));
-          return;
-        }
-        ctx.drawImage(img, 0, 0, w, h);
-        try {
-          resolve(canvas.toDataURL("image/jpeg", quality));
-        } catch (err) {
-          reject(err instanceof Error ? err : new Error("Compress failed"));
-        }
-      };
-      img.src = src;
-    };
-    reader.readAsDataURL(file);
-  });
 }
 
 type ReportStep = "intake" | "experts" | "assessment";
@@ -486,6 +477,7 @@ export default function HomeownerDashboard({
   }, [user]);
 
   const [propertyId, setPropertyId] = useState<number | "">("");
+  const [equipmentKey, setEquipmentKey] = useState("");
   const [showZipPromptPropertyId, setShowZipPromptPropertyId] = useState<number | null>(null);
   const [zipPromptInput, setZipPromptInput] = useState("");
   const [zipPromptAction, setZipPromptAction] = useState<"ai" | "experts" | null>(null);
@@ -552,8 +544,10 @@ export default function HomeownerDashboard({
   const [invoicePaymentMsg, setInvoicePaymentMsg] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<ManagedJob | null>(null);
   const [assessmentMsg, setAssessmentMsg] = useState<string | null>(null);
+  const [assessmentFollowUp, setAssessmentFollowUp] = useState("");
+  const [assessmentFollowUpPhoto, setAssessmentFollowUpPhoto] = useState<string | null>(null);
+  const [assessmentFollowUpPhotoConfirmed, setAssessmentFollowUpPhotoConfirmed] = useState(false);
   const [assessLoadingStep, setAssessLoadingStep] = useState<number | null>(null);
-  const [assessLoadingZip, setAssessLoadingZip] = useState<string | null>(null);
   const [hireScreenOpen, setHireScreenOpen] = useState(false);
   const [intakeDraftSavedAt, setIntakeDraftSavedAt] = useState<string | null>(null);
   const [hasIntakeDraft, setHasIntakeDraft] = useState(false);
@@ -562,7 +556,8 @@ export default function HomeownerDashboard({
   const [techMessageDraft, setTechMessageDraft] = useState("");
   const [techMessageSent, setTechMessageSent] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLInputElement>(null);
+  const followUpCameraRef = useRef<HTMLInputElement>(null);
+  const followUpPhotoRef = useRef<HTMLInputElement>(null);
   const assessInFlightRef = useRef<number | null>(null);
   const assessmentRecoveryRef = useRef<number | null>(null);
   const aiAssessmentConsentRef = useRef<{
@@ -788,8 +783,8 @@ export default function HomeownerDashboard({
     setAssessmentMode("expert");
   }
 
-  async function reassessWithFixera(observation: string) {
-    if (!activeJob) return;
+  async function reassessWithFixera(observation: string, imageDataUrl?: string | null): Promise<boolean> {
+    if (!activeJob) return false;
     setDiyChatBusy(true);
     try {
       const token = window.localStorage.getItem("fixbridge-auth-token");
@@ -805,25 +800,74 @@ export default function HomeownerDashboard({
           description: activeJob.description,
           observation,
           currentStep: diyStepIndex,
+          ...(imageDataUrl ? { imageDataUrl } : {}),
         }),
       });
       const data = await response.json();
       if (!data?.assessment) {
         setError(data?.error || "We couldn't complete the assessment right now. Please try again.");
-        return;
+        return false;
       }
       setActiveJob((prev) => prev ? { ...prev, aiAssessment: { ...prev.aiAssessment, ...data.assessment } } : prev);
       setDiyView("step");
+      return true;
     } catch {
       setError("We couldn't complete the assessment right now. Please try again.");
+      return false;
     } finally {
       setDiyChatBusy(false);
+    }
+  }
+
+  async function prepareAssessmentFollowUpPhoto(file: File | null) {
+    if (!file) return;
+    const name = file.name.toLowerCase();
+    if (!file.type.startsWith("image/") || file.type === "image/heic" || file.type === "image/heif" || name.endsWith(".heic") || name.endsWith(".heif")) {
+      setError("Choose a JPG, PNG, or WEBP photo for Fixera to review.");
+      return;
+    }
+    try {
+      const dataUrl = await compressImageForAssessment(file);
+      if (dataUrl.length > 6_000_000) throw new Error("This photo is too large to attach.");
+      setAssessmentFollowUpPhoto(dataUrl);
+      setAssessmentFollowUpPhotoConfirmed(false);
+      setError(null);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not prepare this photo.");
+    }
+  }
+
+  async function submitAssessmentFollowUp() {
+    if (!assessmentFollowUp.trim() && !assessmentFollowUpPhoto) {
+      setError("Answer a question or add a photo before reassessing.");
+      return;
+    }
+    if (assessmentFollowUpPhoto && !assessmentFollowUpPhotoConfirmed) {
+      setError("Preview and confirm the added photo before reassessing.");
+      return;
+    }
+    const succeeded = await reassessWithFixera(
+      `Homeowner answers to Fixera's questions: ${assessmentFollowUp.trim() || "No additional text."}`,
+      assessmentFollowUpPhotoConfirmed ? assessmentFollowUpPhoto : null
+    );
+    if (succeeded) {
+      setAssessmentFollowUp("");
+      setAssessmentFollowUpPhoto(null);
+      setAssessmentFollowUpPhotoConfirmed(false);
     }
   }
 
   function openProfessionalFromDiy() {
     setDiyShowProfessionalHandoff(true);
     if (activeJob) {
+      void recordFixeraDiyEvent(activeJob.id, {
+        event: "professional_requested",
+        completedStepIndexes: Object.entries(diyCompletedSteps).filter(([, done]) => done).map(([index]) => Number(index)),
+      }).then((saved) => {
+        if (!saved.ok) console.warn("[Fixera] Could not persist professional escalation", saved.code);
+      }).catch((error) => {
+        console.warn("[Fixera] Could not persist professional escalation", error);
+      });
       setSelectedJobId(activeJob.id);
       const attempted = Object.entries(diyCompletedSteps)
         .filter(([, done]) => done)
@@ -872,13 +916,61 @@ export default function HomeownerDashboard({
     const completed = { ...diyCompletedSteps, [diyStepIndex]: true };
     const finished = steps.every((_, idx) => completed[idx]);
     const nextIndex = finished ? diyStepIndex : Math.min(diyStepIndex + 1, steps.length - 1);
-    setDiyCompletedSteps(completed);
-    setDiyStepIndex(nextIndex);
-    if (finished) setDiyView("complete");
-    persistDiyProgress(nextIndex, completed);
-    setDiyStepSaved(true);
-    setDiySavingStep(false);
-    window.setTimeout(() => setDiyStepSaved(false), 1200);
+    try {
+      const saved = await recordFixeraDiyEvent(activeJob.id, {
+        event: "step_completed",
+        stepIndex: diyStepIndex,
+        completedStepIndexes: Object.entries(completed).filter(([, done]) => done).map(([idx]) => Number(idx)),
+      });
+      if (!saved.ok) {
+        setError(saved.message || "Could not save this repair step. Please try again.");
+        return;
+      }
+      setDiyCompletedSteps(completed);
+      setDiyStepIndex(nextIndex);
+      if (finished) setDiyView("complete");
+      persistDiyProgress(nextIndex, completed);
+      setDiyStepSaved(true);
+      window.setTimeout(() => setDiyStepSaved(false), 1200);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not save this repair step. Please try again.");
+    } finally {
+      setDiySavingStep(false);
+    }
+  }
+
+  async function confirmDiyRepairOutcome(outcome: "fixed" | "still_broken", details: DiyRepairOutcomeDetails) {
+    if (!activeJob) return;
+    const completedStepIndexes = Object.entries(diyCompletedSteps)
+      .filter(([, done]) => done)
+      .map(([index]) => Number(index));
+    try {
+      const saved = await recordFixeraDiyEvent(activeJob.id, {
+        event: outcome,
+        completedStepIndexes,
+        actualAction: details.actualAction,
+        partsUsed: details.partsUsed,
+        toolsUsed: details.toolsUsed,
+        cost: details.cost ? Number(details.cost) : null,
+        observation: details.observation,
+        note: outcome === "fixed" ? "Homeowner confirmed the original issue is resolved." : "Homeowner confirmed the original issue is still present.",
+      });
+      if (!saved.ok) {
+        setError(saved.message || "Could not save the repair outcome. Please try again.");
+        return;
+      }
+      if (outcome === "fixed") {
+        setDiyView("home");
+        setAssessmentMsg("Fixera saved your confirmed repair outcome to this property's service history.");
+        await refresh();
+        return;
+      }
+      await reassessWithFixera(
+        `The homeowner confirmed that the original issue is still present after attempting: ${details.actualAction || completedStepIndexes.map((index) => `step ${index + 1}`).join(", ") || "the guided steps"}. New observation: ${details.observation || "none provided"}. Reassess the current issue; do not treat the previous hypothesis as confirmed.`
+      );
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not save the repair outcome. Please try again.");
+    }
   }
 
   async function openGuidedDiyStep() {
@@ -1221,7 +1313,6 @@ export default function HomeownerDashboard({
     setReportPath(null);
     setAssessmentMode("diy");
     setAssessLoadingStep(null);
-    setAssessLoadingZip(null);
     setAssessmentMsg(null);
     setPendingAssessment(null);
     setPendingServiceRequestId(null);
@@ -1251,6 +1342,7 @@ export default function HomeownerDashboard({
       clearAssistantHandoff();
     } else {
       setAssistantHandoffIntent(null);
+      setEquipmentKey("");
       if (prefill?.systemId) setRequestSystemId(prefill.systemId);
       else if (prefill?.service) setRequestSystemId(categoryToTradeId(prefill.service));
       if (prefill?.area) setIssueArea(resolveServiceLocation(String(prefill.area), description));
@@ -2430,6 +2522,7 @@ export default function HomeownerDashboard({
         description,
         adaptiveAnswers,
         propertyId,
+        equipmentKey,
         partnerCode,
         mediaDataUrl,
         mediaType,
@@ -2449,6 +2542,7 @@ export default function HomeownerDashboard({
     description,
     adaptiveAnswers,
     propertyId,
+    equipmentKey,
     partnerCode,
     mediaDataUrl,
     mediaType,
@@ -2464,6 +2558,7 @@ export default function HomeownerDashboard({
     if (draft.description) setDescription(draft.description);
     if (draft.adaptiveAnswers) setAdaptiveAnswers(draft.adaptiveAnswers);
     if (draft.propertyId) setPropertyId(draft.propertyId);
+    if (draft.equipmentKey) setEquipmentKey(draft.equipmentKey);
     if (draft.partnerCode) setPartnerCode(draft.partnerCode);
     if (draft.mediaDataUrl) {
       setMediaDataUrl(draft.mediaDataUrl);
@@ -2489,47 +2584,47 @@ export default function HomeownerDashboard({
     });
   }, [selectedJobId, jobs]);
 
-  function onFile(file: File | null) {
+  async function onFile(file: File | null): Promise<void> {
     if (!file) return;
+    setError(null);
     if (file.type.startsWith("video")) {
       if (file.size > 8_000_000) {
-        setError("Video is too large. Please use a photo under ~8 MB, or a short clip.");
-        return;
+        throw new Error("Video is too large. Please use a shorter clip.");
       }
-      const reader = new FileReader();
-      reader.onload = () => {
-        setMediaDataUrl(String(reader.result));
-        setMediaType("video");
-      };
-      reader.readAsDataURL(file);
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error("Could not read this video."));
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.readAsDataURL(file);
+      });
+      setMediaDataUrl(dataUrl);
+      setMediaType("video");
       return;
     }
     const name = file.name.toLowerCase();
     const heic = file.type === "image/heic" || file.type === "image/heif" || name.endsWith(".heic") || name.endsWith(".heif");
     if (heic) {
-      setError("This image format isn't supported for analysis yet. Please upload a JPG, PNG, or WEBP.");
-      return;
+      throw new Error("This image format isn't supported for analysis yet. Please choose a JPG, PNG, or WEBP.");
     }
     if (!file.type.startsWith("image/")) {
-      setError("This image format isn't supported for analysis yet. Please upload a JPG, PNG, or WEBP.");
-      return;
+      throw new Error("This image format isn't supported for analysis yet. Please choose a JPG, PNG, or WEBP.");
     }
-    void (async () => {
-      try {
-        setError(null);
-        const dataUrl = await compressImageForAssessment(file);
-        setMediaDataUrl(dataUrl);
-        setMediaType("image");
-      } catch {
-        // Fallback to raw read if canvas compress fails
+    let dataUrl: string;
+    try {
+      dataUrl = await compressImageForAssessment(file);
+    } catch {
+      dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => {
-          setMediaDataUrl(String(reader.result));
-          setMediaType("image");
-        };
+        reader.onerror = () => reject(new Error("Could not read this photo."));
+        reader.onload = () => resolve(String(reader.result || ""));
         reader.readAsDataURL(file);
-      }
-    })();
+      });
+    }
+    if (!dataUrl.startsWith("data:image/") || dataUrl.length > 6_000_000) {
+      throw new Error("This photo is too large to attach. Choose a smaller image and try again.");
+    }
+    setMediaDataUrl(dataUrl);
+    setMediaType("image");
   }
 
   //  async function runAssessWithProgress(
@@ -2578,8 +2673,6 @@ export default function HomeownerDashboard({
       recordType?: "managed_job" | "pending_service_request";
     } = {}
   ) {
-    const startedAt = Date.now();
-
     const isPending =
       recordType === "pending_service_request";
 
@@ -2616,25 +2709,6 @@ export default function HomeownerDashboard({
     );
 
     setAssessLoadingStep(0);
-    setAssessLoadingZip(
-      zip ? String(zip).slice(0, 5) : null
-    );
-
-    const timer = window.setInterval(() => {
-      setAssessLoadingStep((s) => {
-        const nextStep =
-          s == null ? 0 : Math.min(6, s + 1);
-
-        console.log(
-          "[Fixera] Buffering step:",
-          nextStep,
-          "| elapsed:",
-          `${Date.now() - startedAt}ms`
-        );
-
-        return nextStep;
-      });
-    }, 900);
 
     try {
       // ============================================================
@@ -2770,13 +2844,8 @@ export default function HomeownerDashboard({
         }
       );
 
-      window.clearInterval(timer);
-
-      setAssessLoadingStep(4);
-
       window.setTimeout(() => {
         setAssessLoadingStep(null);
-        setAssessLoadingZip(null);
       }, 350);
 
       if (
@@ -2841,11 +2910,6 @@ export default function HomeownerDashboard({
     setAssessmentMsg(null);
     setAssessLoadingStep(0);
     setAssessmentMode("diy");
-    const propZip = properties.find((p) => p.id === propertyId)?.zip ||
-      properties.find((p) => p.id === activeJob?.propertyId)?.zip ||
-      activeJob?.cityStateZip?.match(/\b\d{5}\b/)?.[0] ||
-      null;
-    setAssessLoadingZip(propZip ? String(propZip).slice(0, 5) : null);
     if (step !== "assessment" || reportPath !== "ai") {
       navigateTo({
         role: "homeowner",
@@ -2922,8 +2986,6 @@ export default function HomeownerDashboard({
     if (reportPathValue === "ai") {
       setAssessmentMode("diy");
     }
-    const propZip = properties.find((p) => p.id === propertyId)?.zip || null;
-    setAssessLoadingZip(propZip ? String(propZip).slice(0, 5) : null);
     navigateTo({
       role: "homeowner",
       tab: "report",
@@ -2936,7 +2998,6 @@ export default function HomeownerDashboard({
 
   function returnToIntakeDetails() {
     setAssessLoadingStep(null);
-    setAssessLoadingZip(null);
     navigateTo({
       role: "homeowner",
       tab: "report",
@@ -3023,6 +3084,7 @@ export default function HomeownerDashboard({
         title: serviceRequestTitle(resolvedLocation, resolvedTrade),
         description: fullDescription,
         propertyId: propertyId || undefined,
+        equipmentKey: equipmentKey || undefined,
         serviceTiming: path === "experts" ? serviceTiming : "weekday",
         preferredDate: path === "experts" ? preferredDate || undefined : undefined,
         preferredTimeSlot: path === "experts" ? preferredTimeSlot : undefined,
@@ -3300,8 +3362,8 @@ export default function HomeownerDashboard({
     try {
       const category = activeJob.category || "general";
       const desc = activeJob.description || "";
-      const tools = (activeJob.aiAssessment?.tools_required || []).join(", ") || "None";
-      const materials = (activeJob.aiAssessment?.materials_needed || []).join(", ") || "None";
+      const tools = assessmentStringList(activeJob.aiAssessment?.tools_required).join(", ") || "None";
+      const materials = assessmentStringList(activeJob.aiAssessment?.materials_needed).join(", ") || "None";
       const guide = activeJob.aiAssessment?.diy_guide_steps?.[diyStepIndex];
       const steps = (activeJob.aiAssessment?.diy_steps || []).map((s, idx) => `${idx + 1}. ${s}`).join("\n") || "No steps generated.";
 
@@ -3912,12 +3974,13 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                     voiceRecRef={voiceRecRef}
                     voiceBaseRef={voiceBaseRef}
                     fileRef={fileRef}
-                    videoRef={videoRef}
                     onFile={onFile}
                     mediaDataUrl={mediaDataUrl}
                     mediaType={mediaType}
                     propertyId={propertyId}
-                    setPropertyId={setPropertyId}
+                    setPropertyId={(id) => { setPropertyId(id); setEquipmentKey(""); }}
+                    equipmentKey={equipmentKey}
+                    setEquipmentKey={setEquipmentKey}
                     properties={properties}
                     onAddAddress={() => {
                       setModalAddressLine1("");
@@ -4231,8 +4294,6 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                         ) : assessLoadingStep != null ||
                           (isAssessmentProcessing(activeJob) && !hasRenderableAssessment(activeJob) && assessInFlightRef.current === activeJob?.id) ? (
                           <FixeraAnalysisExperience
-                            zip={assessLoadingZip}
-                            activeStep={assessLoadingStep ?? 0}
                             mediaUrl={activeJob?.mediaDataUrl || mediaDataUrl}
                             mediaType={activeJob?.mediaType || mediaType}
                             category={activeJob?.category || category}
@@ -4363,9 +4424,41 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                       <li key={idx}>{q}</li>
                                     ))}
                                   </ul>
-                                  <p className="text-xs pt-1 font-medium text-amber-900 dark:text-amber-200">
-                                    To fix, click <strong className="text-[#FF4D1C]">Report another issue</strong> above and upload a matching photo and clear description.
-                                  </p>
+                                  <label className="grid gap-1.5 pt-2 text-xs font-semibold text-amber-950 dark:text-amber-100">
+                                    Your answer
+                                    <textarea
+                                      value={assessmentFollowUp}
+                                      onChange={(event) => setAssessmentFollowUp(event.target.value)}
+                                      maxLength={2000}
+                                      rows={3}
+                                      placeholder="Add the details Fixera asked for."
+                                      className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-normal text-foreground dark:border-amber-800 dark:bg-background"
+                                    />
+                                  </label>
+                                  <div className="grid grid-cols-2 gap-2 pt-2">
+                                    <button type="button" onClick={() => followUpCameraRef.current?.click()} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold dark:border-amber-800 dark:bg-background">
+                                      <Camera className="h-4 w-4" /> Take Photo
+                                    </button>
+                                    <button type="button" onClick={() => followUpPhotoRef.current?.click()} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold dark:border-amber-800 dark:bg-background">
+                                      <ImagePlus className="h-4 w-4" /> Upload Photo
+                                    </button>
+                                  </div>
+                                  <input ref={followUpCameraRef} type="file" accept="image/*" capture="environment" aria-label="Take a photo for Fixera" className="sr-only" onChange={(event) => { void prepareAssessmentFollowUpPhoto(event.target.files?.[0] || null); event.currentTarget.value = ""; }} />
+                                  <input ref={followUpPhotoRef} type="file" accept="image/jpeg,image/png,image/webp" aria-label="Choose a photo for Fixera" className="sr-only" onChange={(event) => { void prepareAssessmentFollowUpPhoto(event.target.files?.[0] || null); event.currentTarget.value = ""; }} />
+                                  {assessmentFollowUpPhoto ? (
+                                    <div className="flex items-center gap-3 rounded-lg border border-amber-300 bg-white p-2 dark:border-amber-800 dark:bg-background">
+                                      <img src={assessmentFollowUpPhoto} alt="Photo for Fixera clarification" className="h-16 w-16 rounded object-cover" />
+                                      <div className="min-w-0 flex-1 text-xs font-semibold">
+                                        <p>{assessmentFollowUpPhotoConfirmed ? "Photo confirmed" : "Photo selected"}</p>
+                                        {!assessmentFollowUpPhotoConfirmed ? <button type="button" onClick={() => setAssessmentFollowUpPhotoConfirmed(true)} className="mt-1 text-primary underline">Use this photo</button> : null}
+                                      </div>
+                                      <button type="button" onClick={() => { setAssessmentFollowUpPhoto(null); setAssessmentFollowUpPhotoConfirmed(false); }} aria-label="Remove clarification photo" className="rounded p-2"><X className="h-4 w-4" /></button>
+                                    </div>
+                                  ) : null}
+                                  <button type="button" disabled={diyChatBusy} onClick={() => void submitAssessmentFollowUp()} className="mt-2 inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#FF4D1C] px-4 text-sm font-semibold text-white disabled:opacity-60">
+                                    {diyChatBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                                    Add details and reassess
+                                  </button>
                                 </div>
                               </div>
                             )}
@@ -4646,8 +4739,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                     risk={getHomeownerDiyRisk(activeJob)}
                                     steps={assessmentStringList(activeJob.aiAssessment?.diy_steps)}
                                     guideSteps={activeJob.aiAssessment?.diy_guide_steps || []}
-                                    tools={assessmentStringList(activeJob.aiAssessment?.tools_required)}
-                                    materials={assessmentStringList(activeJob.aiAssessment?.materials_needed)}
+                                    tools={assessmentResources(activeJob.aiAssessment?.tools_required)}
+                                    materials={assessmentResources(activeJob.aiAssessment?.materials_needed)}
                                     causes={assessmentStringList(activeJob.aiAssessment?.likely_causes)}
                                     stopConditions={assessmentStringList(activeJob.aiAssessment?.stop_conditions)}
                                     completionChecks={assessmentStringList(activeJob.aiAssessment?.completion_checks)}
@@ -4664,15 +4757,26 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                     view={diyView}
                                     onView={setDiyView}
                                     onBack={() => setDiyView("home")}
+                                    onConfirmFixed={(details) => void confirmDiyRepairOutcome("fixed", details)}
+                                    onStillBroken={(details) => void confirmDiyRepairOutcome("still_broken", details)}
                                     onOpenStep={() => void openGuidedDiyStep()}
                                     onOpenIdeas={() => setDiyView("ideas")}
                                     onCompleteStep={() => void completeCurrentDiyStep()}
-                                    onStepFeedback={(kind) => {
+                                    onStepFeedback={async (kind) => {
                                       if (kind === "worked") {
                                         void completeCurrentDiyStep();
                                         return;
                                       }
                                       const stepTitle = activeJob.aiAssessment?.diy_guide_steps?.[diyStepIndex]?.title || `step ${diyStepIndex + 1}`;
+                                      const feedbackSaved = await recordFixeraDiyEvent(activeJob.id, {
+                                        event: kind === "failed" ? "step_failed" : "step_different",
+                                        stepIndex: diyStepIndex,
+                                        completedStepIndexes: Object.entries(diyCompletedSteps).filter(([, done]) => done).map(([index]) => Number(index)),
+                                        note: kind === "failed" ? "Homeowner reported that the step did not work." : "Homeowner reported a different observation.",
+                                      });
+                                      if (!feedbackSaved.ok) {
+                                        setError(feedbackSaved.message || "Could not save this repair observation.");
+                                      }
                                       if (kind === "failed") {
                                         const prompt = `Step "${stepTitle}" did not work. Give one focused next check for this step only. Do not rewrite the repair plan.`;
                                         setDiyView("chat");
