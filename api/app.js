@@ -3154,7 +3154,7 @@ app.get('/api/admin/fixera/training/export', requireAuth, requireAdmin, requireP
 
 async function handleFixaAssessment(req, res) {
   try {
-    if (req.authUser.role === 'homeowner' && !(await getHomeCareEntitlement(pool, req.authUser.id)).isPro) {
+    if (req.authUser.role === 'homeowner' && !(await getHomeCareEntitlement(pool, req.authUser.id)).hasAccess) {
       return res.status(403).json({ ok: false, code: 'HOMECARE_PLAN_REQUIRED', message: 'An active HomeCare plan is required for AI assessment.' });
     }
     const invocationId = String(req.body?.assessmentInvocationId || req.body?.invocationId || '').trim();
