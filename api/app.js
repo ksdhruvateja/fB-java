@@ -14,7 +14,7 @@ import crypto from 'crypto';
 import { assessRepair, complete, reassessRepair, prepareProfessionalHandoff, getFixeraPublicStatus, getFixeraHealth, getFixeraAdminProviders } from './fixera/index.js';
 import { persistFixeraInteraction, recordFixeraFeedback, recordFixeraInteraction, trainingOverview, exportApprovedTraining, listRecentExperiences } from './fixera/experience/store.js';
 import { getPricingIntelligence } from './fixera/pricing/intelligence.js';
-import { initManagedSchema, ensureReferralCodeColumns } from './schema-managed.js';
+import { initManagedSchema, ensureReferralCodeColumns, ensureRepairPhotoColumns } from './schema-managed.js';
 import { initSupportTicketSchema, registerSupportTicketRoutes } from './support-tickets.js';
 import { initInAppNotificationSchema, registerInAppNotificationRoutes } from './in-app-notifications.js';
 import { initMessagingSchema, registerMessagingRoutes } from './messaging.js';
@@ -430,7 +430,8 @@ async function ensureDemoUsers() {
   }
 }
 
-const SCHEMA_READY_VERSION = 20261001;
+const BASE_SCHEMA_READY_VERSION = 20261001;
+const SCHEMA_READY_VERSION = 20261002;
 
 async function readSchemaReadyVersion() {
   try {
@@ -466,7 +467,16 @@ export async function initDb() {
   }
   // Cold Netlify isolates used to run hundreds of sequential DDL statements
   // before any save, upload, or navigation request could start.
-  if ((await readSchemaReadyVersion()) >= SCHEMA_READY_VERSION) {
+  const readyVersion = await readSchemaReadyVersion();
+  if (readyVersion >= SCHEMA_READY_VERSION) {
+    initDb._done = true;
+    return;
+  }
+  // A previously ready database needs only this version's additive upgrade,
+  // not the hundreds of unrelated initialization queries.
+  if (readyVersion >= BASE_SCHEMA_READY_VERSION) {
+    await ensureRepairPhotoColumns(pool);
+    await writeSchemaReadyVersion();
     initDb._done = true;
     return;
   }

@@ -1,3 +1,8 @@
+export async function ensureRepairPhotoColumns(pool) {
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS media_data_urls JSONB`);
+  await pool.query(`ALTER TABLE pending_service_requests ADD COLUMN IF NOT EXISTS media_data_urls JSONB`);
+}
+
 import { DEFAULT_PRICING_RULES } from './pricing.js';
 
 /**

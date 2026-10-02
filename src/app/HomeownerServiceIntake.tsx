@@ -281,21 +281,12 @@ export default function HomeownerServiceIntake(props: Props) {
   } = props;
 
   const isMobile = useIsMobile();
-  const [photoConfirmed, setPhotoConfirmed] = useState(false);
   const safeIntakePhase = normalizeIntakePhase(intakePhase);
   const stepMeta = INTAKE_STEP_META[safeIntakePhase];
   const resolvedTradeId = resolveRequestTradeId(requestSystemId, description);
   const selectedProperty = properties.find((property) => Number(property.id) === Number(propertyId));
   const equipmentOptions = selectedProperty?.homeSystems || [];
 
-  function runAfterPhotoConfirmation(action: () => void) {
-    if (mediaDataUrls.length && !photoConfirmed) {
-      setError("Preview and confirm the photo before continuing.");
-
-      return;
-    }
-    action();
-  }
 
   function goNextFromLocation() {
     if (!issueArea) {
@@ -312,7 +303,6 @@ export default function HomeownerServiceIntake(props: Props) {
   }
 
   function goNextFromDescribe() {
-    if (mediaDataUrls.length && !photoConfirmed) { setError("Preview and confirm each photo before continuing."); return; }
     if (!description.trim()) {
       setError("Describe the problem so we can analyze it.");
       return;
@@ -412,20 +402,26 @@ export default function HomeownerServiceIntake(props: Props) {
             <Mic className="h-4 w-4 text-primary" />
             {voiceListening ? "Listening…" : "Speak"}
           </button>
-          {properties.length > 1 ? <label className="grid gap-1 text-sm"><span className="font-semibold">Property address</span><select value={propertyId} onChange={(event) => setPropertyId(Number(event.target.value))} className="rounded-xl border border-border bg-background p-3">{properties.map((property) => <option key={property.id} value={property.id}>{property.label || property.addressLine1}</option>)}</select></label> : properties[0] ? <p className="text-sm text-muted-foreground">Property: {properties[0].addressLine1}</p> : null}
+          <label className="grid gap-1.5 text-sm">
+            <span className="font-semibold">Property address</span>
+            <select aria-label="Property address" value={propertyId} onChange={(event) => setPropertyId(event.target.value ? Number(event.target.value) : "")} className="rounded-xl border border-border bg-background p-3">
+              <option value="">Select a property</option>
+              {properties.map((property) => <option key={property.id} value={property.id}>{[property.label, property.addressLine1, property.city, property.state].filter(Boolean).join(" · ")}</option>)}
+            </select>
+            <button type="button" onClick={onAddAddress} className="justify-self-start text-xs font-semibold text-primary">Add a new address</button>
+          </label>
           <RepairPhotoPicker
             photos={mediaDataUrls}
             onFile={async (file) => { setError(null); await onFile(file); }}
             onRemove={(index) => onRemovePhoto?.(index)}
-            onConfirmedChange={setPhotoConfirmed}
             disabled={busy}
           />
           {mediaType?.startsWith("video") && mediaDataUrl ? <div><video src={mediaDataUrl} controls className="max-h-48" /><button type="button" onClick={onClearMedia}>Remove video</button></div> : null}
           <IntakeActionButtons
             busy={busy}
             description={description}
-            onSubmitAi={() => runAfterPhotoConfirmation(onSubmitAi)}
-            onHirePro={() => runAfterPhotoConfirmation(onHirePro)}
+            onSubmitAi={onSubmitAi}
+            onHirePro={onHirePro}
             preferHire={preferHire}
           />
           <div className="hidden justify-end sm:flex">
@@ -500,25 +496,9 @@ export default function HomeownerServiceIntake(props: Props) {
 
           <ServiceAdaptiveQuestions tradeId={resolvedTradeId} answers={adaptiveAnswers} onChange={setAdaptiveAnswers} />
 
-          <div className="grid gap-1.5 text-sm">
-            <span className="font-medium">
-              Property address <span className="text-red-500">*</span>
-            </span>
-            <select
-              className="w-full rounded-lg border border-border bg-background px-3 py-2"
-              value={propertyId}
-              onChange={(e) => setPropertyId(e.target.value ? Number(e.target.value) : "")}
-            >
-              <option value="">Select property</option>
-              {properties.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label || p.addressLine1}
-                </option>
-              ))}
-            </select>
-            <button type="button" onClick={onAddAddress} className="text-xs font-semibold text-primary hover:underline self-start">
-              Add a new address
-            </button>
+          <div className="text-sm text-muted-foreground">
+            <p>Property: {selectedProperty ? [selectedProperty.addressLine1, selectedProperty.city, selectedProperty.state].filter(Boolean).join(", ") : "Select a property on the first step."}</p>
+            <button type="button" onClick={() => setIntakePhase("describe")} className="mt-1 text-xs font-semibold text-primary">Change property</button>
           </div>
 
           <div className="space-y-4 rounded-xl border border-border bg-muted/30 p-4">

@@ -1,12 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Camera, ImagePlus, X } from "lucide-react";
 import { MAX_REPAIR_PHOTOS } from "./repairPhotos";
 
-export default function RepairPhotoPicker({ photos, onFile, onRemove, onConfirmedChange, disabled = false }: {
+export default function RepairPhotoPicker({ photos, onFile, onRemove, disabled = false }: {
   photos: string[];
   onFile: (file: File) => Promise<void>;
   onRemove: (index: number) => void;
-  onConfirmedChange: (confirmed: boolean) => void;
   disabled?: boolean;
 }) {
   const camera = useRef<HTMLInputElement>(null);
@@ -15,9 +14,6 @@ export default function RepairPhotoPicker({ photos, onFile, onRemove, onConfirme
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
-  const [confirmed, setConfirmed] = useState<string[]>([]);
-  const allConfirmed = photos.every((photo) => confirmed.includes(photo));
-  useEffect(() => { onConfirmedChange(allConfirmed); }, [allConfirmed, onConfirmedChange]);
 
   async function addFiles(files: FileList | null) {
     if (!files?.length || adding.current || disabled) return;
@@ -34,7 +30,7 @@ export default function RepairPhotoPicker({ photos, onFile, onRemove, onConfirme
   }
 
   return <div className="space-y-3">
-    <div><p className="text-sm font-semibold">Add photos</p><p className="text-xs text-muted-foreground">Up to 6 photos. Preview and confirm each photo before assessment. Photos are compressed for upload.</p></div>
+    <div><p className="text-sm font-semibold">Add photos</p><p className="text-xs text-muted-foreground">Up to 6 photos. Preview photos if you want to check them. Photos are compressed for upload.</p></div>
     <div className="grid grid-cols-2 gap-2">
       <button type="button" disabled={disabled || busy || photos.length >= MAX_REPAIR_PHOTOS} onClick={() => camera.current?.click()} className="min-h-14 rounded-xl border border-dashed border-primary/40 p-3 text-sm font-semibold disabled:opacity-50"><Camera className="mx-auto h-5 w-5" />Take Photo</button>
       <button type="button" disabled={disabled || busy || photos.length >= MAX_REPAIR_PHOTOS} onClick={() => upload.current?.click()} className="min-h-14 rounded-xl border border-dashed border-border p-3 text-sm font-semibold disabled:opacity-50"><ImagePlus className="mx-auto h-5 w-5" />{photos.length ? "Add More Photos" : "Upload Photo"}</button>
@@ -45,8 +41,8 @@ export default function RepairPhotoPicker({ photos, onFile, onRemove, onConfirme
     {error ? <p role="alert" className="text-sm text-red-600">{error}</p> : null}
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{photos.map((photo, index) => <div key={`${index}:${photo.slice(-24)}`} className="rounded-xl border border-border p-2">
       <button type="button" disabled={disabled || busy} aria-label={`Preview photo ${index + 1}`} onClick={() => setPreview(photo)} className="w-full"><img src={photo} alt={`Repair photo ${index + 1}`} className="h-24 w-full rounded-lg object-cover" /></button>
-      <div className="mt-2 flex items-center justify-between gap-1"><span className="text-xs">{confirmed.includes(photo) ? "Confirmed" : "Preview to confirm"}</span><button type="button" disabled={disabled || busy} aria-label={`Remove photo ${index + 1}`} onClick={() => onRemove(index)} className="rounded p-1"><X className="h-4 w-4" /></button></div>
+      <div className="mt-2 flex items-center justify-between gap-1"><span className="text-xs">{"Photo attached"}</span><button type="button" disabled={disabled || busy} aria-label={`Remove photo ${index + 1}`} onClick={() => onRemove(index)} className="rounded p-1"><X className="h-4 w-4" /></button></div>
     </div>)}</div>
-    {preview ? <div role="dialog" aria-modal="true" aria-label="Photo preview" className="fixed inset-0 z-[130] flex items-center justify-center bg-black/60 p-4"><div className="w-full max-w-xl rounded-2xl bg-card p-4"><img src={preview} alt="Preview selected repair photo" className="max-h-[65vh] w-full object-contain" /><div className="mt-3 flex justify-end gap-2"><button type="button" onClick={() => setPreview(null)} className="rounded-xl border px-4 py-2">Close preview</button><button type="button" onClick={() => { setConfirmed((previous) => [...previous, preview]); setPreview(null); }} className="rounded-xl bg-primary px-4 py-2 text-white">Use this photo</button></div></div></div> : null}
+    {preview ? <div role="dialog" aria-modal="true" aria-label="Photo preview" className="fixed inset-0 z-[130] flex items-center justify-center bg-black/60 p-4"><div className="w-full max-w-xl rounded-2xl bg-card p-4"><img src={preview} alt="Preview selected repair photo" className="max-h-[65vh] w-full object-contain" /><div className="mt-3 flex justify-end gap-2"><button type="button" onClick={() => setPreview(null)} className="rounded-xl border px-4 py-2">Close preview</button><button type="button" onClick={() => setPreview(null)} className="rounded-xl bg-primary px-4 py-2 text-white">Done</button></div></div></div> : null}
   </div>;
 }

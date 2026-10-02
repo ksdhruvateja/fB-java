@@ -42,6 +42,21 @@
 }
 .homeowner-shell h1 { font-family: inherit; text-transform: none; font-weight: 700; letter-spacing: -.025em; line-height: 1.2; }
 .homeowner-main { width: 100%; }
+.homeowner-overview { padding-block: 8px; }
+.homeowner-overview h1 { font-weight: 500; }
+.homeowner-workspace-toolbar { margin-bottom: 12px; }
+.homeowner-workspace-toolbar button { box-shadow: 0 4px 18px #272d3205; }
+.homeowner-scene-stage { background: radial-gradient(ellipse at center, #f6ead833 0%, transparent 70%); }
+.homeowner-scene-stage .homeowner-home-scene { max-width: 520px; margin-block: 18px; }
+.homeowner-health-note { border: 0; box-shadow: 0 10px 30px #2f352606; }
+.homeowner-service-link { border-radius: 12px; padding: 4px; transition: background-color 150ms; }
+.homeowner-service-link:hover { background-color: var(--muted); }
+.homeowner-service-activity > :is(div, section) { border-color: transparent; box-shadow: none; }
+.homeowner-sidebar { border-right-color: transparent; }
+.homeowner-sidebar nav button[class~="bg-[#FF4D1C]"] { background-color: #fff0d9; color: #784516; box-shadow: none; }
+.dark .homeowner-sidebar nav button[class~="bg-[#FF4D1C]"] { background-color: #463626; color: #ffd59a; }
+.dark .homeowner-scene-stage { background: radial-gradient(ellipse at center, #b5872e12 0%, transparent 70%); }
+.homeowner-overview > button { border-color: transparent; box-shadow: none; }
 .homeowner-main > * { max-width: 1440px; margin-inline: auto; }
 .homeowner-main > :is(div, section) { animation: homeowner-enter 180ms ease-out both; }
 .homeowner-shell [class~="bg-card"] { box-shadow: 0 3px 14px #20271d05; }
@@ -81,3 +96,7 @@
   .homeowner-mobile-header { gap: 8px; }
   .homeowner-home-scene { max-width: 260px; }
 }
+
+.homeowner-shell .homeowner-sidebar nav button[class~="bg-[#FF4D1C]"] { background-color: #fff0d9; color: #784516; box-shadow: none; }
+.dark .homeowner-shell .homeowner-sidebar nav button[class~="bg-[#FF4D1C]"] { background-color: #463626; color: #ffd59a; }
+.homeowner-shell .homeowner-overview button[class~="bg-primary"] { background-color: #995c20; color: #fff; }

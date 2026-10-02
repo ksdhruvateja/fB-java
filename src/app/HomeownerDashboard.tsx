@@ -564,12 +564,10 @@ export default function HomeownerDashboard({
   const assessmentFollowUpPhoto = assessmentFollowUpPhotos[0] || null;
   function setAssessmentFollowUpPhoto(photo: string | null) { assessmentFollowUpPhotosRef.current = photo ? [photo] : []; setAssessmentFollowUpPhotos(assessmentFollowUpPhotosRef.current); }
   const reassessmentInFlightRef = useRef(false);
-  const [assessmentFollowUpPhotoConfirmed, setAssessmentFollowUpPhotoConfirmed] = useState(false);
   useEffect(() => {
     setAssessmentFollowUp("");
     assessmentFollowUpPhotosRef.current = [];
     setAssessmentFollowUpPhotos([]);
-    setAssessmentFollowUpPhotoConfirmed(false);
   }, [user.id, activeJob?.id, pendingAssessment?.pendingServiceRequest?.id]);
   const [assessLoadingStep, setAssessLoadingStep] = useState<number | null>(null);
   const [hireScreenOpen, setHireScreenOpen] = useState(false);
@@ -856,7 +854,6 @@ export default function HomeownerDashboard({
     const photo = await prepareRepairPhoto(file);
     assessmentFollowUpPhotosRef.current = [...assessmentFollowUpPhotosRef.current, photo];
     setAssessmentFollowUpPhotos(assessmentFollowUpPhotosRef.current);
-    setAssessmentFollowUpPhotoConfirmed(false);
     setError(null);
   }
 
@@ -865,18 +862,13 @@ export default function HomeownerDashboard({
       setError("Answer a question or add a photo before reassessing.");
       return;
     }
-    if (assessmentFollowUpPhoto && !assessmentFollowUpPhotoConfirmed) {
-      setError("Preview and confirm the added photo before reassessing.");
-      return;
-    }
     const succeeded = await reassessWithFixera(
       `Homeowner answers to Fixera's questions: ${assessmentFollowUp.trim() || "No additional text."}`,
-      assessmentFollowUpPhotoConfirmed ? assessmentFollowUpPhotos : null
+      assessmentFollowUpPhotos.length ? assessmentFollowUpPhotos : null
     );
     if (succeeded) {
       setAssessmentFollowUp("");
       setAssessmentFollowUpPhoto(null);
-      setAssessmentFollowUpPhotoConfirmed(false);
     }
   }
 
@@ -4507,7 +4499,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                       className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-normal text-foreground dark:border-amber-800 dark:bg-background"
                                     />
                                   </label>
-                                    <RepairPhotoPicker photos={assessmentFollowUpPhotos} onFile={async (file) => { await prepareAssessmentFollowUpPhoto(file); }} onRemove={(index) => { assessmentFollowUpPhotosRef.current = assessmentFollowUpPhotos.filter((_, i) => i !== index); setAssessmentFollowUpPhotos(assessmentFollowUpPhotosRef.current); }} onConfirmedChange={setAssessmentFollowUpPhotoConfirmed} disabled={diyChatBusy} />
+                                    <RepairPhotoPicker photos={assessmentFollowUpPhotos} onFile={async (file) => { await prepareAssessmentFollowUpPhoto(file); }} onRemove={(index) => { assessmentFollowUpPhotosRef.current = assessmentFollowUpPhotos.filter((_, i) => i !== index); setAssessmentFollowUpPhotos(assessmentFollowUpPhotosRef.current); }} disabled={diyChatBusy} />
                                   <button type="button" disabled={diyChatBusy} onClick={() => void submitAssessmentFollowUp()} className="mt-2 inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#FF4D1C] px-4 text-sm font-semibold text-white disabled:opacity-60">
                                     {diyChatBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                                     Add details and reassess
