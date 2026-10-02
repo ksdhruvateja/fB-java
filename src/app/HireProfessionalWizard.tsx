@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   ArrowLeft,
@@ -822,6 +822,7 @@ function PendingHireProfessionalWizard({
   const [convertedJob, setConvertedJob] = useState<ManagedJob | null>(null);
   const [consent, setConsent] = useState(false);
   const [paymentMessage, setPaymentMessage] = useState<string | null>(null);
+  const checkoutInFlight = useRef(false);
   const amount = 125;
 
   useEffect(() => {
@@ -887,6 +888,7 @@ function PendingHireProfessionalWizard({
   const validContactPhone = contactPhoneDigits.length >= 7 && contactPhoneDigits.length <= 15;
 
   async function saveAndCheckout() {
+    if (checkoutInFlight.current) return;
     if (!validContactPhone) {
       setContactPhoneTouched(true);
       onError("Please enter a valid contact phone number (7–15 digits).");
@@ -897,6 +899,7 @@ function PendingHireProfessionalWizard({
       onError("Please acknowledge the professional-service payment terms before continuing.");
       return;
     }
+    checkoutInFlight.current = true;
     setBusy(true);
     onError(null);
     try {
@@ -921,6 +924,7 @@ function PendingHireProfessionalWizard({
       }
       window.location.href = result.url;
     } finally {
+      checkoutInFlight.current = false;
       setBusy(false);
     }
   }

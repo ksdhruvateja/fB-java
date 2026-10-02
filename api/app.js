@@ -1,3 +1,5 @@
+import { normalizeRepairPhotos, repairPhotosFromRow } from './repair-photos.js';
+import { getHomeCareEntitlement } from './subscription-state.js';
 import { listKnowledgeEntries, retrieveGlobalKnowledge, writeKnowledgeEntry } from './fixa/knowledge/knowledgeWriter.js';
 import { storeFixeraCaseMedia } from './fixera/case-media.js';
 import { appendAssessmentRevision } from './fixera/assessment-history.js';
@@ -3142,6 +3144,9 @@ app.get('/api/admin/fixera/training/export', requireAuth, requireAdmin, requireP
 
 async function handleFixaAssessment(req, res) {
   try {
+    if (req.authUser.role === 'homeowner' && !(await getHomeCareEntitlement(pool, req.authUser.id)).isPro) {
+      return res.status(403).json({ ok: false, code: 'HOMECARE_PLAN_REQUIRED', message: 'An active HomeCare plan is required for AI assessment.' });
+    }
     const invocationId = String(req.body?.assessmentInvocationId || req.body?.invocationId || '').trim();
     if (!invocationId) {
       return res.status(400).json({
@@ -3379,6 +3384,7 @@ app.post('/api/fixera/assessment', requireAuth, aiLimiter, handleFixaAssessment)
 app.post('/api/fixa/assessment', requireAuth, aiLimiter, handleFixaAssessment);
 
 async function handleFixeraReassess(req, res) {
+  let claimedCase = null;
   try {
     const observation = clampString(req.body?.observation, 2000);
     if (!observation) {
@@ -3390,17 +3396,19 @@ async function handleFixeraReassess(req, res) {
     }
     let authorizedCase = null;
     let caseType = null;
-    const { rows: managedRows } = await pool.query(
-      `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_type, ai_assessment, ai_assessment_history
+    const requestedType = req.body?.caseType;
+    if (requestedType != null && !['managed_job', 'pending_service_request'].includes(requestedType)) return res.status(400).json({ ok: false, code: 'INVALID_CASE_TYPE' });
+    const { rows: managedRows } = requestedType === 'pending_service_request' ? { rows: [] } : await pool.query(
+      `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_data_urls, media_type, ai_assessment, ai_assessment_history
          FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2`,
       [caseId, req.authUser.id]
     );
     if (managedRows[0]) {
       authorizedCase = managedRows[0];
       caseType = 'managed_job';
-    } else {
+    } else if (requestedType !== 'managed_job') {
       const { rows: pendingRows } = await pool.query(
-        `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_type, ai_assessment, ai_assessment_history
+        `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_data_urls, media_type, ai_assessment, ai_assessment_history
            FROM pending_service_requests WHERE id=$1 AND homeowner_user_id=$2`,
         [caseId, req.authUser.id]
       );
@@ -3413,31 +3421,11 @@ async function handleFixeraReassess(req, res) {
       return res.status(404).json({ ok: false, code: 'CASE_NOT_FOUND', message: 'Repair case not found.' });
     }
 
-    let imageDataUrl = authorizedCase.media_data_url || null;
-    if (req.body?.imageDataUrl != null) {
-      if (typeof req.body.imageDataUrl !== 'string' || !req.body.imageDataUrl.startsWith('data:image/') || req.body.imageDataUrl.length > 6_000_000) {
-        return res.status(400).json({ ok: false, code: 'INVALID_REASSESSMENT_IMAGE', message: 'Choose a supported photo under 6 MB.' });
-      }
-      try {
-        await storeFixeraCaseMedia(pool, {
-          userId: req.authUser.id,
-          caseType,
-          caseId,
-          propertyId: authorizedCase.property_id,
-          equipmentKey: authorizedCase.equipment_key || null,
-          dataUrl: req.body.imageDataUrl,
-        });
-      } catch (mediaError) {
-        return res.status(400).json({ ok: false, code: 'REASSESSMENT_IMAGE_SAVE_FAILED', message: mediaError?.message || 'The new photo could not be attached to this case.' });
-      }
-      imageDataUrl = req.body.imageDataUrl;
-      await pool.query(
-        caseType === 'managed_job'
-          ? `UPDATE managed_jobs SET media_data_url=$1, media_type='image', updated_at=NOW() WHERE id=$2 AND homeowner_user_id=$3`
-          : `UPDATE pending_service_requests SET media_data_url=$1, media_type='image', updated_at=NOW() WHERE id=$2 AND homeowner_user_id=$3`,
-        [imageDataUrl, caseId, req.authUser.id]
-      );
-    }
+    const entitlement = await getHomeCareEntitlement(pool, req.authUser.id);
+    if (!entitlement.hasAccess) return res.status(403).json({ ok: false, code: 'HOMECARE_PLAN_REQUIRED', message: 'An eligible active HomeCare plan is required before reassessment.' });
+    const addedPhotos = normalizeRepairPhotos(req.body?.imageDataUrls, req.body?.imageDataUrl);
+    const imageDataUrls = normalizeRepairPhotos([...repairPhotosFromRow(authorizedCase), ...addedPhotos]);
+    const imageDataUrl = imageDataUrls[0] || null;
 
     const propertyContext = authorizedCase.property_id
       ? await buildPropertyAIContext(pool, authorizedCase.property_id, req.authUser.id, {
@@ -3449,6 +3437,12 @@ async function handleFixeraReassess(req, res) {
     if (authorizedCase.property_id && !propertyContext) {
       return res.status(403).json({ ok: false, code: 'PROPERTY_ACCESS_DENIED', message: 'Property access could not be verified.' });
     }
+    const table = caseType === 'managed_job' ? 'managed_jobs' : 'pending_service_requests';
+    const { rows: claimed } = await pool.query(`UPDATE ${table} SET assessment_status='processing' WHERE id=$1 AND homeowner_user_id=$2 AND COALESCE(assessment_status,'idle') <> 'processing' RETURNING id`, [caseId, req.authUser.id]);
+    if (!claimed[0]) return res.status(409).json({ ok: false, code: 'ASSESSMENT_IN_PROGRESS', message: 'This assessment is already running.' });
+    claimedCase = { table, caseId };
+    for (const photo of addedPhotos) await storeFixeraCaseMedia(pool, { userId: req.authUser.id, caseType, caseId, propertyId: authorizedCase.property_id, equipmentKey: authorizedCase.equipment_key, dataUrl: photo });
+    await pool.query(`UPDATE ${table} SET media_data_urls=$1::jsonb, media_data_url=$2, media_type=$3, updated_at=NOW() WHERE id=$4 AND homeowner_user_id=$5`, [JSON.stringify(imageDataUrls), imageDataUrl, imageDataUrls.length ? 'image' : authorizedCase.media_type, caseId, req.authUser.id]);
     const globalKnowledge = await retrieveGlobalKnowledge(pool, {
       category: authorizedCase.category,
       query: [authorizedCase.title, authorizedCase.description, observation, authorizedCase.equipment_key].filter(Boolean).join(' '),
@@ -3459,6 +3453,7 @@ async function handleFixeraReassess(req, res) {
       observation,
       currentStep: req.body?.currentStep ?? null,
       imageDataUrl,
+      imageDataUrls,
       propertyId: propertyContext?.propertyId || null,
       property: propertyContext?.memory || null,
       jobId: caseId,
@@ -3474,7 +3469,7 @@ async function handleFixeraReassess(req, res) {
         title: authorizedCase.title,
         description: authorizedCase.description,
         aiAssessment: authorizedCase.ai_assessment,
-        mediaType: req.body?.imageDataUrl ? 'image' : authorizedCase.media_type,
+        mediaType: imageDataUrls.length ? 'image' : authorizedCase.media_type,
       },
       locationContext: [
         propertyContext?.text || '',
@@ -3520,7 +3515,11 @@ async function handleFixeraReassess(req, res) {
         [JSON.stringify(result.assessment), JSON.stringify(assessmentHistory), caseId, req.authUser.id]
       );
     }
+    if (!result.assessment) await pool.query(`UPDATE ${table} SET assessment_status='failed', updated_at=NOW() WHERE id=$1 AND homeowner_user_id=$2`, [caseId, req.authUser.id]);
     return res.json({
+      caseType,
+      caseId,
+      mediaDataUrls: imageDataUrls,
       ok: Boolean(result.assessment),
       assessment: result.assessment,
       assistant: 'Fixera',
@@ -3528,10 +3527,12 @@ async function handleFixeraReassess(req, res) {
     });
   } catch (e) {
     console.error('fixera reassess:', e);
-    return res.status(500).json({
+    if (claimedCase) await pool.query(`UPDATE ${claimedCase.table} SET assessment_status='failed', updated_at=NOW() WHERE id=$1 AND homeowner_user_id=$2`, [claimedCase.caseId, req.authUser.id]).catch(() => {});
+    return res.status(e.status || 500).json({
+      code: e.code || undefined,
       ok: false,
       assessment: null,
-      error: "We couldn't complete the assessment right now. Please try again.",
+      error: e.status === 400 ? e.message : "We couldn't complete the assessment right now. Please try again.",
     });
   }
 }

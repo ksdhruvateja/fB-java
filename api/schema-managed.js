@@ -226,6 +226,8 @@ export async function initManagedSchema(pool) {
       updated_at                      TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE pending_service_requests ADD COLUMN IF NOT EXISTS media_data_urls JSONB NOT NULL DEFAULT '[]'::jsonb`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS media_data_urls JSONB NOT NULL DEFAULT '[]'::jsonb`);
   await pool.query(`ALTER TABLE pending_service_requests ADD COLUMN IF NOT EXISTS equipment_key TEXT`);
   await pool.query(`ALTER TABLE pending_service_requests ADD COLUMN IF NOT EXISTS ai_assessment_history JSONB NOT NULL DEFAULT '[]'::jsonb`);
 

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Loader2, RefreshCw, Search, Sparkles, UserRound, Wrench } from "lucide-react";
 import { getStoredToken } from "./auth";
+import { loadHomeServices } from "./homeServicesApi";
 import type { Property } from "./managedJobs";
 import { formatMoney } from "./managedJobs";
 import { useProFeatureOptional } from "./ProFeatureProvider";
@@ -58,7 +59,7 @@ export default function HomeownerServicesPage({
   const [startDate, setStartDate] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
-  const [actionLoading, setActionLoading] = useState<"request" | "hire" | "diy" | null>(null);
+  const setupSubmissionRef = useRef(false);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [helpChoice, setHelpChoice] = useState("");
@@ -66,11 +67,7 @@ export default function HomeownerServicesPage({
 
   useEffect(() => {
     let cancelled = false;
-    const token = getStoredToken();
-    void fetch("/api/home-services", {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
-      .then((r) => r.json())
+    void loadHomeServices()
       .then((data) => {
         if (cancelled || !data?.ok) return;
         const merged = mergeOfferings(data.offerings);
@@ -121,14 +118,8 @@ export default function HomeownerServicesPage({
       intent,
     } as const;
 
-    // Every explicit action gets a short transition so the homeowner
-    // immediately sees that FixBridge is preparing the selected path.
-    setActionLoading(intent);
     setMessage(null);
-    window.setTimeout(() => {
-      setActionLoading(null);
-      onRequestService(payload);
-    }, 650);
+    onRequestService(payload);
   }
 
   function openSetup(item: ServiceOffering) {
@@ -143,10 +134,12 @@ export default function HomeownerServicesPage({
   }
 
   async function submitSetup() {
+    if (setupSubmissionRef.current) return;
     if (!selected || !property?.id) {
       setMessage("Add a property before setting up a recurring service.");
       return;
     }
+    setupSubmissionRef.current = true;
     setBusy(true);
     setMessage(null);
     try {
@@ -186,6 +179,7 @@ export default function HomeownerServicesPage({
     } catch {
       setMessage("Could not submit this recurring service.");
     } finally {
+      setupSubmissionRef.current = false;
       setBusy(false);
     }
   }
@@ -273,30 +267,7 @@ export default function HomeownerServicesPage({
           </div>
         )
       ) : null}
-      {actionLoading ? (
-        <div className="flex min-h-[360px] items-center justify-center rounded-3xl border border-border bg-card p-8">
-          <div className="flex max-w-sm flex-col items-center text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
-              <Loader2 className="h-7 w-7 animate-spin text-primary" />
-            </div>
-            <h2 className="mt-5 text-xl font-semibold">
-              {actionLoading === "hire"
-                ? "Creating your professional service request..."
-                : actionLoading === "diy"
-                  ? "Preparing your Fixera experience..."
-                  : "Preparing your Fixera assessment..."}
-            </h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {actionLoading === "hire"
-                ? "We’re creating a new professional request for this service."
-                : actionLoading === "diy"
-                  ? "We’re getting your DIY assessment ready."
-                  : "We’re preparing your Fixera assessment."}
-            </p>
-          </div>
-        </div>
-      ) : null}
-      {selected && !setup && !actionLoading ? (
+      {selected && !setup ? (
         <div className="space-y-4">
           <button type="button" onClick={() => setSelectedId(null)} className="text-sm font-semibold text-primary">
             Back to services

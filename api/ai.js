@@ -1795,22 +1795,8 @@ async function analyzeWithProvider(
     },
   ];
 
-  if (
-    typeof input.imageDataUrl ===
-    'string' &&
-    input.imageDataUrl.startsWith(
-      'data:'
-    )
-  ) {
-    content.push({
-      type:
-        'image_url',
-
-      image_url: {
-        url:
-          input.imageDataUrl,
-      },
-    });
+  for (const imageDataUrl of input.imageDataUrls || (input.imageDataUrl ? [input.imageDataUrl] : [])) {
+    content.push({ type: 'image_url', image_url: { url: imageDataUrl } });
   }
 
   const messages = [
@@ -2297,30 +2283,18 @@ export async function analyzeRepair(
     };
   }
 
-  const prepared =
-    prepareImageForAi(
-      input.imageDataUrl
-    );
-
+  const selectedPhotos = input.imageDataUrls?.length ? input.imageDataUrls : (input.imageDataUrl ? [input.imageDataUrl] : []);
+  const preparedPhotos = selectedPhotos.map(prepareImageForAi);
+  if (preparedPhotos.some((photo) => photo.dropped || !photo.imageDataUrl)) {
+    return { assessment: null, source: 'error', providerCode: 'INVALID_REPAIR_PHOTO', error: 'One or more photos could not be analyzed. Use supported compressed JPG, PNG or WEBP photos.' };
+  }
+  const imageDataUrls = preparedPhotos.map((photo) => photo.imageDataUrl);
   const payload = {
     ...input,
-
-    imageDataUrl:
-      prepared.imageDataUrl,
-
-    description:
-      prepared.dropped
-        ? `${input.description || ''}
-
-(Note: the uploaded photo could not be sent to the AI because ${prepared.reason ||
-        'it was unavailable'
-        }. Do not claim you inspected the photo.)`
-        : input.description,
-
-    mode:
-      input.mode === 'detail'
-        ? 'detail'
-        : 'summary',
+    imageDataUrl: imageDataUrls[0] || null,
+    imageDataUrls,
+    description: imageDataUrls.length ? `${input.description || ''}\nReview ALL ${imageDataUrls.length} attached repair photos together. Ask for specific missing views/details when evidence is insufficient.` : input.description,
+    mode: input.mode === 'detail' ? 'detail' : 'summary',
   };
 
   try {

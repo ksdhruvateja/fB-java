@@ -135,6 +135,7 @@ export type ManagedJob = {
   title?: string;
   description?: string;
   mediaDataUrl?: string | null;
+  mediaDataUrls?: string[];
   mediaType?: string | null;
   preferredDate?: string | null;
   preferredTimeSlot?: string | null;
@@ -880,6 +881,7 @@ function normalizePendingServiceRequest(raw: any) {
     equipmentKey: raw.equipmentKey ?? raw.equipment_key ?? null,
     serviceSubcategory: raw.serviceSubcategory ?? raw.service_subcategory,
     mediaDataUrl: raw.mediaDataUrl ?? raw.media_data_url,
+    mediaDataUrls: raw.mediaDataUrls ?? raw.media_data_urls ?? [],
     mediaType: raw.mediaType ?? raw.media_type,
     serviceTiming: raw.serviceTiming ?? raw.service_timing,
     preferredDate: raw.preferredDate ?? raw.preferred_date,
@@ -2363,6 +2365,7 @@ export type PendingProfessionalRequest = {
   title?: string | null;
   description?: string | null;
   mediaDataUrl?: string | null;
+  mediaDataUrls?: string[];
   mediaType?: string | null;
   serviceTiming?: string | null;
   preferredDate?: string | null;

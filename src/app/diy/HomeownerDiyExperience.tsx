@@ -423,8 +423,8 @@ export default function HomeownerDiyExperience(props: Props) {
     summary,
     photoUrl,
     risk,
-    steps,
-  guideSteps = [],
+    steps: suppliedSteps,
+    guideSteps = [],
     tools,
     materials,
     causes,
@@ -470,7 +470,8 @@ export default function HomeownerDiyExperience(props: Props) {
   });
   const [confirmedId, setConfirmedId] = useState<string | null>(() => readConfirmedCategory(jobId)?.id || null);
   const doneCount = Object.values(completed).filter(Boolean).length;
-  const guides = useMemo(() => asGuideSteps(guideSteps, steps), [guideSteps, steps]);
+  const guides = useMemo(() => asGuideSteps(guideSteps, suppliedSteps), [guideSteps, suppliedSteps]);
+  const steps = useMemo(() => guides.map((guide) => guide.instruction), [guides]);
   const currentGuide: GuideStep | undefined = guides[stepIndex];
   const current = currentGuide?.instruction || steps[stepIndex] || "";
   const parsed = currentGuide
@@ -480,7 +481,9 @@ export default function HomeownerDiyExperience(props: Props) {
   const tip =
     stopConditions[0] ||
     "Work in a dry, well-lit area and stop if this step looks different from what you expected.";
-  const toolList = tools.length ? tools : materials;
+  const toolList = tools;
+  const stepTools = currentGuide?.tools?.length ? currentGuide.tools : tools;
+  const stepMaterials = currentGuide?.materials?.length ? currentGuide.materials : materials;
   const blocked = risk === "red";
 
   useEffect(() => {
@@ -528,10 +531,7 @@ export default function HomeownerDiyExperience(props: Props) {
 
   useEffect(() => {
     if (browseOpen || blocked || mismatch || !userPick || !working || confirmedId) return;
-    const timer = window.setTimeout(() => {
-      confirmCategory(working.id, detectedSub, "user_selected");
-    }, 900);
-    return () => window.clearTimeout(timer);
+    confirmCategory(working.id, detectedSub, "user_selected");
     // confirm once when the homeowner already chose this category
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId, userPick, working?.id, mismatch, browseOpen, blocked, confirmedId]);
@@ -771,7 +771,7 @@ export default function HomeownerDiyExperience(props: Props) {
           </button>
         }
       />
-      <p className="text-[13px] font-medium text-[#7a746c]">Guided by Fixera · Step {stepIndex + 1} of {steps.length || 1}</p>
+      <p className="text-[13px] font-medium text-[#7a746c]">Guided by Fixera · Step {stepIndex + 1} of {steps.length}</p>
       {steps.length > 0 ? <DIYStepProgress current={stepIndex} total={steps.length} completed={completed} /> : null}
       <DIYSafetyBadge risk={risk} />
       {blocked ? (
@@ -780,8 +780,23 @@ export default function HomeownerDiyExperience(props: Props) {
           <p className="text-[15px] leading-relaxed text-[#5c574f]">Request professional help. Unsafe steps are not shown.</p>
           <DIYProfessionalCTA onClick={onHire} label="Request professional help" />
         </div>
+      ) : !guides.length ? (
+        <div className="space-y-3 rounded-[22px] bg-white p-4">
+          <h3 className="text-xl font-semibold">More information needed before DIY</h3>
+          <p className="text-sm leading-relaxed">This assessment has no usable repair instructions. Add details to the assessment or request professional help before starting work.</p>
+          <DIYProfessionalCTA onClick={onHire} />
+        </div>
       ) : (
         <>
+          <details className="rounded-[22px] bg-white p-4" open>
+            <summary className="cursor-pointer text-sm font-semibold">Numbered repair steps</summary>
+            <ol aria-label="Repair steps" className="mt-3 space-y-3">
+              {guides.map((guide, index) => <li key={index} className="flex gap-3 text-sm leading-relaxed">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted font-semibold" aria-hidden>{index + 1}</span>
+                <span><strong>Step {index + 1}: {guide.title}</strong><span className="mt-1 block">{guide.instruction}</span></span>
+              </li>)}
+            </ol>
+          </details>
           <div className="rounded-[22px] bg-white p-4">
             <h3 className="text-[26px] font-semibold leading-tight text-[#2c2926]">{parsed.title}</h3>
             {currentGuide?.goal ? (
@@ -789,14 +804,14 @@ export default function HomeownerDiyExperience(props: Props) {
             ) : null}
             <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">What to do</p>
             <p className="mt-1 whitespace-pre-line text-[15px] leading-relaxed text-[#5c574f]">{currentGuide?.instruction || parsed.body || parsed.title}</p>
-            <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">Why this matters</p>
-            <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">
-              {currentGuide?.explanation || "This check confirms the cause before any part is replaced."}
-            </p>
+            {currentGuide?.explanation ? <>
+              <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">Why this matters</p>
+              <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">{currentGuide.explanation}</p>
+            </> : null}
           </div>
           <div className="overflow-hidden rounded-[22px] bg-[#EFE8DF]">
             {visualUrl ? (
-              <img src={visualUrl} alt="" className="h-52 w-full object-cover" />
+              <div><img src={visualUrl} alt="" className="h-52 w-full object-cover" /><p className="px-4 py-2 text-xs">Placeholder illustration; use your own photos and the written assessment.</p></div>
             ) : currentGuide?.image_needed ? (
               <div className="flex h-48 items-center justify-center text-[14px] text-[#8a847b]">Visual unavailable</div>
             ) : photoUrl ? (
@@ -810,18 +825,18 @@ export default function HomeownerDiyExperience(props: Props) {
           <div>
             <p className="mb-2 text-[14px] font-semibold text-[#2c2926]">Tools needed</p>
             <div className="flex flex-wrap gap-2">
-              {(currentGuide?.tools?.length ? currentGuide.tools : toolList.length ? toolList : ["No special tools listed"]).map((tool, index) => (
+              {(stepTools.length ? stepTools : ["Tools not specified in this assessment"]).map((tool, index) => (
                 <div key={`${resourceName(tool)}-${index}`}>
                   <DIYToolChip label={resourceName(tool)} />
                   {resourceDetail(tool) ? <p className="mt-1 max-w-xs text-xs text-[#5c574f]">{resourceDetail(tool)}</p> : null}
                 </div>
               ))}
             </div>
-            {currentGuide?.materials?.length ? (
+            {stepMaterials.length ? (
               <div className="mt-3">
-                <p className="mb-2 text-[14px] font-semibold text-[#2c2926]">Materials</p>
+                <p className="mb-2 text-[14px] font-semibold text-[#2c2926]">Parts and materials</p>
                 <div className="flex flex-wrap gap-2">
-                  {currentGuide.materials.map((item, index) => (
+                  {stepMaterials.map((item, index) => (
                     <div key={`${resourceName(item)}-${index}`}>
                       <DIYToolChip label={resourceName(item)} />
                       {resourceDetail(item) ? <p className="mt-1 max-w-xs text-xs text-[#5c574f]">{resourceDetail(item)}</p> : null}
@@ -836,15 +851,15 @@ export default function HomeownerDiyExperience(props: Props) {
             <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">{currentGuide?.safety_note || tip}</p>
             <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">What you should look for</p>
             <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">
-              {currentGuide?.what_to_look_for || "A clear change from the condition you started with."}
+              {currentGuide?.what_to_look_for || "Not specified in this assessment. Ask for details before continuing."}
             </p>
             <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">What you should see</p>
             <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">
-              {currentGuide?.expected_result || "The step finishes without a new leak, spark, odor, or unusual resistance."}
+              {currentGuide?.expected_result || "Not specified in this assessment. Ask for details before continuing."}
             </p>
             <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">If this does not happen</p>
             <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">
-              {currentGuide?.failure_signs || "Nothing changes, or a new problem appears."}
+              {currentGuide?.failure_signs || "Not specified in this assessment. Ask for details before continuing."}
             </p>
             <p className="mt-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#8a847b]">What to do if it does not work</p>
             <p className="mt-1 text-[15px] leading-relaxed text-[#5c574f]">
@@ -921,7 +936,7 @@ export default function HomeownerDiyExperience(props: Props) {
       </DIYRepairSummaryCard>
       <DIYRepairSummaryCard title="Tools Needed" tone="bg-[#F8E6AF]">
         <div className="flex flex-wrap gap-2">
-          {(toolList.length ? toolList : ["None listed"]).map((tool, index) => (
+          {(toolList.length ? toolList : ["Tools not specified in this assessment"]).map((tool, index) => (
             <div key={`${resourceName(tool)}-${index}`}>
               <DIYToolChip label={resourceName(tool)} />
               {resourceDetail(tool) ? <p className="mt-1 max-w-xs text-xs text-[#5c574f]">{resourceDetail(tool)}</p> : null}
@@ -1013,11 +1028,11 @@ export default function HomeownerDiyExperience(props: Props) {
     </div>
   );
 
-  const main = view === "complete" ? completeScreen : view === "step" ? stepScreen : view === "ideas" ? ideas : view === "chat" ? null : landing;
+  const main = view === "complete" ? completeScreen : view === "step" ? stepScreen : view === "ideas" ? (blocked ? stepScreen : ideas) : view === "chat" ? null : landing;
 
   return (
     <div className="rounded-[24px] bg-[#F8F7F4] p-4 text-[#2c2926] sm:p-5">
-      <div className="mx-auto grid max-w-6xl gap-5 md:grid-cols-[minmax(0,0.9fr)_minmax(280px,0.7fr)] xl:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.85fr)]">
+      <div className="mx-auto grid max-w-6xl gap-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(280px,0.7fr)] xl:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.85fr)]">
         <div className={view === "chat" ? "hidden lg:block" : ""}>{main}</div>
         <div className={view === "chat" ? "block" : "hidden lg:block"}>{chatPanel}</div>
       </div>

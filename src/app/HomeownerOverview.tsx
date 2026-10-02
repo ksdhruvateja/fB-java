@@ -1,4 +1,5 @@
-﻿import { motion } from "motion/react";
+import HomeownerHomeIllustration from "./HomeownerHomeIllustration";
+﻿import { motion, useReducedMotion } from "motion/react";
 import { useMemo } from "react";
 import {
   ArrowRight,
@@ -106,12 +107,15 @@ export default function HomeownerOverview({
   const propertyJobs = useMemo(
     () =>
       property?.id != null
-        ? jobs.filter((j) => !j.propertyId || Number(j.propertyId) === property.id)
+        ? jobs.filter((j) => Number(j.propertyId) === property.id)
         : jobs,
     [jobs, property?.id]
   );
 
+  const reduceMotion = useReducedMotion();
+  const recordedSystems = new Set((property?.healthProfile?.systems || []).map((system) => system.system));
   const merged = mergeHealthWithJobs(health, propertyJobs, property?.id);
+  const hasCompleteHealthProfile = merged.systems.every((system) => recordedSystems.has(system.system));
   const score = healthScore(merged);
   const stats = jobStats(propertyJobs);
   const activeJobs = activeJobsForHome(propertyJobs);
@@ -159,18 +163,20 @@ export default function HomeownerOverview({
       ) : null}
 
       <div className="overflow-hidden rounded-[1.75rem] bg-[#FFF4EE] shadow-sm">
-        <div className="flex items-center justify-between gap-4 p-5 sm:p-6">
-          <div className="min-w-0">
+        <div className="flex flex-col items-center justify-between gap-6 p-5 sm:p-6 lg:flex-row">
+          <div className="min-w-0 w-full lg:max-w-lg">
+            <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Your home, connected</p>
             <h1 className="text-2xl font-semibold tracking-tight text-[#2C2926] sm:text-3xl">
               {greetingForNow()}, {firstName}!
             </h1>
             <p className="mt-1 max-w-md text-sm text-[#7A746C]">
               Welcome home. FixBridge can diagnose, guide, or connect you with a professional.
             </p>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
             <button
               type="button"
               onClick={onOpenPropertyPicker || onOpenProperty}
-              className="mt-3 inline-flex max-w-full items-center gap-1 text-sm font-medium text-[#2C2926]"
+              className="inline-flex max-w-full items-center gap-1 text-sm font-medium text-[#2C2926]"
             >
               <Home className="h-4 w-4 text-[#FF4D1C]" />
               <span className="truncate">{formatPropertyLine(property)}</span>
@@ -178,16 +184,13 @@ export default function HomeownerOverview({
             <button
               type="button"
               onClick={onRequestService}
-              className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-[#FF4D1C] px-4 py-2.5 text-sm font-semibold text-white"
+              className="inline-flex items-center gap-2 rounded-2xl bg-[#FF4D1C] px-4 py-2.5 text-sm font-semibold text-white"
             >
               <Plus size={16} /> Request Service
             </button>
+            </div>
           </div>
-          <img
-            src="/brand/homeowner-welcome.png"
-            alt=""
-            className="hidden h-28 w-28 shrink-0 rounded-3xl bg-[#111] object-contain sm:block sm:h-36 sm:w-36"
-          />
+          <HomeownerHomeIllustration />
         </div>
       </div>
 
@@ -214,7 +217,7 @@ export default function HomeownerOverview({
                   >
                     <Icon size={16} />
                     <p className="mt-3 text-sm font-semibold">{system.system}</p>
-                    <p className="mt-0.5 text-[11px] opacity-80">{statusLabel(system.status)}</p>
+                    <p className="mt-0.5 text-[11px] opacity-80">{recordedSystems.has(system.system) || system.status !== "good" ? statusLabel(system.status) : "Not assessed"}</p>
                   </button>
                 );
               })}
@@ -230,24 +233,24 @@ export default function HomeownerOverview({
                   cy="64"
                   r={radius}
                   fill="none"
-                  stroke={ring.stroke}
+                  stroke={hasCompleteHealthProfile ? ring.stroke : "var(--border)"}
                   strokeWidth="10"
                   strokeLinecap="round"
                   strokeDasharray={circumference}
                   initial={{ strokeDashoffset: circumference }}
-                  animate={{ strokeDashoffset: circumference * (1 - progress) }}
-                  transition={{ duration: 0.8 }}
+                  animate={{ strokeDashoffset: hasCompleteHealthProfile ? circumference * (1 - progress) : circumference }}
+                  transition={{ duration: reduceMotion ? 0 : 0.8 }}
                 />
               </svg>
               <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <p className="text-2xl font-semibold" style={{ color: ring.stroke }}>{score}</p>
+                <p className="text-2xl font-semibold" style={{ color: hasCompleteHealthProfile ? ring.stroke : "var(--muted-foreground)" }}>{hasCompleteHealthProfile ? score : "—"}</p>
                 <p className="text-[10px] text-muted-foreground">Health</p>
               </div>
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-semibold">{healthHeadline(score)}</p>
+              <p className="text-sm font-semibold">{hasCompleteHealthProfile ? healthHeadline(score) : "Home health needs more information"}</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                {attention.length === 0 ? "All major systems look good." : `${attention.length} system${attention.length === 1 ? "" : "s"} need attention.`}
+                {hasCompleteHealthProfile ? (attention.length === 0 ? "All recorded systems are marked good." : `${attention.length} system${attention.length === 1 ? "" : "s"} need attention.`) : "Add system details to build your home health profile."}
               </p>
             </div>
           </button>

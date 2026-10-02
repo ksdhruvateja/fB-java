@@ -1,3 +1,4 @@
+import { normalizeRepairPhotos, repairPhotosFromRow } from './repair-photos.js';
 // FIXBRIDGE_STAGE_B_CONTRACTOR_BIDS_PROFILE_FINAL
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
@@ -40,7 +41,7 @@ import {
   resolveFeatureEntitlement,
 } from './homecare-config.js';
 import { buildPropertyAIContext } from './property-ai-context.js';
-import { storeFixeraCaseMedia } from './fixera/case-media.js';
+import { storeFixeraCaseMedia, storeFixeraCasePhotos } from './fixera/case-media.js';
 import { recordFixeraInteraction, persistFixeraInteraction } from './fixera/experience/store.js';
 import { retrieveGlobalKnowledge } from './fixa/knowledge/knowledgeWriter.js';
 import { appendAssessmentRevision } from './fixera/assessment-history.js';
@@ -541,6 +542,7 @@ function serializeJob(row, viewer) {
     title: row.title,
     description: row.description,
     mediaDataUrl: row.media_data_url,
+    mediaDataUrls: repairPhotosFromRow(row),
     mediaType: row.media_type,
     equipmentKey: row.equipment_key || null,
     preferredDate: row.preferred_date,
@@ -1156,6 +1158,7 @@ async function runManagedJobAssessment(pool, job, viewer) {
     category: job.category,
     description: job.description,
     imageDataUrl: job.media_data_url,
+    imageDataUrls: repairPhotosFromRow(job),
     task: 'repair_assessment',
     jobId: recordId,
     homeownerId: job.homeowner_user_id,
@@ -2149,6 +2152,8 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
     }
     job.booking_id = bookingId;
     job.equipment_key = pending.equipment_key || null;
+    await client.query(`UPDATE managed_jobs SET media_data_urls=$1::jsonb WHERE id=$2 AND homeowner_user_id=$3`, [JSON.stringify(repairPhotosFromRow(pending)), job.id, pending.homeowner_user_id]);
+    job.media_data_urls = repairPhotosFromRow(pending);
 
     await client.query(
       `UPDATE media_objects
@@ -3611,7 +3616,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         });
       }
 
-      const b = req.body || {};
+      const b = { ...(req.body || {}) };
+      const repairPhotos = normalizeRepairPhotos(b.mediaDataUrls, b.mediaDataUrl);
+      if (b.mediaDataUrls != null) { b.mediaDataUrl = repairPhotos[0] || null; b.mediaType = repairPhotos.length ? "image" : null; }
 
       if (!b.description && !b.title) {
         return res.status(400).json({
@@ -3973,6 +3980,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           );
 
         const pending = pendingRows[0];
+        pending.media_data_urls = repairPhotos;
 
         if (equipmentKey) {
           await pool.query(
@@ -3983,13 +3991,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         }
         let mediaObject = null;
         try {
-          mediaObject = await storeFixeraCaseMedia(pool, {
+          mediaObject = await storeFixeraCasePhotos(pool, {
             userId: req.authUser.id,
             caseType: 'pending_service_request',
             caseId: pending.id,
             propertyId: selectedProperty?.id || null,
             equipmentKey,
             dataUrl: b.mediaDataUrl,
+            photos: repairPhotos,
           });
         } catch (mediaError) {
           await pool.query(
@@ -4124,6 +4133,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       );
 
       let job = rows[0];
+      job.media_data_urls = repairPhotos;
 
       if (equipmentKey) {
         await pool.query(
@@ -4134,13 +4144,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
       let mediaObject = null;
       try {
-        mediaObject = await storeFixeraCaseMedia(pool, {
+        mediaObject = await storeFixeraCasePhotos(pool, {
           userId: req.authUser.id,
           caseType: 'managed_job',
           caseId: job.id,
           propertyId: selectedProperty?.id || null,
           equipmentKey,
           dataUrl: b.mediaDataUrl,
+            photos: repairPhotos,
         });
       } catch (mediaError) {
         await pool.query(
@@ -4248,9 +4259,10 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         e
       );
 
-      return res.status(500).json({
+      return res.status(e.status || 500).json({
         ok: false,
-        message: 'Could not create job.',
+        code: e.code || undefined,
+        message: e.status === 400 ? e.message : 'Could not create job.',
       });
     }
   });
@@ -4279,7 +4291,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         return res.status(400).json({ ok: false, code: 'INVALID_STEP_INDEX', message: 'A valid repair step is required.' });
       }
       const assessment = parseJsonSafe(job.ai_assessment, {}) || {};
-      const diySteps = Array.isArray(assessment.diy_steps) ? assessment.diy_steps : [];
+      if (event.startsWith('step_') && (assessment.professional_required === true || assessment.safe_diy_allowed === false || ['red', 'high', 'danger', 'critical'].includes(String(assessment.diy_risk_level || '').toLowerCase()))) {
+        return res.status(409).json({ ok: false, code: 'DIY_NOT_ALLOWED', message: 'This assessment requires professional assistance. DIY steps cannot be unlocked by an acknowledgment.' });
+      }
+      // Validate against the same usable instructions shown by the homeowner guide.
+      const diySteps = Array.isArray(assessment.diy_guide_steps) && assessment.diy_guide_steps.length
+        ? assessment.diy_guide_steps.filter((step) => step && typeof step === 'object' && String(step.instruction || '').trim())
+        : (Array.isArray(assessment.diy_steps) ? assessment.diy_steps.filter((step) => typeof step === 'string' && step.trim()) : []);
       if (event.startsWith('step_') && stepIndex >= diySteps.length) {
         return res.status(400).json({ ok: false, code: 'STEP_NOT_IN_ASSESSMENT', message: 'That repair step is not part of this assessment.' });
       }
@@ -4410,6 +4428,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const job = rows[0];
       if (Number(job.homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      if (req.authUser.role === 'homeowner' && !(await getHomeCareEntitlement(pool, req.authUser.id)).isPro) {
+        return res.status(403).json({ ok: false, code: 'HOMECARE_PLAN_REQUIRED', message: 'An active HomeCare plan is required for AI assessment.' });
       }
 
       const currentStatus = resolveAssessmentStatus(job);
@@ -4739,6 +4760,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           message: 'Not allowed.',
         });
       }
+
+      const entitlement = await getHomeCareEntitlement(pool, pending.homeowner_user_id);
+      if (!entitlement.hasAccess) return res.status(403).json({ ok: false, code: 'HOMECARE_PLAN_REQUIRED', message: 'Choose an eligible active HomeCare plan before AI assessment.' });
 
       const currentStatus =
         resolveAssessmentStatus(pending);
@@ -9327,9 +9351,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (Number(rows[0].homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
-      await pool.query(`UPDATE managed_jobs SET customer_confirmed_at=NOW() WHERE id=$1`, [jobId]);
+      if (!['work_completed', 'customer_review_pending', 'admin_review_pending', 'payout_pending', 'paid_out', 'closed'].includes(String(rows[0].status))) {
+        return res.status(409).json({ ok: false, code: 'WORK_NOT_COMPLETED', message: 'Completion can only be confirmed after the professional finishes the work.' });
+      }
+      const { rows: firstConfirmation } = await pool.query(`UPDATE managed_jobs SET customer_confirmed_at=NOW() WHERE id=$1 AND customer_confirmed_at IS NULL RETURNING id`, [jobId]);
 
-      if (await hasSucceededRetailPayment(pool, jobId)) {
+      if (firstConfirmation.length && ['work_completed', 'customer_review_pending'].includes(String(rows[0].status)) && await hasSucceededRetailPayment(pool, jobId)) {
         await pushStatus(pool, jobId, rows[0].status, 'admin_review_pending', req.authUser.id, 'Customer confirmed completion');
         await pushStatus(pool, jobId, 'admin_review_pending', 'payout_pending', req.authUser.id, 'Ready for payout');
         try {

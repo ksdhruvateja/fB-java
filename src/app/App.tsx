@@ -1222,7 +1222,7 @@ export default function App() {
               user={currentUser}
               isDark={isDark}
               onToggleDark={toggleDark}
-              onUserUpdated={(u) => setCurrentUser(u)}
+              onUserUpdated={setCurrentUser}
               initialTab={
                 postPaymentDashboard
                   ? "go-pro"

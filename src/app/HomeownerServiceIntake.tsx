@@ -1,3 +1,4 @@
+import RepairPhotoPicker from "./RepairPhotoPicker";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   ArrowLeft,
@@ -125,6 +126,8 @@ type Props = {
   fileRef: RefObject<HTMLInputElement | null>;
   onFile: (file: File | null) => void | Promise<void>;
   mediaDataUrl: string | null;
+  mediaDataUrls?: string[];
+  onRemovePhoto?: (index: number) => void;
   mediaType: string | null;
   propertyId: number | "";
   setPropertyId: (id: number | "") => void;
@@ -251,6 +254,8 @@ export default function HomeownerServiceIntake(props: Props) {
     fileRef,
     onFile,
     mediaDataUrl,
+    mediaDataUrls = [],
+    onRemovePhoto,
     mediaType,
     propertyId,
     setPropertyId,
@@ -276,9 +281,6 @@ export default function HomeownerServiceIntake(props: Props) {
   } = props;
 
   const isMobile = useIsMobile();
-  const cameraRef = useRef<HTMLInputElement | null>(null);
-  const [uploadState, setUploadState] = useState<"idle" | "adding" | "added">("idle");
-  const [previewOpen, setPreviewOpen] = useState(false);
   const [photoConfirmed, setPhotoConfirmed] = useState(false);
   const safeIntakePhase = normalizeIntakePhase(intakePhase);
   const stepMeta = INTAKE_STEP_META[safeIntakePhase];
@@ -286,35 +288,10 @@ export default function HomeownerServiceIntake(props: Props) {
   const selectedProperty = properties.find((property) => Number(property.id) === Number(propertyId));
   const equipmentOptions = selectedProperty?.homeSystems || [];
 
-  useEffect(() => {
-    if (!mediaDataUrl) {
-      setUploadState("idle");
-      setPreviewOpen(false);
-      setPhotoConfirmed(false);
-      return;
-    }
-    setUploadState("added");
-    setPhotoConfirmed(false);
-  }, [mediaDataUrl]);
-
-  async function addMedia(file: File | null) {
-    if (!file) return;
-    setError(null);
-    setUploadState("adding");
-    setPhotoConfirmed(false);
-    try {
-      await onFile(file);
-      setUploadState("added");
-    } catch {
-      setUploadState("idle");
-      setError("This photo could not be prepared. Choose a supported JPG, PNG, or WEBP and try again.");
-    }
-  }
-
   function runAfterPhotoConfirmation(action: () => void) {
-    if (mediaType === "image" && !photoConfirmed) {
+    if (mediaDataUrls.length && !photoConfirmed) {
       setError("Preview and confirm the photo before continuing.");
-      setPreviewOpen(true);
+
       return;
     }
     action();
@@ -335,6 +312,7 @@ export default function HomeownerServiceIntake(props: Props) {
   }
 
   function goNextFromDescribe() {
+    if (mediaDataUrls.length && !photoConfirmed) { setError("Preview and confirm each photo before continuing."); return; }
     if (!description.trim()) {
       setError("Describe the problem so we can analyze it.");
       return;
@@ -434,76 +412,15 @@ export default function HomeownerServiceIntake(props: Props) {
             <Mic className="h-4 w-4 text-primary" />
             {voiceListening ? "Listening…" : "Speak"}
           </button>
-          <div className="space-y-2">
-            <p className="text-sm font-semibold">Add a photo</p>
-            <p className="text-sm text-muted-foreground">Help us understand what&apos;s happening.</p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <button type="button" title="Take Photo" onClick={() => cameraRef.current?.click()} className="min-h-16 rounded-xl border border-dashed border-primary/40 bg-primary/5 px-3 py-3 text-sm font-semibold">
-                <Camera className="mx-auto mb-1 h-5 w-5 text-primary" />
-                Take Photo
-              </button>
-              <button type="button" title="Upload Photo" onClick={() => fileRef.current?.click()} className="min-h-16 rounded-xl border border-dashed border-border px-3 py-3 text-sm font-semibold">
-                <ImagePlus className="mx-auto mb-1 h-5 w-5 text-primary" />
-                Upload Photo
-              </button>
-            </div>
-          </div>
-          <input ref={cameraRef} type="file" accept="image/*" capture="environment" aria-label="Take a photo with the camera" className="sr-only" onChange={(e) => { void addMedia(e.target.files?.[0] || null); e.currentTarget.value = ""; }} />
-          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" aria-label="Choose a photo from this device" className="sr-only" onChange={(e) => { void addMedia(e.target.files?.[0] || null); e.currentTarget.value = ""; }} />
-          {uploadState === "adding" ? <p className="text-sm text-muted-foreground">Adding photo…</p> : null}
-          {mediaDataUrl ? (
-            <div className="rounded-xl border border-border bg-muted/20 p-3 motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <p className="text-xs font-medium text-emerald-700">{photoConfirmed ? "Photo confirmed" : "Photo selected"}</p>
-                <div className="flex gap-2">
-                  <button type="button" onClick={() => setPreviewOpen(true)} className="text-xs font-semibold text-primary">
-                    Preview and confirm
-                  </button>
-                  <button type="button" onClick={() => fileRef.current?.click()} className="text-xs font-semibold">
-                    Replace
-                  </button>
-                  {onClearMedia ? (
-                    <button type="button" onClick={onClearMedia} className="inline-flex items-center gap-1 text-xs font-semibold text-muted-foreground hover:text-foreground">
-                      <X size={12} /> Remove
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-              <button type="button" onClick={() => setPreviewOpen(true)} className="block w-full">
-                {mediaType === "image" ? (
-                  <img src={mediaDataUrl} alt="Uploaded issue photo" className="max-h-48 w-full rounded-xl border object-contain" />
-                ) : mediaType?.startsWith("video") ? (
-                  <span className="flex min-h-24 items-center justify-center rounded-xl border text-sm font-semibold">Video attached</span>
-                ) : null}
-              </button>
-            </div>
-          ) : null}
-          {previewOpen && mediaDataUrl ? (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Attachment preview">
-              <div className="w-full max-w-lg rounded-2xl bg-card p-3">
-                {mediaType === "image" ? (
-                  <img src={mediaDataUrl} alt="Uploaded issue photo" className="max-h-[70vh] w-full object-contain" />
-                ) : (
-                  <video src={mediaDataUrl} controls className="max-h-[70vh] w-full" />
-                )}
-                <div className="mt-3 flex justify-end gap-2">
-                  {onClearMedia ? (
-                    <button type="button" onClick={() => { onClearMedia(); setPreviewOpen(false); }} className="min-h-11 rounded-xl border px-3 text-sm font-semibold">
-                      Remove
-                    </button>
-                  ) : null}
-                  {mediaType === "image" ? (
-                    <button type="button" onClick={() => { setPhotoConfirmed(true); setPreviewOpen(false); setError(null); }} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-semibold text-white">
-                      Use this photo
-                    </button>
-                  ) : null}
-                  <button type="button" onClick={() => setPreviewOpen(false)} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-semibold text-white">
-                    Close
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : null}
+          {properties.length > 1 ? <label className="grid gap-1 text-sm"><span className="font-semibold">Property address</span><select value={propertyId} onChange={(event) => setPropertyId(Number(event.target.value))} className="rounded-xl border border-border bg-background p-3">{properties.map((property) => <option key={property.id} value={property.id}>{property.label || property.addressLine1}</option>)}</select></label> : properties[0] ? <p className="text-sm text-muted-foreground">Property: {properties[0].addressLine1}</p> : null}
+          <RepairPhotoPicker
+            photos={mediaDataUrls}
+            onFile={async (file) => { setError(null); await onFile(file); }}
+            onRemove={(index) => onRemovePhoto?.(index)}
+            onConfirmedChange={setPhotoConfirmed}
+            disabled={busy}
+          />
+          {mediaType?.startsWith("video") && mediaDataUrl ? <div><video src={mediaDataUrl} controls className="max-h-48" /><button type="button" onClick={onClearMedia}>Remove video</button></div> : null}
           <IntakeActionButtons
             busy={busy}
             description={description}
