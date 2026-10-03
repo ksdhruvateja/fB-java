@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import "./adminWorkspace.css";
+import { useProfessionalBookingFee } from "./useProfessionalBookingFee";
 import {
   ArrowLeft, LogOut, Loader2, Shield, DollarSign, Users, Briefcase,
   Settings2, Link2, BarChart3, Sparkles, Menu, X, LayoutDashboard,
@@ -407,6 +409,7 @@ export default function AdminPanel({
   onToggleDark?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("overview");
+  const overviewBookingFee = useProfessionalBookingFee(tab === "overview");
   const { unreadNotifications, unreadMessages, refresh: refreshComms } = useInAppComms(true);
   const [expandedGroup, setExpandedGroup] = useState<string | null>("Overview ");
   const isReadOnly = user?.adminAccessLevel === "read";
@@ -1022,7 +1025,7 @@ export default function AdminPanel({
   // );
 
   const sidebarNav = (
-    <nav className="flex flex-col gap-1 p-3 select-none">
+    <nav className="min-h-0 flex-1 overflow-y-auto flex flex-col gap-1 p-3 select-none">
       {NAV_GROUPS.map((group, index) => {
         // Overview is a standalone navigation item.
         if (!group.label) {
@@ -1352,7 +1355,7 @@ export default function AdminPanel({
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="admin-workspace min-h-screen bg-background text-foreground" data-theme={isDark ? "dark" : "light"}>
       {/* Mobile top bar */}
       <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-background/95 px-4 py-3 backdrop-blur lg:hidden">
         <div className="flex items-center gap-2">
@@ -1442,7 +1445,7 @@ export default function AdminPanel({
           </div>
         </aside>
 
-        <main className="min-w-0 flex-1 space-y-4 bg-muted px-4 py-6 lg:px-8">
+        <main className="admin-workspace-main min-w-0 flex-1 space-y-4 bg-muted px-4 py-6 lg:px-8">
           {/* Desktop ops top bar */}
           {/* <div className="hidden items-center gap-3 lg:flex">
             <label className="relative min-w-0 flex-1">
@@ -1544,6 +1547,26 @@ export default function AdminPanel({
                 </div>
               ) : (
                 <>
+                  <header className="admin-overview-heading">
+                    <p className="text-sm text-muted-foreground">Managed network</p>
+                    <h1>Operations overview</h1>
+                    <p className="text-sm text-muted-foreground">Service requests, next actions, and the people keeping things moving.</p>
+                  </header>
+                  <div className="admin-inline-metrics">
+                    {[
+                      { label: "Service requests", value: jobs.length },
+                      { label: "Awaiting assignment", value: computeAttention(jobs).unassigned.length },
+                      { label: "Quotes ready", value: computeAttention(jobs).quotes_ready.length },
+                      { label: "Payment / completion", value: computeAttention(jobs).payments.length },
+                    ].map(metric => <div key={metric.label}><strong>{metric.value}</strong><span>{metric.label}</span></div>)}
+                  </div>
+                  <div className="admin-overview-columns">
+                    <div className="admin-request-workspace">
+                      <h2>Service requests</h2>
+                      <AdminWorkQueue jobs={jobs} filter={queueFilter} search={queueSearch} selectedJobId={selectedJobId} onFilterChange={setQueueFilter} onSearchChange={setQueueSearch} onSelectJob={openJobDrawer} />
+                    </div>
+                    <div className="admin-overview-rail">
+                  <div className="admin-operations-overview">
                   <AdminAttentionOverview
                     jobs={jobs}
                     reportPayments={report?.revenueCollected}
@@ -1553,6 +1576,18 @@ export default function AdminPanel({
                     unreadContractorMessages={0}
                     onOpenCommunications={() => setTab("communications")}
                   />
+                  </div>
+                    <section className="admin-provider-status">
+                      <h2>Provider configuration</h2>
+                      <p className="text-xs text-muted-foreground">Reported configuration; not a live uptime check.</p>
+                      {platformInfo ? <dl>{["stripe", "gmail", "storage"].map(key => <div key={key}><dt>{key}</dt><dd>{platformInfo[key] == null ? "Unavailable" : String(platformInfo[key])}</dd></div>)}</dl> : <p className="text-sm text-muted-foreground">Status unavailable.</p>}
+                    </section>
+                    </div>
+                  </div>
+                  <div className="admin-overview-settings">
+                    <section><div><h2>Booking settings</h2><p className="text-sm text-muted-foreground">Professional booking fee · same fee for all homeowners</p></div><strong>{overviewBookingFee.amount == null ? "Unavailable" : formatMoney(overviewBookingFee.amount)}</strong><button type="button" className={btnSecondary} onClick={() => setTab("visit-fee")}>View / edit fee</button></section>
+                    <section><div><h2>HomeCare plans</h2><p className="text-sm text-muted-foreground">Manage subscription plans separately from booking fees.</p></div><button type="button" className={btnSecondary} onClick={() => setTab("pro-plans")}>View plans</button></section>
+                  </div>
                   {report && (
                     <div className="mt-8">
                       <details className="group rounded-2xl border border-border/70 bg-card shadow-sm">
@@ -3556,7 +3591,7 @@ export default function AdminPanel({
               <section className="space-y-4">
                 <SectionHeader
                   title="Platform controls"
-                  subtitle="Integrations, overdue dispatch, and admin MFA. Neon + Express is the source of truth (RLS-equivalent auth in API handlers)."
+                  subtitle="Review connected services, dispatch deadlines and staff verification."
                 />
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className={`${cardClass} space-y-2 p-4`}>
@@ -3567,7 +3602,7 @@ export default function AdminPanel({
                           (k) => (
                             <li key={k} className="flex justify-between gap-2">
                               <span className="capitalize">{k}</span>
-                              <span className="font-mono text-foreground">{String(platformInfo[k])}</span>
+                              <span className="font-mono text-foreground">{platformInfo[k] == null ? "Not available" : typeof platformInfo[k] === "boolean" ? (platformInfo[k] ? "Configured" : "Not configured") : String(platformInfo[k])}</span>
                             </li>
                           )
                         )}
@@ -3596,14 +3631,17 @@ export default function AdminPanel({
                     </button>
                     <div className="flex gap-2">
                       <input
-                        className={fieldClass}
+                        className={`${fieldClass} min-w-0 flex-1`}
+                        aria-label="Admin verification code"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
                         placeholder="6-digit code"
                         value={mfaCode}
                         onChange={(e) => setMfaCode(e.target.value)}
                       />
                       <button
                         type="button"
-                        className={btnPrimary}
+                        className={`${btnPrimary} shrink-0 whitespace-nowrap`}
                         disabled={busy || !mfaCode}
                         onClick={async () => {
                           setBusy(true);

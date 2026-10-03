@@ -50,8 +50,8 @@ export const PRO_FEATURE_COPY: Record<ProFeatureId, ProFeatureCopy> = {
     benefit: "Get faster routing options when you need a professional on a tighter timeline.",
   },
   reduced_coordination_fees: {
-    title: "Unlock Reduced Coordination Fees",
-    benefit: "Save on FixBridge coordination fees on eligible service requests with HomeCare Pro.",
+    title: "Professional Booking Fee",
+    benefit: "The professional booking fee is the same for Free and HomeCare Pro homeowners. Review the current amount before paying.",
   },
   quote_second_opinion: {
     title: "Unlock AI Quote Second Opinion",

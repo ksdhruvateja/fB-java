@@ -37,7 +37,8 @@ import {
   saveWorkspace,
   type ContractorWorkspace,
 } from "./contractorWorkspaceStore";
-import ContractorOverviewPanel from "./ContractorOverviewPanel";
+import ContractorWorkOverview from "./ContractorWorkOverview";
+import "./contractorVisual.css";
 import ContractorInvitesPanel, { type ContractorInvite } from "./ContractorInvitesPanel";
 import ContractorJobsPanel from "./ContractorJobsPanel";
 import ContractorSchedulePanel from "./ContractorSchedulePanel";
@@ -631,7 +632,7 @@ export default function ContractorDashboard({
   );
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="contractor-portal min-h-screen bg-background text-foreground">
       <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-background/95 px-4 py-3 backdrop-blur lg:hidden">
         <div className="flex min-w-0 items-center gap-1">
           {(canBack || mobileNav) && (
@@ -711,7 +712,7 @@ export default function ContractorDashboard({
           ) : null}
 
           {tab === "dashboard" && (
-            <ContractorOverviewPanel
+            <ContractorWorkOverview
               companyName={companyName}
               invites={invites}
               jobs={jobs}

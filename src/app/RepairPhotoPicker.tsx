@@ -31,9 +31,9 @@ export default function RepairPhotoPicker({ photos, onFile, onRemove, disabled =
 
   return <div className="space-y-3">
     <div><p className="text-sm font-semibold">Add photos</p><p className="text-xs text-muted-foreground">Up to 6 photos. Preview photos if you want to check them. Photos are compressed for upload.</p></div>
-    <div className="grid grid-cols-2 gap-2">
-      <button type="button" disabled={disabled || busy || photos.length >= MAX_REPAIR_PHOTOS} onClick={() => camera.current?.click()} className="min-h-14 rounded-xl border border-dashed border-primary/40 p-3 text-sm font-semibold disabled:opacity-50"><Camera className="mx-auto h-5 w-5" />Take Photo</button>
-      <button type="button" disabled={disabled || busy || photos.length >= MAX_REPAIR_PHOTOS} onClick={() => upload.current?.click()} className="min-h-14 rounded-xl border border-dashed border-border p-3 text-sm font-semibold disabled:opacity-50"><ImagePlus className="mx-auto h-5 w-5" />{photos.length ? "Add More Photos" : "Upload Photo"}</button>
+    <div className="flex flex-wrap gap-3">
+      <button type="button" disabled={disabled || busy || photos.length >= MAX_REPAIR_PHOTOS} onClick={() => camera.current?.click()} className="inline-flex min-h-11 items-center gap-2 rounded-full border border-border px-4 py-2 text-xs font-medium disabled:opacity-50"><Camera className="h-4 w-4" />Take Photo</button>
+      <button type="button" disabled={disabled || busy || photos.length >= MAX_REPAIR_PHOTOS} onClick={() => upload.current?.click()} className="inline-flex min-h-11 items-center gap-2 rounded-full border border-border px-4 py-2 text-xs font-medium disabled:opacity-50"><ImagePlus className="h-4 w-4" />{photos.length ? "Add More Photos" : "Upload Photo"}</button>
     </div>
     <input ref={camera} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" aria-label="Take a photo with the camera" className="sr-only" onChange={(event) => { void addFiles(event.target.files); event.currentTarget.value = ""; }} />
     <input ref={upload} type="file" accept="image/jpeg,image/png,image/webp" multiple aria-label="Choose photos from this device" className="sr-only" onChange={(event) => { void addFiles(event.target.files); event.currentTarget.value = ""; }} />

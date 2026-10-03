@@ -53,6 +53,36 @@ test('initial assessment admits an active household and keeps free/foreign cases
     assert.equal(directPaid.status, 400);
     assert.notEqual(directPaid.body.code, 'HOMECARE_PLAN_REQUIRED');
     assert.equal((await post('/api/fixera/assessment', 902)).body.code, 'HOMECARE_PLAN_REQUIRED');
+    const { LAUNCH_SUBSCRIPTION_PLANS } = await import('./subscription-catalog.js');
+    const { mergeHomeCareConfig } = await import('./homecare-config.js');
+    const freePlan = LAUNCH_SUBSCRIPTION_PLANS.find((plan) => plan.code === 'free');
+    assert.equal(freePlan.unlocksDiy, false);
+    assert.equal(freePlan.features.find((feature) => feature.label === 'AI assessment').included, false);
+    assert.equal(freePlan.features.find((feature) => feature.label === 'Safe DIY guidance').included, false);
+    // Persisted old settings cannot re-enable free AI/DIY after this policy change.
+    const config = mergeHomeCareConfig({ features: { ai_assessment: { free: true }, diy_guidance: { free: true }, reduced_coordination_fees: { enabled: true, pro: true } } });
+    assert.equal(config.features.ai_assessment.free, false);
+    assert.equal(config.features.diy_guidance.free, false);
+    assert.equal(config.features.reduced_coordination_fees.enabled, false);
+    await pool.query("UPDATE subscription_plans SET unlocks_diy=true, features=$1::jsonb WHERE code='free'", [JSON.stringify([{ label: 'AI assessment', included: true }, { label: 'Safe DIY guidance', included: true }])]);
+    const { getSubscriptionPlanByCode } = await import('./subscription-plans.js');
+    const oldFreeRow = await getSubscriptionPlanByCode(pool, 'free');
+    assert.equal(oldFreeRow.unlocksDiy, false);
+    assert.ok(oldFreeRow.features.every((feature) => feature.included === false));
+    await pool.query("UPDATE managed_jobs SET ai_assessment=$1::jsonb WHERE id IN (201,202)", [JSON.stringify({ safe_diy_allowed: true, diy_guide_steps: [{ instruction: 'Inspect the visible fixture.' }] })]);
+    assert.equal((await post('/api/managed/jobs/202/fixera-diy', 902, { event: 'step_completed', stepIndex: 0 })).body.code, 'HOMECARE_PLAN_REQUIRED');
+    assert.equal((await post('/api/managed/jobs/201/fixera-diy', 901, { event: 'step_completed', stepIndex: 0 })).status, 200);
+    assert.equal((await post('/api/managed/jobs/202/fixera-diy', 901, { event: 'step_completed', stepIndex: 0 })).status, 404);
+    await pool.query("UPDATE managed_jobs SET ai_assessment=$1::jsonb WHERE id=201", [JSON.stringify({ professional_required: true, safe_diy_allowed: false })]);
+    assert.equal((await post('/api/managed/jobs/201/fixera-diy', 901, { event: 'step_completed', stepIndex: 0 })).body.code, 'DIY_NOT_ALLOWED');
+    for (const path of ['/api/ai/chat', '/api/fixera/chat', '/api/fixa/chat']) {
+      assert.equal((await post(path, 902, { messages: [{ role: 'user', content: 'Give me DIY instructions.' }] })).body.code, 'HOMECARE_PLAN_REQUIRED');
+      assert.equal((await post(path, 901)).status, 400); // Paid request reaches normal input validation; no provider call.
+    }
+    await pool.query("UPDATE subscriptions SET status='past_due' WHERE user_id=901");
+    const { invalidateHomeCareEntitlementCache } = await import('./subscription-state.js');
+    invalidateHomeCareEntitlementCache(901); // Billing event handlers invalidate after state changes.
+    assert.equal((await post('/api/managed/jobs/201/fixera-diy', 901, { event: 'step_completed', stepIndex: 0 })).body.code, 'HOMECARE_PLAN_REQUIRED');
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     pgMem.newDb = originalNewDb;

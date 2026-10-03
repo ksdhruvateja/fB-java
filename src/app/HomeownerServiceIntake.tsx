@@ -317,7 +317,7 @@ export default function HomeownerServiceIntake(props: Props) {
   }
 
   return (
-    <div className="space-y-5 rounded-[1.5rem] border border-border/70 bg-card p-5 shadow-sm sm:p-6 pb-24 sm:pb-6">
+    <div className="homeowner-intake max-w-3xl space-y-7 pb-24 sm:pb-6">
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2 text-xs font-medium text-muted-foreground">
           <span>
@@ -501,7 +501,7 @@ export default function HomeownerServiceIntake(props: Props) {
             <button type="button" onClick={() => setIntakePhase("describe")} className="mt-1 text-xs font-semibold text-primary">Change property</button>
           </div>
 
-          <div className="space-y-4 rounded-xl border border-border bg-muted/30 p-4">
+          <div className="space-y-4 border-t border-border pt-6">
             <p className="text-sm font-semibold">Referral</p>
             <label className="grid gap-1.5 text-sm">
               <span className="font-medium">Referral code</span>

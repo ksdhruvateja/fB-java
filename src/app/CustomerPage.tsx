@@ -17,6 +17,7 @@ import {
 import { ScrollReveal, Counter } from "./shared";
 import { FeatureTileIcon } from "./FeatureTileIcon";
 import CustomerTrustSection from "./CustomerTrustSection";
+import { FixeraAboutVisual } from "./FixeraAboutVisual";
 import { brand } from "../config/brand";
 
 const HERO_IMAGE = "/hero-homeowner.png";
@@ -131,7 +132,7 @@ export default function CustomerPage({
   const contentOpacity = useTransform(scrollYProgress, [0, 0.55], [1, 0]);
 
   return (
-    <>
+    <div className="fixbridge-public">
       {/* ── Hero: full-bleed photo ───────────────────────────────────────── */}
       <section ref={heroRef} className="relative min-h-[100svh] min-h-[100dvh] flex flex-col overflow-hidden bg-black">
         <motion.div className="absolute inset-0" style={{ scale: imageScale }}>
@@ -222,32 +223,39 @@ export default function CustomerPage({
         <div className="max-w-7xl mx-auto">
           <ScrollReveal>
             <h2
-              className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.92] tracking-tight mb-14 md:mb-20"
+              className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.92] tracking-tight mb-10 md:mb-14"
               style={{ fontSize: "clamp(2.5rem,7vw,5.5rem)" }}
             >
-              <span className="block">We connect homeowners</span>
-              <span className="block md:pl-[8%]">with vetted contractors nationwide —</span>
-              <span className="block md:pl-[16%]">no guesswork, no cold calls.</span>
+              <span className="block">Know your home.</span>
+              <span className="block md:pl-[8%]">Understand your options.</span>
+              <span className="block md:pl-[16%]">Move forward with Fixera.</span>
             </h2>
           </ScrollReveal>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-10 md:gap-20 border-t border-border pt-12">
+          <div className="grid grid-cols-1 lg:grid-cols-2 items-center gap-10 lg:gap-16 border-t border-border pt-10 md:pt-12">
             <ScrollReveal delay={0.08}>
               <p className="text-muted-foreground text-base md:text-lg leading-relaxed max-w-md">
-                {brand.productName} turns a vague repair into a clear assessment and competing bids —
-                so you hire with confidence anywhere in the United States.
+                Meet Fixera, the AI assistant inside {brand.productName}. Describe the issue, choose your property,
+                and add photos when helpful. With an active HomeCare plan, Fixera brings your inputs and available
+                property history into one assessment so you can understand likely causes and decide what to do next.
+              </p>
+              <p className="text-muted-foreground text-base md:text-lg leading-relaxed max-w-md mt-4">
+                When suitable guidance is available, review the tools, parts and numbered steps. When professional
+                help is needed, carry the same issue into a service request. AI assessments can be incomplete or
+                mistaken; they do not replace an on-site inspection or make hazardous work safe.
               </p>
             </ScrollReveal>
             <ScrollReveal delay={0.16}>
-              <ul className="space-y-4 border-l border-border pl-6">
+              <FixeraAboutVisual />
+              <ul className="grid grid-cols-2 gap-x-5 gap-y-3 mt-6">
                 {[
-                  "AI-assisted assessment in minutes",
-                  "Transparent regional cost ranges",
-                  "Licensed, background-checked pros",
-                  "Free to post — pay only when you book",
+                  "Property-aware AI assessment",
+                  "Optional photos and clear next steps",
+                  "Guidance only when appropriate",
+                  "One issue, from assessment to professional help",
                 ].map((line) => (
-                  <li key={line} className="font-mono text-xs md:text-sm tracking-wide text-muted-foreground uppercase">
-                    — {line}
+                  <li key={line} className="text-xs leading-relaxed text-muted-foreground flex gap-2">
+                    <span className="text-primary" aria-hidden="true">↗</span> {line}
                   </li>
                 ))}
               </ul>
@@ -622,6 +630,6 @@ export default function CustomerPage({
           </div>
         </ScrollReveal>
       </section>
-    </>
+    </div>
   );
 }

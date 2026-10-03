@@ -145,6 +145,7 @@ import HomeownerLocalEstimate from "./HomeownerLocalEstimate";
 import FixeraAnalysisExperience from "./fixera/FixeraAnalysisExperience";
 import HireProfessionalWizard from "./HireProfessionalWizard";
 import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
+import { useProfessionalBookingFee } from "./useProfessionalBookingFee";
 import { VerifiedAddressFields, type AddressVerificationMeta } from "./VerifiedAddressInput";
 import { normalizeUsStateCode } from "./UsLocationFields";
 import { isAddressComplete } from "./addressFormat";
@@ -498,6 +499,7 @@ export default function HomeownerDashboard({
     addressVerified: false,
   });
   const [addressPromptJobId, setAddressPromptJobId] = useState<number | null>(null);
+  const [addressPromptAuthorizedAmount, setAddressPromptAuthorizedAmount] = useState<number | undefined>();
   const [showAddAddressModal, setShowAddAddressModal] = useState(false);
   const [modalAddressLine1, setModalAddressLine1] = useState("");
   const [modalAddressLine2, setModalAddressLine2] = useState("");
@@ -557,6 +559,7 @@ export default function HomeownerDashboard({
   const [paymentReturnMessage, setPaymentReturnMessage] = useState<string | null>(null);
   const [invoicePaymentMsg, setInvoicePaymentMsg] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<ManagedJob | null>(null);
+  const bookingFee = useProfessionalBookingFee(Boolean(activeJob && !activeJob.visitFeeAuthorized), activeJob?.id);
   const [assessmentMsg, setAssessmentMsg] = useState<string | null>(null);
   const [assessmentFollowUp, setAssessmentFollowUp] = useState("");
   const [assessmentFollowUpPhotos, setAssessmentFollowUpPhotos] = useState<string[]>([]);
@@ -1187,30 +1190,14 @@ export default function HomeownerDashboard({
   async function saveHealthProfile(propertyId: number, next: PropertyHealthProfile) {
     setError(null);
     try {
-      // Optimistic local update so Overview / Maintenance reflect changes immediately
-      setProperties((prev) =>
-        prev.map((p) =>
-          p.id === propertyId
-            ? {
-              ...p,
-              healthProfile: next as Property["healthProfile"],
-              beds: next.beds ?? p.beds,
-              baths: next.baths ?? p.baths,
-              sqft: next.sqft ?? p.sqft,
-            }
-            : p
-        )
-      );
       const r = await updatePropertyHealth(propertyId, next);
-      if (!r.ok) {
-        setError(r.message || "Could not save home details.");
-        return;
+      if (!r.ok || !r.property) {
+        throw new Error(r.message || "Could not save home details. Please try again.");
       }
-      if (r.property) {
-        upsertPropertyInState(r.property, { makePrimary: false });
-      }
+      upsertPropertyInState(r.property, { makePrimary: false });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save home details.");
+      throw err;
     }
   }
 
@@ -1634,9 +1621,13 @@ export default function HomeownerDashboard({
     const propsPromise = listProperties()
       .then((p) => {
         if (p.ok) setProperties(p.properties || []);
+        else setError("Could not load your saved properties. Please refresh and try again.");
         return p;
       })
-      .catch(() => ({ ok: false as const }))
+      .catch(() => {
+        setError("Could not load your saved properties. Please refresh and try again.");
+        return { ok: false as const };
+      })
       .finally(() => setPropertiesLoading(false));
     const pendingPromise = listPendingServiceRequests()
       .then((r) => {
@@ -1884,10 +1875,11 @@ export default function HomeownerDashboard({
       }
 
       if (jobId) {
-        const r = await payDispatchFee(jobId);
+        const r = await payDispatchFee(jobId, undefined, undefined, addressPromptAuthorizedAmount);
         if (r.ok && r.url) {
           window.location.href = r.url;
         } else {
+          if (r.code === "PRICING_MISMATCH") window.dispatchEvent(new Event("fixbridge-booking-fee-refresh"));
           alert(r.message || "Stripe checkout could not be started.");
         }
       }
@@ -2433,7 +2425,7 @@ export default function HomeownerDashboard({
 
   const { isPro: hasHomeCarePro } = resolveClientProAccess(user);
   const hasDiyAccess = Boolean(
-    hasHomeCarePro || (user.planCode && diyUnlockCodes.includes(user.planCode))
+    hasHomeCarePro
   );
   const homeCareSub = user.homeCareSubscription ?? null;
 
@@ -3360,7 +3352,7 @@ export default function HomeownerDashboard({
   }
 
   async function payFee() {
-    if (!activeJob) return;
+    if (!activeJob || bookingFee.amount == null) return;
     const prop = properties.find((p) => p.id === activeJob.propertyId);
     if (prop) {
       const isMissingAddress = !prop.addressLine1?.trim() || !prop.city?.trim() || !prop.state?.trim() || !prop.zip?.trim();
@@ -3372,6 +3364,7 @@ export default function HomeownerDashboard({
         setAddressPromptState(prop.state || "");
         setAddressPromptZip(prop.zip || "");
         setAddressPromptJobId(activeJob.id);
+        setAddressPromptAuthorizedAmount(bookingFee.amount ?? undefined);
         return;
       }
     }
@@ -3380,7 +3373,9 @@ export default function HomeownerDashboard({
     try {
       const r = await payDispatchFee(
         activeJob.id,
-        dispatchCouponPreview?.code || activeJob.discountCode || undefined
+        undefined,
+        undefined,
+        bookingFee.amount ?? undefined
       );
       if (!r.ok) {
         setError(r.message || "Payment failed.");
@@ -3396,11 +3391,8 @@ export default function HomeownerDashboard({
     }
   }
 
-  const baseDispatchFee =
-    activeJob?.visitFeeAmount ??
-    activeJob?.pricing?.contractor_visit_fee ??
-    125;
-  const dispatchHoldAmount = dispatchCouponPreview?.discountedAmount ?? baseDispatchFee;
+  const baseDispatchFee = activeJob?.visitFeeAuthorized ? (activeJob.visitFeeAmount ?? 0) : (bookingFee.amount ?? 0);
+  const dispatchHoldAmount = baseDispatchFee;
 
   async function sendDiyChatMessage(forcedText?: string) {
     const text = (forcedText ?? diyChatInput).trim();
@@ -3616,7 +3608,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
           <div className="flex min-w-0 items-center gap-1">
             {canBack && <AppBackButton onBack={goBack} className="-ml-1 shrink-0" />}
             <div className="min-w-0">
-              <AppLogo onHome={goHome} variant="auth" tone={isDark ? "auto" : "black"} className="homeowner-brand mb-0.5" />
+              <AppLogo onHome={goHome} variant="auth" tone="color" className="homeowner-brand mb-0.5" />
               <p className="truncate text-[10px] text-muted-foreground">{user.name}</p>
             </div>
           </div>
@@ -3643,7 +3635,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
           {/* Desktop left sidebar */}
           <aside className="homeowner-sidebar sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-card lg:flex">
             <div className="border-b border-border px-4 py-4">
-              <AppLogo onHome={goHome} variant="auth" tone={isDark ? "auto" : "black"} className="homeowner-brand mb-4" />
+              <AppLogo onHome={goHome} variant="auth" tone="color" className="homeowner-brand mb-4" />
               <div className="flex min-w-0 items-center gap-3">
               {user.photoDataUrl ? (
                 <img src={user.photoDataUrl} alt="Avatar" className="h-9 w-9 rounded-full object-cover border border-border" />
@@ -3766,6 +3758,14 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                   health={healthProfile}
                   jobs={primaryPropertyJobs}
                   quotesWaiting={countQuotesWaiting(primaryPropertyJobs)}
+                  hasHomeCarePro={hasHomeCarePro}
+                  onOpenPlans={() => navigateTab("go-pro")}
+                  onOpenFixera={() => {
+                    openRequestService();
+                    setReportPath("ai");
+                    setAssessmentMode("diy");
+                    setIntakePhase("describe");
+                  }}
                   onRequestService={() => openRequestService()}
                   onOpenJob={(id) => openJobsSegment("active", id)}
                   onOpenHealth={() => openPropertyCare("passport")}
@@ -4444,9 +4444,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                             <div className="fixera-card p-4">
                               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--fixbridge-orange)]">Here&apos;s what Fixera found</p>
                               <p className="mt-1 text-lg font-semibold">{activeJob.title || activeJob.aiAssessment?.summary || "Your repair assessment"}</p>
-                              <p className="mt-1 text-sm text-[var(--fixbridge-muted-text)]">
-                                Using Fixera repair intelligence. Similar scenarios are compared for guidance. Learning improvements use validated outcomes, not automatic retraining on this photo.
-                              </p>
+                              {activeJob.aiAssessment?.summary ? <p className="mt-3 text-sm leading-relaxed text-foreground">{activeJob.aiAssessment.summary}</p> : null}
+                              <p className="mt-2 text-xs text-muted-foreground">AI-assisted assessment based on the details you provided. Check the observations below and add missing information before deciding what to do next.</p>
                             </div>
                             {/* Mode Selector Toggle */}
                             <div className="flex border-b border-border">
@@ -5039,6 +5038,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                           onNeedAddress={({
                             propertyId,
                             jobId,
+                            authorizedAmount,
                             line1,
                             line2,
                             city,
@@ -5052,6 +5052,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                             setAddressPromptState(state);
                             setAddressPromptZip(zip);
                             setAddressPromptJobId(jobId);
+                            setAddressPromptAuthorizedAmount(authorizedAmount);
                           }}
                         />
                       </div>

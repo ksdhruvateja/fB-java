@@ -8,6 +8,14 @@ import {
 
 const DEFAULT_PLANS = LAUNCH_SUBSCRIPTION_PLANS;
 
+function paidOnlyAiFeatures(features, code) {
+  return (Array.isArray(features) ? features : []).filter((feature) => !/reduced\s+coordination\s+fees?/i.test(String(feature?.label || ''))).map((feature) => (
+    !isPaidHomeCarePlan(code) && /(?:ai\s*assessment|diy\s*guidance)/i.test(String(feature?.label || ''))
+      ? { ...feature, included: false }
+      : feature
+  ));
+}
+
 function normalizeFeatures(raw) {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -28,9 +36,9 @@ function rowToPlan(r) {
     interval: r.interval || 'month',
     theme: r.theme || 'light',
     sortOrder: Number(r.sort_order) || 0,
-    features: Array.isArray(r.features) ? r.features : [],
+    features: paidOnlyAiFeatures(r.features, r.code),
     highlight: Boolean(r.highlight),
-    unlocksDiy: Boolean(r.unlocks_diy),
+    unlocksDiy: isPaidHomeCarePlan(r.code) && Boolean(r.unlocks_diy),
     trialDays: Number(r.trial_days) || 0,
     active: r.active !== false,
     ctaLabel: r.cta_label || 'Select',
@@ -244,6 +252,10 @@ function parsePlanBody(body, { partial = false } = {}) {
   if (!partial || body.description != null) {
     out.description = body.description ? clampString(String(body.description), 500) : null;
   }
+  if (out.code && !isPaidHomeCarePlan(out.code)) {
+    out.unlocksDiy = false;
+    if (out.features) out.features = paidOnlyAiFeatures(out.features, out.code);
+  }
   return out;
 }
 
@@ -342,9 +354,9 @@ export function registerSubscriptionPlanRoutes(app, { pool, requireAuth, require
           next.interval,
           next.theme,
           next.sortOrder,
-          JSON.stringify(next.features),
+          JSON.stringify(paidOnlyAiFeatures(next.features, next.code)),
           next.highlight,
-          next.unlocksDiy,
+          isPaidHomeCarePlan(next.code) && next.unlocksDiy,
           next.trialDays,
           next.active,
           next.ctaLabel,

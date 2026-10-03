@@ -1,3 +1,5 @@
+import { assertPendingBookingPayment } from './professional-booking-checkout.js';
+import { resolveRuntimeDatabase } from './runtime-database-config.js';
 import { normalizeRepairPhotos, repairPhotosFromRow } from './repair-photos.js';
 import { getHomeCareEntitlement } from './subscription-state.js';
 import { listKnowledgeEntries, retrieveGlobalKnowledge, writeKnowledgeEntry } from './fixa/knowledge/knowledgeWriter.js';
@@ -14,7 +16,7 @@ import crypto from 'crypto';
 import { assessRepair, complete, reassessRepair, prepareProfessionalHandoff, getFixeraPublicStatus, getFixeraHealth, getFixeraAdminProviders } from './fixera/index.js';
 import { persistFixeraInteraction, recordFixeraFeedback, recordFixeraInteraction, trainingOverview, exportApprovedTraining, listRecentExperiences } from './fixera/experience/store.js';
 import { getPricingIntelligence } from './fixera/pricing/intelligence.js';
-import { initManagedSchema, ensureReferralCodeColumns, ensureRepairPhotoColumns } from './schema-managed.js';
+import { initManagedSchema, ensureReferralCodeColumns, ensureRepairPhotoColumns, ensurePropertyCoverColumns } from './schema-managed.js';
 import { initSupportTicketSchema, registerSupportTicketRoutes } from './support-tickets.js';
 import { initInAppNotificationSchema, registerInAppNotificationRoutes } from './in-app-notifications.js';
 import { initMessagingSchema, registerMessagingRoutes } from './messaging.js';
@@ -95,9 +97,10 @@ import {
   userHasPermission,
 } from './rbac.js';
 
-const isProduction = process.env.NODE_ENV === 'production';
+const runtimeDatabase = resolveRuntimeDatabase();
+const isProduction = runtimeDatabase.deployed;
 
-/** Netlify may run with NODE_ENV unset; use hosting signals for health/status only. */
+/** Startup, authentication and health use the same hosted-environment policy. */
 function isDeployedProduction() {
   return (
     isProduction ||
@@ -105,7 +108,9 @@ function isDeployedProduction() {
     process.env.FIXBRIDGE_HOSTING === 'netlify'
   );
 }
-const useInMemoryDb = !process.env.NEON_DATABASE_URL;
+const useInMemoryDb = runtimeDatabase.useInMemoryDb;
+// Preserve existing internal consumers while accepting standard PostgreSQL hosting configuration.
+if (runtimeDatabase.connectionString) process.env.NEON_DATABASE_URL = runtimeDatabase.connectionString;
 
 // ── Require SESSION_SECRET at startup ─────────────────────────────────────────
 const JWT_SECRET = process.env.SESSION_SECRET || (!isProduction ? 'local-dev-secret' : undefined);
@@ -431,7 +436,7 @@ async function ensureDemoUsers() {
 }
 
 const BASE_SCHEMA_READY_VERSION = 20261001;
-const SCHEMA_READY_VERSION = 20261002;
+const SCHEMA_READY_VERSION = 20261003;
 
 async function readSchemaReadyVersion() {
   try {
@@ -476,6 +481,7 @@ export async function initDb() {
   // not the hundreds of unrelated initialization queries.
   if (readyVersion >= BASE_SCHEMA_READY_VERSION) {
     await ensureRepairPhotoColumns(pool);
+    await ensurePropertyCoverColumns(pool);
     await writeSchemaReadyVersion();
     initDb._done = true;
     return;
@@ -1321,6 +1327,11 @@ app.post('/api/auth/signin', signInLimiter, async (req, res) => {
     }
 
     // Former social-login accounts: no local password until they reset one
+    // Old Google registrations derived a password from the public provider subject.
+    // Never accept that guessable value; a reset password remains supported.
+    if (rows[0].oauth_google_sub && password === `GOOGLE_OAUTH_${rows[0].oauth_google_sub}`) {
+      return res.status(401).json({ ok:false, message:'Use Google sign-in or reset your password to sign in with email.' });
+    }
     if (['GOOGLE_OAUTH', 'APPLE_OAUTH', 'AUTH0_OAUTH'].includes(String(rows[0].password))) {
       return res.status(401).json({
         ok: false,
@@ -1651,10 +1662,9 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
               )
             ) {
               try {
-                const pendingAmountCents =
-                  session.amount_total != null
-                    ? Number(session.amount_total)
-                    : Number(payment.amount || 0) * 100;
+                const pendingAmountCents = payment.payment_type === 'pending_professional_fee'
+                  ? await assertPendingBookingPayment(pool, session, req.authUser.id, pendingServiceRequestId)
+                  : session.amount_total != null ? Number(session.amount_total) : Number(payment.amount || 0) * 100;
 
                 const converted = await convertPendingServiceRequest(
                   pool,
@@ -3573,7 +3583,7 @@ registerMarketingRoutes(app, { pool, requireAuth, requireAdmin, requirePermissio
 registerGoogleAuthRoutes(app, { pool, makeToken, rowToUser, bcrypt, signupLimiter: signInLimiter, requireAuth });
 registerAssessmentProcessor(processManagedJobAssessmentTask);
 registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin });
-registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdmin });
+registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerHomeAssistantRoutes(app, { pool, requireAuth });
 registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerContractorEmployeeRoutes(app, { pool, requireAuth, requireAdmin });
@@ -3598,6 +3608,9 @@ registerServiceAreaRoutes(app);
 
 async function handleFixaChat(req, res) {
   try {
+    if (req.authUser.role === 'homeowner' && !(await getHomeCareEntitlement(pool, req.authUser.id)).hasAccess) {
+      return res.status(403).json({ ok: false, code: 'HOMECARE_PLAN_REQUIRED', message: 'An active HomeCare plan is required for Fixera AI and DIY guidance.' });
+    }
     const { messages, jobId } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ ok: false, message: 'messages array is required.' });

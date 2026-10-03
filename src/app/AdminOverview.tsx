@@ -90,7 +90,7 @@ function KpiCard({
   accent: string;
 }) {
   return (
-    <div className="group rounded-2xl border border-border/60 bg-card p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-[#FF4D1C]/35 hover:shadow-md">
+    <div className="admin-analytics-kpi group rounded-2xl border border-border/60 bg-card p-4">
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="text-sm text-muted-foreground">{label}</p>
@@ -119,7 +119,7 @@ function Panel({
   className?: string;
 }) {
   return (
-    <div className={`rounded-2xl border border-border/60 bg-card p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-[#FF4D1C]/30 hover:shadow-md ${className}`}>
+    <div className={`admin-analytics-panel rounded-2xl border border-border/60 bg-card p-4 ${className}`}>
       <div className="mb-3 flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
         {action}
@@ -174,7 +174,7 @@ export default function AdminOverview({
       : 0;
 
   return (
-    <section className="space-y-4">
+    <section className="admin-analytics space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">

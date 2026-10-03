@@ -377,6 +377,19 @@ export function registerMessagingRoutes(app, { pool, requireAuth, requireAdmin }
 
       // Reuse existing job-linked conversation when possible
       if (jobId) {
+        if (!Number.isSafeInteger(jobId) || jobId <= 0) {
+          return res.status(400).json({ ok: false, message: 'Invalid job.' });
+        }
+        const { rows: linkedJobs } = await pool.query(
+          'SELECT homeowner_user_id, assigned_contractor_user_id FROM managed_jobs WHERE id=$1',
+          [jobId],
+        );
+        if (!linkedJobs[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
+        const linkedJob = linkedJobs[0];
+        if ((role === 'homeowner' && Number(linkedJob.homeowner_user_id) !== Number(req.authUser.id)) ||
+            (role === 'contractor' && Number(linkedJob.assigned_contractor_user_id) !== Number(req.authUser.id))) {
+          return res.status(403).json({ ok: false, message: 'Not allowed.' });
+        }
         const reuseParams = [type, jobId];
         let reuseSql = `SELECT * FROM conversations WHERE type=$1 AND job_id=$2 AND status != 'archived'`;
         if (type === 'homeowner_admin' && homeownerUserId) {

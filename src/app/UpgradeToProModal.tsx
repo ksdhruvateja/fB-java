@@ -88,7 +88,7 @@ export default function UpgradeToProModal({
         <div className="mt-5 rounded-2xl border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
           <p className="flex items-start gap-2">
             <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-[#FF4D1C]" aria-hidden />
-            FixBridge Free still includes AI assessment, service requests, quotes, and basic home profile.
+            FixBridge Free includes service requests, quotes, and a basic home profile. AI assessment and safe DIY guidance require HomeCare Pro.
           </p>
         </div>
 

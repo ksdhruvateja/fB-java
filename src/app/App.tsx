@@ -16,7 +16,7 @@ import ResetPassword from "./ResetPassword";
 import GoProPublicPage from "./GoProPublicPage";
 import SubscriptionSuccessModal from "./SubscriptionSuccessModal";
 import SubscriptionCancelModal from "./SubscriptionCancelModal";
-import { getStoredUser, validateToken, clearSession, loadAllUsers, saveSession, type AuthUser, type UserRole, type ResetRole } from "./auth";
+import { getStoredToken, getStoredUser, validateToken, clearSession, loadAllUsers, saveSession, type AuthUser, type UserRole, type ResetRole } from "./auth";
 import { storePendingReferralCode } from "./referralSession";
 import { brand } from "../config/brand";
 import { PAID_HOME_CARE_PLAN_CODE, isPaidHomeCarePlan } from "./subscriptionCatalog";
@@ -40,6 +40,7 @@ import MarketingUnsubscribePage from "./MarketingUnsubscribePage";
 import { PUBLIC_FOOTER_LEGAL_LINKS, PUBLIC_CONTRACTOR_LEGAL_LINKS } from "./legalDocuments";
 import { applySiteMeta } from "./siteMeta";
 import LeadConnectorChatWidget, { shouldShowLeadConnectorChat } from "./LeadConnectorChatWidget";
+import "./approvedWorkspace.css";
 
 function isResetRole(role: string | null): role is ResetRole {
   return role === "homeowner" || role === "contractor" || role === "admin" || role === "partner";
@@ -142,7 +143,8 @@ function loadInitialState(): {
 
     return { page, marketingContext, currentUser };
   } catch {
-    return fallback;
+    const currentUser = getStoredUser();
+    return currentUser ? { ...fallback, currentUser, page: roleHomePage(currentUser.role) as Page } : fallback;
   }
 }
 
@@ -565,7 +567,10 @@ export default function App() {
   // the first render when a cached user exists but the token hasn't been validated yet.
   // Cached session renders immediately. /api/auth/me refreshes in the background
   // and must not hide the dashboard behind a full-screen spinner.
-  const [authLoading, setAuthLoading] = useState(false);
+  const [authLoading, setAuthLoading] = useState(() => Boolean(getStoredToken() && !initialState.currentUser));
+  const lastSignedInRole = useRef<UserRole | null>(initialState.currentUser?.role || null);
+  const [authRecoveryMessage, setAuthRecoveryMessage] = useState("");
+  const [authRetry, setAuthRetry] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [resetParams, setResetParams] = useState<{ token: string; role: ResetRole } | null>(null);
   const [subscriptionSuccessPlan, setSubscriptionSuccessPlan] = useState<string | null>(null);
@@ -871,6 +876,7 @@ export default function App() {
 
   const handleSignOut = (nextPage: Page) => {
     clearSession();
+    setAuthRecoveryMessage("");
     clearNavFrames();
     setCurrentUser(null);
     // Clear stored page so the next cold load doesn't start on a dashboard page
@@ -927,31 +933,45 @@ export default function App() {
     };
   }, [showSubscriptionSuccess, subscriptionActivating, subscriptionSuccessPlan]);
 
-  // Validate the stored JWT and populate user list cache on startup
+  // A failed refresh is not a missing account; stale requests never switch accounts.
   useEffect(() => {
-    // Verify the token first so the shell can render. Public user cache is secondary.
-    validateToken().then((result) => {
+    let cancelled = false;
+    const cached = getStoredUser();
+    if (getStoredToken() && !cached) setAuthLoading(true);
+    validateToken().then(result => {
+      if (cancelled) return;
       if (result.ok) {
         setCurrentUser(result.user);
-        if (result.user.role === "admin" || result.user.role === "contractor") {
-          void loadAllUsers();
-        }
-        const params = new URLSearchParams(window.location.search);
-        const stripe = params.get("stripe");
-        if (result.user.role === "contractor" && (stripe === "return" || stripe === "refresh")) {
-          setPage("contractor-dashboard");
-        }
+        setAuthRecoveryMessage(result.source === "cached" ? "Your saved sign-in is available, but the server could not refresh it. Your account has not been removed." : "");
+        if (!cached) setPage(roleHomePage(result.user.role));
+        if (result.user.role === "admin" || result.user.role === "contractor") void loadAllUsers();
+        const stripe = new URLSearchParams(window.location.search).get("stripe");
+        if (result.user.role === "contractor" && (stripe === "return" || stripe === "refresh")) setPage("contractor-dashboard");
       } else if (result.reason === "invalid") {
-        // Server rejected the JWT — clear the stale session
-        clearSession();
         setCurrentUser(null);
-        setPage("home");
+        setAuthRecoveryMessage("Your sign-in expired. Sign in again to access your saved profile and properties.");
+        setPage(cached?.role === "admin" ? "admin-login" : cached?.role === "contractor" ? "contractor-login" : "homeowner-login");
+      } else if (result.reason === "network") {
+        setAuthRecoveryMessage("We could not verify your saved sign-in. Retry when the connection returns; you do not need to create another account.");
       }
-      // Always resolve the auth loading state so dashboards can render (or redirect)
       setAuthLoading(false);
     });
-    // Only run on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { cancelled = true; };
+  }, [authRetry]);
+
+  useEffect(() => { if (currentUser) lastSignedInRole.current = currentUser.role; }, [currentUser]);
+
+  useEffect(() => {
+    const syncSession = (event: StorageEvent) => {
+      if (event.key !== "fixbridge-auth-token" && event.key !== "fixbridge-user-cache" && event.key !== null) return;
+      const cached = getStoredUser();
+      setCurrentUser(cached);
+      if (!getStoredToken()) { setAuthRecoveryMessage(""); setPage(lastSignedInRole.current === "admin" ? "admin-login" : lastSignedInRole.current === "contractor" ? "contractor-login" : "homeowner-login"); }
+      else if (cached) setPage(roleHomePage(cached.role));
+      setAuthRetry(attempt => attempt + 1);
+    };
+    window.addEventListener("storage", syncSession);
+    return () => window.removeEventListener("storage", syncSession);
   }, []);
 
   useEffect(() => {
@@ -1094,6 +1114,7 @@ export default function App() {
           />
         )}
 
+        {authRecoveryMessage && <div role="status" className="relative z-50 flex flex-wrap items-center justify-center gap-3 border-b border-border bg-muted p-3 text-sm"><span>{authRecoveryMessage}</span><button type="button" disabled={authLoading} onClick={() => setAuthRetry(attempt => attempt + 1)} className="rounded-lg border border-border bg-background px-3 py-1.5 font-semibold disabled:opacity-50">Retry sign-in check</button></div>}
         {/* Page content */}
         <motion.div
           key={page}
@@ -1218,6 +1239,7 @@ export default function App() {
               }}
             >
               <HomeownerDashboard
+              key={`homeowner-session-${currentUser.id}`}
               onLogout={() => handleSignOut("home")}
               user={currentUser}
               isDark={isDark}
@@ -1251,6 +1273,7 @@ export default function App() {
           {page === "contractor-dashboard" && currentUser && currentUser.role === "contractor" && !authLoading && (
             <AppErrorBoundary section="contractor-dashboard">
               <ContractorDashboard
+              key={`contractor-session-${currentUser.id}`}
               onLogout={() => handleSignOut("contractors")}
               user={currentUser}
               isDark={isDark}
@@ -1262,6 +1285,7 @@ export default function App() {
           {page === "admin" && currentUser?.role === "admin" && !authLoading && (
             <AppErrorBoundary section="admin-dashboard">
               <AdminPanel
+                key={`admin-session-${currentUser.id}`}
                 onBack={() => navigate(marketingContext)}
                 onSignOut={() => handleSignOut("admin-login")}
                 user={currentUser}

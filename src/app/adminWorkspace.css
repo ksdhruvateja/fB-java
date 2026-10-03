@@ -1,0 +1,181 @@
+.admin-workspace {
+  --background: #faf7f1;
+  --foreground: #172b46;
+  --card: #fffefa;
+  --card-foreground: #172b46;
+  --muted: #f3efe7;
+  --muted-foreground: #716b60;
+  --border: #e4ddd1;
+  --admin-accent: #ff4d1c;
+  --admin-hero: #fffefa;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.admin-workspace[data-theme="dark"] {
+  --background: #191b18;
+  --foreground: #f5f0e7;
+  --card: #242722;
+  --card-foreground: #f5f0e7;
+  --muted: #2b2e28;
+  --muted-foreground: #b9b5aa;
+  --border: #40443a;
+  --admin-accent: #ff7449;
+  --admin-hero: #242722;
+}
+
+.admin-workspace-main {
+  background: var(--background);
+  padding-top: 2rem;
+  padding-bottom: 3rem;
+}
+
+.admin-workspace-main > * {
+  max-width: 1600px;
+  margin-inline: auto;
+}
+
+.admin-workspace aside { background: var(--card); }
+.admin-workspace table { border-collapse: collapse; }
+.admin-workspace thead { background: var(--muted); }
+.admin-workspace th {
+  font-size: .75rem;
+  letter-spacing: .035em;
+  font-weight: 600;
+}
+.admin-workspace td { border-bottom-color: var(--border); }
+
+/* Keep the existing attention actions and counts; give them one calm workspace. */
+.admin-operations-overview > section > div:first-child {
+  position: relative;
+  border-radius: 1.5rem;
+  padding: clamp(1.25rem, 3vw, 2.25rem);
+  background: var(--admin-hero);
+  color: #fff8ec;
+  gap: 1.5rem;
+  overflow: hidden;
+}
+.admin-operations-overview > section > div:first-child h1 {
+  font-size: clamp(1.75rem, 3vw, 2.65rem);
+  letter-spacing: -.045em;
+  font-weight: 600;
+}
+.admin-operations-overview > section > div:first-child p {
+  color: #d3cfc3;
+  max-width: 44rem;
+  line-height: 1.65;
+}
+.admin-operations-overview > section > div:first-child > button {
+  background: #e9ad6b;
+  color: #292721;
+  min-height: 44px;
+  box-shadow: none;
+}
+.admin-operations-overview > section > div:nth-child(2) {
+  border: 1px solid var(--border);
+  border-radius: 1.5rem;
+  padding: 1.25rem;
+  background: var(--card);
+}
+.admin-operations-overview > section > div:nth-child(2) > .grid {
+  gap: 0;
+}
+.admin-operations-overview > section > div:nth-child(2) > .grid > button {
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  min-height: 100px;
+}
+.admin-operations-overview > section > div:nth-child(2) > .grid > button:hover {
+  background: var(--muted);
+  transform: none;
+  box-shadow: none;
+}
+.admin-operations-overview > section > div:nth-child(2) > .grid > button:focus-visible {
+  outline: 2px solid var(--admin-accent);
+  outline-offset: -3px;
+}
+.admin-operations-overview > section > div:last-child > .grid {
+  border-radius: 1.25rem;
+  box-shadow: none;
+}
+.admin-operations-overview > section > div:last-child > .grid > div {
+  background: transparent;
+  border-radius: 0;
+}
+.admin-analytics { padding: .75rem; }
+.admin-analytics-panel { border-radius: 1.25rem; box-shadow: none; }
+.admin-analytics-kpi { box-shadow: none; }
+
+@media (max-width: 639px) {
+  .admin-workspace-main { padding-top: 1rem; }
+  .admin-operations-overview > section > div:first-child { border-radius: 1.25rem; }
+  .admin-operations-overview > section > div:first-child > button { width: 100%; justify-content: center; }
+  .admin-operations-overview > section > div:nth-child(2) { padding: 1rem; }
+  .admin-operations-overview > section > div:nth-child(2) > .grid > button { min-height: 88px; }
+  .admin-analytics { padding: .25rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-workspace *, .admin-workspace *::before, .admin-workspace *::after {
+    animation-duration: .01ms !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+/* Operations composition follows the approved navy / vivid-orange concept. */
+.admin-workspace aside.lg\:flex { width: 258px; }
+.admin-overview-heading { padding: 0 0 24px; }
+.admin-overview-heading h1 { font-size: clamp(30px, 3.2vw, 42px); line-height: 1.15; font-weight: 750; letter-spacing: -.035em; margin: 8px 0 12px; }
+.admin-inline-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 24px 0; border-block: 1px solid var(--border); margin-bottom: 32px; }
+.admin-inline-metrics > div { display: flex; flex-direction: column; gap: 6px; padding: 0 24px; border-right: 1px solid var(--border); }
+.admin-inline-metrics > div:first-child { padding-left: 0; }
+.admin-inline-metrics > div:last-child { border-right: 0; }
+.admin-inline-metrics strong { font-size: 30px; letter-spacing: -.03em; }
+.admin-inline-metrics span { font-size: 13px; color: var(--muted-foreground); }
+.admin-overview-columns { display: grid; grid-template-columns: minmax(0, 2.57fr) minmax(260px, 1fr); gap: 24px; align-items: start; }
+.admin-request-workspace, .admin-provider-status { border: 1px solid var(--border); background: var(--card); border-radius: 8px; padding: 24px; min-width: 0; }
+.admin-request-workspace > h2, .admin-provider-status h2, .admin-overview-settings h2 { font-weight: 700; font-size: 18px; margin-bottom: 12px; }
+.admin-request-workspace > section > div:first-child { display: none; }
+.admin-request-workspace table { font-size: 13px; }
+.admin-overview-rail { display: grid; gap: 24px; min-width: 0; }
+.admin-operations-overview > section { display: grid; gap: 0; }
+.admin-operations-overview > section > div:first-child { padding: 20px; border-radius: 8px 8px 0 0; border: 1px solid var(--border); border-bottom: 0; color: var(--foreground); gap: 12px; }
+.admin-operations-overview > section > div:first-child h1 { font-size: 20px; }
+.admin-operations-overview > section > div:first-child p { color: var(--muted-foreground); font-size: 12px; }
+.admin-operations-overview > section > div:first-child > button { background: #ff4d1c; color: white; border-radius: 6px; width: 100%; justify-content: center; }
+.admin-operations-overview > section > div:nth-child(2) { border-radius: 0 0 8px 8px; padding: 0 20px 12px; margin-top: 0; border-top: 0; }
+.admin-operations-overview > section > div:nth-child(2) > p { margin-top: 8px; }
+.admin-operations-overview > section > div:nth-child(2) > .grid { grid-template-columns: 1fr; }
+.admin-operations-overview > section > div:nth-child(2) > .grid > button { min-height: 66px; padding: 12px 0; }
+.admin-operations-overview > section > div:nth-child(2) > .grid > button p:first-child { font-size: 18px; }
+.admin-operations-overview > section > div:last-child { margin-top: 24px; }
+.admin-operations-overview > section > div:last-child > .grid { border-radius: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.admin-provider-status dl > div { display: flex; justify-content: space-between; gap: 12px; padding-block: 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.admin-provider-status dt { text-transform: capitalize; }
+.admin-provider-status dd { overflow-wrap: anywhere; text-align: right; }
+.admin-overview-settings { display: grid; gap: 12px; margin-top: 24px; }
+.admin-overview-settings section { display: flex; align-items: center; flex-wrap: wrap; gap: 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); padding: 20px 24px; }
+.admin-overview-settings section > div { flex: 1; min-width: 180px; }
+.admin-overview-settings h2 { margin-bottom: 4px; }
+.admin-overview-settings button { border-radius: 6px; }
+.admin-analytics-panel, .admin-analytics-kpi { border-radius: 8px; }
+/* Keep the overview's next-action rail bounded; every action remains scrollable. */
+@media (min-width: 1200px) {
+  .admin-overview-columns { grid-template-columns: minmax(0, 72fr) minmax(0, 28fr); }
+  .admin-operations-overview > section { max-height: 400px; overflow-y: auto; scrollbar-gutter: stable; border: 1px solid var(--border); border-radius: 8px; }
+  .admin-operations-overview > section > div:first-child { border: 0; padding: 16px; }
+  .admin-operations-overview > section > div:first-child p:last-child { display: none; }
+  .admin-operations-overview > section > div:nth-child(2) { border: 0; padding-inline: 16px; }
+  .admin-operations-overview > section > div:nth-child(2) > .grid > button { min-height: 52px; padding-block: 8px; }
+  .admin-operations-overview > section > div:last-child { margin-top: 12px; padding: 0 16px 16px; }
+  .admin-operations-overview > section > div:last-child > .grid { padding: 8px; }
+  .admin-overview-rail { gap: 12px; }
+  .admin-provider-status { padding: 16px; }
+  .admin-provider-status h2 { font-size: 16px; margin-bottom: 4px; }
+  .admin-provider-status dl > div { padding-block: 6px; font-size: 12px; }
+}
+@media (max-width: 1199px) { .admin-overview-columns { grid-template-columns: 1fr; } .admin-overview-rail { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; } }
+@media (max-width: 639px) { .admin-inline-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; } .admin-inline-metrics > div { padding: 0; border: 0; } .admin-overview-rail { grid-template-columns: 1fr; } .admin-request-workspace, .admin-provider-status { padding: 16px; } .admin-overview-settings section { padding: 16px; } }

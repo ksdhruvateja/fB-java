@@ -1,0 +1,9 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),{transformSync}=require('esbuild');
+const code=transformSync(fs.readFileSync(__dirname+'/ActiveServiceCards.tsx','utf8'),{loader:'tsx',format:'cjs',jsx:'automatic'}).code;
+const moduleRecord={exports:{}};
+vm.runInNewContext(code,{module:moduleRecord,exports:moduleRecord.exports,require:()=>({STATUS_LABELS:{}})});
+const {homeServiceStage,activeJobsForHome}=moduleRecord.exports;
+test('dispatch and invitation remain requested, without claiming a provider is matched',()=>{for(const status of ['paid_for_dispatch','awaiting_contractor','contractor_invited'])assert.equal(homeServiceStage(status),0);assert.equal(homeServiceStage('contractor_accepted'),1);});
+test('only recorded scheduled or later states activate the scheduled stage',()=>{for(const status of ['approved','scheduled','diagnosing','contractor_en_route','work_started'])assert.equal(homeServiceStage(status),2);for(const status of ['draft','ai_review_complete','future_unknown','canceled','refunded','disputed'])assert.equal(homeServiceStage(status),null);});
+test('completion review remains distinct from an ongoing service',()=>{for(const status of ['work_completed','customer_review_pending','closed'])assert.equal(homeServiceStage(status),3);const jobs=[{id:1,status:'customer_review_pending'},{id:2,status:'work_started'},{id:3,status:'canceled'}];assert.deepEqual(Array.from(activeJobsForHome(jobs),j=>j.id),[2]);});
+test('preferred dates, provider metadata and unknown statuses cannot manufacture lifecycle progress',()=>{const job={id:4,status:'future_unknown',preferredDate:'2020-01-01',assignedContractorUserId:9};assert.equal(homeServiceStage(job.status),null);assert.deepEqual(Array.from(activeJobsForHome([job]),j=>j.id),[4]);});

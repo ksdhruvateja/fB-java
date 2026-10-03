@@ -18,6 +18,7 @@ import { formatMoney } from "./managedJobs";
 export type FeePair = { customer: number; contractor: number };
 export type TradeBaseline = { trip: number; hourly: number; materials_allowance: number };
 export type PricingRules = {
+  booking_fee_cents?: number;
   dispatch_fees: Record<string, FeePair>;
   trade_baselines: Record<string, TradeBaseline>;
   fixed_platform_cost: number;
@@ -723,23 +724,7 @@ export default function AdminPricingPanel({
                   suffix="$"
                   dirty={isDirtyPath("subscription_discount")}
                 />
-                <NumField
-                  label="Free coordination fee"
-                  value={Number(pricingRules.standard_coordination_fee ?? 125)}
-                  onChange={(n) => setPricingRules({ ...pricingRules, standard_coordination_fee: n })}
-                  suffix="$"
-                  dirty={isDirtyPath("standard_coordination_fee")}
-                />
-                <NumField
-                  label="HomeCare Pro coordination fee"
-                  value={Number(pricingRules.homecare_pro_coordination_fee ?? 99)}
-                  onChange={(n) => setPricingRules({ ...pricingRules, homecare_pro_coordination_fee: n })}
-                  suffix="$"
-                  dirty={isDirtyPath("homecare_pro_coordination_fee")}
-                />
-                <p className="sm:col-span-2 text-xs text-muted-foreground">
-                  Coordination fees apply to new quotes only. Existing accepted quotes keep their snapshotted amounts.
-                </p>
+                <p className="sm:col-span-2 text-xs text-muted-foreground">Professional booking fee: {formatMoney(Number(pricingRules.booking_fee_cents ?? 12500) / 100)} for every homeowner, including Pro. Edit the single fee in Admin Settings / Professional Booking Fee. Existing paid amounts remain unchanged.</p>
                 <NumField
                   label="Assessment credit"
                   value={pricingRules.assessment_credit}
@@ -949,21 +934,7 @@ export default function AdminPricingPanel({
                       </span>
                     </div>
                     <div className="grid gap-3 sm:grid-cols-2">
-                      <NumField
-                        label="Customer fee"
-                        value={Number(fee.customer)}
-                        onChange={(n) =>
-                          setPricingRules({
-                            ...pricingRules,
-                            dispatch_fees: {
-                              ...pricingRules.dispatch_fees,
-                              [key]: { ...fee, customer: n },
-                            },
-                          })
-                        }
-                        suffix="$"
-                        dirty={isDirtyPath(`dispatch_fees.${key}.customer`)}
-                      />
+                      <div className="text-sm"><p className="text-muted-foreground">Customer booking fee (all timings)</p><p className="mt-2 font-semibold">{formatMoney(Number(pricingRules.booking_fee_cents ?? 12500) / 100)}</p></div>
                       <NumField
                         label="Contractor visit payout"
                         value={Number(fee.contractor)}

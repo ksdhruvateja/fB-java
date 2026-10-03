@@ -84,6 +84,12 @@ export type AuthUser = {
 
 const TOKEN_KEY = "fixbridge-auth-token";
 const USER_CACHE_KEY = "fixbridge-user-cache";
+let sessionRevision = 0;
+function validSessionUser(value: unknown): value is AuthUser {
+  if (!value || typeof value !== "object") return false;
+  const user = value as AuthUser;
+  return ["homeowner", "contractor", "admin"].includes(user.role) && !!user.id && typeof user.email === "string" && typeof user.name === "string";
+}
 
 function canUseStorage() {
   if (typeof window === "undefined") return false;
@@ -106,15 +112,19 @@ export function getStoredToken(): string | null {
 export function getStoredUser(): AuthUser | null {
   if (!canUseStorage()) return null;
   try {
+    if (!getStoredToken()) return null;
     const raw = window.localStorage.getItem(USER_CACHE_KEY);
     if (!raw) return null;
-    return JSON.parse(raw) as AuthUser;
+    const user = JSON.parse(raw);
+    return validSessionUser(user) ? user : null;
   } catch {
     return null;
   }
 }
 
 function storeSession(token: string, user: AuthUser) {
+  if (typeof token !== "string" || !token.trim() || !validSessionUser(user)) return;
+  sessionRevision++;
   if (!canUseStorage()) return;
   try {
     window.localStorage.setItem(TOKEN_KEY, token);
@@ -129,6 +139,7 @@ export function saveSession(token: string, user: AuthUser) {
 }
 
 export function clearSession() {
+  sessionRevision++;
   if (!canUseStorage()) return;
   try {
     window.localStorage.removeItem(TOKEN_KEY);
@@ -204,7 +215,8 @@ export async function signUpUser(user: {
       body: JSON.stringify(user),
     });
     const data = await res.json();
-    if (!data.ok) return { ok: false, message: data.message };
+    if (!res.ok || !data.ok) return { ok: false, message: data.message || "Sign-in service is unavailable. Please try again; you do not need another account." };
+    if (!validSessionUser(data.user) || typeof data.token !== "string" || !data.token.trim()) return { ok: false, message: "The server could not confirm your sign-in. Please retry." };
     storeSession(data.token, data.user);
     return { ok: true, user: data.user };
   } catch {
@@ -229,7 +241,8 @@ export async function signInUser(
       body: JSON.stringify({ role, email, password }),
     });
     const data = await res.json();
-    if (!data.ok) return { ok: false, message: data.message };
+    if (!res.ok || !data.ok) return { ok: false, message: data.message || "Sign-in service is unavailable. Please try again; you do not need another account." };
+    if (!validSessionUser(data.user) || typeof data.token !== "string" || !data.token.trim()) return { ok: false, message: "The server could not confirm your sign-in. Please retry." };
     // Admin MFA-pending tokens are stored so MFA start/verify can authenticate,
     // but they cannot call requireAdmin APIs until MFA completes.
     storeSession(data.token, data.user);
@@ -261,6 +274,7 @@ export async function updateUserProfile(
     });
     const data = await res.json();
     if (!data.ok) return { ok: false, message: data.message ?? "Could not save profile." };
+    if (getStoredToken() !== token) return { ok: false, message: "Your sign-in changed. Reload before saving this profile." };
     storeSession(typeof data.token === "string" && data.token ? data.token : token, data.user);
     return { ok: true, user: data.user };
   } catch {
@@ -288,53 +302,37 @@ export async function resetPassword(
 // ── Validate existing token (called on app startup) ──────────────────────────
 
 export async function validateToken(options?: { syncCheckout?: boolean }): Promise<
-  { ok: true; user: AuthUser } | { ok: false; reason?: "no-token" | "invalid" | "network" }
+  { ok: true; user: AuthUser; source?: "server" | "cached" } | { ok: false; reason?: "no-token" | "invalid" | "network" | "superseded" }
 > {
   const token = getStoredToken();
   if (!token) return { ok: false, reason: "no-token" };
+  const revision = sessionRevision;
+  const changed = () => sessionRevision !== revision || getStoredToken() !== token;
+  const fallback = () => {
+    if (changed()) return { ok: false as const, reason: "superseded" as const };
+    const cached = getStoredUser();
+    return cached ? { ok: true as const, user: cached, source: "cached" as const } : { ok: false as const, reason: "network" as const };
+  };
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), 8000);
   try {
     const res = await fetch(options?.syncCheckout ? "/api/auth/me?sync=checkout" : "/api/auth/me", {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: controller.signal,
+      headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,
     });
+    if (changed()) return { ok: false, reason: "superseded" };
+    // Authentication status is authoritative even when an error body is not JSON.
+    if (res.status === 401 || res.status === 403) {
+      clearSession();
+      return { ok: false, reason: "invalid" };
+    }
+    if (!res.ok) return fallback();
     const data = await res.json();
-    // Only an explicit authentication rejection invalidates the session.
-    // Previously any `{ ok:false }` response (including a transient 5xx/429
-    // from /api/auth/me) cleared the Admin session and looked like an
-    // unexpected logout. Keep the cached session for server/network failures.
-    if (!res.ok) {
-      if ([401, 403, 429].includes(res.status)) {
-        console.warn(`[FixBridge auth ${res.status}] /api/auth/me`, {
-          status: res.status,
-          at: new Date().toISOString(),
-        });
-      }
-      if (res.status === 401 || res.status === 403) {
-        clearSession();
-        return { ok: false, reason: "invalid" };
-      }
-      const cached = getStoredUser();
-      if (cached) return { ok: true, user: cached };
-      return { ok: false, reason: "network" };
-    }
-    if (!data.ok || !data.user) {
-      const cached = getStoredUser();
-      if (cached) return { ok: true, user: cached };
-      return { ok: false, reason: "network" };
-    }
+    if (changed()) return { ok: false, reason: "superseded" };
+    if (!data.ok || !validSessionUser(data.user)) return fallback();
     storeSession(token, data.user);
-    return { ok: true, user: data.user };
-  } catch {
-    // Network / transient API failure — keep the cached session so a blip
-    // does not wipe auth and bounce the user to the marketing home page.
-    const cached = getStoredUser();
-    if (cached) return { ok: true, user: cached };
-    return { ok: false, reason: "network" };
-  } finally {
-    window.clearTimeout(timer);
-  }
+    return { ok: true, user: data.user, source: "server" };
+  } catch { return fallback(); }
+  finally { window.clearTimeout(timer); }
 }
 
 // ── User list cache (for admin panel and contractor display) ─────────────────
@@ -433,7 +431,8 @@ export async function createPublicGuestJob(jobData: {
       body: JSON.stringify(jobData),
     });
     const data = await res.json();
-    if (!data.ok) return { ok: false, message: data.message };
+    if (!res.ok || !data.ok) return { ok: false, message: data.message || "Sign-in service is unavailable. Please try again; you do not need another account." };
+    if (!validSessionUser(data.user) || typeof data.token !== "string" || !data.token.trim()) return { ok: false, message: "The server could not confirm your sign-in. Please retry." };
     storeSession(data.token, data.user);
     return { ok: true, user: data.user, job: data.job };
   } catch {

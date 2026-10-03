@@ -3,6 +3,13 @@ export async function ensureRepairPhotoColumns(pool) {
   await pool.query(`ALTER TABLE pending_service_requests ADD COLUMN IF NOT EXISTS media_data_urls JSONB`);
 }
 
+export async function ensurePropertyCoverColumns(pool) {
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS cover_kind TEXT NOT NULL DEFAULT 'default'`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS cover_stock_key TEXT`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS cover_image BYTEA`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS cover_version TEXT`);
+}
+
 import { DEFAULT_PRICING_RULES } from './pricing.js';
 
 /**
@@ -70,6 +77,8 @@ export async function initManagedSchema(pool) {
       created_at      TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+
+  await ensurePropertyCoverColumns(pool);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pricing_rules (

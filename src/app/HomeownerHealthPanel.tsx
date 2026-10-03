@@ -101,6 +101,7 @@ export default function HomeownerHealthPanel({
   const [suggestions, setSuggestions] = useState<AiServiceSuggestion[]>([]);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiNote, setAiNote] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [showAddPast, setShowAddPast] = useState(false);
   const autoAnalyzeKeyRef = useRef<string>("");
 
@@ -194,11 +195,18 @@ export default function HomeownerHealthPanel({
   }, [property?.id, health.beds, health.baths, health.sqft]);
 
   async function persist(next: PropertyHealthProfile) {
-    if (!property) return;
+    if (!property) return false;
     const normalized = normalizeHealthProfile(next);
-    workingRef.current = normalized;
-    setWorkingHealth(normalized);
-    await onSave(property.id, normalized);
+    setSaveError(null);
+    try {
+      await onSave(property.id, normalized);
+      workingRef.current = normalized;
+      setWorkingHealth(normalized);
+      return true;
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Could not save home details. Please try again.");
+      return false;
+    }
   }
 
   const startEdit = (system: PropertySystem) => {
@@ -219,7 +227,7 @@ export default function HomeownerHealthPanel({
       notes,
       updatedBy: "homeowner",
     });
-    await persist(next);
+    if (!await persist(next)) return;
     setEditing(null);
   };
 
@@ -239,7 +247,7 @@ export default function HomeownerHealthPanel({
       sqft: withMeta.sqft ?? property.sqft,
     };
     const analyzed = analyzePropertyHealthProfile(propertyDraft, withMeta);
-    await persist(analyzed);
+    if (!await persist(analyzed)) return;
     setSuggestions(analyzed.aiSuggestions || []);
     autoAnalyzeKeyRef.current = "";
     await runAiSuggestions(analyzed.previousServices || [], analyzed, propertyDraft);
@@ -373,7 +381,7 @@ export default function HomeownerHealthPanel({
       maintenance: withSystems.maintenance || [],
       onboardingComplete: false,
     };
-    await persist(nextProfile);
+    if (!await persist(nextProfile)) return;
     setOnboardingStep("suggestions");
     await runAiSuggestions(allPrevious, nextProfile);
   }
@@ -427,7 +435,7 @@ export default function HomeownerHealthPanel({
     if (propertyHasHealthInputs(property)) {
       next = analyzePropertyHealthProfile(property, next);
     }
-    await persist(next);
+    if (!await persist(next)) return;
     setOnboardingStep(null);
     if (propertyHasHealthInputs(property) || (next.previousServices || []).length) {
       await runAiSuggestions(next.previousServices || [], next, property);
@@ -446,7 +454,7 @@ export default function HomeownerHealthPanel({
       previousServices: allPrevious,
       onboardingComplete: true,
     };
-    await persist(nextProfile);
+    if (!await persist(nextProfile)) return;
     setShowAddPast(false);
     setDraftServices([emptyDraftService()]);
     await runAiSuggestions(allPrevious, nextProfile);
@@ -541,6 +549,7 @@ export default function HomeownerHealthPanel({
 
   return (
     <section className="mx-auto max-w-5xl space-y-5">
+      {saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight">

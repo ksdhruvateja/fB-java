@@ -31,8 +31,6 @@ export const HOMECARE_FEATURE_IDS = [
 ];
 
 const FREE_BASE_FEATURES = new Set([
-  'ai_assessment',
-  'diy_guidance',
   'service_requests',
   'quotes',
   'payments',
@@ -56,7 +54,7 @@ const FEATURE_LABELS = {
   recurring_cleaning: 'Recurring Cleaning',
   recurring_landscaping: 'Recurring Landscaping',
   priority_routing: 'Priority Routing',
-  reduced_coordination_fees: 'Reduced Coordination Fee',
+  reduced_coordination_fees: 'Standard Booking Fee',
   quote_second_opinion: 'Quote Second Opinion',
   household_sharing: 'Household Sharing',
   annual_health_report: 'Annual Home Health Report',
@@ -67,7 +65,7 @@ function defaultFeatureEntitlements() {
   for (const id of HOMECARE_FEATURE_IDS) {
     const isBase = FREE_BASE_FEATURES.has(id);
     features[id] = {
-      enabled: true,
+      enabled: id !== 'reduced_coordination_fees',
       free: isBase,
       pro: true,
       label: FEATURE_LABELS[id] || id,
@@ -206,8 +204,8 @@ function deepMergeFeatures(defaults, incoming) {
       continue;
     }
     out[id] = {
-      enabled: patch.enabled !== false,
-      free: Boolean(patch.free),
+      enabled: id !== 'reduced_coordination_fees' && patch.enabled !== false,
+      free: ['ai_assessment', 'diy_guidance'].includes(id) ? false : Boolean(patch.free),
       pro: patch.pro !== false,
       label: sanitizeText(patch.label || base.label, 120) || base.label,
       benefit: patch.benefit != null ? sanitizeText(patch.benefit, 400) : base.benefit,
