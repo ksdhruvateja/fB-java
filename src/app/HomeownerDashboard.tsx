@@ -1,3 +1,7 @@
+import { asGuideSteps } from "./diy/diyGuideVisual";
+import "./homeownerLayout.css";
+import RepairPhotoPicker from "./RepairPhotoPicker";
+import { MAX_REPAIR_PHOTOS, prepareRepairPhoto } from "./repairPhotos";
 ﻿import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Home, PlusCircle, LogOut, Sun, Moon, Menu, X,
@@ -9,7 +13,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import type { AuthUser } from "./auth";
-import { getStoredToken, validateToken } from "./auth";
+import { getStoredToken, getStoredUser, validateToken } from "./auth";
 import { chatWithAi, type ChatMessage } from "./geminiAssessment";
 import { brand } from "../config/brand";
 import AppLogo from "./AppLogo";
@@ -56,7 +60,7 @@ import {
 import HomeownerServiceIntake, { type IntakePhase, normalizeIntakePhase } from "./HomeownerServiceIntake";
 import AiAssessmentAckModal from "./AiAssessmentAckModal";
 import type { ConsentMap } from "./legalDocuments";
-import { clearIntakeDraft, loadIntakeDraft, saveIntakeDraft } from "./intakeDraft";
+import { clearIntakeDraft, loadIntakeDraft, loadIntakeDraftPhotos, saveIntakeDraft } from "./intakeDraft";
 import {
   tradeToCategory,
   tradeLabel,
@@ -141,6 +145,7 @@ import HomeownerLocalEstimate from "./HomeownerLocalEstimate";
 import FixeraAnalysisExperience from "./fixera/FixeraAnalysisExperience";
 import HireProfessionalWizard from "./HireProfessionalWizard";
 import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
+import { useProfessionalBookingFee } from "./useProfessionalBookingFee";
 import { VerifiedAddressFields, type AddressVerificationMeta } from "./VerifiedAddressInput";
 import { normalizeUsStateCode } from "./UsLocationFields";
 import { isAddressComplete } from "./addressFormat";
@@ -205,6 +210,7 @@ function normalizeDiyRiskLevel(value: unknown): "red" | "yellow" | "green" {
 }
 
 function getHomeownerDiyRisk(job: ManagedJob | null | undefined): "red" | "yellow" | "green" {
+  if (job?.aiAssessment?.professional_required || job?.aiAssessment?.safe_diy_allowed === false) return "red";
   return normalizeDiyRiskLevel(job?.diyRiskLevel || job?.aiAssessment?.diy_risk_level || "green");
 }
 
@@ -493,6 +499,7 @@ export default function HomeownerDashboard({
     addressVerified: false,
   });
   const [addressPromptJobId, setAddressPromptJobId] = useState<number | null>(null);
+  const [addressPromptAuthorizedAmount, setAddressPromptAuthorizedAmount] = useState<number | undefined>();
   const [showAddAddressModal, setShowAddAddressModal] = useState(false);
   const [modalAddressLine1, setModalAddressLine1] = useState("");
   const [modalAddressLine2, setModalAddressLine2] = useState("");
@@ -510,6 +517,14 @@ export default function HomeownerDashboard({
   const [preferredDate, setPreferredDate] = useState("");
   const [preferredTimeSlot, setPreferredTimeSlot] = useState("9-11");
   const [mediaDataUrl, setMediaDataUrl] = useState<string | null>(null);
+  const [mediaDataUrls, setMediaDataUrls] = useState<string[]>([]);
+  const mediaPhotosRef = useRef<string[]>([]);
+  function adoptRepairPhotos(photos: string[]) {
+    mediaPhotosRef.current = photos;
+    setMediaDataUrls(photos);
+    setMediaDataUrl(photos[0] || null);
+    setMediaType(photos.length ? "image" : null);
+  }
   const [mediaType, setMediaType] = useState<string | null>(null);
   const [assistantHandoffIntent, setAssistantHandoffIntent] = useState<"remote_quote" | "site_visit" | "diy" | null>(null);
   const [propertyPurpose, setPropertyPurpose] = useState("current_homeowner");
@@ -541,12 +556,22 @@ export default function HomeownerDashboard({
   const [dispatchCouponPreview, setDispatchCouponPreview] = useState<DispatchCouponPreview | null>(null);
   const [dispatchSuccessMsg, setDispatchSuccessMsg] = useState<string | null>(null);
   const [showPaymentSuccess, setShowPaymentSuccess] = useState(false);
+  const [paymentReturnMessage, setPaymentReturnMessage] = useState<string | null>(null);
   const [invoicePaymentMsg, setInvoicePaymentMsg] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<ManagedJob | null>(null);
+  const bookingFee = useProfessionalBookingFee(Boolean(activeJob && !activeJob.visitFeeAuthorized), activeJob?.id);
   const [assessmentMsg, setAssessmentMsg] = useState<string | null>(null);
   const [assessmentFollowUp, setAssessmentFollowUp] = useState("");
-  const [assessmentFollowUpPhoto, setAssessmentFollowUpPhoto] = useState<string | null>(null);
-  const [assessmentFollowUpPhotoConfirmed, setAssessmentFollowUpPhotoConfirmed] = useState(false);
+  const [assessmentFollowUpPhotos, setAssessmentFollowUpPhotos] = useState<string[]>([]);
+  const assessmentFollowUpPhotosRef = useRef<string[]>([]);
+  const assessmentFollowUpPhoto = assessmentFollowUpPhotos[0] || null;
+  function setAssessmentFollowUpPhoto(photo: string | null) { assessmentFollowUpPhotosRef.current = photo ? [photo] : []; setAssessmentFollowUpPhotos(assessmentFollowUpPhotosRef.current); }
+  const reassessmentInFlightRef = useRef(false);
+  useEffect(() => {
+    setAssessmentFollowUp("");
+    assessmentFollowUpPhotosRef.current = [];
+    setAssessmentFollowUpPhotos([]);
+  }, [user.id, activeJob?.id, pendingAssessment?.pendingServiceRequest?.id]);
   const [assessLoadingStep, setAssessLoadingStep] = useState<number | null>(null);
   const [hireScreenOpen, setHireScreenOpen] = useState(false);
   const [intakeDraftSavedAt, setIntakeDraftSavedAt] = useState<string | null>(null);
@@ -556,8 +581,6 @@ export default function HomeownerDashboard({
   const [techMessageDraft, setTechMessageDraft] = useState("");
   const [techMessageSent, setTechMessageSent] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-  const followUpCameraRef = useRef<HTMLInputElement>(null);
-  const followUpPhotoRef = useRef<HTMLInputElement>(null);
   const assessInFlightRef = useRef<number | null>(null);
   const assessmentRecoveryRef = useRef<number | null>(null);
   const aiAssessmentConsentRef = useRef<{
@@ -566,6 +589,8 @@ export default function HomeownerDashboard({
   } | null>(null);
   const pendingAiRunRef = useRef<(() => Promise<void>) | null>(null);
   const expertLaunchRef = useRef(false);
+  const issueSubmissionRef = useRef(false);
+  const diyStepSubmissionRef = useRef(false);
   useEffect(() => {
     if (step !== "experts") {
       expertLaunchRef.current = false;
@@ -629,7 +654,7 @@ export default function HomeownerDashboard({
     );
 
     const saved = readDiyProgress(numericalUserId, numericalJobId);
-    const steps = assessmentStringList(activeJob.aiAssessment?.diy_steps);
+    const steps = asGuideSteps(activeJob.aiAssessment?.diy_guide_steps, assessmentStringList(activeJob.aiAssessment?.diy_steps)).map((guide) => guide.instruction);
     if (saved && steps.length) {
       const next: Record<number, boolean> = {};
       for (const idx of saved.completedSteps) {
@@ -643,7 +668,7 @@ export default function HomeownerDashboard({
     }
     setDiyView("home");
     setDiyStepSaved(false);
-  }, [activeJob?.id, user.id, activeJob?.aiAssessment?.diy_steps?.length]);
+  }, [activeJob?.id, user.id, activeJob?.aiAssessment?.diy_steps?.length, activeJob?.aiAssessment?.diy_guide_steps?.length]);
 
   // useEffect(() => {
   //    if (!activeJob) return;
@@ -660,7 +685,7 @@ export default function HomeownerDashboard({
   //       ]
   //   );
   //   const saved = readDiyProgress(user.id, activeJob.id);
-  //   const steps = assessmentStringList(activeJob.aiAssessment?.diy_steps);
+  //   const steps = asGuideSteps(activeJob.aiAssessment?.diy_guide_steps, assessmentStringList(activeJob.aiAssessment?.diy_steps)).map((guide) => guide.instruction);
   //   if (saved && steps.length) {
   //     const next: Record<number, boolean> = {};
   //     for (const idx of saved.completedSteps) {
@@ -783,8 +808,10 @@ export default function HomeownerDashboard({
     setAssessmentMode("expert");
   }
 
-  async function reassessWithFixera(observation: string, imageDataUrl?: string | null): Promise<boolean> {
-    if (!activeJob) return false;
+  async function reassessWithFixera(observation: string, imageDataUrl?: string | string[] | null): Promise<boolean> {
+    const repairCase = activeJob || pendingAssessment?.pendingServiceRequest;
+    if (!repairCase || reassessmentInFlightRef.current) return false;
+    reassessmentInFlightRef.current = true;
     setDiyChatBusy(true);
     try {
       const token = window.localStorage.getItem("fixbridge-auth-token");
@@ -795,12 +822,13 @@ export default function HomeownerDashboard({
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
-          jobId: activeJob.id,
-          category: activeJob.category,
-          description: activeJob.description,
+          jobId: repairCase.id,
+          caseType: activeJob ? "managed_job" : "pending_service_request",
+          category: repairCase.category,
+          description: repairCase.description,
           observation,
           currentStep: diyStepIndex,
-          ...(imageDataUrl ? { imageDataUrl } : {}),
+          ...(imageDataUrl ? { imageDataUrls: Array.isArray(imageDataUrl) ? imageDataUrl : [imageDataUrl] } : {}),
         }),
       });
       const data = await response.json();
@@ -808,33 +836,28 @@ export default function HomeownerDashboard({
         setError(data?.error || "We couldn't complete the assessment right now. Please try again.");
         return false;
       }
-      setActiveJob((prev) => prev ? { ...prev, aiAssessment: { ...prev.aiAssessment, ...data.assessment } } : prev);
+      if (activeJob) setActiveJob((prev) => prev ? { ...prev, aiAssessment: data.assessment, diyRiskLevel: data.assessment.diy_risk_level, mediaDataUrls: data.mediaDataUrls || prev.mediaDataUrls } : prev);
+      else setPendingAssessment((previous) => previous?.pendingServiceRequest ? { ...previous, pendingServiceRequest: { ...previous.pendingServiceRequest, aiAssessment: data.assessment, mediaDataUrls: data.mediaDataUrls } } : previous);
+      if (data.assessment.professional_required || data.assessment.diy_risk_level === "red") setAssessmentMode("expert");
       setDiyView("step");
       return true;
     } catch {
       setError("We couldn't complete the assessment right now. Please try again.");
       return false;
     } finally {
+      reassessmentInFlightRef.current = false;
       setDiyChatBusy(false);
     }
   }
 
   async function prepareAssessmentFollowUpPhoto(file: File | null) {
     if (!file) return;
-    const name = file.name.toLowerCase();
-    if (!file.type.startsWith("image/") || file.type === "image/heic" || file.type === "image/heif" || name.endsWith(".heic") || name.endsWith(".heif")) {
-      setError("Choose a JPG, PNG, or WEBP photo for Fixera to review.");
-      return;
-    }
-    try {
-      const dataUrl = await compressImageForAssessment(file);
-      if (dataUrl.length > 6_000_000) throw new Error("This photo is too large to attach.");
-      setAssessmentFollowUpPhoto(dataUrl);
-      setAssessmentFollowUpPhotoConfirmed(false);
-      setError(null);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "Could not prepare this photo.");
-    }
+    const existingCount = (activeJob?.mediaDataUrls?.length || (activeJob?.mediaDataUrl ? 1 : 0));
+    if (existingCount + assessmentFollowUpPhotosRef.current.length >= MAX_REPAIR_PHOTOS) throw new Error("This assessment supports up to 6 photos in total.");
+    const photo = await prepareRepairPhoto(file);
+    assessmentFollowUpPhotosRef.current = [...assessmentFollowUpPhotosRef.current, photo];
+    setAssessmentFollowUpPhotos(assessmentFollowUpPhotosRef.current);
+    setError(null);
   }
 
   async function submitAssessmentFollowUp() {
@@ -842,18 +865,13 @@ export default function HomeownerDashboard({
       setError("Answer a question or add a photo before reassessing.");
       return;
     }
-    if (assessmentFollowUpPhoto && !assessmentFollowUpPhotoConfirmed) {
-      setError("Preview and confirm the added photo before reassessing.");
-      return;
-    }
     const succeeded = await reassessWithFixera(
       `Homeowner answers to Fixera's questions: ${assessmentFollowUp.trim() || "No additional text."}`,
-      assessmentFollowUpPhotoConfirmed ? assessmentFollowUpPhoto : null
+      assessmentFollowUpPhotos.length ? assessmentFollowUpPhotos : null
     );
     if (succeeded) {
       setAssessmentFollowUp("");
       setAssessmentFollowUpPhoto(null);
-      setAssessmentFollowUpPhotoConfirmed(false);
     }
   }
 
@@ -908,10 +926,11 @@ export default function HomeownerDashboard({
   }
 
   async function completeCurrentDiyStep() {
-    if (!activeJob) return;
-    const steps = assessmentStringList(activeJob.aiAssessment?.diy_steps);
+    if (!activeJob || diyStepSubmissionRef.current) return;
+    const steps = asGuideSteps(activeJob.aiAssessment?.diy_guide_steps, assessmentStringList(activeJob.aiAssessment?.diy_steps)).map((guide) => guide.instruction);
     if (!steps.length) return;
     if (getHomeownerDiyRisk(activeJob) === "red") return;
+    diyStepSubmissionRef.current = true;
     setDiySavingStep(true);
     const completed = { ...diyCompletedSteps, [diyStepIndex]: true };
     const finished = steps.every((_, idx) => completed[idx]);
@@ -935,6 +954,7 @@ export default function HomeownerDashboard({
     } catch (error) {
       setError(error instanceof Error ? error.message : "Could not save this repair step. Please try again.");
     } finally {
+      diyStepSubmissionRef.current = false;
       setDiySavingStep(false);
     }
   }
@@ -1170,30 +1190,14 @@ export default function HomeownerDashboard({
   async function saveHealthProfile(propertyId: number, next: PropertyHealthProfile) {
     setError(null);
     try {
-      // Optimistic local update so Overview / Maintenance reflect changes immediately
-      setProperties((prev) =>
-        prev.map((p) =>
-          p.id === propertyId
-            ? {
-              ...p,
-              healthProfile: next as Property["healthProfile"],
-              beds: next.beds ?? p.beds,
-              baths: next.baths ?? p.baths,
-              sqft: next.sqft ?? p.sqft,
-            }
-            : p
-        )
-      );
       const r = await updatePropertyHealth(propertyId, next);
-      if (!r.ok) {
-        setError(r.message || "Could not save home details.");
-        return;
+      if (!r.ok || !r.property) {
+        throw new Error(r.message || "Could not save home details. Please try again.");
       }
-      if (r.property) {
-        upsertPropertyInState(r.property, { makePrimary: false });
-      }
+      upsertPropertyInState(r.property, { makePrimary: false });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save home details.");
+      throw err;
     }
   }
 
@@ -1331,6 +1335,7 @@ export default function HomeownerDashboard({
       if (descParts.length) setDescription(descParts.join("\n\n").slice(0, 3000));
       if (handoff.issueArea) setIssueArea(handoff.issueArea as ServiceLocation);
       if (handoff.mediaDataUrl) {
+        adoptRepairPhotos(handoff.mediaDataUrl.startsWith("data:image/") ? [handoff.mediaDataUrl] : []);
         setMediaDataUrl(handoff.mediaDataUrl);
         setMediaType(handoff.mediaType || (String(handoff.mediaDataUrl).startsWith("data:video") ? "video" : "image"));
       }
@@ -1348,7 +1353,7 @@ export default function HomeownerDashboard({
       if (prefill?.area) setIssueArea(resolveServiceLocation(String(prefill.area), description));
       if (prefill?.service) setCategory(prefill.service);
       setDescription(prefill?.description || "");
-      setMediaDataUrl(null);
+      adoptRepairPhotos([]);
       setMediaType(null);
     }
     navigateTo({
@@ -1416,6 +1421,7 @@ export default function HomeownerDashboard({
         preferredDate: undefined,
         preferredTimeSlot: "9-11",
         mediaDataUrl,
+        mediaDataUrls,
         mediaType,
         contactName: user.name,
         contactPhone: user.phone || "",
@@ -1615,9 +1621,13 @@ export default function HomeownerDashboard({
     const propsPromise = listProperties()
       .then((p) => {
         if (p.ok) setProperties(p.properties || []);
+        else setError("Could not load your saved properties. Please refresh and try again.");
         return p;
       })
-      .catch(() => ({ ok: false as const }))
+      .catch(() => {
+        setError("Could not load your saved properties. Please refresh and try again.");
+        return { ok: false as const };
+      })
       .finally(() => setPropertiesLoading(false));
     const pendingPromise = listPendingServiceRequests()
       .then((r) => {
@@ -1717,7 +1727,9 @@ export default function HomeownerDashboard({
 
     window.addEventListener("fixbridge:workflow-mutated", onWorkflowMutated);
     document.addEventListener("visibilitychange", onVisibility);
-    void refreshJobsOnly("mount");
+    // The initial account refresh already loads jobs. Start polling afterward
+    // instead of issuing a second identical jobs request on login.
+    timer = window.setTimeout(() => void refreshJobsOnly("poll"), delayMs);
 
     return () => {
       stopped = true;
@@ -1863,10 +1875,11 @@ export default function HomeownerDashboard({
       }
 
       if (jobId) {
-        const r = await payDispatchFee(jobId);
+        const r = await payDispatchFee(jobId, undefined, undefined, addressPromptAuthorizedAmount);
         if (r.ok && r.url) {
           window.location.href = r.url;
         } else {
+          if (r.code === "PRICING_MISMATCH") window.dispatchEvent(new Event("fixbridge-booking-fee-refresh"));
           alert(r.message || "Stripe checkout could not be started.");
         }
       }
@@ -1998,6 +2011,8 @@ export default function HomeownerDashboard({
 
   useEffect(() => {
     void refresh();
+
+    let paymentReturnCancelled = false;
     void listGoProPlans()
       .then((r) => {
         const codes = (r.plans || []).filter((p) => p.unlocksDiy).map((p) => p.code);
@@ -2063,39 +2078,46 @@ export default function HomeownerDashboard({
       const pendingPaymentPaid = pendingPaymentParams.get("paid") === "pending-professional";
       const pendingPaymentCanceled = pendingPaymentParams.get("canceled") === "pending-professional";
       const pendingStoredId = Number(sessionStorage.getItem("fixbridge-pending-service-request-id") || 0);
+      const pendingStoredResult = sessionStorage.getItem("fixbridge-pending-service-request-result");
       const pendingReturnId = pendingReturnIdFromUrl || pendingStoredId;
 
-      if (pendingReturnId > 0 && (pendingPaymentPaid || pendingPaymentCanceled)) {
+      if (Number.isSafeInteger(pendingReturnId) && pendingReturnId > 0 && (pendingPaymentPaid || pendingPaymentCanceled || pendingStoredResult === "paid" || pendingStoredResult === "canceled")) {
         sessionStorage.removeItem("fixbridge-pending-service-request-id");
         sessionStorage.removeItem("fixbridge-pending-service-request-result");
 
-        if (pendingPaymentCanceled) {
-          setError("Payment was canceled. Your saved request is still available.");
+        if (pendingPaymentCanceled || pendingStoredResult === "canceled") {
+          setPaymentReturnMessage("Payment was canceled. Your saved request is still available.");
           setPendingServiceRequestId(pendingReturnId);
           navigateTab("overview");
           void refresh();
           window.history.replaceState({}, document.title, window.location.pathname);
         } else {
-          // Stripe's success URL is authoritative for the payment event. Show the
-          // requested success popup immediately, while the webhook conversion is
-          // reconciled in the background. A slow webhook must never ask the user
-          // to pay again or delete the saved request.
+          // A redirect is only a wake-up. Confirm the owned server-side conversion
+          // before displaying success; delayed or unknown state must stay neutral.
           setPendingServiceRequestId(pendingReturnId);
-          setShowPaymentSuccess(true);
+          setPaymentReturnMessage("Confirming payment and your saved service request with FixBridge...");
           setTab("report");
           setStep("assessment");
           setAssessmentMode("expert");
           setReportPath("experts");
           void (async () => {
             for (let i = 0; i < 60; i++) {
+              if (paymentReturnCancelled) return;
               try {
                 const result = await getPendingProfessionalRequest(pendingReturnId);
-                if (result.ok && result.managedJob) {
+                if (paymentReturnCancelled) return;
+                if (result.ok && result.converted === true && result.managedJob) {
                   setActiveJob(result.managedJob);
                   setSelectedJobId(result.managedJob.id);
                   setPendingAssessment(null);
                   setSavedPendingRequests((prev) => prev.filter((item) => item.id !== pendingReturnId));
+                  setPaymentReturnMessage(null);
+                  setShowPaymentSuccess(true);
                   await refresh();
+                  return;
+                }
+                if (!result.ok) {
+                  setPaymentReturnMessage("We couldn't confirm this payment return. Check Service Requests or contact support before paying again.");
                   return;
                 }
               } catch {
@@ -2103,6 +2125,7 @@ export default function HomeownerDashboard({
               }
               await new Promise((resolve) => setTimeout(resolve, 1500));
             }
+            if (!paymentReturnCancelled) setPaymentReturnMessage("Your payment status is still unconfirmed. Your saved request has not been deleted. Check Service Requests or contact support before paying again.");
           })();
         }
       }
@@ -2282,6 +2305,7 @@ export default function HomeownerDashboard({
     } catch {
       // ignore
     }
+    return () => { paymentReturnCancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -2401,7 +2425,7 @@ export default function HomeownerDashboard({
 
   const { isPro: hasHomeCarePro } = resolveClientProAccess(user);
   const hasDiyAccess = Boolean(
-    hasHomeCarePro || (user.planCode && diyUnlockCodes.includes(user.planCode))
+    hasHomeCarePro
   );
   const homeCareSub = user.homeCareSubscription ?? null;
 
@@ -2415,11 +2439,30 @@ export default function HomeownerDashboard({
   useEffect(() => {
     if (user.homeCareSubscription != null) return;
     let cancelled = false;
-    void validateToken().then((r) => {
-      if (!cancelled && r.ok) onUserUpdated?.(r.user);
-    });
+    let timer: number | null = null;
+    const token = getStoredToken();
+    const retry = async () => {
+      if (cancelled || token !== getStoredToken()) return;
+      if (document.visibilityState !== "visible") {
+        timer = window.setTimeout(() => void retry(), 30_000);
+        return;
+      }
+      const result = await validateToken();
+      if (cancelled || token !== getStoredToken()) return;
+      if (result.ok && String(result.user.id) === String(user.id)) {
+        onUserUpdated?.(result.user);
+        if (result.user.homeCareSubscription != null) return;
+      } else if (!result.ok && result.reason === "invalid") {
+        return;
+      }
+      // Unknown entitlement stays gated. A transient response may return the
+      // cached user without subscription details; retry without a render loop.
+      timer = window.setTimeout(() => void retry(), 30_000);
+    };
+    void retry();
     return () => {
       cancelled = true;
+      if (timer != null) window.clearTimeout(timer);
     };
   }, [user.id, user.homeCareSubscription, onUserUpdated]);
 
@@ -2525,6 +2568,7 @@ export default function HomeownerDashboard({
         equipmentKey,
         partnerCode,
         mediaDataUrl,
+        mediaDataUrls,
         mediaType,
         savedAt: new Date().toISOString(),
       });
@@ -2545,10 +2589,11 @@ export default function HomeownerDashboard({
     equipmentKey,
     partnerCode,
     mediaDataUrl,
+    mediaDataUrls,
     mediaType,
   ]);
 
-  function resumeIntakeDraft() {
+  async function resumeIntakeDraft() {
     if (!user.id) return;
     const draft = loadIntakeDraft(Number(user.id));
     if (!draft) return;
@@ -2560,10 +2605,11 @@ export default function HomeownerDashboard({
     if (draft.propertyId) setPropertyId(draft.propertyId);
     if (draft.equipmentKey) setEquipmentKey(draft.equipmentKey);
     if (draft.partnerCode) setPartnerCode(draft.partnerCode);
-    if (draft.mediaDataUrl) {
-      setMediaDataUrl(draft.mediaDataUrl);
-      setMediaType(draft.mediaType);
-    }
+    const photos = await loadIntakeDraftPhotos(draft);
+    if (String(user.id) !== String(getStoredUser()?.id)) return;
+    adoptRepairPhotos(photos);
+    if (draft.mediaType?.startsWith("video")) { setMediaDataUrl(draft.mediaDataUrl); setMediaType(draft.mediaType); }
+
     navigateTo({
       role: "homeowner",
       tab: "report",
@@ -2573,6 +2619,12 @@ export default function HomeownerDashboard({
       jobId: null,
     });
   }
+
+  useEffect(() => {
+    if (!hasHomeCarePro || sessionStorage.getItem("fixbridge.ai-after-plan") !== String(user.id)) return;
+    sessionStorage.removeItem("fixbridge.ai-after-plan");
+    resumeIntakeDraft();
+  }, [hasHomeCarePro, user.id]);
 
   useEffect(() => {
     if (!selectedJobId) {
@@ -2586,45 +2638,15 @@ export default function HomeownerDashboard({
 
   async function onFile(file: File | null): Promise<void> {
     if (!file) return;
-    setError(null);
-    if (file.type.startsWith("video")) {
-      if (file.size > 8_000_000) {
-        throw new Error("Video is too large. Please use a shorter clip.");
-      }
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = () => reject(new Error("Could not read this video."));
-        reader.onload = () => resolve(String(reader.result || ""));
-        reader.readAsDataURL(file);
-      });
-      setMediaDataUrl(dataUrl);
-      setMediaType("video");
-      return;
+    if (file.type.startsWith("video/")) {
+      if (mediaPhotosRef.current.length) throw new Error("Remove photos before attaching a video.");
+      if (file.size > 8_000_000) throw new Error("Video must be smaller than 8 MB.");
+      const url = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onerror = () => reject(new Error("Could not read video.")); reader.onload = () => resolve(String(reader.result || "")); reader.readAsDataURL(file); });
+      setMediaDataUrl(url); setMediaType("video"); return;
     }
-    const name = file.name.toLowerCase();
-    const heic = file.type === "image/heic" || file.type === "image/heif" || name.endsWith(".heic") || name.endsWith(".heif");
-    if (heic) {
-      throw new Error("This image format isn't supported for analysis yet. Please choose a JPG, PNG, or WEBP.");
-    }
-    if (!file.type.startsWith("image/")) {
-      throw new Error("This image format isn't supported for analysis yet. Please choose a JPG, PNG, or WEBP.");
-    }
-    let dataUrl: string;
-    try {
-      dataUrl = await compressImageForAssessment(file);
-    } catch {
-      dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = () => reject(new Error("Could not read this photo."));
-        reader.onload = () => resolve(String(reader.result || ""));
-        reader.readAsDataURL(file);
-      });
-    }
-    if (!dataUrl.startsWith("data:image/") || dataUrl.length > 6_000_000) {
-      throw new Error("This photo is too large to attach. Choose a smaller image and try again.");
-    }
-    setMediaDataUrl(dataUrl);
-    setMediaType("image");
+    if (mediaPhotosRef.current.length >= MAX_REPAIR_PHOTOS) throw new Error("Attach up to 6 photos. Remove a photo to add another.");
+    const photo = await prepareRepairPhoto(file);
+    adoptRepairPhotos([...mediaPhotosRef.current, photo]);
   }
 
   //  async function runAssessWithProgress(
@@ -2922,7 +2944,20 @@ export default function HomeownerDashboard({
     scrollToAiAssessment();
   }
 
-  function requestAiAssessment(run?: () => Promise<void>) {
+  async function requestAiAssessment(run?: () => Promise<void>) {
+    if (user.homeCareSubscription == null) {
+      setError("Your plan is still being checked. Please try again shortly.");
+      return;
+    }
+    if (!hasHomeCarePro) {
+      const saved = await saveIntakeDraft({ userId: Number(user.id), intakePhase, requestSystemId, issueArea, description, adaptiveAnswers, propertyId, equipmentKey, partnerCode, mediaDataUrl, mediaDataUrls, mediaType, savedAt: new Date().toISOString() });
+      if (!saved) { setError("Your photos could not be saved for checkout. Please retry before leaving this page."); return; }
+      setHasIntakeDraft(true);
+      sessionStorage.setItem("fixbridge.ai-after-plan", String(user.id));
+      navigateTab("go-pro");
+      return;
+    }
+
     const next = run ?? (() => submitIssue("ai"));
     if (hasStoredAiAck()) {
       prepareAiConsent();
@@ -3010,6 +3045,8 @@ export default function HomeownerDashboard({
   }
 
   async function submitIssue(path: "ai" | "experts") {
+    // Lock synchronously: multiple clicks can arrive before busy renders.
+    if (issueSubmissionRef.current) return;
     if (!description.trim()) {
       alert("Please describe the issue first.");
       setError("Please describe the issue first.");
@@ -3053,6 +3090,7 @@ export default function HomeownerDashboard({
       return;
     }
 
+    issueSubmissionRef.current = true;
     setBusy(true);
     setError(null);
     setAssessmentMsg(null);
@@ -3089,6 +3127,7 @@ export default function HomeownerDashboard({
         preferredDate: path === "experts" ? preferredDate || undefined : undefined,
         preferredTimeSlot: path === "experts" ? preferredTimeSlot : undefined,
         mediaDataUrl,
+        mediaDataUrls,
         mediaType,
         contactName: user.name,
         contactPhone: user.phone || "",
@@ -3275,6 +3314,7 @@ export default function HomeownerDashboard({
         returnToIntakeDetails();
       }
     } finally {
+      issueSubmissionRef.current = false;
       setBusy(false);
     }
   }
@@ -3312,7 +3352,7 @@ export default function HomeownerDashboard({
   }
 
   async function payFee() {
-    if (!activeJob) return;
+    if (!activeJob || bookingFee.amount == null) return;
     const prop = properties.find((p) => p.id === activeJob.propertyId);
     if (prop) {
       const isMissingAddress = !prop.addressLine1?.trim() || !prop.city?.trim() || !prop.state?.trim() || !prop.zip?.trim();
@@ -3324,6 +3364,7 @@ export default function HomeownerDashboard({
         setAddressPromptState(prop.state || "");
         setAddressPromptZip(prop.zip || "");
         setAddressPromptJobId(activeJob.id);
+        setAddressPromptAuthorizedAmount(bookingFee.amount ?? undefined);
         return;
       }
     }
@@ -3332,7 +3373,9 @@ export default function HomeownerDashboard({
     try {
       const r = await payDispatchFee(
         activeJob.id,
-        dispatchCouponPreview?.code || activeJob.discountCode || undefined
+        undefined,
+        undefined,
+        bookingFee.amount ?? undefined
       );
       if (!r.ok) {
         setError(r.message || "Payment failed.");
@@ -3348,11 +3391,8 @@ export default function HomeownerDashboard({
     }
   }
 
-  const baseDispatchFee =
-    activeJob?.visitFeeAmount ??
-    activeJob?.pricing?.contractor_visit_fee ??
-    125;
-  const dispatchHoldAmount = dispatchCouponPreview?.discountedAmount ?? baseDispatchFee;
+  const baseDispatchFee = activeJob?.visitFeeAuthorized ? (activeJob.visitFeeAmount ?? 0) : (bookingFee.amount ?? 0);
+  const dispatchHoldAmount = baseDispatchFee;
 
   async function sendDiyChatMessage(forcedText?: string) {
     const text = (forcedText ?? diyChatInput).trim();
@@ -3375,7 +3415,7 @@ export default function HomeownerDashboard({
       const tools = assessmentStringList(activeJob.aiAssessment?.tools_required).join(", ") || "None";
       const materials = assessmentStringList(activeJob.aiAssessment?.materials_needed).join(", ") || "None";
       const guide = activeJob.aiAssessment?.diy_guide_steps?.[diyStepIndex];
-      const steps = (activeJob.aiAssessment?.diy_steps || []).map((s, idx) => `${idx + 1}. ${s}`).join("\n") || "No steps generated.";
+      const steps = asGuideSteps(activeJob.aiAssessment?.diy_guide_steps, assessmentStringList(activeJob.aiAssessment?.diy_steps)).map((guide) => guide.instruction).map((s, idx) => `${idx + 1}. ${s}`).join("\n") || "No steps generated.";
 
       const jobProperty =
         properties.find((p) => p.id === activeJob.propertyId) ||
@@ -3527,7 +3567,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
       <p className="mt-2 text-sm text-muted-foreground">{blurb}</p>
       <button
         type="button"
-        onClick={() => openRequestService}
+        onClick={() => openRequestService()}
         className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-semibold text-white"
       >
         <PlusCircle size={16} /> Request Service
@@ -3562,13 +3602,13 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
       onUpgrade={handleAuthenticatedCheckout}
       onProActivated={handleProActivated}
     >
-      <div className="min-h-screen bg-background text-foreground">
+      <div className="homeowner-shell min-h-screen bg-background text-foreground">
         {/* Mobile top bar - title + quick actions; full nav lives in bottom bar */}
-        <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-background/95 px-4 py-3 backdrop-blur lg:hidden">
+        <header className="homeowner-mobile-header sticky top-0 z-40 flex items-center justify-between border-b border-border bg-background/95 px-4 py-3 backdrop-blur lg:hidden">
           <div className="flex min-w-0 items-center gap-1">
             {canBack && <AppBackButton onBack={goBack} className="-ml-1 shrink-0" />}
             <div className="min-w-0">
-              <AppLogo onHome={goHome} variant="auth" className="mb-0.5" />
+              <AppLogo onHome={goHome} variant="auth" tone="color" className="homeowner-brand mb-0.5" />
               <p className="truncate text-[10px] text-muted-foreground">{user.name}</p>
             </div>
           </div>
@@ -3593,8 +3633,10 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
 
         <div className="lg:flex lg:min-h-screen">
           {/* Desktop left sidebar */}
-          <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-card lg:flex">
-            <div className="border-b border-border px-4 py-4 flex items-center gap-3">
+          <aside className="homeowner-sidebar sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-card lg:flex">
+            <div className="border-b border-border px-4 py-4">
+              <AppLogo onHome={goHome} variant="auth" tone="color" className="homeowner-brand mb-4" />
+              <div className="flex min-w-0 items-center gap-3">
               {user.photoDataUrl ? (
                 <img src={user.photoDataUrl} alt="Avatar" className="h-9 w-9 rounded-full object-cover border border-border" />
               ) : (
@@ -3602,9 +3644,9 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                   {String(user.name || "U").slice(0, 1).toUpperCase()}
                 </div>
               )}
-              <div>
-                <AppLogo onHome={goHome} variant="auth" className="mb-0.5" />
-                <p className="text-[10px] text-muted-foreground leading-none">Homeowner | {user.name}</p>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">{user.name}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">Homeowner</p>
                 {hasHomeCarePro ? (
                   <div className="mt-1.5 inline-flex items-center gap-1 rounded-full border border-[#FF6B2C]/35 bg-[#FF6B2C]/10 px-2 py-0.5">
                     <Sparkles className="h-3 w-3 text-[#FF6B2C]" aria-hidden />
@@ -3613,10 +3655,11 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                 ) : null}
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto">
+              </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
               {sidebarNav}
-              {goProPromoCard}
             </div>
+            {goProPromoCard}
             <div className="space-y-1 border-t border-border p-3">
               <button type="button" onClick={onToggleDark} className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm hover:bg-muted">
                 {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
@@ -3628,7 +3671,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
             </div>
           </aside>
 
-          <main className="min-w-0 flex-1 px-4 py-6 pb-24 lg:px-8 lg:pb-6">
+          <main className="homeowner-main min-w-0 flex-1 px-4 py-6 pb-24 lg:px-8 lg:pb-6">
+            {paymentReturnMessage ? <p role="status" className="mb-4 rounded-xl border border-amber-300/70 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">{paymentReturnMessage}</p> : null}
             {error && (
               <div className="mb-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
                 {error}
@@ -3714,6 +3758,14 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                   health={healthProfile}
                   jobs={primaryPropertyJobs}
                   quotesWaiting={countQuotesWaiting(primaryPropertyJobs)}
+                  hasHomeCarePro={hasHomeCarePro}
+                  onOpenPlans={() => navigateTab("go-pro")}
+                  onOpenFixera={() => {
+                    openRequestService();
+                    setReportPath("ai");
+                    setAssessmentMode("diy");
+                    setIntakePhase("describe");
+                  }}
                   onRequestService={() => openRequestService()}
                   onOpenJob={(id) => openJobsSegment("active", id)}
                   onOpenHealth={() => openPropertyCare("passport")}
@@ -3985,6 +4037,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                     voiceBaseRef={voiceBaseRef}
                     fileRef={fileRef}
                     onFile={onFile}
+                    mediaDataUrls={mediaDataUrls}
+                    onRemovePhoto={(index) => adoptRepairPhotos(mediaDataUrls.filter((_, i) => i !== index))}
                     mediaDataUrl={mediaDataUrl}
                     mediaType={mediaType}
                     propertyId={propertyId}
@@ -4014,7 +4068,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                     onHirePro={() => void submitIssue("experts")}
                     preferHire={assessmentMode === "expert"}
                     onClearMedia={() => {
-                      setMediaDataUrl(null);
+                      adoptRepairPhotos([]);
                       setMediaType(null);
                     }}
                     draftSavedAt={intakeDraftSavedAt}
@@ -4390,9 +4444,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                             <div className="fixera-card p-4">
                               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--fixbridge-orange)]">Here&apos;s what Fixera found</p>
                               <p className="mt-1 text-lg font-semibold">{activeJob.title || activeJob.aiAssessment?.summary || "Your repair assessment"}</p>
-                              <p className="mt-1 text-sm text-[var(--fixbridge-muted-text)]">
-                                Using Fixera repair intelligence. Similar scenarios are compared for guidance. Learning improvements use validated outcomes, not automatic retraining on this photo.
-                              </p>
+                              {activeJob.aiAssessment?.summary ? <p className="mt-3 text-sm leading-relaxed text-foreground">{activeJob.aiAssessment.summary}</p> : null}
+                              <p className="mt-2 text-xs text-muted-foreground">AI-assisted assessment based on the details you provided. Check the observations below and add missing information before deciding what to do next.</p>
                             </div>
                             {/* Mode Selector Toggle */}
                             <div className="flex border-b border-border">
@@ -4421,13 +4474,13 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                               </button>
                             </div>
 
-                            {assessmentStringList(activeJob.aiAssessment?.questions_needed).length > 0 && (
+                            {activeJob.aiAssessment && (
                               <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100 flex gap-3 shadow-sm">
                                 <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
                                 <div className="text-sm space-y-1.5 w-full">
-                                  <p className="font-semibold text-amber-900 dark:text-amber-200">Clarification Needed to Refine Estimate</p>
+                                  <p className="font-semibold text-amber-900 dark:text-amber-200">Add details or photos to refine the assessment</p>
                                   <p className="text-xs opacity-90 leading-relaxed">
-                                    Our AI detected potential uncertainty or mismatch in the details provided (e.g. description and photo trade categories mismatch, or extremely vague summary). Please review the following questions:
+                                    Add another view or describe what changed. Fixera will reassess this same property and keep the previously selected photos. Answer any questions below to improve the available evidence.
                                   </p>
                                   <ul className="list-disc pl-5 text-xs space-y-1 text-amber-800 dark:text-amber-300 font-medium">
                                     {assessmentStringList(activeJob.aiAssessment?.questions_needed).map((q, idx) => (
@@ -4445,26 +4498,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                       className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-normal text-foreground dark:border-amber-800 dark:bg-background"
                                     />
                                   </label>
-                                  <div className="grid grid-cols-2 gap-2 pt-2">
-                                    <button type="button" onClick={() => followUpCameraRef.current?.click()} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold dark:border-amber-800 dark:bg-background">
-                                      <Camera className="h-4 w-4" /> Take Photo
-                                    </button>
-                                    <button type="button" onClick={() => followUpPhotoRef.current?.click()} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold dark:border-amber-800 dark:bg-background">
-                                      <ImagePlus className="h-4 w-4" /> Upload Photo
-                                    </button>
-                                  </div>
-                                  <input ref={followUpCameraRef} type="file" accept="image/*" capture="environment" aria-label="Take a photo for Fixera" className="sr-only" onChange={(event) => { void prepareAssessmentFollowUpPhoto(event.target.files?.[0] || null); event.currentTarget.value = ""; }} />
-                                  <input ref={followUpPhotoRef} type="file" accept="image/jpeg,image/png,image/webp" aria-label="Choose a photo for Fixera" className="sr-only" onChange={(event) => { void prepareAssessmentFollowUpPhoto(event.target.files?.[0] || null); event.currentTarget.value = ""; }} />
-                                  {assessmentFollowUpPhoto ? (
-                                    <div className="flex items-center gap-3 rounded-lg border border-amber-300 bg-white p-2 dark:border-amber-800 dark:bg-background">
-                                      <img src={assessmentFollowUpPhoto} alt="Photo for Fixera clarification" className="h-16 w-16 rounded object-cover" />
-                                      <div className="min-w-0 flex-1 text-xs font-semibold">
-                                        <p>{assessmentFollowUpPhotoConfirmed ? "Photo confirmed" : "Photo selected"}</p>
-                                        {!assessmentFollowUpPhotoConfirmed ? <button type="button" onClick={() => setAssessmentFollowUpPhotoConfirmed(true)} className="mt-1 text-primary underline">Use this photo</button> : null}
-                                      </div>
-                                      <button type="button" onClick={() => { setAssessmentFollowUpPhoto(null); setAssessmentFollowUpPhotoConfirmed(false); }} aria-label="Remove clarification photo" className="rounded p-2"><X className="h-4 w-4" /></button>
-                                    </div>
-                                  ) : null}
+                                    <RepairPhotoPicker photos={assessmentFollowUpPhotos} onFile={async (file) => { await prepareAssessmentFollowUpPhoto(file); }} onRemove={(index) => { assessmentFollowUpPhotosRef.current = assessmentFollowUpPhotos.filter((_, i) => i !== index); setAssessmentFollowUpPhotos(assessmentFollowUpPhotosRef.current); }} disabled={diyChatBusy} />
                                   <button type="button" disabled={diyChatBusy} onClick={() => void submitAssessmentFollowUp()} className="mt-2 inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#FF4D1C] px-4 text-sm font-semibold text-white disabled:opacity-60">
                                     {diyChatBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                                     Add details and reassess
@@ -4852,7 +4886,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                   </div>
                   <button
                     type="button"
-                    onClick={() => openRequestService}
+                    onClick={() => openRequestService()}
                     className="hidden sm:inline-flex items-center gap-2 rounded-2xl bg-primary px-4 py-2.5 text-sm font-semibold text-white"
                   >
                     <PlusCircle size={16} /> New request
@@ -5004,6 +5038,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                           onNeedAddress={({
                             propertyId,
                             jobId,
+                            authorizedAmount,
                             line1,
                             line2,
                             city,
@@ -5017,6 +5052,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                             setAddressPromptState(state);
                             setAddressPromptZip(zip);
                             setAddressPromptJobId(jobId);
+                            setAddressPromptAuthorizedAmount(authorizedAmount);
                           }}
                         />
                       </div>

@@ -1,3 +1,15 @@
+export async function ensureRepairPhotoColumns(pool) {
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS media_data_urls JSONB`);
+  await pool.query(`ALTER TABLE pending_service_requests ADD COLUMN IF NOT EXISTS media_data_urls JSONB`);
+}
+
+export async function ensurePropertyCoverColumns(pool) {
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS cover_kind TEXT NOT NULL DEFAULT 'default'`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS cover_stock_key TEXT`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS cover_image BYTEA`);
+  await pool.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS cover_version TEXT`);
+}
+
 import { DEFAULT_PRICING_RULES } from './pricing.js';
 
 /**
@@ -65,6 +77,8 @@ export async function initManagedSchema(pool) {
       created_at      TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+
+  await ensurePropertyCoverColumns(pool);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pricing_rules (
@@ -226,6 +240,8 @@ export async function initManagedSchema(pool) {
       updated_at                      TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE pending_service_requests ADD COLUMN IF NOT EXISTS media_data_urls JSONB NOT NULL DEFAULT '[]'::jsonb`);
+  await pool.query(`ALTER TABLE managed_jobs ADD COLUMN IF NOT EXISTS media_data_urls JSONB NOT NULL DEFAULT '[]'::jsonb`);
   await pool.query(`ALTER TABLE pending_service_requests ADD COLUMN IF NOT EXISTS equipment_key TEXT`);
   await pool.query(`ALTER TABLE pending_service_requests ADD COLUMN IF NOT EXISTS ai_assessment_history JSONB NOT NULL DEFAULT '[]'::jsonb`);
 

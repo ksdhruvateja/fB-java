@@ -43,7 +43,7 @@ export default function AdminHomeCareProPanel({
   onMessage?: (msg: string) => void;
 }) {
   const canManage = can(permissions, "homecare.manage") || can(permissions, "settings.edit");
-  const canEditPricing = can(permissions, "pricing.edit") || canManage;
+  const canEditPricing = can(permissions, "pricing.edit");
   const canView = can(permissions, "homecare.view") || can(permissions, "settings.view") || canManage;
 
   const [section, setSection] = useState<SectionId>("features");
@@ -263,12 +263,8 @@ export default function AdminHomeCareProPanel({
             Applied to new eligible service pricing. Existing accepted quotes and invoices are not changed.
           </p>
           <label className="block text-sm">
-            <span className="font-medium">FixBridge Free coordination fee ($)</span>
-            <input className={`${fieldClass} mt-1 tabular-nums`} type="number" min={0} step={1} disabled={!canEditPricing} value={pricing.standardCoordinationFee} onChange={(e) => setPricing({ ...pricing, standardCoordinationFee: Number(e.target.value) })} />
-          </label>
-          <label className="block text-sm">
-            <span className="font-medium">HomeCare Pro coordination fee ($)</span>
-            <input className={`${fieldClass} mt-1 tabular-nums`} type="number" min={0} step={1} disabled={!canEditPricing} value={pricing.homecareProCoordinationFee} onChange={(e) => setPricing({ ...pricing, homecareProCoordinationFee: Number(e.target.value) })} />
+            <span className="font-medium">Professional booking fee for all homeowners ($)</span>
+            <input className={`${fieldClass} mt-1 tabular-nums`} type="number" min={0.01} step={0.01} disabled={!canEditPricing} value={pricing.standardCoordinationFee} onChange={(e) => setPricing({ ...pricing, standardCoordinationFee:Number(e.target.value), homecareProCoordinationFee:Number(e.target.value) })} />
           </label>
           <label className="block text-sm">
             <span className="font-medium">Assessment subscription discount (0–1)</span>
@@ -277,7 +273,7 @@ export default function AdminHomeCareProPanel({
           {canEditPricing && (
             <button type="button" className="inline-flex items-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-2 text-sm font-medium text-white" disabled={busy} onClick={() => void savePricing()}>
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              Save coordination fees
+              Save booking fee
             </button>
           )}
         </div>

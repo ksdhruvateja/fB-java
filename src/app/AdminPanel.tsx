@@ -1022,7 +1022,7 @@ export default function AdminPanel({
   // );
 
   const sidebarNav = (
-    <nav className="flex flex-col gap-1 p-3 select-none">
+    <nav className="min-h-0 flex-1 overflow-y-auto flex flex-col gap-1 p-3 select-none">
       {NAV_GROUPS.map((group, index) => {
         // Overview is a standalone navigation item.
         if (!group.label) {
@@ -1352,7 +1352,7 @@ export default function AdminPanel({
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="admin-workspace min-h-screen bg-background text-foreground" data-theme={isDark ? "dark" : "light"}>
       {/* Mobile top bar */}
       <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-background/95 px-4 py-3 backdrop-blur lg:hidden">
         <div className="flex items-center gap-2">
@@ -1442,7 +1442,7 @@ export default function AdminPanel({
           </div>
         </aside>
 
-        <main className="min-w-0 flex-1 space-y-4 bg-muted px-4 py-6 lg:px-8">
+        <main className="admin-workspace-main min-w-0 flex-1 space-y-4 bg-muted px-4 py-6 lg:px-8">
           {/* Desktop ops top bar */}
           {/* <div className="hidden items-center gap-3 lg:flex">
             <label className="relative min-w-0 flex-1">
@@ -3556,7 +3556,7 @@ export default function AdminPanel({
               <section className="space-y-4">
                 <SectionHeader
                   title="Platform controls"
-                  subtitle="Integrations, overdue dispatch, and admin MFA. Neon + Express is the source of truth (RLS-equivalent auth in API handlers)."
+                  subtitle="Review connected services, dispatch deadlines and staff verification."
                 />
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className={`${cardClass} space-y-2 p-4`}>
@@ -3567,7 +3567,7 @@ export default function AdminPanel({
                           (k) => (
                             <li key={k} className="flex justify-between gap-2">
                               <span className="capitalize">{k}</span>
-                              <span className="font-mono text-foreground">{String(platformInfo[k])}</span>
+                              <span className="font-mono text-foreground">{platformInfo[k] == null ? "Not available" : typeof platformInfo[k] === "boolean" ? (platformInfo[k] ? "Configured" : "Not configured") : String(platformInfo[k])}</span>
                             </li>
                           )
                         )}
@@ -3596,14 +3596,17 @@ export default function AdminPanel({
                     </button>
                     <div className="flex gap-2">
                       <input
-                        className={fieldClass}
+                        className={`${fieldClass} min-w-0 flex-1`}
+                        aria-label="Admin verification code"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
                         placeholder="6-digit code"
                         value={mfaCode}
                         onChange={(e) => setMfaCode(e.target.value)}
                       />
                       <button
                         type="button"
-                        className={btnPrimary}
+                        className={`${btnPrimary} shrink-0 whitespace-nowrap`}
                         disabled={busy || !mfaCode}
                         onClick={async () => {
                           setBusy(true);

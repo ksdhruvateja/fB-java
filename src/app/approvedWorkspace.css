@@ -1,0 +1,48 @@
+/* Shared visual system from the approved Home workspace. Domain components
+   retain their own layout, semantic status colors, data, actions and gates. */
+:is(.homeowner-shell,.contractor-portal,.admin-workspace,.fixbridge-plans){--background:#FAF8F4;--foreground:#142B3B;--card:#fff;--card-foreground:#142B3B;--popover:#fff;--popover-foreground:#142B3B;--muted:#F1EEE8;--muted-foreground:#65717B;--border:#E7E2DA;--primary:#CE4510;--primary-foreground:#fff;--homeowner-soft:#FFF0DC;--admin-accent:#CE4510;--admin-hero:#fff;font-family:"DM Sans",system-ui,sans-serif;line-height:1.5;color:var(--foreground);background:var(--background)}
+.dark :is(.homeowner-shell,.contractor-portal),.admin-workspace[data-theme="dark"]{--background:#141C23;--foreground:#EDF2F6;--card:#1C2730;--card-foreground:#EDF2F6;--popover:#1C2730;--popover-foreground:#EDF2F6;--muted:#26333F;--muted-foreground:#B5BEC6;--border:#34404A;--primary:#CE4510;--primary-foreground:#fff;--homeowner-soft:#30291D;--admin-accent:#FFB786;--admin-hero:#1C2730}
+:is(.homeowner-shell,.contractor-portal,.admin-workspace,.fixbridge-plans) main h1{font-family:inherit;font-size:36px;line-height:42px;font-weight:650;text-transform:none;letter-spacing:-.035em}
+:is(.homeowner-shell,.contractor-portal,.admin-workspace,.fixbridge-plans) main h2{font-family:inherit;text-transform:none;letter-spacing:-.02em}
+:is(.homeowner-shell,.contractor-portal,.admin-workspace,.fixbridge-plans) :is(input:not([type=checkbox]):not([type=radio]),select,textarea){border-radius:7px;border-color:var(--border);font-family:inherit;font-size:15px;line-height:22px}
+:is(.homeowner-shell,.contractor-portal,.admin-workspace,.fixbridge-plans) :is(.rounded-3xl,.rounded-2xl,.rounded-xl){border-radius:10px}
+:is(.homeowner-shell,.contractor-portal,.admin-workspace,.fixbridge-plans) :is(button,a,input,textarea,select):focus-visible{outline:2px solid var(--primary);outline-offset:3px}
+:is(.homeowner-shell,.contractor-portal,.admin-workspace,.fixbridge-plans) button{min-height:44px}
+:is(.homeowner-shell,.contractor-portal,.admin-workspace,.fixbridge-plans) button:is(.bg-primary,[class~="bg-[#FF6B2C]"],[class~="bg-[#FF4D1C]"]){background:#CE4510;color:white;box-shadow:none}
+:is(.homeowner-shell,.contractor-portal,.admin-workspace,.fixbridge-plans) main :is(.shadow-lg,.shadow-xl,.shadow-2xl){box-shadow:0 2px 8px #142B3B08}
+:is(.homeowner-shell,.contractor-portal,.admin-workspace,.fixbridge-plans) table{font-size:13px;line-height:20px}
+:is(.homeowner-shell,.contractor-portal,.admin-workspace,.fixbridge-plans) :is(th,td){padding-top:12px;padding-bottom:12px}
+:is(.homeowner-shell,.contractor-portal,.admin-workspace,.fixbridge-plans) :is(.text-xs,.text-\[11px\]){line-height:18px}
+.contractor-portal .contractor-work-heading h1{font-size:36px;line-height:42px;font-weight:650}
+.contractor-portal :is(.contractor-work-panel,.contractor-followup-band){border-radius:10px;padding:24px}
+.contractor-portal .contractor-work-overview{gap:24px}
+.contractor-portal .contractor-summary-strip strong{font-size:28px;font-weight:650}
+.admin-workspace .admin-operations-overview>section>div:first-child{border-radius:10px}
+.auth-welcome{background:#FAF8F4;color:#142B3B;padding-top:0}
+.auth-welcome .auth-welcome-header{min-height:64px}
+.auth-welcome :is(.auth-welcome-copy h1,.auth-welcome-form h1){font-size:36px;line-height:42px;font-weight:650;letter-spacing:-.035em}
+.auth-welcome :is(.auth-welcome-copy,.auth-welcome-photo){border-radius:10px}
+.auth-welcome input:not([type=checkbox]):not([type=radio]){min-height:48px;border-color:#E7E2DA;font-size:15px}
+.auth-welcome button[type=submit]{min-height:48px;background:#CE4510}
+.auth-welcome .auth-welcome-photo:after{background:none}
+.auth-welcome :is(button,a,input):focus-visible{outline:2px solid #CE4510;outline-offset:3px}
+@media(max-width:799px){:is(.homeowner-shell,.contractor-portal,.admin-workspace,.fixbridge-plans) main h1,.contractor-portal .contractor-work-heading h1,.auth-welcome :is(.auth-welcome-copy h1,.auth-welcome-form h1){font-size:30px;line-height:36px}:is(.homeowner-shell,.contractor-portal,.admin-workspace,.fixbridge-plans) main{padding-inline:16px}.contractor-portal :is(.contractor-work-panel,.contractor-followup-band){padding:20px}}
+@media(prefers-reduced-motion:reduce){:is(.homeowner-shell,.contractor-portal,.admin-workspace,.auth-welcome) *{scroll-behavior:auto;transition-duration:0s!important;animation-duration:0s!important}}
+.fixbridge-public,.fixbridge-partner{--background:#FAF8F4;--foreground:#142B3B;--card:#fff;--muted-foreground:#65717B;--border:#E7E2DA;--primary:#CE4510;font-family:"DM Sans",system-ui,sans-serif}
+.fixbridge-public h1{font-family:inherit!important;font-size:48px!important;line-height:54px!important;font-weight:650!important;text-transform:none!important;letter-spacing:-.035em!important}
+.fixbridge-public :is(h2,h3,button),.fixbridge-partner h1{font-family:inherit!important;text-transform:none!important;letter-spacing:-.02em}
+.fixbridge-public>section:not(:first-child){background:#FAF8F4;color:#142B3B}
+.fixbridge-public>section:not(:first-child) [class*="text-white"]{color:#142B3B}
+.fixbridge-public>section:not(:first-child) [class*="bg-[#1d1d1f]"],.fixbridge-public>section:not(:first-child) [class~="bg-black"]{background:#fff;border-color:#E7E2DA}
+.fixbridge-public :is(.rounded-3xl,.rounded-2xl){border-radius:10px}
+.fixbridge-public button.bg-primary{background:#CE4510;color:#fff!important;box-shadow:none}
+.fixbridge-public :is(button,a,input,textarea):focus-visible,.fixbridge-partner :is(button,a,input):focus-visible{outline:2px solid #CE4510;outline-offset:3px}
+.fixbridge-public :is(button,input),.fixbridge-partner :is(button,input){min-height:44px}
+.fixbridge-partner h1{font-size:36px;line-height:42px;font-weight:650}
+@media(max-width:799px){.fixbridge-public h1{font-size:36px!important;line-height:42px!important}.fixbridge-partner h1{font-size:30px;line-height:36px}}
+
+.homeowner-services>*+*{margin-top:24px!important}
+.fixbridge-plans{background:var(--background);color:var(--foreground);min-height:100vh}
+.fixbridge-plans h1{font-size:36px;line-height:42px;font-weight:650;letter-spacing:-.035em;font-family:inherit;text-transform:none}
+@media(max-width:799px){.homeowner-services>*+*{margin-top:20px!important}.homeowner-services .service-catalog-intro{display:none}.homeowner-services .service-discovery-copy>p.mb-3{display:none}.homeowner-services .service-discovery-note{margin-top:12px;gap:4px 14px}.fixbridge-plans h1{font-size:30px;line-height:36px}}
+.fixbridge-public>section:not(:first-child) h2{font-size:32px!important;line-height:38px!important;font-weight:650!important;letter-spacing:-.03em!important;color:#142B3B}.fixbridge-public>section:not(:first-child) [style*="opacity"]{opacity:1!important}@media(max-width:799px){.fixbridge-public>section:not(:first-child) h2{font-size:26px!important;line-height:32px!important}}

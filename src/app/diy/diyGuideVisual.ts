@@ -69,7 +69,7 @@ export function asGuideSteps(value: unknown, fallback: string[]): GuideStep[] {
         const row = item as Record<string, unknown>;
         const title = String(row.title || "").trim();
         const instruction = String(row.instruction || "").trim();
-        if (!title && !instruction) return null;
+        if (!instruction) return null;
         return {
           step_number: Number(row.step_number) || index + 1,
           title: title || `Step ${index + 1}`,
@@ -90,23 +90,21 @@ export function asGuideSteps(value: unknown, fallback: string[]): GuideStep[] {
       })
       .filter((item): item is GuideStep => Boolean(item));
   }
-  return fallback.map((instruction, index) => ({
+  return fallback.filter((instruction) => instruction.trim()).map((instruction, index) => ({
     step_number: index + 1,
     title: instruction.replace(/^\d+[\).\s-]+/, "").split(/[.!?]/)[0].slice(0, 80) || `Step ${index + 1}`,
-    goal: "Finish this one action before changing any part.",
+    goal: "",
     instruction,
-    explanation: "This check confirms the cause before any part is replaced.",
+    explanation: "",
     tools: [],
     materials: [],
     safety_note: "Stop if the part is damaged, stuck, or looks different from this step.",
-    what_to_look_for: "Look for a clear change from the condition you started with.",
-    expected_result: "The step finishes without a new leak, spark, odor, or unusual resistance.",
-    failure_signs: "Nothing changes, or a new leak, spark, or resistance appears.",
+    what_to_look_for: "",
+    expected_result: "",
+    failure_signs: "",
     if_not: "Do not force it. Use Hire a Professional with this step noted.",
     when_to_stop: "Stop if you cannot complete this action safely.",
-    image_needed: /valve|filter|reset|handle|shutoff/i.test(instruction),
-    image_prompt: /valve|filter|reset|handle|shutoff/i.test(instruction)
-      ? `Close-up instructional view of ${instruction.slice(0, 80)}`
-      : "",
+    image_needed: false,
+    image_prompt: "",
   }));
 }

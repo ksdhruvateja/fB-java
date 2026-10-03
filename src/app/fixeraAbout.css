@@ -1,0 +1,24 @@
+.fixera-about-visual { margin:0; overflow:hidden; background:linear-gradient(145deg,#fffaf0,#faf3e6 55%,#f8e7d7); color:#463b32; border-radius:28px; padding:24px; }
+.fixera-about-eyebrow { display:flex; align-items:center; gap:8px; font-size:10px; letter-spacing:.13em; font-weight:700; color:#a75428; }
+.fixera-about-eyebrow span { margin-left:auto; letter-spacing:0; font-weight:400; color:#786858; }
+.fixera-about-scene { position:relative; }
+.fixera-about-art { display:block; width:100%; height:auto; }
+.fixera-about-chip { display:flex; align-items:center; gap:6px; position:absolute; padding:8px 10px; font-size:11px; border-radius:30px; background:#fffdf7; box-shadow:0 4px 20px #965f2910; white-space:nowrap; }
+.fixera-about-home { left:0; top:51%; }
+.fixera-about-photo { right:0; top:24%; }
+.fixera-about-next { right:0; top:65%; }
+.fixera-about-visual figcaption { display:flex; align-items:center; gap:12px; border-top:1px solid #b9824a26; padding-top:20px; }
+.fixera-about-visual figcaption strong { font-size:15px; font-weight:600; }
+.fixera-about-visual figcaption p { font-size:12px; line-height:1.6; margin-top:4px; color:#786858; }
+.fixera-about-visual figcaption>svg { margin-left:auto; flex-shrink:0; color:#c06430; }
+.fixera-about-caption-mark { display:grid; place-items:center; width:36px; height:36px; border-radius:50%; color:#bf6128; background:#ed9f4024; flex-shrink:0; }
+.fixera-about-flow { animation:fixera-about-flow 7s linear infinite; }
+.fixera-about-halo { transform-origin:250px 145px; animation:fixera-about-breathe 5s ease-in-out infinite; }
+@keyframes fixera-about-flow { to { stroke-dashoffset:-40; } }
+@keyframes fixera-about-breathe { 50% { opacity:.35; transform:scale(1.12); } }
+.dark .fixera-about-visual { background:linear-gradient(145deg,#29241d,#25201b 55%,#35251b); color:#eedac4; }
+.dark .fixera-about-chip { background:#393026; color:#f2dfc5; }
+.dark .fixera-about-eyebrow { color:#f6b65a; }
+.dark .fixera-about-eyebrow span,.dark .fixera-about-visual figcaption p { color:#c9b9a8; }
+@media(max-width:480px) { .fixera-about-visual { padding:18px 14px; border-radius:22px; } .fixera-about-eyebrow span { font-size:9px; } .fixera-about-chip { padding:6px 8px; font-size:9px; gap:4px; } .fixera-about-chip svg { width:12px; } .fixera-about-visual figcaption strong { font-size:13px; } .fixera-about-visual figcaption p { font-size:11px; } }
+@media(prefers-reduced-motion:reduce) { .fixera-about-flow,.fixera-about-halo { animation:none; } }

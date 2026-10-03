@@ -4,49 +4,15 @@
  */
 
 import { applyDiscountToAmount } from './discounts.js';
-import { getDispatchFee } from './pricing.js';
+import { getDispatchFee, resolveBookingFeeCents } from './pricing.js';
 
-export const DEFAULT_PROFESSIONAL_DISPATCH_LINES = [
-  {
-    key: 'assessment_coordination',
-    label: 'FixBridge Assessment / Coordination',
-    amount_cents: 14900,
-    enabled: true,
-    line_type: 'charge',
-  },
-  {
-    key: 'visit_diagnostic',
-    label: 'Contractor Visit / Diagnostic',
-    amount_cents: 9500,
-    enabled: true,
-    line_type: 'charge',
-    timing_adjustable: true,
-  },
-  {
-    key: 'beta_discount',
-    label: 'Beta Discount',
-    amount_cents: 14900,
-    enabled: true,
-    line_type: 'discount',
-  },
-];
+export const DEFAULT_PROFESSIONAL_DISPATCH_LINES = [{ key: 'professional_booking', label: 'Professional booking / dispatch fee', amount_cents: 12500, enabled: true, line_type: 'charge' }];
 
 export function resolveProfessionalDispatchConfig(rules = {}) {
-  const cfg = rules?.professional_dispatch_pricing || {};
-  const lines = Array.isArray(cfg.lines) && cfg.lines.length
-    ? cfg.lines
-    : DEFAULT_PROFESSIONAL_DISPATCH_LINES;
   return {
-    version: cfg.version != null ? String(cfg.version) : '1',
-    effective_from: cfg.effective_from || null,
-    lines: lines.map((line) => ({
-      key: String(line.key || ''),
-      label: String(line.label || line.key || 'Fee'),
-      amount_cents: Math.max(0, Math.round(Number(line.amount_cents) || 0)),
-      enabled: line.enabled !== false,
-      line_type: line.line_type === 'discount' ? 'discount' : 'charge',
-      timing_adjustable: line.timing_adjustable === true,
-    })),
+    version: String(rules?.professional_dispatch_pricing?.version || '1'),
+    effective_from: rules?.professional_dispatch_pricing?.effective_from || null,
+    lines: [{ ...DEFAULT_PROFESSIONAL_DISPATCH_LINES[0], amount_cents: resolveBookingFeeCents(rules) }],
   };
 }
 
@@ -189,7 +155,7 @@ export function assertProfessionalDispatchPricingIntegrity(breakdown) {
 export function buildProfessionalDispatchBreakdown(job, rules = {}, discount = null) {
   const config = resolveProfessionalDispatchConfig(rules);
   const visitOverride =
-    config.lines.some((l) => l.key === 'visit_diagnostic' && l.timing_adjustable)
+    config.lines.some((l) => l.key === 'visit_diagnostic' || l.key === 'professional_booking' && l.timing_adjustable)
       ? visitAmountCentsForTiming(job, rules, config.lines.find((l) => l.key === 'visit_diagnostic')?.amount_cents || 0)
       : null;
 
@@ -227,13 +193,7 @@ export function buildProfessionalDispatchBreakdown(job, rules = {}, discount = n
   let couponCode = null;
   let couponId = null;
   let couponLabel = null;
-  if (discount) {
-    const applied = applyDiscountToAmount(linePricing.pricingLineSumCents / 100, discount);
-    couponDiscountCents = Math.round(applied.discountAmount * 100);
-    couponCode = discount.code || null;
-    couponId = discount.id || null;
-    couponLabel = discount.label || null;
-  }
+  // Booking fees have no plan, beta or coupon discount.
 
   const authorizedNowCents = linePricing.pricingLineSumCents - couponDiscountCents;
   if (authorizedNowCents < 0) {

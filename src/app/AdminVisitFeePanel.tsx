@@ -14,30 +14,22 @@ export default function AdminVisitFeePanel({
   onSave: (patch: Partial<PricingRules>) => Promise<boolean>;
 }) {
   const [visitFee, setVisitFee] = useState("125");
-  const [emergencyFee, setEmergencyFee] = useState("125");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!pricingRules) return;
-    const v = Number(pricingRules.default_visit_fee);
-    const e = Number(pricingRules.default_emergency_visit_fee ?? pricingRules.default_visit_fee);
+    const v = Number(pricingRules.booking_fee_cents ?? 12500) / 100;
     setVisitFee(String(Number.isFinite(v) && v >= 0 ? v : 125));
-    setEmergencyFee(String(Number.isFinite(e) && e >= 0 ? e : 125));
   }, [pricingRules]);
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     if (readOnly) return;
     const amount = Number(visitFee);
-    const emergency = Number(emergencyFee);
-    if (!Number.isFinite(amount) || amount < 0) {
-      setError("Enter a valid visit fee (0 or greater).");
-      return;
-    }
-    if (!Number.isFinite(emergency) || emergency < 0) {
-      setError("Enter a valid emergency visit fee (0 or greater).");
+    if (!Number.isFinite(amount) || amount <= 0 || !Number.isSafeInteger(Math.round(amount * 100)) || Math.abs(amount * 100 - Math.round(amount * 100)) > 0.000001) {
+      setError("Enter a positive booking fee with at most two decimal places.");
       return;
     }
     setSaving(true);
@@ -45,8 +37,7 @@ export default function AdminVisitFeePanel({
     setMessage(null);
     try {
       const ok = await onSave({
-        default_visit_fee: amount,
-        default_emergency_visit_fee: emergency,
+        booking_fee_cents: Math.round(amount * 100),
       });
       if (ok) {
         setMessage(
@@ -65,7 +56,7 @@ export default function AdminVisitFeePanel({
   return (
     <section className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Homeowner Visit Fee</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Professional Booking Fee</h1>
         <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
           Set the amount homeowners authorize before a pro is dispatched. When the final repair bill is issued,
           this paid visit fee is deducted automatically from the amount due.
@@ -83,17 +74,17 @@ export default function AdminVisitFeePanel({
             </span>
             <div>
               <p className="font-semibold">Platform visit fee</p>
-              <p className="text-xs text-muted-foreground">Applies to new dispatch authorizations</p>
+              <p className="text-xs text-muted-foreground">Same fee for all homeowners, including HomeCare Pro</p>
             </div>
           </div>
 
           <label className="grid gap-1.5 text-sm max-w-xs">
-            <span className="font-medium">Standard visit fee ($)</span>
+            <span className="font-medium">Booking / dispatch fee for every homeowner ($)</span>
             <div className="relative">
               <span className="absolute left-3 top-2.5 text-muted-foreground">$</span>
               <input
                 type="number"
-                min={0}
+                min={0.01}
                 step="0.01"
                 className="w-full rounded-xl border border-border bg-background py-2.5 pl-7 pr-3"
                 value={visitFee}
@@ -104,22 +95,7 @@ export default function AdminVisitFeePanel({
             </div>
           </label>
 
-          <label className="grid gap-1.5 text-sm max-w-xs">
-            <span className="font-medium">Emergency visit fee ($)</span>
-            <div className="relative">
-              <span className="absolute left-3 top-2.5 text-muted-foreground">$</span>
-              <input
-                type="number"
-                min={0}
-                step="0.01"
-                className="w-full rounded-xl border border-border bg-background py-2.5 pl-7 pr-3"
-                value={emergencyFee}
-                onChange={(e) => setEmergencyFee(e.target.value)}
-                disabled={readOnly || saving || busy}
-                required
-              />
-            </div>
-          </label>
+
 
           {error ? <p className="text-sm text-red-600">{error}</p> : null}
           {message ? <p className="text-sm text-teal-700 dark:text-teal-400">{message}</p> : null}
@@ -131,7 +107,7 @@ export default function AdminVisitFeePanel({
               className="inline-flex items-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
             >
               {saving || busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Save visit fee
+              Save booking fee
             </button>
           )}
         </form>
@@ -148,7 +124,7 @@ export default function AdminVisitFeePanel({
             <li>Invoice amount due = service total − visit fee already paid − other payments.</li>
           </ol>
           <p className="text-xs text-muted-foreground border-t border-border pt-3">
-            Changes apply to new visit authorizations. Jobs that already authorized a visit fee keep their
+            Changes apply to unpaid checkout after a new pricing review. Jobs that already authorized or paid a visit fee keep their
             recorded amount for credit calculations.
           </p>
         </div>

@@ -1,0 +1,47 @@
+.property-concept-cover{grid-area:property;border-radius:10px;min-width:0;border-color:var(--border);background:var(--card)}
+.property-concept-photo{height:230px}
+.property-concept-photo>img{object-position:center 68%}
+.property-concept-tools{position:relative;display:flex;justify-content:space-between;gap:8px;align-items:flex-start;padding:12px}
+.property-concept-sample{background:#fffef3ed;padding:4px 8px;font-size:12px;line-height:16px;color:#344451;border-radius:5px}
+.property-concept-edit{margin-left:auto;background:#fffffff0;color:#142B3B;display:flex;gap:6px;align-items:center;font-size:12px;font-weight:600;padding:8px 10px;border-radius:6px}
+.property-concept-edit:disabled{opacity:.5}
+.property-concept-address{min-height:74px;background:#fffefa;padding:12px 18px;display:flex;justify-content:space-between;gap:12px;align-items:center;color:var(--foreground)}
+.property-concept-address>div{min-width:0}
+.property-concept-label{font-size:18px;line-height:22px;font-weight:650}
+.property-concept-location{font-size:12px;line-height:16px;color:var(--muted-foreground);margin-top:4px;overflow-wrap:anywhere}
+.property-concept-view{font-size:12px;white-space:nowrap;color:#B23C0C;font-weight:600}
+.homeowner-active-summary{display:flex;justify-content:space-between;gap:20px;align-items:flex-start}
+.homeowner-active-description{min-width:0}
+.homeowner-service-eyebrow{font-size:12px;line-height:16px;color:var(--muted-foreground)}
+.homeowner-service-eyebrow>span{margin-left:10px;color:#B23C0C}
+.homeowner-active-service h2{font-size:18px;line-height:24px;font-weight:650;margin-top:4px}
+.homeowner-active-description>p:last-child,.homeowner-active-empty>div>p:last-child{font-size:12px;line-height:18px;color:var(--muted-foreground);margin-top:4px}
+.homeowner-service-expand,.homeowner-active-empty>button{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:#B23C0C;flex-shrink:0}
+.homeowner-service-rail{display:flex;margin-top:16px;list-style:none;max-width:750px;gap:0}
+.homeowner-service-rail li{display:flex;align-items:center;gap:8px;font-size:12px;line-height:16px;color:var(--muted-foreground);flex:1;position:relative}
+.homeowner-service-rail li:not(:last-child):after{content:"";height:1px;flex:1;background:var(--border);margin-inline:10px}
+.homeowner-service-rail li>span:first-child{height:9px;width:9px;border-radius:50%;background:#B8BDC0;flex-shrink:0}
+.homeowner-service-rail .is-complete>span:first-child{background:#A98028}
+.homeowner-service-rail .is-current>span:first-child{background:var(--primary);box-shadow:0 0 0 4px #FFF0DC}
+.homeowner-service-rail .is-current{color:#B23C0C;font-weight:600}
+.homeowner-service-status{margin-top:10px;color:var(--muted-foreground)}
+.homeowner-active-details{margin-top:18px;border-top:1px solid var(--border)}
+.homeowner-active-details article{padding:16px 0;display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid var(--border)}
+.homeowner-active-details article:last-child{padding-bottom:0;border-bottom:0}
+.homeowner-active-details h3{font-size:15px;font-weight:600}
+.homeowner-active-details p{font-size:12px;color:var(--muted-foreground);margin-top:3px}
+.homeowner-active-controls{display:flex;gap:12px;flex-wrap:wrap}
+.homeowner-active-controls button{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#B23C0C}
+.homeowner-active-empty{display:flex;align-items:center;justify-content:space-between;gap:20px}
+.dark .property-concept-address{background:#1C2730}
+.homeowner-active-summary{flex-direction:column;gap:4px}
+.homeowner-active-service{padding:18px}
+.homeowner-service-rail{flex-direction:column;gap:0;margin-top:10px}
+.homeowner-service-rail li{min-height:34px;flex:none}
+.homeowner-service-rail li:not(:last-child):after{position:absolute;left:4px;top:23px;width:1px;height:12px;margin:0}
+.homeowner-active-details article{flex-direction:column;align-items:flex-start}
+.homeowner-active-empty{align-items:flex-start;flex-direction:column;gap:8px}
+.property-concept-address{padding-inline:14px}
+.property-concept-photo{height:230px}
+.property-concept-label{font-size:17px}
+@media(max-width:639px){.homeowner-active-summary{flex-direction:column;gap:8px}.homeowner-service-rail{flex-wrap:wrap}.homeowner-active-details article{flex-direction:column;align-items:flex-start}}

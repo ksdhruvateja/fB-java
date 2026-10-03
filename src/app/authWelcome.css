@@ -1,0 +1,41 @@
+/* Login presentation only: role forms, authentication and MFA remain owned by their components. */
+.auth-welcome { min-height:100dvh; background:#fbfaf7; color:#14263c; padding:0 32px 32px; }
+.auth-welcome-header { display:flex; align-items:center; justify-content:space-between; gap:16px; max-width:1600px; margin:auto; min-height:100px; }
+.auth-welcome-back { display:inline-flex; align-items:center; gap:8px; padding:10px 14px; border-radius:6px; color:#697079; font-size:14px; }
+.auth-welcome-back:hover { background:#efebe3; color:#14263c; }
+.auth-welcome-back:focus-visible { outline:2px solid #f26725; outline-offset:3px; }
+.auth-welcome-layout { display:grid; grid-template-columns:minmax(0,56fr) minmax(0,44fr); max-width:1600px; margin:auto; gap:32px; min-height:calc(100dvh - 132px); }
+.auth-welcome-photo { position:relative; isolation:isolate; overflow:hidden; border-radius:8px; background:#c8b99e; min-height:640px; display:flex; flex-direction:column; justify-content:flex-end; padding:32px; }
+.auth-welcome-photo>img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:-2; }
+.auth-welcome-photo::after { content:""; position:absolute; inset:0; background:linear-gradient(180deg,transparent 55%,rgba(38,34,23,.12)); z-index:-1; }
+.auth-welcome-copy { padding:28px 32px; color:#14263c; background:rgba(255,251,242,.92); backdrop-filter:blur(12px); border-radius:6px; max-width:530px; }
+.auth-welcome-copy h1 { max-width:440px; font-size:clamp(32px,3vw,46px); line-height:1.12; letter-spacing:-.04em; font-weight:750; }
+.auth-welcome-eyebrow { font-size:13px; font-weight:650; margin-bottom:12px; color:#bd4b15; }
+.auth-welcome-copy h1+p { max-width:410px; font-size:14px; line-height:1.65; margin-top:14px; color:#58616a; }
+.auth-welcome-image-note { display:block; font-size:10px; color:#667078; margin-top:14px; }
+.auth-welcome-footer { padding:20px 0 0; color:#14263c; }
+.auth-welcome-form { display:flex; align-items:center; justify-content:center; padding:40px 20px; min-width:0; }
+.auth-welcome-form-inner { width:100%; max-width:440px; }
+.auth-welcome-wide { max-width:768px; }
+.auth-welcome-form h1 { color:#14263c; font-size:clamp(38px,4vw,58px); font-weight:750; line-height:1.1; letter-spacing:-.045em; }
+.auth-welcome-form h1.hidden,.auth-welcome-form p.hidden { display:block; }
+.auth-welcome input:not([type=checkbox]):not([type=radio]) { min-height:60px; border-radius:6px; background:#fff; border-color:#deddd7; }
+.auth-welcome button[type=submit] { min-height:60px; border-radius:6px; background:#f26725; color:#fff; font-weight:700; box-shadow:none; }
+.auth-welcome button[type=submit]:hover:not(:disabled) { background:#d94f15; }
+.auth-welcome button[type=submit]:disabled { opacity:.6; }
+.auth-welcome button { border-radius:6px; }
+.auth-welcome [role=tablist] { border-color:#deddd7; }
+.dark .auth-welcome { background:#17212b; color:#f5f1e9; }
+.dark .auth-welcome-back { color:#c6ced6; }
+.dark .auth-welcome-back:hover { background:#263341; color:#fff; }
+.dark .auth-welcome-copy { background:rgba(25,36,47,.94); color:#f5f1e9; }
+.dark .auth-welcome-copy h1+p,.dark .auth-welcome-image-note { color:#d2d6da; }
+.dark .auth-welcome-eyebrow { color:#ffad7e; }
+.dark .auth-welcome-form,.dark .auth-welcome-form h1 { color:#f5f1e9; }
+.dark .auth-welcome input:not([type=checkbox]):not([type=radio]) { background:#202e3b; border-color:#536171; color:#f5f1e9; }
+.dark .auth-welcome .text-neutral-900,.dark .auth-welcome .text-neutral-800 { color:#f5f1e9; }
+.dark .auth-welcome .text-neutral-600,.dark .auth-welcome .text-neutral-500 { color:#c6ced6; }
+.dark .auth-welcome .bg-white,.dark .auth-welcome .bg-neutral-100 { background:#263341; }
+.dark .auth-welcome [role=tablist] { border-color:#536171; }
+@media(max-width:1023px) { .auth-welcome { padding:0 20px 28px; } .auth-welcome-header { min-height:84px; } .auth-welcome-layout { grid-template-columns:1fr; gap:0; min-height:0; } .auth-welcome-photo { min-height:330px; max-height:390px; border-radius:6px; padding:20px; } .auth-welcome-copy { padding:20px; max-width:480px; } .auth-welcome-copy h1 { font-size:30px; } .auth-welcome-copy h1+p { margin-top:10px; font-size:13px; } .auth-welcome-eyebrow { margin-bottom:8px; } .auth-welcome-image-note { margin-top:10px; } .auth-welcome-footer { display:none; } .auth-welcome-form { padding:36px 4px 16px; } .auth-welcome-form h1 { font-size:42px; } }
+@media(max-width:420px) { .auth-welcome { padding-inline:16px; } .auth-welcome-back { font-size:12px; padding-inline:8px; } .auth-welcome-photo { padding:16px; } .auth-welcome-copy { padding:18px; } .auth-welcome-copy h1 { font-size:27px; } }

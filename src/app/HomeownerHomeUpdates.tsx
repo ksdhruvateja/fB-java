@@ -49,6 +49,18 @@ export default function HomeownerHomeUpdates({
   );
   const [whyId, setWhyId] = useState<string | null>(null);
   const [snoozeId, setSnoozeId] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  async function savePreference(next: PropertyHealthProfile) {
+    setSaveError(null);
+    try {
+      await onSaveHealth(next);
+      return true;
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Could not save your preference. Please try again.");
+      return false;
+    }
+  }
 
   async function dismiss(item: HomeUpdateItem) {
     const next = applyHomeUpdatePreference(health, {
@@ -63,7 +75,7 @@ export default function HomeownerHomeUpdates({
         basedOn: item.why,
       },
     });
-    await onSaveHealth(next);
+    await savePreference(next);
   }
 
   async function snooze(item: HomeUpdateItem, option: "1w" | "1m" | "3m" | string) {
@@ -80,8 +92,7 @@ export default function HomeownerHomeUpdates({
         basedOn: item.why,
       },
     });
-    setSnoozeId(null);
-    await onSaveHealth(next);
+    if (await savePreference(next)) setSnoozeId(null);
   }
 
   function primaryClick(item: HomeUpdateItem) {
@@ -104,6 +115,7 @@ export default function HomeownerHomeUpdates({
 
   return (
     <div className={compact ? "space-y-4" : "space-y-6"}>
+      {saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}
       {!compact ? (
         <div className="rounded-[1.5rem] border border-border/70 bg-card p-5 shadow-sm">
           <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Your Home</p>

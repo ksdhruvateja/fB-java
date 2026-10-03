@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Loader2, RefreshCw, Search, Sparkles, UserRound, Wrench } from "lucide-react";
 import { getStoredToken } from "./auth";
+import { loadHomeServices } from "./homeServicesApi";
 import type { Property } from "./managedJobs";
 import { formatMoney } from "./managedJobs";
 import { useProFeatureOptional } from "./ProFeatureProvider";
@@ -12,7 +13,9 @@ import {
   type ActivationFeeSettings,
   type ServiceOffering,
 } from "./serviceOfferings";
-import { ServiceThumb } from "./serviceVisuals";
+import ServiceThumb from "./HomeownerServiceArtwork";
+import HomeownerServiceIcon from "./HomeownerServiceIcon";
+import "./homeownerServices.css";
 
 const FILTERS = [
   { id: "all", label: "All" },
@@ -58,28 +61,32 @@ export default function HomeownerServicesPage({
   const [startDate, setStartDate] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
-  const [actionLoading, setActionLoading] = useState<"request" | "hire" | "diy" | null>(null);
+  const setupSubmissionRef = useRef(false);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState(false);
+  const [catalogAttempt, setCatalogAttempt] = useState(0);
   const [helpChoice, setHelpChoice] = useState("");
   const [visitMode, setVisitMode] = useState<"one_time" | "recurring" | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const token = getStoredToken();
-    void fetch("/api/home-services", {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
-      .then((r) => r.json())
+    setLoading(true);
+    setCatalogError(false);
+    void loadHomeServices()
       .then((data) => {
-        if (cancelled || !data?.ok) return;
+        if (cancelled) return;
+        if (!data?.ok) throw new Error("Catalog unavailable");
         const merged = mergeOfferings(data.offerings);
         const ids = new Set((Array.isArray(data.offerings) ? data.offerings : []).map((row: { id?: string }) => String(row.id)));
         setOfferings(ids.size ? merged.filter((item) => ids.has(item.id)) : merged.filter((item) => item.active && item.homeownerVisible));
         if (data.activationFee) setFee(data.activationFee);
       })
       .catch(() => {
-        if (!cancelled) setOfferings(mergeOfferings(null).filter((item) => item.active && item.homeownerVisible));
+        if (!cancelled) {
+          setCatalogError(true);
+          setOfferings(mergeOfferings(null).filter((item) => item.active && item.homeownerVisible));
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -87,11 +94,11 @@ export default function HomeownerServicesPage({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [catalogAttempt]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return offerings.filter((item) => {
+    const matches = offerings.filter((item) => {
       if (filter === "popular" && !item.popular) return false;
       if (filter === "subscription" && !item.subscriptionEligible) return false;
       if (filter === "maintenance" && item.kind !== "maintenance" && !item.subscriptionEligible) return false;
@@ -100,6 +107,10 @@ export default function HomeownerServicesPage({
       if (!q) return true;
       return `${item.name} ${item.description} ${item.category} ${(item.helpsWith || []).join(" ")} ${(item.searchTerms || []).join(" ")}`.toLowerCase().includes(q);
     });
+    // Featured categories lead discovery; retain every matching offering.
+    return filter === "all"
+      ? matches.sort((a, b) => Number(b.popular) - Number(a.popular) || a.name.localeCompare(b.name))
+      : matches;
   }, [offerings, query, filter]);
 
   const selected = offerings.find((item) => item.id === selectedId) || null;
@@ -121,14 +132,8 @@ export default function HomeownerServicesPage({
       intent,
     } as const;
 
-    // Every explicit action gets a short transition so the homeowner
-    // immediately sees that FixBridge is preparing the selected path.
-    setActionLoading(intent);
     setMessage(null);
-    window.setTimeout(() => {
-      setActionLoading(null);
-      onRequestService(payload);
-    }, 650);
+    onRequestService(payload);
   }
 
   function openSetup(item: ServiceOffering) {
@@ -143,10 +148,12 @@ export default function HomeownerServicesPage({
   }
 
   async function submitSetup() {
+    if (setupSubmissionRef.current) return;
     if (!selected || !property?.id) {
       setMessage("Add a property before setting up a recurring service.");
       return;
     }
+    setupSubmissionRef.current = true;
     setBusy(true);
     setMessage(null);
     try {
@@ -186,21 +193,34 @@ export default function HomeownerServicesPage({
     } catch {
       setMessage("Could not submit this recurring service.");
     } finally {
+      setupSubmissionRef.current = false;
       setBusy(false);
     }
   }
 
   return (
-    <section className="mx-auto max-w-5xl space-y-5">
-      <div>
+    <section className="homeowner-services mx-auto max-w-6xl space-y-8">
+      <header className="homeowner-services-heading service-discovery-hero">
+        <div className="service-discovery-copy">
+        <p className="mb-3 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Care for your home</p>
         <h1 className="text-2xl font-semibold tracking-tight">Home Services, All in One Place</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Choose what your home needs and FixBridge will help diagnose, guide, or connect you with the right professional.
         </p>
-      </div>
+        <p className="service-discovery-note"><span>01 / Choose your service</span><span>02 / Tell us what you need</span><span>03 / Review your next step</span></p>
+        </div>
+        <div className="service-discovery-art" aria-hidden="true"><ServiceThumb name="HVAC" className="service-hero-image" /><span className="service-art-caption">A little care. A better home.</span></div>
+      </header>
       {!selected ? (
         <>
-          <label className="relative block">
+
+          <aside className="service-homecare-rail" aria-label="HomeCare subscription">
+            <div className="service-homecare-mark"><Sparkles aria-hidden="true" className="h-5 w-5" /></div>
+            <div className="min-w-0"><p className="service-eyebrow">Your home, throughout the year</p><h2>HomeCare Pro subscription</h2><p>Explore ongoing home management and AI features. Service visits and recurring service pricing are separate.</p></div>
+            <button type="button" onClick={onOpenHomeCare}>View Plans <ArrowRight aria-hidden="true" className="h-4 w-4" /></button>
+          </aside>
+          <div className="service-catalog-intro"><div><p className="service-eyebrow">Find the right help</p><h2>Explore home services</h2></div><p>Start with a one-time need, or choose recurring care where available.</p></div>
+          <label className="relative block service-search">
             <span className="mb-1.5 block text-sm font-medium">What does your home need?</span>
             <Search className="pointer-events-none absolute bottom-3.5 left-3 h-4 w-4 text-muted-foreground" />
             <input
@@ -211,13 +231,15 @@ export default function HomeownerServicesPage({
               className="min-h-12 w-full rounded-2xl border border-border bg-card py-3 pl-10 pr-3 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
             />
           </label>
-          <div className="flex gap-2 overflow-x-auto pb-1">
+          {catalogError ? <div role="status" className="service-catalog-notice">Live availability could not be loaded. You can browse the service guide; availability will be checked when you submit.<button type="button" onClick={() => setCatalogAttempt((value) => value + 1)}>Retry loading</button></div> : null}
+          <div className="homeowner-service-filters flex gap-5 overflow-x-auto border-b border-border">
             {FILTERS.map((item) => (
               <button
                 key={item.id}
                 type="button"
                 onClick={() => setFilter(item.id)}
-                className={`shrink-0 rounded-full px-3 py-2 text-xs font-semibold ${filter === item.id ? "bg-primary text-white" : "bg-card ring-1 ring-border"}`}
+                aria-pressed={filter === item.id}
+                className={`shrink-0 border-b-2 px-0 py-3 text-xs font-medium ${filter === item.id ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}
               >
                 {item.label}
               </button>
@@ -237,7 +259,7 @@ export default function HomeownerServicesPage({
             No services match that search. Try a home problem like “leaking faucet” or “AC not cooling”.
           </div>
         ) : (
-          <div className="grid grid-cols-1 items-stretch gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="homeowner-service-directory service-gallery">
             {visible.map((item) => {
               const q = query.trim().toLowerCase();
               const match = q
@@ -245,74 +267,51 @@ export default function HomeownerServicesPage({
                   item.searchTerms.find((line) => line.toLowerCase().includes(q))
                 : "";
               return (
-              <article
-                key={item.id}
-                className="flex h-full flex-col rounded-3xl border border-border/80 bg-card p-4 text-left shadow-sm motion-safe:transition motion-safe:duration-300 motion-safe:hover:-translate-y-1 motion-safe:hover:border-primary/50"
-              >
-                <ServiceThumb name={item.name} className="h-24 w-full" />
-                <h2 className="mt-3 text-base font-semibold">{item.name}</h2>
-                <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{item.description}</p>
-                {match ? <p className="mt-1 text-xs font-semibold text-primary">{match}</p> : null}
-                <ul className="mt-3 flex flex-wrap gap-1.5 text-[11px] font-semibold">
-                  {item.oneTimeAvailable ? <li className="rounded-full bg-muted px-2 py-1">One-Time</li> : null}
-                  {item.subscriptionEligible ? <li className="rounded-full bg-primary/10 px-2 py-1 text-primary">Subscription Eligible</li> : null}
-                  {item.professionalAvailable ? <li className="rounded-full bg-muted px-2 py-1">Professional</li> : null}
-                  {item.diyAvailable ? <li className="rounded-full bg-muted px-2 py-1">DIY Available</li> : null}
-                  {item.popular ? <li className="rounded-full bg-primary/10 px-2 py-1 text-primary">Popular</li> : null}
-                </ul>
-                <button
-                  type="button"
-                  onClick={() => openService(item)}
-                  className="mt-4 inline-flex min-h-11 items-center justify-between rounded-2xl bg-primary px-3 py-2 text-sm font-semibold text-white"
-                >
-                  View Service <ArrowRight className="h-4 w-4" />
-                </button>
+              <article key={item.id} className="homeowner-service-entry service-gallery-entry">
+                <button type="button" onClick={() => openService(item)} className="service-gallery-image" aria-label={`Explore ${item.name}`}><ServiceThumb name={item.name} className="service-catalog-image" />{item.popular ? <span className="service-popular-label">Popular</span> : null}</button>
+                <div className="service-gallery-copy min-w-0">
+                  <h2 className="text-base font-medium">{item.name}</h2>
+                  <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">{item.description}</p>
+                  {match ? <p className="mt-1 text-xs font-medium text-primary">{match}</p> : null}
+                  <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+                    {item.oneTimeAvailable ? <li>One-Time</li> : null}
+                    {item.subscriptionEligible ? <li className="text-primary">Recurring care available</li> : null}
+                    {item.professionalAvailable ? <li>Professional</li> : null}
+                    {item.diyAvailable && item.aiAssessmentAvailable ? <li>AI assessment with HomeCare</li> : null}
+
+                  </ul>
+                  <button type="button" onClick={() => openService(item)} className="mt-2 inline-flex min-h-11 items-center gap-3 text-xs font-medium text-foreground hover:text-primary">View Service <ArrowRight className="h-4 w-4" /></button>
+                </div>
               </article>
               );
             })}
           </div>
         )
       ) : null}
-      {actionLoading ? (
-        <div className="flex min-h-[360px] items-center justify-center rounded-3xl border border-border bg-card p-8">
-          <div className="flex max-w-sm flex-col items-center text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
-              <Loader2 className="h-7 w-7 animate-spin text-primary" />
-            </div>
-            <h2 className="mt-5 text-xl font-semibold">
-              {actionLoading === "hire"
-                ? "Creating your professional service request..."
-                : actionLoading === "diy"
-                  ? "Preparing your Fixera experience..."
-                  : "Preparing your Fixera assessment..."}
-            </h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {actionLoading === "hire"
-                ? "We’re creating a new professional request for this service."
-                : actionLoading === "diy"
-                  ? "We’re getting your DIY assessment ready."
-                  : "We’re preparing your Fixera assessment."}
-            </p>
-          </div>
-        </div>
+      {!selected ? (
+          <aside className="service-homecare-rail" aria-label="HomeCare subscription">
+            <div className="service-homecare-mark"><Sparkles aria-hidden="true" className="h-5 w-5" /></div>
+            <div className="min-w-0"><p className="service-eyebrow">Your home, throughout the year</p><h2>HomeCare Pro subscription</h2><p>Explore ongoing home management and AI features. Service visits and recurring service pricing are separate.</p></div>
+            <button type="button" onClick={onOpenHomeCare}>View Plans <ArrowRight aria-hidden="true" className="h-4 w-4" /></button>
+          </aside>
       ) : null}
-      {selected && !setup && !actionLoading ? (
+      {selected && !setup ? (
         <div className="space-y-4">
           <button type="button" onClick={() => setSelectedId(null)} className="text-sm font-semibold text-primary">
             Back to services
           </button>
-          <div className="overflow-hidden rounded-3xl border border-border bg-card">
-            <div className="grid gap-4 p-5 md:grid-cols-[180px_1fr] md:items-center">
-              <ServiceThumb name={selected.name} className="h-36 w-full" />
+          <div className="homeowner-service-detail border-b border-border pb-6">
+            <div className="service-detail-intro grid gap-6 md:grid-cols-[240px_1fr] md:items-center">
+              <ServiceThumb name={selected.name} className="service-detail-image" />
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-primary">{selected.name}</p>
                 <h2 className="mt-1 text-2xl font-semibold tracking-tight">{selected.name}</h2>
                 <p className="mt-2 text-sm text-muted-foreground">{selected.description}</p>
                 <ul className="mt-3 flex flex-wrap gap-1.5 text-[11px] font-semibold">
                   {selected.oneTimeAvailable ? <li className="rounded-full bg-muted px-2 py-1">One-Time Service</li> : null}
-                  {selected.subscriptionEligible ? <li className="rounded-full bg-primary/10 px-2 py-1 text-primary">Subscription Eligible</li> : null}
+                  {selected.subscriptionEligible ? <li className="rounded-full bg-primary/10 px-2 py-1 text-primary">Recurring care available</li> : null}
                   {selected.professionalAvailable ? <li className="rounded-full bg-muted px-2 py-1">Professional Available</li> : null}
-                  {selected.diyAvailable ? <li className="rounded-full bg-muted px-2 py-1">DIY Available</li> : null}
+                  {selected.diyAvailable ? <li className="rounded-full bg-muted px-2 py-1">DIY with HomeCare</li> : null}
                 </ul>
               </div>
             </div>
@@ -326,9 +325,9 @@ export default function HomeownerServicesPage({
                     key={line}
                     type="button"
                     onClick={() => setHelpChoice(line)}
-                    className={`min-h-11 rounded-2xl border px-3 py-2 text-sm motion-safe:transition ${helpChoice === line ? "border-primary bg-primary/10" : "border-border bg-card"}`}
+                    className={`inline-flex min-h-11 items-center gap-2 rounded-2xl border px-3 py-2 text-sm motion-safe:transition ${helpChoice === line ? "border-primary bg-primary/10" : "border-border bg-card"}`}
                   >
-                    {line}
+                    <HomeownerServiceIcon name={line} fallbackName={selected.name} className="h-6 w-6" />{line}
                   </button>
                 ))}
               </div>
@@ -350,34 +349,34 @@ export default function HomeownerServicesPage({
             </div>
           ) : null}
           <div>
-            <h3 className="text-sm font-semibold">How would you like FixBridge to help?</h3>
+            <h3 className="text-sm font-semibold">Choose your next step</h3><p className="mt-1 text-sm text-muted-foreground">Add your details and property address next. Professional requests continue to scheduling and a pricing review before checkout.</p>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
               {selected.oneTimeAvailable && visitMode !== "recurring" ? (
-                <button type="button" onClick={() => startAction(selected, "request")} className="rounded-2xl border border-border bg-card p-4 text-left motion-safe:transition motion-safe:hover:-translate-y-1 motion-safe:hover:border-primary/50">
+                <button type="button" onClick={() => startAction(selected, "request")} className="homeowner-service-action border-b border-border py-5 text-left transition hover:border-primary/50">
                   <Wrench className="h-5 w-5 text-primary" />
                   <span className="mt-2 block font-semibold">Request a Service</span>
                   <span className="mt-1 block text-sm text-muted-foreground">Tell us what is happening and we will start a request.</span>
                 </button>
               ) : null}
               {selected.professionalAvailable && visitMode !== "recurring" ? (
-                <button type="button" onClick={() => startAction(selected, "hire")} className="rounded-2xl border border-border bg-card p-4 text-left motion-safe:transition motion-safe:hover:-translate-y-1 motion-safe:hover:border-primary/50">
+                <button type="button" onClick={() => startAction(selected, "hire")} className="homeowner-service-action border-b border-border py-5 text-left transition hover:border-primary/50">
                   <UserRound className="h-5 w-5 text-primary" />
                   <span className="mt-2 block font-semibold">Hire a Professional</span>
                   <span className="mt-1 block text-sm text-muted-foreground">Skip the DIY path and request a professional directly.</span>
                 </button>
               ) : null}
               {selected.diyAvailable && selected.aiAssessmentAvailable && visitMode !== "recurring" ? (
-                <button type="button" onClick={() => startAction(selected, "diy")} className="rounded-2xl border border-border bg-card p-4 text-left motion-safe:transition motion-safe:hover:-translate-y-1 motion-safe:hover:border-primary/50">
+                <button type="button" onClick={() => startAction(selected, "diy")} className="homeowner-service-action border-b border-border py-5 text-left transition hover:border-primary/50">
                   <Sparkles className="h-5 w-5 text-primary" />
-                  <span className="mt-2 block font-semibold">Try DIY</span>
-                  <span className="mt-1 block text-sm text-muted-foreground">Get AI guidance. Unsafe work stays with a professional.</span>
+                  <span className="mt-2 block font-semibold">Get AI assessment</span>
+                  <span className="mt-1 block text-sm text-muted-foreground">Get a Fixera AI assessment with active HomeCare. DIY guidance is only available when the assessment supports it; unsafe work stays with a professional.</span>
                 </button>
               ) : null}
               {selected.subscriptionEligible && visitMode !== "one_time" ? (
-                <button type="button" onClick={() => openSetup(selected)} className="rounded-2xl border border-border bg-card p-4 text-left motion-safe:transition motion-safe:hover:-translate-y-1 motion-safe:hover:border-primary/50">
+                <button type="button" onClick={() => openSetup(selected)} className="homeowner-service-action border-b border-border py-5 text-left transition hover:border-primary/50">
                   <RefreshCw className="h-5 w-5 text-primary" />
                   <span className="mt-2 block font-semibold">Set Up Recurring Service</span>
-                  <span className="mt-1 block text-sm text-muted-foreground">Available as a recurring service. Activation fee comes from admin settings.</span>
+                  <span className="mt-1 block text-sm text-muted-foreground">Choose a regular schedule. Review any activation fee before submitting; visit pricing follows a contractor review.</span>
                 </button>
               ) : null}
             </div>
@@ -467,6 +466,7 @@ export default function HomeownerServicesPage({
           {message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
         </div>
       ) : null}
+      {message && !setup ? <p role="status" className="service-catalog-notice">{message}</p> : null}
     </section>
   );
 }

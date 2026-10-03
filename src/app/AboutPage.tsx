@@ -146,7 +146,7 @@ export default function AboutPage({
   const contentOpacity = useTransform(scrollYProgress, [0, 0.55], [1, 0]);
 
   return (
-    <>
+    <div className="fixbridge-public">
       {/* ── Hero: full-bleed photo + brand (matches homeowners) ───────────── */}
       <section ref={heroRef} className="relative min-h-[100svh] min-h-[100dvh] flex flex-col overflow-hidden bg-black">
         <motion.div className="absolute inset-0" style={{ scale: imageScale }}>
@@ -462,6 +462,6 @@ export default function AboutPage({
           </div>
         </ScrollReveal>
       </section>
-    </>
+    </div>
   );
 }

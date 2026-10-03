@@ -1,128 +1,44 @@
+import "./propertyCoverPresentation.css";
 import { useState } from "react";
-import { ChevronDown, MessageSquare, Plus } from "lucide-react";
+import { ArrowRight, ChevronDown, MessageSquare } from "lucide-react";
 import type { ManagedJob } from "./managedJobs";
 import { STATUS_LABELS } from "./managedJobs";
-import { ServiceThumb } from "./serviceVisuals";
-
-function nextStep(job: ManagedJob) {
-  const label = job.homeownerStatusLabel || STATUS_LABELS[job.status] || job.status;
-  if (job.status === "work_started") return "In Progress";
-  if (job.status === "contractor_en_route") return "Contractor On The Way";
-  if (job.status === "scheduled" || job.status === "proposal_accepted") return "Scheduled";
-  if (job.assignedContractorUserId || job.technician) return "Contractor Assigned";
-  return label;
+// Stages come only from recorded lifecycle states, never dates or inferred appointments.
+export function homeServiceStage(status: string): number | null {
+  if (["awaiting_service_payment", "paid_for_dispatch", "awaiting_contractor", "contractor_invited", "awaiting_bid"].includes(status)) return 0;
+  if (["contractor_accepted", "bid_received", "proposal_sent", "awaiting_customer_approval"].includes(status)) return 1;
+  if (["approved", "diagnosing", "scheduled", "contractor_en_route", "work_started", "change_order_pending"].includes(status)) return 2;
+  if (["work_completed", "customer_review_pending", "admin_review_pending", "payout_pending", "paid_out", "closed"].includes(status)) return 3;
+  return null;
 }
-
-function contractorName(job: ManagedJob) {
-  const tech = job.technician;
-  return tech?.company || tech?.name || (job.assignedContractorUserId ? "Assigned contractor" : "Not assigned yet");
-}
-
 export function activeJobsForHome(jobs: ManagedJob[]) {
-  const terminal = new Set([
-    "work_completed",
-    "customer_review_pending",
-    "admin_review_pending",
-    "payout_pending",
-    "paid_out",
-    "closed",
-    "canceled",
-    "refunded",
-    "disputed",
-  ]);
-  return jobs.filter((job) => !terminal.has(job.status));
+  const terminal = new Set(["work_completed", "customer_review_pending", "admin_review_pending", "payout_pending", "paid_out", "closed", "canceled", "refunded", "disputed"]);
+  return jobs.filter(job => !terminal.has(job.status));
 }
-
-export default function ActiveServiceCards({
-  jobs,
-  onOpenJob,
-  onRequestService,
-}: {
-  jobs: ManagedJob[];
-  onOpenJob: (jobId: number) => void;
-  onRequestService: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const first = jobs[0];
-  const label = jobs.length === 1 ? "Active Service" : `${jobs.length} Active Services`;
-
-  if (!jobs.length) {
-    return (
-      <section className="flex items-center justify-between gap-3 rounded-2xl border border-border/70 bg-card px-4 py-3 shadow-sm">
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Active Service</p>
-          <p className="mt-1 text-sm font-semibold">No active services</p>
-          <p className="mt-0.5 text-xs text-muted-foreground">Need something fixed?</p>
-        </div>
-        <button
-          type="button"
-          onClick={onRequestService}
-          className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-white"
-        >
-          <Plus size={14} /> Request
-        </button>
-      </section>
-    );
+function provider(job: ManagedJob) {
+  return job.technician?.company || job.technician?.name || job.contractorName || (job.assignedContractorUserId ? "Assigned professional" : null);
+}
+function requestedWindow(job: ManagedJob) {
+  let date = job.preferredDate;
+  if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    const parsed = new Date(`${date}T12:00:00`);
+    if (!Number.isNaN(parsed.getTime())) date = parsed.toLocaleDateString(undefined, {month:"short", day:"numeric"});
   }
-
-  return (
-    <section className="overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => jobs.length && setOpen((value) => !value)}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left"
-      >
-        <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Active Service</p>
-          {first ? (
-            <>
-              <p className="mt-1 truncate text-sm font-semibold">{first.title || first.category || "Service request"}</p>
-              <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                {label} · {STATUS_LABELS[first.status] || first.status}
-              </p>
-            </>
-          ) : (
-            <>
-              <p className="mt-1 text-sm font-semibold">No active services</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">Need something fixed?</p>
-            </>
-          )}
-        </div>
-        <ChevronDown className={`h-5 w-5 shrink-0 text-primary transition-transform duration-300 motion-reduce:transition-none ${open ? "rotate-180" : ""}`} />
-      </button>
-      <div className={`grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
-        <div className="overflow-hidden">
-          <div className="space-y-2 border-t border-border/70 px-3 py-3">
-            {jobs.map((job) => {
-              const title = job.title || job.category || "Service request";
-              const status = job.homeownerStatusLabel || STATUS_LABELS[job.status] || job.status;
-              return (
-                <article key={job.id} className="rounded-xl border border-border/70 bg-background p-3">
-                  <div className="flex items-center gap-3">
-                    <ServiceThumb name={job.category || title} className="h-12 w-14" />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold">{title}</p>
-                      <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                        {status} · {contractorName(job)}
-                      </p>
-                      <p className="mt-0.5 text-xs text-muted-foreground">Next: {nextStep(job)}</p>
-                    </div>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button type="button" onClick={() => onOpenJob(job.id)} className="min-h-11 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-white">
-                      Track Service
-                    </button>
-                    <button type="button" onClick={() => onOpenJob(job.id)} className="inline-flex min-h-11 items-center gap-1 rounded-xl border border-border px-3 py-2 text-xs font-semibold">
-                      <MessageSquare className="h-3.5 w-3.5" /> Messages
-                    </button>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    </section>
-  );
+  return [date, job.preferredTimeSlot].filter(Boolean).join(" · ");
+}
+function Progress({job}:{job:ManagedJob}) {
+  const stage = homeServiceStage(job.status);
+  if (stage == null) return <p className="homeowner-service-status">{job.homeownerStatusLabel || STATUS_LABELS[job.status] || job.status}</p>;
+  return <ol className="homeowner-service-rail" aria-label="Service progress">{["Requested", "Matched", "Scheduled", "Completed"].map((label,index)=><li key={label} className={index<stage?"is-complete":index===stage?"is-current":"is-future"} aria-current={index===stage?"step":undefined}><span aria-hidden="true"/><span>{label}</span></li>)}</ol>;
+}
+export default function ActiveServiceCards({jobs,onOpenJob,onRequestService}:{jobs:ManagedJob[];onOpenJob:(id:number)=>void;onRequestService:()=>void}) {
+  const [open,setOpen] = useState(false);
+  const first = jobs[0];
+  if (!first) return <section className="homeowner-active-service homeowner-active-empty"><div><p className="homeowner-service-eyebrow">Active service</p><h2>No active services</h2><p>Your service requests will appear here.</p></div><button type="button" onClick={onRequestService}>Request service <ArrowRight size={16}/></button></section>;
+  const name = provider(first), window = requestedWindow(first);
+  return <section className="homeowner-active-service">
+    <div className="homeowner-active-summary"><div className="homeowner-active-description"><p className="homeowner-service-eyebrow">Active service <span>{first.homeownerStatusLabel || STATUS_LABELS[first.status] || first.status}</span></p><h2>{first.title || first.category || "Service request"}</h2><p>{name || "Professional not assigned yet"}{window && <><span aria-hidden="true"> · </span>Requested: {window}</>}</p></div><button type="button" className="homeowner-service-expand" aria-expanded={open} aria-controls="homeowner-active-details" onClick={()=>setOpen(v=>!v)}>{open?"Hide requests":`View ${jobs.length===1?"request":`all ${jobs.length} requests`}`} <ChevronDown size={16} className={open?"rotate-180":""}/></button></div>
+    <Progress job={first}/>
+    {open&&<div id="homeowner-active-details" className="homeowner-active-details">{jobs.map(job=><article key={job.id}><div><h3>{job.title || job.category || "Service request"}</h3><p>{job.homeownerStatusLabel || STATUS_LABELS[job.status] || job.status}{provider(job)&&` · ${provider(job)}`}</p>{requestedWindow(job)&&<p>Requested: {requestedWindow(job)}</p>}</div><div className="homeowner-active-controls"><button type="button" onClick={()=>onOpenJob(job.id)}>Track Service <ArrowRight size={15}/></button><button type="button" onClick={()=>onOpenJob(job.id)}><MessageSquare size={15}/>Messages</button></div></article>)}</div>}
+  </section>;
 }

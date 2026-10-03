@@ -93,9 +93,6 @@ export async function getFixaHealth() {
     fallbackProvider: ai.fallbackProvider || null,
     fallbackModel: ai.fallbackModel || null,
     fallbackProviders: ai.fallbackProviders || [],
-      code,
-      caseId: packed.context.jobId,
-      propertyId: packed.context.propertyId,
     code: ai.configured ? 'configured_not_probed' : 'not_connected',
   };
 }

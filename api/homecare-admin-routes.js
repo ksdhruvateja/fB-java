@@ -1,3 +1,4 @@
+import { mergePricingRules, resolveCustomerVisitFee, validateBookingFeeCents } from './pricing.js';
 /**
  * Admin + public HomeCare Pro configuration APIs.
  */
@@ -24,7 +25,7 @@ async function ensureHomeCareSettingsRow(pool) {
   }
 }
 
-export function registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdmin }) {
+export function registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite }) {
   app.get('/api/homecare/config', async (req, res) => {
     try {
       await ensureHomeCareSettingsRow(pool);
@@ -66,8 +67,8 @@ export function registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdm
           ok: true,
           config,
           pricing: {
-            standardCoordinationFee: Number(parsed.standard_coordination_fee ?? 125),
-            homecareProCoordinationFee: Number(parsed.homecare_pro_coordination_fee ?? 99),
+            standardCoordinationFee: resolveCustomerVisitFee(parsed),
+            homecareProCoordinationFee: resolveCustomerVisitFee(parsed),
             subscriptionDiscount: Number(parsed.subscription_discount ?? 0),
           },
         });
@@ -128,33 +129,33 @@ export function registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdm
     '/api/admin/homecare/pricing',
     requireAuth,
     requireAdmin,
-    requirePermission('pricing.edit', 'homecare.manage'),
+    requireAdminWrite,
+    requirePermission('pricing.edit'),
     async (req, res) => {
       try {
         const b = req.body || {};
         const stdFee = Number(b.standardCoordinationFee);
         const proFee = Number(b.homecareProCoordinationFee);
-        if (!Number.isFinite(stdFee) || stdFee < 0 || !Number.isFinite(proFee) || proFee < 0) {
-          return res.status(400).json({ ok: false, message: 'Coordination fees must be non-negative numbers.' });
+        if (!Number.isFinite(stdFee) || stdFee !== proFee || !validateBookingFeeCents(Math.round(stdFee * 100)) || Math.abs(stdFee * 100 - Math.round(stdFee * 100)) > 0.000001) {
+          return res.status(400).json({ ok: false, message: 'The booking fee must be positive, have at most two decimals, and be identical for Free and Pro.' });
         }
         if (!b.confirmImpact) {
           return res.status(409).json({
             ok: false,
             code: 'CONFIRMATION_REQUIRED',
             message:
-              'Coordination fee changes apply to new quotes only. Existing accepted quotes are unchanged. Confirm to proceed.',
+              'Booking fee changes apply to unpaid checkout after a new pricing review. Existing paid amounts and accepted quotes remain unchanged. Confirm to proceed.',
             preview: { standardCoordinationFee: stdFee, homecareProCoordinationFee: proFee },
           });
         }
         const { rows } = await pool.query(`SELECT rules FROM pricing_rules WHERE id='default'`);
         const rules = rows[0]?.rules || {};
-        const parsed = typeof rules === 'string' ? JSON.parse(rules) : { ...rules };
+        const parsed = mergePricingRules(typeof rules === 'string' ? JSON.parse(rules) : rules);
         const previous = {
           standard_coordination_fee: parsed.standard_coordination_fee,
           homecare_pro_coordination_fee: parsed.homecare_pro_coordination_fee,
         };
-        parsed.standard_coordination_fee = stdFee;
-        parsed.homecare_pro_coordination_fee = proFee;
+        Object.assign(parsed, mergePricingRules({ ...parsed, booking_fee_cents:Math.round(stdFee * 100) }));
         if (b.subscriptionDiscount != null) {
           const disc = Number(b.subscriptionDiscount);
           if (!Number.isFinite(disc) || disc < 0 || disc > 1) {
@@ -163,7 +164,7 @@ export function registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdm
           parsed.subscription_discount = disc;
         }
         await pool.query(
-          `UPDATE pricing_rules SET rules=$1, updated_at=NOW(), updated_by=$2 WHERE id='default'`,
+          `INSERT INTO pricing_rules(id,rules,updated_at,updated_by) VALUES ('default',$1,NOW(),$2) ON CONFLICT(id) DO UPDATE SET rules=$1,updated_at=NOW(),updated_by=$2`,
           [JSON.stringify(parsed), req.authUser.id]
         );
         await writeAudit(pool, req.authUser.id, 'homecare_pricing_update', 'pricing_rules', 'default', {

@@ -135,6 +135,7 @@ export type ManagedJob = {
   title?: string;
   description?: string;
   mediaDataUrl?: string | null;
+  mediaDataUrls?: string[];
   mediaType?: string | null;
   preferredDate?: string | null;
   preferredTimeSlot?: string | null;
@@ -880,6 +881,7 @@ function normalizePendingServiceRequest(raw: any) {
     equipmentKey: raw.equipmentKey ?? raw.equipment_key ?? null,
     serviceSubcategory: raw.serviceSubcategory ?? raw.service_subcategory,
     mediaDataUrl: raw.mediaDataUrl ?? raw.media_data_url,
+    mediaDataUrls: raw.mediaDataUrls ?? raw.media_data_urls ?? [],
     mediaType: raw.mediaType ?? raw.media_type,
     serviceTiming: raw.serviceTiming ?? raw.service_timing,
     preferredDate: raw.preferredDate ?? raw.preferred_date,
@@ -1086,16 +1088,17 @@ export async function updateHomeownerJob(
 export async function payDispatchFee(
   jobId: number,
   discountCode?: string,
-  consents?: Record<string, boolean>
+  consents?: Record<string, boolean>,
+  authorizedAmount?: number
 ) {
-  return api<{ ok: boolean; simulated?: boolean; url?: string; amount?: number; job?: ManagedJob; message?: string }>(
+  return api<{ ok: boolean; simulated?: boolean; url?: string; amount?: number; authorizedNow?: number; code?: string; job?: ManagedJob; message?: string }>(
     `/api/managed/jobs/${jobId}/pay-dispatch`,
     {
       method: "POST",
       body: JSON.stringify(
         discountCode
-          ? { discountCode, consents, acknowledged: true }
-          : { consents, acknowledged: true }
+          ? { discountCode, consents, acknowledged: true, authorizedAmount }
+          : { consents, acknowledged: true, authorizedAmount }
       ),
     }
   );
@@ -1134,10 +1137,10 @@ export async function finalizeEstimate(jobId: number) {
 }
 
 
-export async function approveProposal(jobId: number, consents?: Record<string, boolean>, proposalId?: number) {
+export async function approveProposal(jobId: number, consents?: Record<string, boolean>, proposalId?: number, expectedVersion?: number) {
   return api<{ ok: boolean; proposal?: Proposal; message?: string }>(
     `/api/managed/jobs/${jobId}/approve-proposal`,
-    { method: "POST", body: JSON.stringify({ consents, acknowledged: true, proposalId }) }
+    { method: "POST", body: JSON.stringify({ consents, acknowledged: true, proposalId, expectedVersion }) }
   );
 }
 
@@ -2363,6 +2366,7 @@ export type PendingProfessionalRequest = {
   title?: string | null;
   description?: string | null;
   mediaDataUrl?: string | null;
+  mediaDataUrls?: string[];
   mediaType?: string | null;
   serviceTiming?: string | null;
   preferredDate?: string | null;
@@ -2425,6 +2429,7 @@ export async function getPendingProfessionalRequest(pendingServiceRequestId: num
 export async function startPendingProfessionalCheckout(
   pendingServiceRequestId: number,
   body: {
+    authorizedAmountCents: number;
     serviceTiming: string;
     preferredDate?: string;
     preferredTimeSlot: string;
@@ -2447,4 +2452,16 @@ export async function startPendingProfessionalCheckout(
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+type ProfessionalBookingFeeResponse = { ok:boolean; amount?:number; amountCents?:number; currency?:string; message?:string };
+let bookingFeeInFlight: { token:string | null; promise:Promise<ProfessionalBookingFeeResponse> } | null = null;
+export function fetchProfessionalBookingFee() {
+  const token = getStoredToken();
+  if (bookingFeeInFlight?.token === token) return bookingFeeInFlight.promise;
+  const promise = api<ProfessionalBookingFeeResponse>("/api/professional-booking-fee").finally(() => {
+    if (bookingFeeInFlight?.promise === promise) bookingFeeInFlight = null;
+  });
+  bookingFeeInFlight = { token, promise };
+  return promise;
 }

@@ -276,9 +276,10 @@ export default function HomeownerGoProPlans({
 
   if (plans.length === 0) {
     return (
-      <p className="py-8 text-center text-sm text-muted-foreground">
-        No subscription plans are available yet. Check back soon.
-      </p>
+      <section className="rounded-xl border border-border bg-card p-6" aria-label="HomeCare plans">
+        <h1 className="text-2xl font-semibold">HomeCare plans</h1>
+        <p className="mt-3 text-sm text-muted-foreground">No subscription plans are available yet. Check back soon.</p>
+      </section>
     );
   }
 
@@ -311,8 +312,8 @@ export default function HomeownerGoProPlans({
               HomeCare Subscription
             </h1>
             <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
-              FixBridge Free covers repairs when something breaks. HomeCare Pro adds year-round property
-              management — maintenance, documents, recurring services, and priority routing.
+              FixBridge Free includes service requests, quotes, payments, and a basic home profile. HomeCare Pro adds AI assessment, safe DIY guidance, and year-round property
+              management - maintenance, documents, recurring services, and priority routing.
             </p>
           </div>
         )}

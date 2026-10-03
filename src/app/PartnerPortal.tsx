@@ -83,7 +83,7 @@ export default function PartnerPortal({ onBack }: { onBack: () => void }) {
   const converted = referrals.filter((r) => r.jobId != null).length;
 
   return (
-    <div className="mx-auto min-h-screen max-w-3xl px-4 py-8">
+    <div className="fixbridge-partner mx-auto min-h-screen max-w-3xl px-4 py-8">
       <button type="button" onClick={onBack} className="mb-6 text-sm text-muted-foreground underline">
         ← Back to {brand.productName}
       </button>

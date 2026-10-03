@@ -1,0 +1,44 @@
+/* Contractor-only concept styling; all data and navigation remain role scoped. */
+.contractor-portal{--background:#faf9f5;--foreground:#18283f;--card:#fff;--card-foreground:#18283f;--border:#e7e8e7;--muted-foreground:#657083;--primary:#fa4d16;--primary-foreground:#fff;background:var(--background);color:var(--foreground)}
+.dark .contractor-portal{--background:#141c28;--foreground:#eef2f7;--card:#1d2939;--card-foreground:#eef2f7;--border:#354356;--muted-foreground:#b0bdcc;--primary:#ff6b35;--primary-foreground:#111b28}
+.contractor-portal>div>aside{width:252px;background:var(--card)}
+.contractor-portal main{padding:32px;}
+.contractor-work-overview{max-width:1280px;margin:auto;display:flex;flex-direction:column;gap:28px}
+.contractor-work-heading{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:8px 0}
+.contractor-eyebrow{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted-foreground);margin:0 0 9px}
+.contractor-work-heading h1{font-size:48px;line-height:1.1;font-weight:750;letter-spacing:-.045em;margin:0;max-width:660px}
+.contractor-work-heading>div>p:last-child{font-size:14px;line-height:1.7;color:var(--muted-foreground);margin:14px 0 0}
+.contractor-primary-action{display:inline-flex;align-items:center;justify-content:center;gap:10px;background:var(--primary);color:var(--primary-foreground);padding:13px 19px;border-radius:6px;font-size:13px;font-weight:700;white-space:nowrap}
+.contractor-summary-strip{display:flex;padding:10px 0 20px;border-bottom:1px solid var(--border)}
+.contractor-summary-strip>button{text-align:left;padding:0 34px;min-width:0;flex:1;}
+.contractor-summary-strip>button:first-child{padding-left:0}
+.contractor-summary-strip>button+button{border-left:1px solid var(--border)}
+.contractor-summary-strip span{display:block;font-size:12px;color:var(--muted-foreground);margin-bottom:8px}
+.contractor-summary-strip strong{font-size:32px;letter-spacing:-.035em;font-weight:750}
+.contractor-work-grid{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:24px}
+.contractor-work-panel{min-width:0;padding:32px;background:var(--card);border:1px solid var(--border);border-radius:8px}
+.contractor-panel-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.contractor-work-overview h2{font-size:21px;font-weight:700;letter-spacing:-.025em;margin:0}
+.contractor-work-overview h3{font-weight:700;font-size:16px;margin:0}
+.contractor-job-timeline{list-style:none;padding:0;margin:28px 0 0}
+.contractor-job-timeline>li{position:relative;padding:0 0 26px 20px;border-left:2px solid var(--primary);display:grid;grid-template-columns:112px minmax(0,1fr);gap:20px}
+.contractor-job-timeline>li:before{content:'';width:9px;height:9px;border-radius:50%;background:var(--primary);position:absolute;top:5px;left:-5.5px}
+.contractor-job-timeline>li:last-child{padding-bottom:0}
+.contractor-job-date strong{font-size:13px;display:block}.contractor-job-date span{font-size:11px;color:var(--muted-foreground);display:block;margin-top:6px}
+.contractor-job-summary{display:flex;gap:12px;min-width:0}.contractor-job-summary img,.contractor-job-symbol{width:64px;height:64px;flex-shrink:0;border-radius:6px;object-fit:cover;background:var(--background)}
+.contractor-job-symbol{display:flex;align-items:center;justify-content:center;color:var(--muted-foreground)}
+.contractor-job-summary>div{min-width:0}.contractor-job-summary button{text-align:left;font-size:14px;font-weight:700;overflow-wrap:anywhere}
+.contractor-job-summary p,.contractor-opportunity p{display:flex;align-items:center;gap:5px;line-height:1.6;color:var(--muted-foreground);font-size:12px;margin:7px 0}
+.contractor-job-status{display:inline-block;font-size:10px;font-weight:600;text-transform:capitalize;color:var(--muted-foreground);background:var(--background);padding:4px 7px;border-radius:4px;margin-top:5px}
+.contractor-opportunity{margin-top:24px}.contractor-opportunity h3{margin-top:12px;font-size:20px}.contractor-opportunity .contractor-primary-action{margin-top:16px}
+.contractor-schedule-context{margin-top:28px;padding-top:23px;border-top:1px solid var(--border)}
+.contractor-schedule-context p,.contractor-empty p,.contractor-followup-band p{font-size:13px;line-height:1.7;color:var(--muted-foreground);margin:10px 0}
+.contractor-text-action,.contractor-empty button{display:inline-flex;align-items:center;gap:8px;color:var(--primary);font-weight:700;font-size:12px;padding:8px 0}
+.contractor-empty{padding:32px 0}.contractor-empty>svg{color:var(--muted-foreground);margin-bottom:16px}
+.contractor-followup-band{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:26px 32px;border:1px solid var(--border);border-radius:8px;background:var(--card)}
+.contractor-followup-band>div:first-child{display:flex;align-items:center;gap:18px}.contractor-followup-band h2{font-size:16px}.contractor-followup-band p{margin:5px 0 0}
+.contractor-followup-actions{display:flex;flex-wrap:wrap;gap:16px}.contractor-followup-actions button{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:650}
+.contractor-work-overview button:focus-visible{outline:2px solid var(--primary);outline-offset:4px}.contractor-work-overview button:hover{filter:brightness(.96)}
+@media(max-width:1100px){.contractor-work-heading h1{font-size:40px}.contractor-job-timeline>li{grid-template-columns:1fr;gap:10px}.contractor-followup-band{align-items:flex-start;flex-direction:column}}
+@media(max-width:767px){.contractor-portal main{padding:20px 16px}.contractor-work-overview{gap:22px}.contractor-work-heading{align-items:flex-start;flex-direction:column}.contractor-work-heading h1{font-size:36px}.contractor-work-grid{grid-template-columns:1fr}.contractor-work-panel{padding:24px}.contractor-summary-strip>button{padding:0 14px}.contractor-summary-strip strong{font-size:27px}.contractor-summary-strip span{font-size:11px}.contractor-followup-band{padding:24px}.contractor-job-timeline>li{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){.contractor-portal *{scroll-behavior:auto;transition-duration:0s!important}}

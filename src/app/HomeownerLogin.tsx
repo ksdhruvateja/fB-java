@@ -72,7 +72,7 @@ export default function HomeownerLogin({
  onGoContractor: () => void;
 }) {
  const [showPass, setShowPass] = useState(false);
- const [tab, setTab] = useState<"report" | "login" | "signup">("report");
+ const [tab, setTab] = useState<"report" | "login" | "signup">(() => window.location.pathname.replace(/\/+$/, "") === "/start" ? "report" : "login");
  const [loading, setLoading] = useState(false);
  const [error, setError] = useState("");
  const [fullName, setFullName] = useState("");
@@ -426,7 +426,7 @@ export default function HomeownerLogin({
  role: "homeowner",
  title: "Your home, handled with care.",
  subtitle: "Welcome to FixBridge",
- body: "Describe what you need, get AI guidance, and connect with trusted professionals nationwide.",
+ body: "Create a free account and book a professional. AI assessments and guided DIY require an active paid HomeCare plan.",
  }}
  >
  <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}>
@@ -578,6 +578,7 @@ export default function HomeownerLogin({
  {(tab === "login" || tab === "signup") && (
  <div className="space-y-3">
  <GoogleSignInButton
+ showEmailSeparator
  disabled={loading}
  text={tab === "signup" ? "signup_with" : "signin_with"}
  onCredential={(cred) => void handleGoogleCredential(cred)}
@@ -588,11 +589,6 @@ export default function HomeownerLogin({
  setGoogleOverlayError(null);
  }}
  />
- <div className="flex items-center gap-3 text-xs text-neutral-400">
- <span className="h-px flex-1 bg-neutral-200" />
- or
- <span className="h-px flex-1 bg-neutral-200" />
- </div>
  </div>
  )}
 
@@ -719,7 +715,7 @@ export default function HomeownerLogin({
  <Lock size={14} /> Secure payments
  </span>
  <span className="inline-flex items-center gap-1.5">
- Nationwide coverage
+ Saved home details
  </span>
  </div>
 
