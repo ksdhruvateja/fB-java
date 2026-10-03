@@ -3,8 +3,10 @@ import { brand } from "../config/brand";
 export type BrandLogoVariant = "nav" | "footer" | "hero" | "auth" | "mark";
 
 /**
- * Render the exact uploaded FixBridge PNG without cropping or recoloring.
- * Layout variants resize the same asset; they never substitute another mark.
+ * Full-color FixBridge logo assets (transparent PNG).
+ * - mark: FB icon only
+ * - nav / auth: icon + FixBridge wordmark (no tagline)
+ * - footer / hero: full lockup with tagline
  */
 const VARIANT: Record<
   BrandLogoVariant,
@@ -42,7 +44,7 @@ function logoSrc(kind: "mark" | "lockup" | "full", tone: "color" | "black") {
   return brand.logoUrl;
 }
 
-/** Exact uploaded FixBridge logo. Asset transfer must finish before publication. */
+/** Full-color FixBridge logo — black lockup available for scrolled marketing nav. */
 export function BrandLogo({
   variant = "nav",
   tone = "color",
@@ -50,7 +52,7 @@ export function BrandLogo({
   showName: _showName,
 }: {
   variant?: BrandLogoVariant;
-  /** Compatibility prop; the uploaded asset is never recolored. */
+  /** `black` uses the monochrome lockup (marketing nav when scrolled). */
   tone?: "white" | "black" | "color" | "auto";
   className?: string;
   /** @deprecated Wordmark is baked into lockup/full assets. */
@@ -67,7 +69,6 @@ export function BrandLogo({
       className={`block object-contain object-left select-none pointer-events-none ${cfg.className} ${className}`}
       draggable={false}
       decoding="async"
-      onError={(event) => { event.currentTarget.style.visibility = "hidden"; }}
     />
   );
 }

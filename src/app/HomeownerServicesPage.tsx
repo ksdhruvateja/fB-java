@@ -13,10 +13,7 @@ import {
   type ActivationFeeSettings,
   type ServiceOffering,
 } from "./serviceOfferings";
-function ServiceThumb({name,className=""}:{name:string;className?:string}) {
- const photo=/plumb/i.test(name)?"/service-plumbing.jpg":/electri/i.test(name)?"/service-electrical.jpg":/hvac|heating|cooling/i.test(name)?"/service-hvac.jpg":/landscap|lawn/i.test(name)?"/service-garden.jpg":/clean/i.test(name)?"/login-living-room.jpg":null;
- return photo?<span className={`service-residential-photo ${className}`} aria-hidden="true"><img src={photo} alt="" loading="lazy"/></span>:<span className={`service-native-category ${className}`} aria-hidden="true"><HomeownerServiceIcon name={name} className="h-12 w-12"/></span>;
-}
+import ServiceThumb from "./HomeownerServiceArtwork";
 import HomeownerServiceIcon from "./HomeownerServiceIcon";
 import "./homeownerServices.css";
 
@@ -112,7 +109,7 @@ export default function HomeownerServicesPage({
     });
     // Featured categories lead discovery; retain every matching offering.
     return filter === "all"
-      ? matches.sort((a, b) => { const rank=(name:string)=>/plumb/i.test(name)?0:/electri/i.test(name)?1:/hvac|heating|cooling/i.test(name)?2:3; return rank(a.name)-rank(b.name) || Number(b.popular)-Number(a.popular) || a.name.localeCompare(b.name); })
+      ? matches.sort((a, b) => Number(b.popular) - Number(a.popular) || a.name.localeCompare(b.name))
       : matches;
   }, [offerings, query, filter]);
 
@@ -206,17 +203,22 @@ export default function HomeownerServicesPage({
       <header className="homeowner-services-heading service-discovery-hero">
         <div className="service-discovery-copy">
         <p className="mb-3 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Care for your home</p>
-        <h1 className="text-2xl font-semibold tracking-tight">Find the right care for your home.</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Home Services, All in One Place</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Choose a service, describe the issue, and review your next step before submitting.
+          Choose what your home needs and FixBridge will help diagnose, guide, or connect you with the right professional.
         </p>
         <p className="service-discovery-note"><span>01 / Choose your service</span><span>02 / Tell us what you need</span><span>03 / Review your next step</span></p>
         </div>
-
+        <div className="service-discovery-art" aria-hidden="true"><ServiceThumb name="HVAC" className="service-hero-image" /><span className="service-art-caption">A little care. A better home.</span></div>
       </header>
       {!selected ? (
         <>
 
+          <aside className="service-homecare-rail" aria-label="HomeCare subscription">
+            <div className="service-homecare-mark"><Sparkles aria-hidden="true" className="h-5 w-5" /></div>
+            <div className="min-w-0"><p className="service-eyebrow">Your home, throughout the year</p><h2>HomeCare Pro subscription</h2><p>Explore ongoing home management and AI features. Service visits and recurring service pricing are separate.</p></div>
+            <button type="button" onClick={onOpenHomeCare}>View Plans <ArrowRight aria-hidden="true" className="h-4 w-4" /></button>
+          </aside>
           <div className="service-catalog-intro"><div><p className="service-eyebrow">Find the right help</p><h2>Explore home services</h2></div><p>Start with a one-time need, or choose recurring care where available.</p></div>
           <label className="relative block service-search">
             <span className="mb-1.5 block text-sm font-medium">What does your home need?</span>

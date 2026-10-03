@@ -1,3 +1,4 @@
+import "./propertyCoverPresentation.css";
 import { useState } from "react";
 import { ArrowRight, ChevronDown, MessageSquare } from "lucide-react";
 import type { ManagedJob } from "./managedJobs";

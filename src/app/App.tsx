@@ -1,3 +1,4 @@
+import "./portalDensity.css";
 import { useEffect, useState, useRef } from "react";
 import { motion } from "motion/react";
 import { Sun, Moon, Menu, X, MapPin, ArrowRight, Loader2 } from "lucide-react";
@@ -40,7 +41,6 @@ import MarketingUnsubscribePage from "./MarketingUnsubscribePage";
 import { PUBLIC_FOOTER_LEGAL_LINKS, PUBLIC_CONTRACTOR_LEGAL_LINKS } from "./legalDocuments";
 import { applySiteMeta } from "./siteMeta";
 import LeadConnectorChatWidget, { shouldShowLeadConnectorChat } from "./LeadConnectorChatWidget";
-import "./approvedWorkspace.css";
 
 function isResetRole(role: string | null): role is ResetRole {
   return role === "homeowner" || role === "contractor" || role === "admin" || role === "partner";

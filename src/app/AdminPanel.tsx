@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import "./adminWorkspace.css";
-import { useProfessionalBookingFee } from "./useProfessionalBookingFee";
 import {
   ArrowLeft, LogOut, Loader2, Shield, DollarSign, Users, Briefcase,
   Settings2, Link2, BarChart3, Sparkles, Menu, X, LayoutDashboard,
@@ -409,7 +407,6 @@ export default function AdminPanel({
   onToggleDark?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("overview");
-  const overviewBookingFee = useProfessionalBookingFee(tab === "overview");
   const { unreadNotifications, unreadMessages, refresh: refreshComms } = useInAppComms(true);
   const [expandedGroup, setExpandedGroup] = useState<string | null>("Overview ");
   const isReadOnly = user?.adminAccessLevel === "read";
@@ -1547,26 +1544,6 @@ export default function AdminPanel({
                 </div>
               ) : (
                 <>
-                  <header className="admin-overview-heading">
-                    <p className="text-sm text-muted-foreground">Managed network</p>
-                    <h1>Operations overview</h1>
-                    <p className="text-sm text-muted-foreground">Service requests, next actions, and the people keeping things moving.</p>
-                  </header>
-                  <div className="admin-inline-metrics">
-                    {[
-                      { label: "Service requests", value: jobs.length },
-                      { label: "Awaiting assignment", value: computeAttention(jobs).unassigned.length },
-                      { label: "Quotes ready", value: computeAttention(jobs).quotes_ready.length },
-                      { label: "Payment / completion", value: computeAttention(jobs).payments.length },
-                    ].map(metric => <div key={metric.label}><strong>{metric.value}</strong><span>{metric.label}</span></div>)}
-                  </div>
-                  <div className="admin-overview-columns">
-                    <div className="admin-request-workspace">
-                      <h2>Service requests</h2>
-                      <AdminWorkQueue jobs={jobs} filter={queueFilter} search={queueSearch} selectedJobId={selectedJobId} onFilterChange={setQueueFilter} onSearchChange={setQueueSearch} onSelectJob={openJobDrawer} />
-                    </div>
-                    <div className="admin-overview-rail">
-                  <div className="admin-operations-overview">
                   <AdminAttentionOverview
                     jobs={jobs}
                     reportPayments={report?.revenueCollected}
@@ -1576,18 +1553,6 @@ export default function AdminPanel({
                     unreadContractorMessages={0}
                     onOpenCommunications={() => setTab("communications")}
                   />
-                  </div>
-                    <section className="admin-provider-status">
-                      <h2>Provider configuration</h2>
-                      <p className="text-xs text-muted-foreground">Reported configuration; not a live uptime check.</p>
-                      {platformInfo ? <dl>{["stripe", "gmail", "storage"].map(key => <div key={key}><dt>{key}</dt><dd>{platformInfo[key] == null ? "Unavailable" : String(platformInfo[key])}</dd></div>)}</dl> : <p className="text-sm text-muted-foreground">Status unavailable.</p>}
-                    </section>
-                    </div>
-                  </div>
-                  <div className="admin-overview-settings">
-                    <section><div><h2>Booking settings</h2><p className="text-sm text-muted-foreground">Professional booking fee · same fee for all homeowners</p></div><strong>{overviewBookingFee.amount == null ? "Unavailable" : formatMoney(overviewBookingFee.amount)}</strong><button type="button" className={btnSecondary} onClick={() => setTab("visit-fee")}>View / edit fee</button></section>
-                    <section><div><h2>HomeCare plans</h2><p className="text-sm text-muted-foreground">Manage subscription plans separately from booking fees.</p></div><button type="button" className={btnSecondary} onClick={() => setTab("pro-plans")}>View plans</button></section>
-                  </div>
                   {report && (
                     <div className="mt-8">
                       <details className="group rounded-2xl border border-border/70 bg-card shadow-sm">

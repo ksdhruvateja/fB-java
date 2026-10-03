@@ -6,9 +6,8 @@ import { BrandLogo } from "./BrandLogo";
 import { brand } from "../config/brand";
 import AuthMascot from "./AuthMascot";
 import { AuthMascotProvider, useAuthMascot, type AuthMascotVariant } from "./AuthMascotContext";
-import { type AuthSplitRole } from "./AuthSplitBrandPanel";
-import { AUTH_ROLE_PHOTOS } from "./authRoleAssets";
-import "./authWelcome.css";
+import AuthSplitBrandPanel, { type AuthSplitRole } from "./AuthSplitBrandPanel";
+import AuthMobileSplitHero from "./AuthMobileSplitHero";
 import { AuthThemeProvider, useAuthTheme } from "./AuthThemeContext";
 
 export const authInputClass =
@@ -299,35 +298,49 @@ export function AuthShell({
   error?: boolean;
 }) {
   if (split) {
-    const welcome = split.role === "homeowner"
-      ? "One place for a better-kept home."
-      : split.role === "contractor"
-        ? "Good work. Clear next steps."
-        : "Keep every home moving forward.";
     return (
       <AuthThemeProvider theme="split">
-        <div className="auth-welcome" data-auth-role={split.role}>
-          <header className="auth-welcome-header">
-            <AuthHeaderLogo onHome={onBack} />
-            <button type="button" onClick={onBack} className="auth-welcome-back">
-              <ArrowLeft size={15} />{backLabel}
-            </button>
-          </header>
-          <div className="auth-welcome-layout">
-            <aside className="auth-welcome-photo">
-              <img src={split.role === "homeowner" ? "/login-living-room.jpg" : AUTH_ROLE_PHOTOS[split.role]} alt="" decoding="async" />
-              <div className="auth-welcome-copy">
-                <p className="auth-welcome-eyebrow">Home care, connected.</p>
-                <h1>{welcome}</h1>
-                <p>{split.body}</p>
-                <span className="auth-welcome-image-note">Illustrative image</span>
-              </div>
-              {split.footer ? <div className="auth-welcome-footer">{split.footer}</div> : null}
-            </aside>
-            <main className="auth-welcome-form">
-              <div className={`auth-welcome-form-inner ${contentWide ? "auth-welcome-wide" : ""}`}>
-                {children}
-              </div>
+        <div className="grid min-h-screen lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+          <div className="hidden lg:block">
+            <AuthSplitBrandPanel
+              role={split.role}
+              title={split.title}
+              subtitle={split.subtitle}
+              body={split.body}
+              onHome={onBack}
+              footer={split.footer}
+            />
+          </div>
+
+          <div className="relative flex min-h-[100dvh] flex-col bg-white text-neutral-900 lg:min-h-screen">
+            <BrandLogo
+              variant="mark"
+              tone="color"
+              className="pointer-events-none absolute -bottom-10 -right-6 hidden h-44 w-44 opacity-[0.05] lg:block"
+            />
+
+            <AuthMobileSplitHero
+              role={split.role}
+              title={split.title}
+              subtitle={split.subtitle}
+              body={split.body}
+              onBack={onBack}
+              backLabel={backLabel}
+            />
+
+            <div className="relative z-10 hidden items-center justify-end gap-3 px-10 py-4 lg:flex">
+              <button
+                type="button"
+                onClick={onBack}
+                className="inline-flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm text-neutral-500 transition hover:bg-neutral-50 hover:text-neutral-800"
+              >
+                <ArrowLeft size={15} />
+                {backLabel}
+              </button>
+            </div>
+
+            <main className="relative z-20 -mt-8 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain rounded-t-[1.75rem] bg-white px-5 pb-4 pt-6 shadow-[0_-14px_48px_rgba(15,23,42,0.12)] sm:px-8 lg:mt-0 lg:justify-center lg:overflow-visible lg:rounded-none lg:px-12 lg:py-10 lg:shadow-none">
+              <div className={`mx-auto w-full ${contentWide ? "max-w-3xl" : "max-w-[440px]"}`}>{children}</div>
             </main>
           </div>
         </div>

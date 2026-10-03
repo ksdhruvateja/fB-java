@@ -1,3 +1,4 @@
+import "./propertyCoverPresentation.css";
 import { useEffect, useRef, useState } from "react";
 import { Check, Home, Loader2, Pencil, RotateCcw, Upload, X } from "lucide-react";
 import { getPropertyCover, getPropertyCoverOptions, preparePropertyCover, savePropertyCover, type PropertyCover, type PropertyCoverStock } from "./propertyCoverApi";

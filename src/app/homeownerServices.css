@@ -71,33 +71,3 @@
  .homeowner-services .service-homecare-rail h2 { font-size:16px; }
  .homeowner-services .service-homecare-rail p:last-child { font-size:12px; line-height:1.65; }
 }
-
-/* Approved Home design carried into discovery and service-specific decisions. */
-.homeowner-services{color:var(--foreground);font-size:15px;line-height:22px}
-.homeowner-services .service-discovery-hero{display:block;min-height:0;padding:0}
-.homeowner-services .service-discovery-copy h1{font-size:36px;line-height:42px;font-weight:650;max-width:760px}
-.homeowner-services .service-discovery-copy>p:not(:first-child){line-height:22px}
-.homeowner-services .service-discovery-note{font-size:12px;margin-top:16px}
-.homeowner-services .service-homecare-rail{background:var(--homeowner-soft);border:1px solid var(--border);border-radius:10px;padding:20px}
-.homeowner-services .service-gallery{gap:24px 20px}
-.homeowner-services .service-gallery-entry{border:1px solid var(--border);border-radius:10px;background:var(--card);overflow:hidden}
-.homeowner-services .service-gallery-image{border-radius:0;background:var(--muted)}
-.homeowner-services .service-catalog-image{height:auto;aspect-ratio:16/9;border-radius:0;background:var(--muted)}
-.homeowner-services .service-residential-photo{display:block;overflow:hidden}
-.homeowner-services .service-residential-photo img{width:100%;height:100%;object-fit:cover;padding:0}
-.homeowner-services .service-gallery-copy{padding:16px}
-.homeowner-services .service-gallery-copy h2{font-size:18px;line-height:24px;font-weight:650}
-.homeowner-services .service-gallery-copy>p{font-size:13px;line-height:20px}
-.homeowner-services .service-gallery-copy ul{font-size:12px;line-height:18px}
-.homeowner-services .service-gallery-copy>button{color:var(--primary);font-weight:600}
-.homeowner-services .service-detail-intro{grid-template-columns:minmax(0,1fr) minmax(0,2fr);padding:20px;border:1px solid var(--border);border-radius:10px;background:var(--card)}
-.homeowner-services .service-detail-image{max-width:none;height:220px;border-radius:7px}
-.homeowner-services .service-designed-artwork{background:var(--muted)}
-.homeowner-services .service-illustration-ring,.homeowner-services .service-illustration-line{display:none}
-.homeowner-services .service-illustration-symbol svg{width:48px;height:48px;color:var(--muted-foreground)}
-.homeowner-services .homeowner-service-action{padding:20px;border:1px solid var(--border);border-radius:10px;background:var(--card)}
-.homeowner-services .homeowner-service-action:hover{border-color:var(--primary)}
-.homeowner-services .service-popular-label{border-radius:5px;font-size:12px;line-height:16px}
-@media(max-width:799px){.homeowner-services .service-gallery{grid-template-columns:1fr}.homeowner-services .service-discovery-copy h1{font-size:30px;line-height:36px}.homeowner-services .service-detail-intro{grid-template-columns:1fr}.homeowner-services .service-detail-image{height:190px}}
-
-.homeowner-services .service-native-category{display:flex;align-items:center;justify-content:center;color:var(--muted-foreground);background:var(--muted)}

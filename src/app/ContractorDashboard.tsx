@@ -37,8 +37,7 @@ import {
   saveWorkspace,
   type ContractorWorkspace,
 } from "./contractorWorkspaceStore";
-import ContractorWorkOverview from "./ContractorWorkOverview";
-import "./contractorVisual.css";
+import ContractorOverviewPanel from "./ContractorOverviewPanel";
 import ContractorInvitesPanel, { type ContractorInvite } from "./ContractorInvitesPanel";
 import ContractorJobsPanel from "./ContractorJobsPanel";
 import ContractorSchedulePanel from "./ContractorSchedulePanel";
@@ -712,7 +711,7 @@ export default function ContractorDashboard({
           ) : null}
 
           {tab === "dashboard" && (
-            <ContractorWorkOverview
+            <ContractorOverviewPanel
               companyName={companyName}
               invites={invites}
               jobs={jobs}
