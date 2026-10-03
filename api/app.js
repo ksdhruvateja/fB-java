@@ -3210,7 +3210,7 @@ async function handleFixaAssessment(req, res) {
         return res.status(400).json({ ok: false, code: 'INVALID_CASE_ID', message: 'A valid repair case is required.' });
       }
       const managed = await pool.query(
-        `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_type, ai_assessment, ai_assessment_history
+        `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_data_urls, media_type, ai_assessment, ai_assessment_history
          FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2`,
         [directJobId, req.authUser.id]
       );
@@ -3219,7 +3219,7 @@ async function handleFixaAssessment(req, res) {
         caseType = 'managed_job';
       } else {
         const pending = await pool.query(
-          `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_type, ai_assessment, ai_assessment_history
+          `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_data_urls, media_type, ai_assessment, ai_assessment_history
            FROM pending_service_requests WHERE id=$1 AND homeowner_user_id=$2`,
           [directJobId, req.authUser.id]
         );
@@ -3253,29 +3253,35 @@ async function handleFixaAssessment(req, res) {
       return res.status(403).json({ ok: false, code: 'PROPERTY_ACCESS_DENIED', message: 'You do not have access to this property.' });
     }
 
-    const globalKnowledge = await retrieveGlobalKnowledge(pool, {
-      category: authorizedCase?.category || body.category,
-      query: [authorizedCase?.title, body.description || authorizedCase?.description].filter(Boolean).join(' '),
-    });
-
     const desc = clampString(body.description || authorizedCase?.description, 4000);
     const cat = clampString(body.category || authorizedCase?.category, 80);
-    const imageDataUrl = body.imageDataUrl || authorizedCase?.media_data_url || null;
-    const hasImage = typeof imageDataUrl === 'string' && imageDataUrl.startsWith('data:');
-    if (hasImage && imageDataUrl.length > 6_000_000) {
-      return res.status(400).json({ ok: false, message: 'Image is too large.' });
+    let imageDataUrls;
+    try {
+      imageDataUrls = normalizeRepairPhotos(
+        body.imageDataUrls ?? (body.imageDataUrl != null ? null : repairPhotosFromRow(authorizedCase)),
+        body.imageDataUrl,
+      );
+    } catch (error) {
+      return res.status(error.status || 400).json({ ok: false, code: error.code, message: error.message });
     }
+    const hasImage = imageDataUrls.length > 0;
     if (!cat || (!desc && !hasImage)) {
       return res.status(400).json({
         ok: false,
         message: 'category and either a description or a photo are required.',
       });
     }
+    const globalKnowledge = await retrieveGlobalKnowledge(pool, {
+      category: authorizedCase?.category || body.category,
+      query: [authorizedCase?.title, body.description || authorizedCase?.description].filter(Boolean).join(' '),
+    });
+
     // Prefer structured assessment (no invented prices). Legacy UI still receives mapped fields.
     const structured = await assessRepair({
       category: cat,
       description: desc || 'No written description provided. Analyze the attached photo and infer the repair issue.',
-      imageDataUrl: hasImage ? imageDataUrl : null,
+      imageDataUrl: imageDataUrls[0] || null,
+      imageDataUrls,
       task: 'repair_assessment',
       jobId: authorizedCase?.id || null,
       homeownerId: req.authUser.id,
