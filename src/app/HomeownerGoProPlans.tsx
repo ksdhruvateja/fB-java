@@ -112,11 +112,11 @@ function PlanCard({
       <ul className="mt-7 flex flex-1 flex-col gap-4">
         {plan.features.map((f) => (
           <li key={f.label} className="flex items-start gap-3">
-            <Check
+            {f.included ? <Check
               size={18}
               strokeWidth={2.75}
               className={`mt-0.5 shrink-0 ${f.included ? activeCheck : mutedCheck}`}
-            />
+            aria-label="Included" /> : <Minus size={18} className={`mt-0.5 shrink-0 ${mutedCheck}`} aria-label="Not included" />}
             <span className={`text-[0.95rem] leading-snug ${f.included ? activeText : mutedText}`}>
               {f.label}
             </span>

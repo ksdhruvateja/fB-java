@@ -282,6 +282,19 @@ export async function updateUserProfile(
   }
 }
 
+export async function updateContractorServices(selectedServiceIds: string[]): Promise<{ ok: true; user: AuthUser } | { ok: false; message: string }> {
+ const token = getStoredToken();
+ if (!token) return { ok: false, message: 'Not signed in.' };
+ try {
+ const res = await fetch('/api/contractor/service-capabilities', { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ selectedServiceIds }) });
+ const data = await res.json();
+ if (!res.ok || !data.ok) return { ok: false, message: data.message || 'Could not save services.' };
+ if (getStoredToken() !== token) return { ok: false, message: 'Your sign-in changed. Reload before saving.' };
+ storeSession(token, data.user);
+ return { ok: true, user: data.user };
+ } catch { return { ok: false, message: 'Network error. Your changes are retained; retry saving.' }; }
+}
+
 // ── Password reset ────────────────────────────────────────────────────────────
 
 export async function forgotPassword(

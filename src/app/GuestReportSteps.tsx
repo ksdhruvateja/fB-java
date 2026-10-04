@@ -1,3 +1,4 @@
+import { ServiceThumb } from "./serviceVisuals";
 import { useRef } from "react";
 import { motion } from "motion/react";
 import { Camera, CheckCircle2, Check, ImagePlus, X } from "lucide-react";
@@ -144,7 +145,7 @@ export default function GuestReportSteps(props: Props) {
                     <Check size={12} strokeWidth={3} />
                   </span>
                 ) : null}
-                {opt.label}
+                <span className="flex items-center gap-2"><ServiceThumb name={opt.label} serviceId={opt.id} className="h-10 w-10" /><span className="min-w-0">{opt.label}</span></span>
               </motion.button>
             );
           })}

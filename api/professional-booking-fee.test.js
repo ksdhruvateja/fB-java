@@ -105,6 +105,23 @@ test('admin setting propagates to all new previews; stale/unowned/paid checkouts
     const managedRetry=await request('POST','/api/managed/jobs/201/pay-dispatch',901,managedBody);
     assert.equal(managedRetry.status,200,JSON.stringify(managedRetry.body));assert.equal(creates.length,3);assert.equal(managedCheckout.body.url,managedRetry.body.url);
     assert.equal(Number((await pool.query("SELECT COUNT(*) AS count FROM payments WHERE job_id=201 AND payment_type='dispatch_fee'")).rows[0].count),1);
+    const perService={by_service:{plumbing:17000},additional_charges:[{key:'priority',label:'Priority coordination',amount_cents:75,enabled:true,basis:'flat',applies_when:'same-day',service_ids:['plumbing']}]};
+    assert.equal((await request('PUT','/api/pricing/rules',901,{professional_dispatch_pricing:perService})).status,403);
+    assert.equal((await request('PUT','/api/pricing/rules',905,{professional_dispatch_pricing:perService})).status,403);
+    assert.equal((await request('PUT','/api/pricing/rules',906,{professional_dispatch_pricing:{by_service:{plumbing:-1}}})).status,400);
+    assert.equal((await request('PUT','/api/pricing/rules',906,{professional_dispatch_pricing:perService})).status,200);
+    await pool.query("INSERT INTO pending_service_requests(id,homeowner_user_id,category,title,description,status,checkout_expires_at) VALUES(302,901,'Plumbing','Fixture','Fixture','pending',$1)",[new Date(Date.now()+86400000)]);
+    const specific=await request('GET','/api/professional-booking-fee?pendingServiceRequestId=302&serviceTiming=same-day',901);
+    assert.equal(specific.body.amountCents,17075);assert.equal(specific.body.breakdown.lines.length,2);
+    assert.equal((await request('GET','/api/professional-booking-fee?pendingServiceRequestId=302',902)).status,404);
+    assert.equal((await request('POST','/api/pending-service-requests/302/professional-checkout',901,{...pendingBody,serviceTiming:'same-day',authorizedAmountCents:1})).status,409);
+    const serviceCheckout=await request('POST','/api/pending-service-requests/302/professional-checkout',901,{...pendingBody,serviceTiming:'same-day',authorizedAmountCents:17075});assert.equal(serviceCheckout.status,200,JSON.stringify(serviceCheckout.body));assert.equal(creates.at(-1).params.line_items[0].price_data.unit_amount,17075);
+    assert.equal((await request('GET','/api/managed/jobs/202/dispatch-pricing',901)).body.authorizedNowCents,9500,'accepted historic price remains unchanged');
+    const receipt=(await pool.query("SELECT meta FROM payments WHERE payment_type='pending_professional_fee' ORDER BY id DESC LIMIT 1",[])).rows[0];
+    assert.equal(receipt.meta.bookingBreakdown.authorizedNowCents,17075);
+    assert.equal((await request('PUT','/api/pricing/rules',906,{professional_dispatch_pricing:{by_service:{plumbing:0},additional_charges:[]}})).status,200);
+    assert.equal((await request('GET','/api/professional-booking-fee?pendingServiceRequestId=302',901)).body.amountCents,0);
+    const beforeZero=creates.length;const zeroCheckout=await request('POST','/api/pending-service-requests/302/professional-checkout',901,{...pendingBody,authorizedAmountCents:0});assert.equal(zeroCheckout.status,400);assert.equal(zeroCheckout.body.code,'BOOKING_FEE_NOT_PAYABLE');assert.equal(creates.length,beforeZero,'no zero-dollar Stripe checkout created');
     process.env.STRIPE_SECRET_KEY = '';
 
   } finally {if(server)await new Promise(r=>server.close(r));pgMem.newDb=original;await pool.end();}

@@ -1,3 +1,4 @@
+import { ServiceThumb } from "./serviceVisuals";
 import { useEffect, useMemo, useState } from "react";
 import {
   Building2,
@@ -200,7 +201,7 @@ export default function HomeownerServiceHistory({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="font-semibold truncate">{job.title || job.category}</p>
+                      <div className="flex items-center gap-3"><ServiceThumb name={job.category || job.title} className="h-10 w-12" /><p className="min-w-0 font-semibold truncate">{job.title || job.category}</p></div>
                       <p className="mt-1 text-sm text-muted-foreground truncate">{companyName(job)}</p>
                     </div>
                     <ChevronRight className={`h-4 w-4 shrink-0 ${active ? "text-primary" : "text-muted-foreground"}`} />

@@ -1,0 +1,89 @@
+/* Signed-in admin presentation shares the homeowner workspace palette and rhythm.
+   Role-specific navigation, action semantics and status colors remain unchanged. */
+.admin-workspace {
+  --background: #f7f6f2;
+  --foreground: #272d32;
+  --card: #ffffff;
+  --card-foreground: #272d32;
+  --popover: #ffffff;
+  --popover-foreground: #272d32;
+  --muted: #eeede7;
+  --muted-foreground: #606970;
+  --secondary: #eeede7;
+  --secondary-foreground: #272d32;
+  --accent: #eeede7;
+  --accent-foreground: #272d32;
+  --border: #e1e2dc;
+  --input-background: #ffffff;
+  --primary: #c84322;
+  --admin-accent: #c84322;
+  --admin-hero: #ffffff;
+  font-family: "DM Sans", system-ui, sans-serif;
+  line-height: 1.5;
+  color-scheme: light;
+}
+.admin-workspace[data-theme="dark"] {
+  --background: #111518;
+  --foreground: #edf3fb;
+  --card: #1c2227;
+  --card-foreground: #edf3fb;
+  --popover: #1c2227;
+  --popover-foreground: #edf3fb;
+  --muted: #2a3137;
+  --muted-foreground: #abb5bd;
+  --secondary: #2a3137;
+  --secondary-foreground: #edf3fb;
+  --accent: #2a3137;
+  --accent-foreground: #edf3fb;
+  --border: #3a434a;
+  --input-background: #1c2227;
+  --admin-accent: #ffb578;
+  --admin-hero: #1c2227;
+  color-scheme: dark;
+}
+.admin-workspace-main > * { max-width: 1440px; }
+.admin-workspace h1 { font-family: inherit; letter-spacing: -.025em; line-height: 1.2; }
+.admin-overview-heading h1 { font-size: clamp(28px, 3vw, 38px); font-weight: 600; }
+.admin-workspace aside { border-right-color: transparent; }
+.admin-workspace aside nav button { min-height: 42px; border-radius: 12px; }
+.admin-workspace aside nav button[class~="bg-[#FF4D1C]"] {
+  background-color: #fff0d9; color: #784516; box-shadow: none;
+}
+.admin-workspace[data-theme="dark"] aside nav button[class~="bg-[#FF4D1C]"] {
+  background-color: #463626; color: #ffd59a;
+}
+.admin-workspace :is(button, a, input, select, textarea):focus-visible {
+  outline: 2px solid #e9673f; outline-offset: 3px;
+}
+.admin-workspace :is(button, a, input, textarea) { -webkit-tap-highlight-color: transparent; }
+.admin-workspace :is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]), select) {
+  min-height: 44px; border-radius: 12px;
+}
+.admin-workspace textarea { line-height: 1.6; border-radius: 12px; }
+.admin-workspace [class~="bg-card"] { box-shadow: 0 3px 14px #20271d05; }
+.admin-workspace main :is(button, a)[class~="text-white"][class~="bg-[#FF4D1C]"] {
+  background-color: #c84322;
+}
+.admin-workspace :is([class~="text-[#FF4D1C]"], [class~="text-[#FF6B2C]"]) { color: #b6401f; }
+.admin-workspace[data-theme="dark"] :is([class~="text-primary"], [class~="text-[#FF4D1C]"], [class~="text-[#FF6B2C]"]) { color: #ffb578; }
+.admin-request-workspace, .admin-provider-status, .admin-overview-settings section,
+.admin-analytics-panel, .admin-analytics-kpi { border-radius: 18px; }
+.admin-operations-overview > section { border-radius: 18px; }
+.admin-operations-overview > section > div:first-child { border-radius: 18px 18px 0 0; }
+.admin-operations-overview > section > div:nth-child(2) { border-radius: 0 0 18px 18px; }
+.admin-overview-settings button { border-radius: 12px; }
+.admin-workspace th { padding-block: 12px; color: var(--muted-foreground); }
+.admin-workspace td { padding-block: 14px; }
+.admin-workspace tbody tr:hover { background-color: var(--muted); }
+@media (max-width: 639px) {
+  .admin-workspace-main { padding-inline: 16px; }
+  .admin-workspace main h1 { font-size: 1.6rem; }
+  .admin-inline-metrics strong { font-size: 26px; }
+  .admin-overview-heading { padding-bottom: 20px; }
+  .admin-workspace aside { max-width: calc(100vw - 44px); }
+}
+.admin-workspace-main { background-color: var(--background); padding-top: 2rem; padding-bottom: 3rem; }
+.admin-workspace main :is([class~="rounded-2xl"], [class~="rounded-3xl"])[class~="bg-card"] { border-radius: 18px; }
+.admin-workspace main :is(button, a)[class~="rounded-lg"] { border-radius: 10px; }
+@media (max-width: 639px) { .admin-workspace-main { padding-top: 1rem; } }
+.admin-workspace aside nav button[class~="bg-[#FF4D1C]"] svg { color: inherit; }

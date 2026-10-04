@@ -1,19 +1,6 @@
 import { notifyAdmins } from './in-app-notifications.js';
 
-function addRecurrenceDays(dateStr, recurrence) {
-  const d = new Date(`${String(dateStr || '').slice(0, 10)}T12:00:00`);
-  if (Number.isNaN(d.getTime())) return null;
-  if (recurrence === 'weekly') d.setDate(d.getDate() + 7);
-  else if (recurrence === 'biweekly') d.setDate(d.getDate() + 14);
-  else if (recurrence === 'monthly') d.setMonth(d.getMonth() + 1);
-  else if (recurrence === 'every_2_months') d.setMonth(d.getMonth() + 2);
-  else if (recurrence === 'quarterly') d.setMonth(d.getMonth() + 3);
-  else if (recurrence === 'every_6_months') d.setMonth(d.getMonth() + 6);
-  else if (recurrence === 'annually') d.setFullYear(d.getFullYear() + 1);
-  else if (recurrence === 'seasonal') d.setMonth(d.getMonth() + 3);
-  else d.setMonth(d.getMonth() + 1);
-  return d.toISOString().slice(0, 10);
-}
+import { addRecurrenceDays, calendarDate } from './recurring-calendar.js';
 
 function readMeta(row) {
   try {
@@ -60,7 +47,7 @@ export async function createRecurringAdminJob(pool, { recurring, homeowner }) {
       description,
       prop.address_line1 || null,
       [prop.city, prop.state, prop.zip].filter(Boolean).join(', ') || null,
-      recurring.start_date ? String(recurring.start_date).slice(0, 10) : null,
+      recurring.start_date ? calendarDate(recurring.start_date) : null,
       recurring.preferred_time_window || null,
       recurring.id,
     ]
@@ -93,21 +80,24 @@ export async function createRecurringAdminJob(pool, { recurring, homeowner }) {
 }
 
 export async function fulfillRecurringActivation(pool, { recurringServiceId, paymentId = null, amountCents = null }) {
-  const { rows } = await pool.query(`SELECT * FROM recurring_services WHERE id=$1`, [recurringServiceId]);
-  const recurring = rows[0];
-  if (!recurring) return { ok: false, message: 'Recurring service not found.' };
-  const meta = readMeta(recurring);
-  meta.activationFeeStatus = 'paid';
-  if (amountCents != null) meta.activationFeeAmountCents = amountCents;
-  if (paymentId) meta.activationPaymentId = paymentId;
-  await pool.query(`UPDATE recurring_services SET metadata=$2, updated_at=NOW() WHERE id=$1`, [
-    recurring.id,
-    JSON.stringify(meta),
-  ]);
-  const refreshed = (await pool.query(`SELECT * FROM recurring_services WHERE id=$1`, [recurring.id])).rows[0];
-  const { rows: users } = await pool.query(`SELECT id, name, email FROM users WHERE id=$1`, [recurring.owner_user_id]);
-  const result = await createRecurringAdminJob(pool, { recurring: refreshed, homeowner: users[0] });
-  return { ok: true, ...result };
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const recurring = (await client.query('SELECT * FROM recurring_services WHERE id=$1 FOR UPDATE', [recurringServiceId])).rows[0];
+    if (!recurring) { await client.query('COMMIT'); return { ok:false, message:'Recurring service not found.' }; }
+    if (['cancelled','paused'].includes(recurring.status)) { await client.query('COMMIT'); return { ok:false, message:'Recurring service is not active.' }; }
+    const meta = readMeta(recurring);
+    meta.activationFeeStatus = 'paid';
+    if (amountCents != null) meta.activationFeeAmountCents = amountCents;
+    if (paymentId) meta.activationPaymentId = paymentId;
+    await client.query('UPDATE recurring_services SET metadata=$2, updated_at=NOW() WHERE id=$1',[recurring.id,JSON.stringify(meta)]);
+    const refreshed = (await client.query('SELECT * FROM recurring_services WHERE id=$1',[recurring.id])).rows[0];
+    const homeowner = (await client.query('SELECT id,name FROM users WHERE id=$1',[recurring.owner_user_id])).rows[0];
+    const result = await createRecurringAdminJob(client,{recurring:refreshed,homeowner});
+    await client.query('COMMIT');
+    return { ok:true,...result };
+  } catch(error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
 }
 
 export { addRecurrenceDays };

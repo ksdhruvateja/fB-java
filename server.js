@@ -4,6 +4,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import app, { initDb, pool } from './api/app.js';
+import { processUpcomingRecurringServices } from './api/recurring-scheduler.js';
 import { processDueServiceReminders } from './api/service-reminders.js';
 import { processComplianceExpirationAlerts } from './api/contractor-compliance-alerts.js';
 
@@ -29,6 +30,18 @@ initDb()
   .then(() => {
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`[FixBridge API] Running on http://localhost:${PORT}`);
+      if (process.env.ENABLE_RECURRING_COORDINATION_POLL === 'true') {
+        let recurringSweepRunning = false;
+        const runRecurringSweep = async () => {
+          if (recurringSweepRunning) return;
+          recurringSweepRunning = true;
+          try { await processUpcomingRecurringServices(pool); }
+          catch (error) { console.error('[recurring coordination poll]', error.message); }
+          finally { recurringSweepRunning = false; }
+        };
+        void runRecurringSweep();
+        setInterval(() => void runRecurringSweep(), 15 * 60 * 1000);
+      }
       if (process.env.ENABLE_SERVICE_REMINDER_POLL === 'true') {
         const intervalMs = Number(process.env.SERVICE_REMINDER_POLL_MS || 15 * 60 * 1000);
         console.log(`[FixBridge API] Service reminder poll enabled every ${intervalMs}ms`);

@@ -1,3 +1,4 @@
+import { ServiceThumb } from "./serviceVisuals";
 import {
   approveProposal,
   confirmCompletion,
@@ -476,6 +477,7 @@ export default function HomeownerJobDetailPanel({
                 <AiEstimateDisclaimer compact />
               </div>
             ) : null}
+            <ServiceThumb name={job.category || job.title} className="mt-3 h-16 w-20" />
             {job.category ? (
               <p className="mt-2 text-xs text-muted-foreground">
                 Category: <span className="font-medium capitalize text-foreground">{job.category}</span>

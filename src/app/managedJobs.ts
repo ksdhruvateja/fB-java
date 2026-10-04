@@ -474,7 +474,7 @@ const inflightGets = new Map<string, Promise<unknown>>();
 
 async function api<T>(path: string, init?: RequestInit & { timeoutMs?: number }): Promise<T> {
   const method = String(init?.method || "GET").toUpperCase();
-  const dedupeKey = method === "GET" ? path : "";
+  const dedupeKey = method === "GET" ? `${getStoredToken() || "anonymous"}:${path}` : "";
   if (dedupeKey && inflightGets.has(dedupeKey)) {
     return inflightGets.get(dedupeKey) as Promise<T>;
   }
@@ -2454,14 +2454,19 @@ export async function startPendingProfessionalCheckout(
   });
 }
 
-type ProfessionalBookingFeeResponse = { ok:boolean; amount?:number; amountCents?:number; currency?:string; message?:string };
-let bookingFeeInFlight: { token:string | null; promise:Promise<ProfessionalBookingFeeResponse> } | null = null;
-export function fetchProfessionalBookingFee() {
+type ProfessionalBookingFeeResponse = { ok:boolean; amount?:number; amountCents?:number; currency?:string; message?:string; breakdown?:CheckoutBreakdown };
+let bookingFeeInFlight: { key:string; promise:Promise<ProfessionalBookingFeeResponse> } | null = null;
+export function fetchProfessionalBookingFee(options?: { pendingServiceRequestId?:number; serviceTiming?:string }) {
   const token = getStoredToken();
-  if (bookingFeeInFlight?.token === token) return bookingFeeInFlight.promise;
-  const promise = api<ProfessionalBookingFeeResponse>("/api/professional-booking-fee").finally(() => {
+  const query = new URLSearchParams();
+  if (options?.pendingServiceRequestId) query.set("pendingServiceRequestId", String(options.pendingServiceRequestId));
+  if (options?.serviceTiming) query.set("serviceTiming", options.serviceTiming);
+  const url = `/api/professional-booking-fee${query.size ? `?${query}` : ""}`;
+  const key = `${token}:${url}`;
+  if (bookingFeeInFlight?.key === key) return bookingFeeInFlight.promise;
+  const promise = api<ProfessionalBookingFeeResponse>(url).finally(() => {
     if (bookingFeeInFlight?.promise === promise) bookingFeeInFlight = null;
   });
-  bookingFeeInFlight = { token, promise };
+  bookingFeeInFlight = { key, promise };
   return promise;
 }

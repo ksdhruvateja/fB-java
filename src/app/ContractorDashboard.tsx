@@ -1,3 +1,4 @@
+import "./contractorWorkspace.css";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   LayoutDashboard, Bell, Briefcase, CalendarDays, MessageSquare, Wrench, MapPin,
@@ -5,7 +6,7 @@ import {
   HelpCircle, LogOut, Menu, Moon, Sun, X, Loader2, User, Gift,
 } from "lucide-react";
 import type { AuthUser } from "./auth";
-import AppLogo from "./AppLogo";
+import RoleBrandLogo from "./RoleBrandLogo";
 import AppBackButton from "./AppBackButton";
 import { type ContractorNavFrame } from "./navigation";
 import { useDashboardNavigation } from "./useDashboardNavigation";
@@ -591,7 +592,7 @@ export default function ContractorDashboard({
   };
 
   const sidebarNav = (
-    <nav className="flex flex-col gap-5 p-3">
+    <nav className="contractor-workspace-nav flex flex-col gap-5 p-3">
       {NAV_GROUPS.map((group) => (
         <div key={group.label}>
           <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
@@ -603,6 +604,7 @@ export default function ContractorDashboard({
                 key={item.id}
                 type="button"
                 onClick={() => go(item.id)}
+                aria-current={tab === item.id ? "page" : undefined}
                 className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
                   tab === item.id ? "bg-primary text-white" : "text-foreground hover:bg-muted"
                 }`}
@@ -620,10 +622,10 @@ export default function ContractorDashboard({
         </div>
       ))}
       <div className="border-t border-border pt-3 space-y-0.5">
-        <button type="button" onClick={() => go("settings")} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm ${tab === "settings" ? "bg-primary text-white" : "hover:bg-muted"}`}>
+        <button type="button" onClick={() => go("settings")} aria-current={tab === "settings" ? "page" : undefined} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm ${tab === "settings" ? "bg-primary text-white" : "hover:bg-muted"}`}>
           <Settings className="h-4 w-4" /> Settings
         </button>
-        <button type="button" onClick={() => go("help")} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm ${tab === "help" ? "bg-primary text-white" : "hover:bg-muted"}`}>
+        <button type="button" onClick={() => go("help")} aria-current={tab === "help" ? "page" : undefined} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm ${tab === "help" ? "bg-primary text-white" : "hover:bg-muted"}`}>
           <HelpCircle className="h-4 w-4" /> Help & Support
         </button>
       </div>
@@ -638,7 +640,7 @@ export default function ContractorDashboard({
             <AppBackButton onBack={handleMobileBack} className="-ml-1 shrink-0" />
           )}
           <div className="min-w-0">
-            <AppLogo onHome={goHome} variant="auth" />
+            <RoleBrandLogo onHome={goHome} />
             <p className="text-[10px] text-muted-foreground">Contractor</p>
           </div>
         </div>
@@ -662,7 +664,7 @@ export default function ContractorDashboard({
           <button type="button" className="absolute inset-0 bg-black/40" aria-label="Close" onClick={() => setMobileNav(false)} />
           <aside className="absolute inset-y-0 left-0 flex w-72 flex-col border-r border-border bg-background shadow-xl">
             <div className="border-b border-border px-4 py-4">
-              <AppLogo onHome={goHome} variant="auth" className="mb-1" />
+              <RoleBrandLogo onHome={goHome} className="mb-1" />
               <p className="text-xs text-muted-foreground">{companyName}</p>
             </div>
             <div className="flex-1 overflow-y-auto">{sidebarNav}</div>
@@ -678,7 +680,7 @@ export default function ContractorDashboard({
       <div className="lg:flex lg:min-h-screen">
         <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-card lg:flex">
           <div className="border-b border-border px-4 py-4">
-            <AppLogo onHome={goHome} variant="auth" className="mb-1" />
+            <RoleBrandLogo onHome={goHome} className="mb-1" />
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Contractor</p>
             <p className="mt-0.5 text-sm font-semibold truncate">{companyName}</p>
           </div>
@@ -766,7 +768,7 @@ export default function ContractorDashboard({
           )}
 
           {tab === "services" && (
-            <ContractorServicesPanel workspace={workspace} onChange={updateWorkspace} />
+            <ContractorServicesPanel workspace={workspace} onChange={updateWorkspace} user={user} onUserUpdated={onUserUpdated} />
           )}
 
           {tab === "areas" && (

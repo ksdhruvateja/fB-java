@@ -6,6 +6,7 @@ export type IntakeDraft = {
   userId: number;
   intakePhase: IntakePhase;
   requestSystemId: string;
+  serviceCategory?: string;
   issueArea: ServiceLocation | "";
   description: string;
   adaptiveAnswers: AdaptiveAnswers;

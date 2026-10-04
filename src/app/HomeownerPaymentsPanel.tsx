@@ -150,6 +150,7 @@ export default function HomeownerPaymentsPanel({
                     <p className="text-xs text-muted-foreground">{formatDate(t.createdAt)}</p>
                     <p className="mt-1 text-sm font-semibold">{t.description}</p>
                     <p className="text-xs text-muted-foreground">{t.typeLabel}</p>
+                    {t.paymentType === "subscription" && t.status === "pending" ? <p className="mt-1 text-xs text-muted-foreground">Checkout pending — this amount has not been confirmed paid.</p> : null}
                     <p className="mt-2 font-mono text-[11px] text-muted-foreground">
                       Transaction: {t.transactionId}
                     </p>

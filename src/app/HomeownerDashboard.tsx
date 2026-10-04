@@ -46,6 +46,7 @@ import {
   assessPendingServiceRequest,
   listPendingServiceRequests,
   getPendingProfessionalRequest,
+  getPendingServiceRequestAssessmentStatus,
   recordFixeraDiyEvent,
 } from "./managedJobs";
 import { cancelHomeCareSubscription, openHomeCareBillingPortal, resumeHomeCareSubscription, startSubscription } from "./platformApi";
@@ -78,6 +79,7 @@ import {
   type PropertyHealthProfile,
 } from "./homeownerPropertyHealth";
 import HomeownerOverview from "./HomeownerOverview";
+import CompletionRecurringOffer from "./CompletionRecurringOffer";
 import HomeownerServicesPage from "./HomeownerServicesPage";
 import HomeownerHomeUpdates from "./HomeownerHomeUpdates";
 import HomeownerPropertyCare from "./HomeownerPropertyCare";
@@ -405,7 +407,9 @@ export default function HomeownerDashboard({
   initialTab,
   showSubscriptionSuccess,
   subscriptionSuccessPlanCode,
+  confirmedSubscriptionUserId,
   subscriptionActivating,
+  subscriptionConfirmationDelayed,
   onDismissSubscriptionSuccess,
 }: {
   onLogout: () => void;
@@ -416,7 +420,9 @@ export default function HomeownerDashboard({
   initialTab?: DashTab;
   showSubscriptionSuccess?: boolean;
   subscriptionSuccessPlanCode?: string | null;
+  confirmedSubscriptionUserId?: string | null;
   subscriptionActivating?: boolean;
+  subscriptionConfirmationDelayed?: boolean;
   onDismissSubscriptionSuccess?: () => void;
 }) {
   const [tab, setTab] = useState<DashTab>(() => sanitizeDashTab(initialTab || "overview"));
@@ -431,6 +437,11 @@ export default function HomeownerDashboard({
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
   const [propertiesLoading, setPropertiesLoading] = useState(true);
+  const [upgradeDraftReady, setUpgradeDraftReady] = useState(false);
+  const upgradeResumeRef = useRef(false);
+  const upgradeSubmissionRef = useRef(false);
+  const [addressSavedAiPropertyId, setAddressSavedAiPropertyId] = useState<number | null>(null);
+  const [modalAddressError, setModalAddressError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
   const [pendingServiceRequestId, setPendingServiceRequestId] = useState<number | null>(null);
@@ -519,6 +530,7 @@ export default function HomeownerDashboard({
   const [mediaDataUrl, setMediaDataUrl] = useState<string | null>(null);
   const [mediaDataUrls, setMediaDataUrls] = useState<string[]>([]);
   const mediaPhotosRef = useRef<string[]>([]);
+  const intakeDraftRestoringRef = useRef(false);
   function adoptRepairPhotos(photos: string[]) {
     mediaPhotosRef.current = photos;
     setMediaDataUrls(photos);
@@ -1311,6 +1323,13 @@ export default function HomeownerDashboard({
   }
 
   function openRequestService(prefill?: HomeUpdateItem["requestPrefill"]) {
+    sessionStorage.removeItem("fixbridge.ai-upgrade-assessment");
+    const handoff = readAssistantHandoff();
+    const draft = loadIntakeDraft(Number(user.id));
+    if (!prefill && !handoff && draft && (draft.description || draft.requestSystemId || draft.intakePhase !== "describe")) {
+      void resumeIntakeDraft();
+      return;
+    }
     setError(null);
     setStep("intake");
     setIntakePhase("describe");
@@ -1320,8 +1339,8 @@ export default function HomeownerDashboard({
     setAssessmentMsg(null);
     setPendingAssessment(null);
     setPendingServiceRequestId(null);
-    const handoff = readAssistantHandoff();
     if (handoff) {
+      setCategory((handoff.category || (handoff.requestSystemId ? tradeToCategory(handoff.requestSystemId) : "")) as HomeownerService | "");
       if (handoff.propertyId) setPropertyId(handoff.propertyId);
       if (handoff.category) {
         setCategory(handoff.category as HomeownerService);
@@ -1351,7 +1370,7 @@ export default function HomeownerDashboard({
       if (prefill?.systemId) setRequestSystemId(prefill.systemId);
       else if (prefill?.service) setRequestSystemId(categoryToTradeId(prefill.service));
       if (prefill?.area) setIssueArea(resolveServiceLocation(String(prefill.area), description));
-      if (prefill?.service) setCategory(prefill.service);
+      setCategory(prefill?.service || (prefill?.systemId ? tradeToCategory(prefill.systemId) : ""));
       setDescription(prefill?.description || "");
       adoptRepairPhotos([]);
       setMediaType(null);
@@ -1891,6 +1910,8 @@ export default function HomeownerDashboard({
   }
 
   async function handleSaveAddressModal() {
+    if (busy) return;
+    setModalAddressError(null);
     const structured = {
       addressLine1: modalAddressLine1.trim(),
       addressLine2: modalAddressLine2.trim(),
@@ -1899,7 +1920,7 @@ export default function HomeownerDashboard({
       zip: modalZip.trim(),
     };
     if (!isAddressComplete(structured) || !isValidUsZip(structured.zip)) {
-      alert("Please fill in Address Line 1, City, State, and a valid ZIP Code.");
+      setModalAddressError("Please fill in Address Line 1, City, State, and a valid ZIP Code.");
       return;
     }
     setBusy(true);
@@ -1925,17 +1946,17 @@ export default function HomeownerDashboard({
         closeAddAddressModal();
         if (action) {
           if (action === "ai") {
-            requestAiAssessment();
+            setAddressSavedAiPropertyId(Number(r.property.id));
           } else if (action === "experts") {
             setError(null);
             setStep("experts");
           }
         }
       } else {
-        alert(r.message || "Could not save property.");
+        setModalAddressError(r.message || "Could not save property.");
       }
     } catch (e: any) {
-      alert(e.message || "Failed to save property.");
+      setModalAddressError(e.message || "Failed to save property.");
     } finally {
       setBusy(false);
     }
@@ -2557,10 +2578,12 @@ export default function HomeownerDashboard({
   useEffect(() => {
     if (tab !== "report" || step !== "intake") return;
     const timer = window.setTimeout(() => {
+      if (intakeDraftRestoringRef.current) return;
       saveIntakeDraft({
         userId: Number(user.id),
         intakePhase,
         requestSystemId,
+        serviceCategory: category,
         issueArea,
         description,
         adaptiveAnswers,
@@ -2582,6 +2605,7 @@ export default function HomeownerDashboard({
     user.id,
     intakePhase,
     requestSystemId,
+    category,
     issueArea,
     description,
     adaptiveAnswers,
@@ -2594,19 +2618,22 @@ export default function HomeownerDashboard({
   ]);
 
   async function resumeIntakeDraft() {
-    if (!user.id) return;
+    if (!user.id || intakeDraftRestoringRef.current) return false;
     const draft = loadIntakeDraft(Number(user.id));
-    if (!draft) return;
-    setIntakePhase(normalizeIntakePhase(draft.intakePhase));
-    if (draft.requestSystemId) setRequestSystemId(draft.requestSystemId);
-    if (draft.issueArea) setIssueArea(draft.issueArea);
-    if (draft.description) setDescription(draft.description);
-    if (draft.adaptiveAnswers) setAdaptiveAnswers(draft.adaptiveAnswers);
-    if (draft.propertyId) setPropertyId(draft.propertyId);
-    if (draft.equipmentKey) setEquipmentKey(draft.equipmentKey);
-    if (draft.partnerCode) setPartnerCode(draft.partnerCode);
+    if (!draft) return false;
+    intakeDraftRestoringRef.current = true;
+    try {
     const photos = await loadIntakeDraftPhotos(draft);
-    if (String(user.id) !== String(getStoredUser()?.id)) return;
+    if (String(user.id) !== String(getStoredUser()?.id)) return false;
+    setIntakePhase(normalizeIntakePhase(draft.intakePhase));
+    setRequestSystemId(draft.requestSystemId || "");
+    setCategory((draft.serviceCategory || "") as HomeownerService | "");
+    setIssueArea(draft.issueArea || "");
+    setDescription(draft.description || "");
+    setAdaptiveAnswers(draft.adaptiveAnswers || {});
+    setPropertyId(draft.propertyId || "");
+    setEquipmentKey(draft.equipmentKey || "");
+    setPartnerCode(draft.partnerCode || "");
     adoptRepairPhotos(photos);
     if (draft.mediaType?.startsWith("video")) { setMediaDataUrl(draft.mediaDataUrl); setMediaType(draft.mediaType); }
 
@@ -2618,13 +2645,82 @@ export default function HomeownerDashboard({
       reportPath: null,
       jobId: null,
     });
+    return true;
+    } finally { intakeDraftRestoringRef.current = false; }
   }
 
   useEffect(() => {
-    if (!hasHomeCarePro || sessionStorage.getItem("fixbridge.ai-after-plan") !== String(user.id)) return;
-    sessionStorage.removeItem("fixbridge.ai-after-plan");
-    resumeIntakeDraft();
-  }, [hasHomeCarePro, user.id]);
+    if (sessionStorage.getItem("fixbridge.ai-after-plan") !== String(user.id)) return;
+    void resumeIntakeDraft().then(restored => {
+      if (restored) setUpgradeDraftReady(true);
+    });
+  }, [user.id]);
+
+  useEffect(() => {
+    const owner = String(user.id);
+    if (!upgradeDraftReady || propertiesLoading || upgradeResumeRef.current ||
+        confirmedSubscriptionUserId !== owner || !hasHomeCarePro ||
+        sessionStorage.getItem("fixbridge.ai-upgrade-return") !== owner ||
+        sessionStorage.getItem("fixbridge.ai-after-plan") !== owner) return;
+    const draft = loadIntakeDraft(Number(user.id));
+    // Wait for the restored React state and the owner's property list to commit.
+    if (!draft || description !== draft.description || propertyId !== draft.propertyId ||
+        !properties.some(property => property.id === propertyId)) return;
+    upgradeResumeRef.current = true;
+    onDismissSubscriptionSuccess?.();
+    void requestAiAssessment(async () => {
+      if (sessionStorage.getItem("fixbridge.ai-upgrade-return") !== owner ||
+          String(getStoredUser()?.id) !== owner) return;
+      // Consume before submission: refresh/back/repeated renders cannot create another request.
+      sessionStorage.removeItem("fixbridge.ai-upgrade-return");
+      sessionStorage.removeItem("fixbridge.ai-after-plan");
+      upgradeSubmissionRef.current = true;
+      await submitIssue("ai");
+    });
+  }, [upgradeDraftReady, propertiesLoading, confirmedSubscriptionUserId, hasHomeCarePro, user.id, description, propertyId, properties]);
+
+  useEffect(() => {
+    if (addressSavedAiPropertyId == null || busy || propertyId !== addressSavedAiPropertyId ||
+        !properties.some(property => property.id === addressSavedAiPropertyId)) return;
+    setAddressSavedAiPropertyId(null);
+    void requestAiAssessment();
+  }, [addressSavedAiPropertyId, propertyId, properties, busy]);
+
+  useEffect(() => {
+    let resume: { userId: number; pendingId: number; savedAt: number };
+    try { resume = JSON.parse(sessionStorage.getItem("fixbridge.ai-upgrade-assessment") || "null"); } catch { return; }
+    if (!resume || resume.userId !== Number(user.id) || !Number.isInteger(resume.pendingId) ||
+        Date.now() - resume.savedAt > 15 * 60 * 1000) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    let attempts = 0;
+    const reopen = async () => {
+      const status = await getPendingServiceRequestAssessmentStatus(resume.pendingId);
+      if (cancelled || String(getStoredUser()?.id) !== String(user.id)) return;
+      if (status.ok && status.status === "ready") {
+        const loaded = await getPendingProfessionalRequest(resume.pendingId);
+        if (cancelled || String(getStoredUser()?.id) !== String(user.id)) return;
+        if (loaded.ok && loaded.pendingServiceRequest) {
+          setPendingServiceRequestId(resume.pendingId);
+          setPendingAssessment({ ok: true, pendingServiceRequestId: resume.pendingId,
+            pendingServiceRequest: loaded.pendingServiceRequest, pricing: status.pricing } as PendingAssessmentSuccess);
+          setActiveJob(null);
+          setAssessLoadingStep(null);
+          navigateTo({ role: "homeowner", tab: "report", reportStep: "assessment", reportPath: "ai", jobId: null });
+        }
+        return;
+      }
+      if (status.ok && status.status === "processing" && ++attempts < 50) {
+        openAssessmentFlow("ai");
+        setPendingServiceRequestId(resume.pendingId);
+        timer = window.setTimeout(() => void reopen(), 3000);
+        return;
+      }
+      setAssessmentMsg("Your saved assessment could not be reopened yet. Check Service Requests before starting another request.");
+    };
+    void reopen();
+    return () => { cancelled = true; if (timer) window.clearTimeout(timer); };
+  }, [user.id]);
 
   useEffect(() => {
     if (!selectedJobId) {
@@ -2886,6 +2982,7 @@ export default function HomeownerDashboard({
     setAiAckOpen(false);
     setAiAckChecked(false);
     setAiAckError(null);
+    sessionStorage.removeItem("fixbridge.ai-upgrade-return");
     pendingAiRunRef.current = null;
   }
 
@@ -2950,7 +3047,7 @@ export default function HomeownerDashboard({
       return;
     }
     if (!hasHomeCarePro) {
-      const saved = await saveIntakeDraft({ userId: Number(user.id), intakePhase, requestSystemId, issueArea, description, adaptiveAnswers, propertyId, equipmentKey, partnerCode, mediaDataUrl, mediaDataUrls, mediaType, savedAt: new Date().toISOString() });
+      const saved = await saveIntakeDraft({ userId: Number(user.id), intakePhase, requestSystemId, serviceCategory: category, issueArea, description, adaptiveAnswers, propertyId, equipmentKey, partnerCode, mediaDataUrl, mediaDataUrls, mediaType, savedAt: new Date().toISOString() });
       if (!saved) { setError("Your photos could not be saved for checkout. Please retry before leaving this page."); return; }
       setHasIntakeDraft(true);
       sessionStorage.setItem("fixbridge.ai-after-plan", String(user.id));
@@ -3063,7 +3160,7 @@ export default function HomeownerDashboard({
       setIssueArea(resolvedLocation);
     }
 
-    const category = tradeToCategory(resolvedTrade);
+    const submissionCategory = category || tradeToCategory(resolvedTrade);
     const fullDescription = `${description.trim()}${formatAdaptiveAnswersNote(resolvedTrade, adaptiveAnswers)}`;
 
     if (!propertyId) {
@@ -3118,7 +3215,7 @@ export default function HomeownerDashboard({
       const usePartner = Boolean(code);
       const created = await createManagedJob({
         intent: path === "experts" ? "hire" : "ai",
-        category,
+        category: submissionCategory,
         title: serviceRequestTitle(resolvedLocation, resolvedTrade),
         description: fullDescription,
         propertyId: propertyId || undefined,
@@ -3206,6 +3303,10 @@ export default function HomeownerDashboard({
           return;
         }
 
+        if (upgradeSubmissionRef.current) {
+          sessionStorage.setItem("fixbridge.ai-upgrade-assessment", JSON.stringify({ userId: Number(user.id), pendingId, savedAt: Date.now() }));
+          upgradeSubmissionRef.current = false;
+        }
         setPendingServiceRequestId(pendingId);
         setPendingAssessment(null);
         setActiveJob(null);
@@ -3962,6 +4063,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
               open={Boolean(showSubscriptionSuccess)}
               plan={successPlanCard}
               activating={Boolean(subscriptionActivating)}
+              confirmationDelayed={Boolean(subscriptionConfirmationDelayed)}
               onClose={() => onDismissSubscriptionSuccess?.()}
               onViewFeatures={() => {
                 setTab("go-pro");
@@ -4022,6 +4124,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                   <HomeownerServiceIntake
                     intakePhase={intakePhase}
                     setIntakePhase={setIntakePhase}
+                    serviceCategory={category}
                     requestSystemId={requestSystemId}
                     setRequestSystemId={setRequestSystemId}
                     setCategory={(c) => setCategory(c as HomeownerService)}
@@ -4051,6 +4154,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                       setModalCity("");
                       setModalState("");
                       setModalZip("");
+                      setModalAddressError(null);
                       setModalActionAfterSave(null);
                       setShowAddAddressModal(true);
                     }}
@@ -4978,6 +5082,12 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                             }}
                           />
                         </div>
+                        <CompletionRecurringOffer job={selectedJob ?? filteredJobs[0]} onChoose={(offeringId) => {
+                          const job = selectedJob ?? filteredJobs[0];
+                          if (job.propertyId) selectPrimaryProperty(job.propertyId);
+                          window.sessionStorage.setItem("fixbridge.serviceOffering", offeringId);
+                          navigateTab("services");
+                        }} />
                         {showTechMessage && (
                           <div className="rounded-[1.5rem] border border-border bg-card p-4 space-y-3">
                             <p className="text-sm font-semibold">Message technician</p>
@@ -5632,6 +5742,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                   />
                 </div>
 
+                {modalAddressError ? <p role="alert" className="text-sm text-destructive">{modalAddressError}</p> : null}
                 <div className="flex justify-end gap-3 pt-2">
                   <button
                     type="button"

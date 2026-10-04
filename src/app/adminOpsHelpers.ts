@@ -99,6 +99,7 @@ export function jobDotTone(job: ManagedJob): string {
 }
 
 export function jobQueueHeadline(job: ManagedJob): string {
+  if (job.sourceRecurringServiceId && ["paid_for_dispatch", "awaiting_contractor"].includes(job.status)) return "Recurring - coordinate visit";
   switch (job.status) {
     case "paid_for_dispatch":
     case "awaiting_contractor":

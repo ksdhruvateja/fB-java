@@ -1,3 +1,4 @@
+import { ServiceThumb } from "./serviceVisuals";
 import { useEffect, useState } from "react";
 import { Loader2, Plus, Users, FileText } from "lucide-react";
 import type { ManagedJob, Property } from "./managedJobs";
@@ -250,6 +251,7 @@ export default function HomeCareProHub({
             >
               <label className="grid gap-1 text-xs sm:col-span-2">
                 Service
+                <ServiceThumb name={newServiceType} serviceId={newServiceType} className="h-16 w-20" />
                 <select className="rounded-lg border border-border px-3 py-2" value={newServiceType} onChange={(e) => setNewServiceType(e.target.value as RecurringService["serviceType"])}>
                   <option value="recurring_cleaning">Recurring cleaning</option>
                   <option value="recurring_landscaping">Recurring landscaping</option>
@@ -303,9 +305,9 @@ export default function HomeCareProHub({
               <article key={s.id} className="rounded-xl border border-border bg-card p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0 space-y-2 text-sm">
-                    <p className="text-base font-semibold">
+                    <div className="flex items-center gap-3"><ServiceThumb name={s.serviceType} serviceId={s.serviceType} className="h-16 w-20" /><p className="text-base font-semibold">
                       {s.serviceType === "recurring_cleaning" ? "Cleaning" : "Landscaping"}
-                    </p>
+                    </p></div>
                     <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
                       <p>
                         <span className="font-medium text-foreground">Property:</span>{" "}

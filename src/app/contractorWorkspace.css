@@ -1,0 +1,41 @@
+/* Signed-in contractor presentation. Match the homeowner workspace tokens
+   while retaining semantic status colors, role controls and panel layouts. */
+.contractor-portal {
+  --background:#f7f6f2; --foreground:#272d32; --card:#fff;
+  --card-foreground:#272d32; --popover:#fff; --popover-foreground:#272d32;
+  --muted:#eeede7; --muted-foreground:#606970; --border:#e1e2dc;
+  --secondary:#eeede7; --secondary-foreground:#272d32;
+  --accent:#eeede7; --accent-foreground:#272d32;
+  --primary:#c84322; --primary-foreground:#fff; --input-background:#fff;
+  font-family:"DM Sans",system-ui,sans-serif; line-height:1.5; color-scheme:light;
+}
+.dark .contractor-portal {
+  --background:#111518; --foreground:#edf3fb; --card:#1c2227;
+  --card-foreground:#edf3fb; --popover:#1c2227; --popover-foreground:#edf3fb;
+  --muted:#2a3137; --muted-foreground:#abb5bd; --border:#3a434a;
+  --secondary:#2a3137; --secondary-foreground:#edf3fb;
+  --accent:#2a3137; --accent-foreground:#edf3fb;
+  --input-background:#1c2227; color-scheme:dark;
+}
+.contractor-portal main {padding:32px;}
+.contractor-portal main > section {max-width:1440px;}
+.contractor-portal main h1 {font-family:inherit!important;font-size:36px;line-height:1.2;font-weight:500;text-transform:none;letter-spacing:-.035em;}
+.contractor-portal main :is(h2,h3) {font-family:inherit!important;letter-spacing:-.02em;}
+.contractor-portal main [class*="Barlow_Condensed"] {font-family:inherit!important;}
+.contractor-portal main :is(.rounded-2xl,.rounded-3xl,[class~="rounded-[1.5rem]"]) {border-radius:14px;}
+.contractor-portal main :is(.shadow-lg,.shadow-xl,.shadow-2xl) {box-shadow:0 4px 18px #272d3207;}
+.contractor-portal :is(input:not([type=checkbox]):not([type=radio]):not([type=file]),select,textarea) {border-radius:9px;border-color:var(--border);font-family:inherit;font-size:14px;line-height:1.5;}
+.contractor-portal :is(input:not([type=checkbox]):not([type=radio]):not([type=file]),select) {min-height:44px;}
+.contractor-portal button {min-height:44px;}
+.contractor-portal button:is(.bg-primary,[class~="bg-[#FF4D1C]"],[class~="bg-[#FF6B2C]"]) {background:var(--primary);color:var(--primary-foreground);}
+.contractor-portal :is(button,a,input,select,textarea):focus-visible {outline:2px solid var(--primary);outline-offset:3px;}
+.contractor-portal .contractor-workspace-nav button[aria-current=page] {background:#fff0d9;color:#784516;box-shadow:none;font-weight:600;}
+.dark .contractor-portal .contractor-workspace-nav button[aria-current=page] {background:#463626;color:#ffd59a;}
+.contractor-portal .contractor-workspace-nav {gap:22px;}
+.contractor-portal .contractor-workspace-nav button {border-radius:10px;}
+.contractor-portal table {font-size:13px;line-height:1.5;}
+.contractor-portal :is(th,td) {padding-block:12px;}
+.contractor-portal main :is(.text-xs,.text-sm) {line-height:1.65;}
+@media(max-width:1023px) {.contractor-portal main{padding:24px 16px;}.contractor-portal main h1{font-size:30px;}}
+@media(prefers-reduced-motion:reduce) {.contractor-portal *{scroll-behavior:auto;transition-duration:0s!important;}}
+.dark .contractor-portal main .text-primary {color:#ffb38f;}

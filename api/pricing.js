@@ -688,6 +688,8 @@ export function mergePricingRules(stored) {
       },
     },
     professional_dispatch_pricing: {
+      by_service: {},
+      additional_charges: [],
       ...(DEFAULT_PRICING_RULES.professional_dispatch_pricing || {}),
       ...(stored.professional_dispatch_pricing || {}),
       lines:

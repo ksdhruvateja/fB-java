@@ -149,6 +149,7 @@ export type ContractorApplication = {
   contactPhoneType: string;
   contactEmail: string;
 
+  selectedServiceIds?: string[];
   primaryServices: string[];
   serviceStates: string[];
   serviceZips: string;
@@ -296,7 +297,7 @@ export function applicationFromUser(user: {
     addressVerified: saved.addressVerified ?? user.addressVerified ?? false,
     postalCodePlus4: saved.postalCodePlus4 ?? user.postalCodePlus4 ?? null,
     primaryServices: (
-      Array.isArray(saved.primaryServices) && saved.primaryServices.length
+      Array.isArray(saved.primaryServices)
         ? saved.primaryServices
         : user.trade
           ? String(user.trade).split(/,\s*/)

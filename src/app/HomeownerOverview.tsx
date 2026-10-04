@@ -202,13 +202,13 @@ export default function HomeownerOverview({
           <div>
             <div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-medium">Popular services</h2>{onOpenServices ? <button type="button" onClick={() => onOpenServices()} className="text-[11px] text-primary">View all</button> : null}</div>
             <div className="grid grid-cols-2 gap-3 xl:grid-cols-1">{popular.slice(0,4).map(item => <button key={item.id} type="button" onClick={() => onOpenServices?.(item.id)} className="homeowner-service-link flex min-h-14 items-center gap-3 text-left">
-              <ServiceThumb name={item.name} className="h-10 w-10 rounded-xl" /><span className="min-w-0 text-xs font-medium">{item.name}</span><ArrowRight size={13} className="ml-auto shrink-0 text-muted-foreground" />
+              <ServiceThumb name={item.name} serviceId={item.id} category={item.category} className="h-10 w-10 rounded-xl" /><span className="min-w-0 text-xs font-medium">{item.name}</span><ArrowRight size={13} className="ml-auto shrink-0 text-muted-foreground" />
             </button>)}</div>
           </div>
           <div>
             <h2 className="text-sm font-medium">Recurring care</h2><p className="mt-1 text-[11px] text-muted-foreground">A little upkeep, on your schedule.</p>
             <div className="mt-3 grid grid-cols-2 gap-3 xl:grid-cols-1">{recurring.map(item => <button key={item.id} type="button" onClick={() => onOpenServices?.(item.id)} className="homeowner-service-link flex items-center gap-3 text-left">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/5 text-primary"><CalendarDays size={14} /></span><span><span className="block text-xs font-medium">{item.name}</span><span className="mt-0.5 block text-[10px] text-muted-foreground">{item.recommendedFrequency ? frequencyLabel(item.recommendedFrequency) : "Recurring"}</span></span>
+              <ServiceThumb name={item.name} serviceId={item.id} category={item.category} className="h-10 w-10 rounded-xl" /><span><span className="block text-xs font-medium">{item.name}</span><span className="mt-0.5 block text-[10px] text-muted-foreground">{item.recommendedFrequency ? frequencyLabel(item.recommendedFrequency) : "Recurring"}</span></span>
             </button>)}</div>
           </div>
         </div>

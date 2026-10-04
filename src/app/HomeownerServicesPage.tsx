@@ -26,7 +26,7 @@ const FILTERS = [
   { id: "outdoor", label: "Outdoor" },
 ] as const;
 
-const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Flexible"];
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "Flexible"];
 const TIMES = ["Morning", "Afternoon", "Evening", "Flexible"];
 const COMMITMENTS = [
   { id: "month_to_month", label: "Month-to-Month" },
@@ -62,6 +62,7 @@ export default function HomeownerServicesPage({
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const setupSubmissionRef = useRef(false);
+  const setupInvocationRef = useRef("");
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [catalogError, setCatalogError] = useState(false);
@@ -140,10 +141,12 @@ export default function HomeownerServicesPage({
     const feature = /landscap|snow/i.test(item.category) ? "recurring_landscaping" : "recurring_cleaning";
     if (pro && !pro.requestFeature(feature, "services-setup")) return;
     setSelectedId(item.id);
-    if (helpChoice && !notes) setNotes(helpChoice);
+    setNotes(helpChoice || "");
+    setStartDate("");
     setSetup(true);
     setStep(0);
-    setRecurrence(item.frequencies[0] || "");
+    setRecurrence(item.frequencies.some(value => value === item.recommendedFrequency) ? item.recommendedFrequency : item.frequencies[0] || "");
+    setupInvocationRef.current = crypto.randomUUID();
     setMessage(null);
   }
 
@@ -163,6 +166,7 @@ export default function HomeownerServicesPage({
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           offeringId: selected.id,
+          setupInvocationId: setupInvocationRef.current,
           propertyId: property.id,
           recurrence,
           frequencyLabel: frequencyLabel(recurrence),
@@ -259,8 +263,12 @@ export default function HomeownerServicesPage({
             No services match that search. Try a home problem like “leaking faucet” or “AC not cooling”.
           </div>
         ) : (
-          <div className="homeowner-service-directory service-gallery">
-            {visible.map((item) => {
+          <div className="service-catalog-groups">
+            {[{ id: "regular", title: "One-time services", description: "Book help when you need it.", items: visible.filter(item => !item.subscriptionEligible) }, { id: "recurring", title: "Subscription & recurring care", description: "Choose a one-time visit or a regular service schedule. Visit pricing is separate from HomeCare Pro.", items: visible.filter(item => item.subscriptionEligible) }].filter(group => group.items.length).map(group => (
+            <section key={group.id} className="service-catalog-group" aria-labelledby={`services-${group.id}`}>
+              <header className="service-group-heading"><h2 id={`services-${group.id}`}>{group.title}</h2><p>{group.description}</p></header>
+              <div className="homeowner-service-directory service-gallery">
+            {group.items.map((item) => {
               const q = query.trim().toLowerCase();
               const match = q
                 ? item.helpsWith.find((line) => line.toLowerCase().includes(q)) ||
@@ -268,10 +276,11 @@ export default function HomeownerServicesPage({
                 : "";
               return (
               <article key={item.id} className="homeowner-service-entry service-gallery-entry">
-                <button type="button" onClick={() => openService(item)} className="service-gallery-image" aria-label={`Explore ${item.name}`}><ServiceThumb name={item.name} className="service-catalog-image" />{item.popular ? <span className="service-popular-label">Popular</span> : null}</button>
+                <button type="button" onClick={() => openService(item)} className="service-gallery-image" aria-label={`Explore ${item.name}`}><ServiceThumb name={item.name} serviceId={item.id} category={item.category} className="service-catalog-image" />{item.popular ? <span className="service-popular-label">Popular</span> : null}</button>
                 <div className="service-gallery-copy min-w-0">
-                  <h2 className="text-base font-medium">{item.name}</h2>
+                  <h3 className="text-base font-medium">{item.name}</h3>
                   <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">{item.description}</p>
+                  {item.id === "landscaping_yard" && !item.subscriptionEligible ? <p className="service-catalog-scope">One-time yard requests. For scheduled care, explore Landscaping.</p> : null}
                   {match ? <p className="mt-1 text-xs font-medium text-primary">{match}</p> : null}
                   <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
                     {item.oneTimeAvailable ? <li>One-Time</li> : null}
@@ -285,15 +294,11 @@ export default function HomeownerServicesPage({
               </article>
               );
             })}
+              </div>
+            </section>
+            ))}
           </div>
         )
-      ) : null}
-      {!selected ? (
-          <aside className="service-homecare-rail" aria-label="HomeCare subscription">
-            <div className="service-homecare-mark"><Sparkles aria-hidden="true" className="h-5 w-5" /></div>
-            <div className="min-w-0"><p className="service-eyebrow">Your home, throughout the year</p><h2>HomeCare Pro subscription</h2><p>Explore ongoing home management and AI features. Service visits and recurring service pricing are separate.</p></div>
-            <button type="button" onClick={onOpenHomeCare}>View Plans <ArrowRight aria-hidden="true" className="h-4 w-4" /></button>
-          </aside>
       ) : null}
       {selected && !setup ? (
         <div className="space-y-4">
@@ -302,7 +307,7 @@ export default function HomeownerServicesPage({
           </button>
           <div className="homeowner-service-detail border-b border-border pb-6">
             <div className="service-detail-intro grid gap-6 md:grid-cols-[240px_1fr] md:items-center">
-              <ServiceThumb name={selected.name} className="service-detail-image" />
+              <ServiceThumb name={selected.name} serviceId={selected.id} category={selected.category} className="service-detail-image" />
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-primary">{selected.name}</p>
                 <h2 className="mt-1 text-2xl font-semibold tracking-tight">{selected.name}</h2>
@@ -337,18 +342,18 @@ export default function HomeownerServicesPage({
             <div>
               <h3 className="text-sm font-semibold">How do you need this service?</h3>
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                <button type="button" onClick={() => setVisitMode("one_time")} className={`rounded-2xl border p-4 text-left motion-safe:transition motion-safe:hover:-translate-y-0.5 ${visitMode === "one_time" ? "border-primary bg-primary/10" : "border-border bg-card"}`}>
+                <button type="button" aria-pressed={visitMode === "one_time"} onClick={() => setVisitMode("one_time")} className={`rounded-2xl border p-4 text-left motion-safe:transition motion-safe:hover:-translate-y-0.5 ${visitMode === "one_time" ? "border-primary bg-primary/10" : "border-border bg-card"}`}>
                   <span className="font-semibold">One-Time Service</span>
                   <span className="mt-1 block text-sm text-muted-foreground">Best for a single service visit.</span>
                 </button>
-                <button type="button" onClick={() => setVisitMode("recurring")} className={`rounded-2xl border p-4 text-left motion-safe:transition motion-safe:hover:-translate-y-0.5 ${visitMode === "recurring" ? "border-primary bg-primary/10" : "border-border bg-card"}`}>
-                  <span className="font-semibold">Recurring Service</span>
+                <button type="button" aria-pressed={visitMode === "recurring"} onClick={() => setVisitMode("recurring")} className={`rounded-2xl border p-4 text-left motion-safe:transition motion-safe:hover:-translate-y-0.5 ${visitMode === "recurring" ? "border-primary bg-primary/10" : "border-border bg-card"}`}>
+                  <span className="font-semibold">Subscription / Recurring Service</span>
                   <span className="mt-1 block text-sm text-muted-foreground">Set a schedule and let FixBridge manage it.</span>
                 </button>
               </div>
             </div>
           ) : null}
-          <div>
+          {(!selected.subscriptionEligible || !selected.oneTimeAvailable || visitMode) ? <div>
             <h3 className="text-sm font-semibold">Choose your next step</h3><p className="mt-1 text-sm text-muted-foreground">Add your details and property address next. Professional requests continue to scheduling and a pricing review before checkout.</p>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
               {selected.oneTimeAvailable && visitMode !== "recurring" ? (
@@ -380,15 +385,17 @@ export default function HomeownerServicesPage({
                 </button>
               ) : null}
             </div>
-          </div>
+          </div> : <p role="status" className="text-sm text-muted-foreground">Choose a one-time visit or subscription above to continue.</p>}
         </div>
       ) : null}
       {selected && setup ? (
         <div className="space-y-4 rounded-2xl border border-border bg-card p-4">
-          <button type="button" onClick={() => setSetup(false)} className="text-sm font-semibold text-primary">
+          <button type="button" onClick={() => step > 0 ? setStep(step - 1) : setSetup(false)} className="text-sm font-semibold text-primary">
             Back
           </button>
-          <h2 className="text-lg font-semibold">{selected.name}</h2>
+          <p className="service-eyebrow">Recurring service setup · Step {step + 1} of 4</p>
+          <div className="flex items-center gap-3"><ServiceThumb name={selected.name} serviceId={selected.id} category={selected.category} sizes="80px" className="h-16 w-20 shrink-0" /><h2 className="text-lg font-semibold">{selected.name}</h2></div>
+          <p className="text-sm text-muted-foreground">Frequency → Schedule → Preferences → Review. FixBridge coordinates contractors; submitting does not assign a contractor or approve visit pricing.</p>
           {step === 0 ? (
             <div className="space-y-3">
               <p className="text-sm font-medium">How often do you need this service?</p>
@@ -437,18 +444,21 @@ export default function HomeownerServicesPage({
               </div>
               <label className="block text-sm">
                 Preferred start
-                <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="mt-1 min-h-11 w-full rounded-xl border border-border px-3" />
+                <input type="date" min={new Date().toISOString().slice(0, 10)} value={startDate} onChange={(e) => setStartDate(e.target.value)} className="mt-1 min-h-11 w-full rounded-xl border border-border px-3" />
               </label>
-              <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes for FixBridge" className="min-h-20 w-full rounded-xl border border-border p-3 text-sm" />
-              <button type="button" onClick={() => setStep(3)} className="min-h-11 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white">Review</button>
+              <textarea aria-label="Notes for FixBridge" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes for FixBridge" className="min-h-20 w-full rounded-xl border border-border p-3 text-sm" />
+              <button type="button" onClick={() => { if (startDate && startDate < new Date().toISOString().slice(0, 10)) { setMessage("Choose today or a future start date."); return; } setMessage(null); setStep(3); }} className="min-h-11 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white">Review</button>
             </div>
           ) : null}
           {step === 3 ? (
             <div className="space-y-3 text-sm">
               <p>Service: {selected.name}</p>
               <p>Frequency: {frequencyLabel(recurrence)}</p>
+              <p>Preferred start: {startDate || "Today / next available"}</p>
               <p>Preferred day: {day}</p>
               <p>Preferred time: {time}</p>
+              <p>Notes: {notes || "None"}</p>
+              {["custom", "per_snow_event"].includes(recurrence) ? <p className="text-muted-foreground">FixBridge will coordinate dates for this custom or event-based schedule with you.</p> : null}
               <p>Commitment: {COMMITMENTS.find((c) => c.id === commitment)?.label}</p>
               <p>Property: {property ? [property.addressLine1, property.city].filter(Boolean).join(", ") : "Select a property on Home"}</p>
               <p className="text-muted-foreground">FixBridge will review your service requirements and work with qualified local professionals to secure the best available pricing for your recurring service.</p>
@@ -463,10 +473,11 @@ export default function HomeownerServicesPage({
               </button>
             </div>
           ) : null}
-          {message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
+          {message ? <p role="status" className="text-sm text-muted-foreground">{message}</p> : null}
         </div>
       ) : null}
       {message && !setup ? <p role="status" className="service-catalog-notice">{message}</p> : null}
+      <a className="service-photo-credits" href="/brand/service-photos/credits.html" target="_blank" rel="noopener noreferrer">Service photo credits</a>
     </section>
   );
 }

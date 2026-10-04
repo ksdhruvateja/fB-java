@@ -1,3 +1,5 @@
+import { ServiceThumb } from "./serviceVisuals";
+import { HOMEOWNER_SERVICES } from "./homeownerCategories";
 import RepairPhotoPicker from "./RepairPhotoPicker";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
@@ -18,6 +20,7 @@ import {
   SERVICE_LOCATION_OPTIONS,
   serviceRequestTitle,
   tradeToCategory,
+  categoryToTradeId,
   resolveRequestTradeId,
   inferTradeFromDescription,
   type AdaptiveAnswers,
@@ -111,6 +114,7 @@ type Props = {
   intakePhase: IntakePhase;
   setIntakePhase: (p: IntakePhase) => void;
   requestSystemId: string;
+  serviceCategory?: string;
   setRequestSystemId: (id: string) => void;
   setCategory: (c: string) => void;
   issueArea: ServiceLocation | "";
@@ -239,6 +243,7 @@ export default function HomeownerServiceIntake(props: Props) {
     intakePhase,
     setIntakePhase,
     requestSystemId,
+    serviceCategory,
     setRequestSystemId,
     setCategory,
     issueArea,
@@ -350,9 +355,23 @@ export default function HomeownerServiceIntake(props: Props) {
               Describe the issue and add a photo if it helps clarify what is happening.
             </p>
             {requestSystemId ? (
-              <p className="mt-2 text-sm font-semibold">Selected service: {tradeToCategory(resolvedTradeId)}</p>
+              <div className="mt-2 flex items-center gap-3"><ServiceThumb name={serviceCategory || tradeToCategory(resolvedTradeId)} className="h-16 w-20" /><p className="text-sm font-semibold">Selected service: {serviceCategory || tradeToCategory(resolvedTradeId)}</p></div>
             ) : null}
           </div>
+          <label className="grid gap-1.5 text-sm">
+            <span className="font-semibold">Service category</span>
+            <select aria-label="Service category" value={serviceCategory || (requestSystemId ? tradeToCategory(resolvedTradeId) : "")} disabled={busy} onChange={(event) => {
+              const nextCategory = event.target.value;
+              setCategory(nextCategory);
+              setRequestSystemId(nextCategory ? categoryToTradeId(nextCategory) : "");
+              setAdaptiveAnswers({});
+              setEquipmentKey("");
+            }} className="rounded-xl border border-border bg-background p-3">
+              <option value="">Choose a service</option>
+              {HOMEOWNER_SERVICES.map((category) => <option key={category} value={category}>{category}</option>)}
+            </select>
+            {serviceCategory === "Other" ? <span className="text-xs text-muted-foreground">Describe the service you need in the issue description below.</span> : null}
+          </label>
           {equipmentOptions.length > 0 ? (
             <label className="grid gap-1.5 text-sm">
               <span className="font-semibold">Equipment (optional)</span>
@@ -404,8 +423,9 @@ export default function HomeownerServiceIntake(props: Props) {
           </button>
           <label className="grid gap-1.5 text-sm">
             <span className="font-semibold">Property address</span>
-            <select aria-label="Property address" value={propertyId} onChange={(event) => setPropertyId(event.target.value ? Number(event.target.value) : "")} className="rounded-xl border border-border bg-background p-3">
+            <select aria-label="Property address" value={propertyId} onChange={(event) => { if (event.target.value === "__add_property__") { onAddAddress(); return; } setPropertyId(event.target.value ? Number(event.target.value) : ""); }} className="rounded-xl border border-border bg-background p-3">
               <option value="">Select a property</option>
+              <option value="__add_property__">Add new property</option>
               {properties.map((property) => <option key={property.id} value={property.id}>{[property.label, property.addressLine1, property.city, property.state].filter(Boolean).join(" · ")}</option>)}
             </select>
             <button type="button" onClick={onAddAddress} className="justify-self-start text-xs font-semibold text-primary">Add a new address</button>
@@ -490,7 +510,7 @@ export default function HomeownerServiceIntake(props: Props) {
             <ArrowLeft size={14} /> Back
           </button>
           <div className="rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm">
-            <p className="font-semibold">{serviceRequestTitle(issueArea, resolvedTradeId)}</p>
+            <div className="flex items-center gap-3"><ServiceThumb name={serviceCategory || tradeToCategory(resolvedTradeId)} className="h-16 w-20" /><p className="font-semibold">{serviceRequestTitle(issueArea, resolvedTradeId)}</p></div>
             <p className="mt-1 line-clamp-3 text-muted-foreground">{description}</p>
           </div>
 

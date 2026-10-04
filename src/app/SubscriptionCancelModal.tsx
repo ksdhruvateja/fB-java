@@ -4,10 +4,14 @@ export default function SubscriptionCancelModal({
   open,
   onClose,
   onTryAgain,
+  checking = false,
+  membershipActive = false,
 }: {
   open: boolean;
   onClose: () => void;
   onTryAgain?: () => void;
+  checking?: boolean;
+  membershipActive?: boolean;
 }) {
   if (!open) return null;
 
@@ -27,23 +31,24 @@ export default function SubscriptionCancelModal({
           <div className="flex h-14 w-14 items-center justify-center rounded-full bg-amber-500/15 text-amber-700">
             <AlertCircle className="h-8 w-8" strokeWidth={2} />
           </div>
-          <h2 className="mt-4 text-xl font-bold">Payment Not Completed</h2>
+          <h2 className="mt-4 text-xl font-bold">{checking ? "Checking Checkout Status" : membershipActive ? "Membership Active" : "Checkout Closed"}</h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            Your plan has not been activated. No successful transaction was recorded.
+            {checking ? "Checking your membership with verified billing information." : membershipActive ? "Your HomeCare Pro membership is active. You can return to your saved request." : "Your membership is not confirmed as active. Closing checkout does not confirm a payment or cancel a pending payment. Your saved request is available when you return."}
           </p>
         </div>
 
         <div className="mt-5 flex flex-col gap-2">
-          <button
+          {!membershipActive ? <button
             type="button"
+            disabled={checking}
             onClick={() => {
               onTryAgain?.();
               onClose();
             }}
             className="inline-flex w-full items-center justify-center rounded-xl bg-[#FF4D1C] px-4 py-3 text-sm font-semibold text-white"
           >
-            Try Again
-          </button>
+            View Plans
+          </button> : null}
           <button
             type="button"
             onClick={onClose}

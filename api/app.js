@@ -1,4 +1,7 @@
+import { validateSelectedServiceIds } from './contractor-service-capabilities.js';
+import { isContractorEligibleForJob } from './contractor-matching.js';
 import { assertPendingBookingPayment } from './professional-booking-checkout.js';
+import { checkoutPaymentState, reconcileSubscriptionCheckoutPayment } from './checkout-payment-state.js';
 import { resolveRuntimeDatabase } from './runtime-database-config.js';
 import { normalizeRepairPhotos, repairPhotosFromRow } from './repair-photos.js';
 import { getHomeCareEntitlement } from './subscription-state.js';
@@ -1054,9 +1057,9 @@ function rowToNotification(r) {
 
 async function notifyMatchingContractors(job) {
   const { rows: contractors } = await pool.query(
-    `SELECT id, trade FROM users WHERE role='contractor' AND is_blocked=false`
+    `SELECT u.*, a.temporary_unavailable FROM users u LEFT JOIN contractor_availability a ON a.contractor_user_id=u.id WHERE u.role='contractor' AND u.is_blocked=false`
   );
-  const matching = contractors.filter((c) => contractorTradeMatchesCategory(c.trade, job.category));
+  const matching = contractors.filter((c) => isContractorEligibleForJob(c, job));
   const jobLabel = job.booking_id || job.bookingId || `JOB-${job.id}`;
   const title = job.urgent ? 'Urgent job in your trade' : 'New job in your trade';
   const message = `${jobLabel} · ${job.category}: ${job.title}`;
@@ -1428,6 +1431,7 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
 
     if (role === 'contractor') {
       const app = contractorApplication && typeof contractorApplication === 'object' ? contractorApplication : null;
+      if (app?.selectedServiceIds !== undefined && !validateSelectedServiceIds(app.selectedServiceIds)) return res.status(400).json({ ok: false, message: 'Choose valid homeowner services.' });
       if (!app) {
         return res.status(400).json({ ok: false, message: 'Contractor application details are required.' });
       }
@@ -1618,9 +1622,13 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
         const stripe = await getStripe();
         if (stripe) {
           const session = await stripe.checkout.sessions.retrieve(payment.stripe_session_id);
-          if (session.payment_status === 'paid' || session.status === 'complete') {
+          if (payment.payment_type === 'subscription') {
+            if (Number(session.metadata?.userId || session.metadata?.homeownerId) !== Number(req.authUser.id)) continue;
+            await reconcileSubscriptionCheckoutPayment(pool, session);
+          }
+          if (payment.payment_type === 'subscription' ? checkoutPaymentState(session) === 'succeeded' : session.payment_status === 'paid' || session.status === 'complete') {
             await pool.query(
-              `UPDATE payments SET status='succeeded' WHERE id=$1`,
+              `UPDATE payments SET status='succeeded' WHERE id=$1 AND status IN ('pending','failed','cancelled','canceled','succeeded')`,
               [payment.id]
             );
             const planCode = session.metadata?.planCode;
@@ -1720,10 +1728,22 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
   }
 });
 
+app.put('/api/contractor/service-capabilities', requireAuth, async (req, res) => {
+ if (req.authUser.role !== 'contractor') return res.status(403).json({ ok: false, message: 'Contractor access required.' });
+ const ids = req.body?.selectedServiceIds;
+ if (!validateSelectedServiceIds(ids)) return res.status(400).json({ ok: false, message: 'Choose valid homeowner services.' });
+ try {
+ const { rows } = await pool.query("UPDATE users SET contractor_application=COALESCE(contractor_application,'{}'::jsonb) || $1::jsonb WHERE id=$2 AND role='contractor' RETURNING *", [JSON.stringify({ selectedServiceIds: ids }), req.authUser.id]);
+ if (!rows.length) return res.status(404).json({ ok: false, message: 'Contractor not found.' });
+ return res.json({ ok: true, user: rowToUser(rows[0]) });
+ } catch (e) { return res.status(500).json({ ok: false, message: 'Could not save services. Please retry.' }); }
+});
+
 // ── PUT /api/auth/profile — update signed-in user's My Profile fields ─────────
 app.put('/api/auth/profile', requireAuth, async (req, res) => {
   try {
     const body = req.body || {};
+    if (body.contractorApplication?.selectedServiceIds !== undefined && !validateSelectedServiceIds(body.contractorApplication.selectedServiceIds)) return res.status(400).json({ ok: false, message: 'Choose valid homeowner services.' });
     const name = typeof body.name === 'string' ? body.name.trim() : '';
     if (!name) {
       return res.status(400).json({ ok: false, message: 'Name is required.' });
@@ -2556,7 +2576,8 @@ app.get('/api/jobs', requireAuth, async (req, res) => {
     if (req.authUser.role === 'admin') {
       return res.json(rows.map(rowToJob));
     }
-    return res.json(rows.map(rowToJobBoard));
+    const { rows: providers } = await pool.query('SELECT u.*, a.temporary_unavailable FROM users u LEFT JOIN contractor_availability a ON a.contractor_user_id=u.id WHERE u.id=$1', [req.authUser.id]);
+    return res.json(rows.filter(job => isContractorEligibleForJob(providers[0], job)).map(rowToJobBoard));
   } catch (e) {
     console.error('jobs list:', e);
     return res.status(500).json({ error: publicErrorMessage(e) });
@@ -2670,6 +2691,8 @@ app.put('/api/lifecycle/:jobId/status', requireAuth, async (req, res) => {
       contractorEmail = clampString(req.body?.contractorEmail, 200) || null;
     } else if (req.authUser.role === 'contractor') {
       if (status === 'accepted') {
+        const { rows: providers } = await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id]);
+        if (!isContractorEligibleForJob(providers[0], access.job)) return res.status(403).json({ error: 'This service is not eligible for your current capabilities and coverage.' });
         contractorName = req.authUser.name || null;
         contractorEmail = req.authUser.email;
       } else if (!access.mutate) {

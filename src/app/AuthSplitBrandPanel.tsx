@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import RoleBrandLogo from "./RoleBrandLogo";
 import { BrandLogo } from "./BrandLogo";
 import { brand } from "../config/brand";
 import { AUTH_ROLE_PHOTOS } from "./authRoleAssets";
@@ -36,7 +37,7 @@ export default function AuthSplitBrandPanel({
   const photo = AUTH_ROLE_PHOTOS[role];
 
   const logo = (
-    <BrandLogo variant="auth" tone="color" className="brightness-0 invert drop-shadow-sm" />
+    role === "homeowner" ? <BrandLogo variant="auth" tone="color" className="brightness-0 invert drop-shadow-sm" /> : <RoleBrandLogo />
   );
 
   return (

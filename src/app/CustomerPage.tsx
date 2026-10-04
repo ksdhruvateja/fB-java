@@ -246,19 +246,7 @@ export default function CustomerPage({
               </p>
             </ScrollReveal>
             <ScrollReveal delay={0.16}>
-              <FixeraAboutVisual />
-              <ul className="grid grid-cols-2 gap-x-5 gap-y-3 mt-6">
-                {[
-                  "Property-aware AI assessment",
-                  "Optional photos and clear next steps",
-                  "Guidance only when appropriate",
-                  "One issue, from assessment to professional help",
-                ].map((line) => (
-                  <li key={line} className="text-xs leading-relaxed text-muted-foreground flex gap-2">
-                    <span className="text-primary" aria-hidden="true">↗</span> {line}
-                  </li>
-                ))}
-              </ul>
+              <FixeraAboutVisual onGetStarted={onGetStarted} />
             </ScrollReveal>
           </div>
         </div>

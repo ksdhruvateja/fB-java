@@ -1,3 +1,4 @@
+import { ServiceThumb } from "./serviceVisuals";
 import { useState } from "react";
 import JobTimelinePanel from "./JobTimelinePanel";
 import {
@@ -165,7 +166,8 @@ export default function ServiceTrackingCard({
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
             {formatRequestNumber(job)}
           </p>
-          <h2 className="mt-1 text-xl font-semibold tracking-tight sm:text-2xl">
+          <ServiceThumb name={job.category || job.title} className="mt-2 h-16 w-20" />
+            <h2 className="mt-1 text-xl font-semibold tracking-tight sm:text-2xl">
             {job.title || job.category || "Service request"}
           </h2>
           <p className="mt-2 inline-flex max-w-full items-center rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">

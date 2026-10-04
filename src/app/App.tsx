@@ -575,8 +575,12 @@ export default function App() {
   const [resetParams, setResetParams] = useState<{ token: string; role: ResetRole } | null>(null);
   const [subscriptionSuccessPlan, setSubscriptionSuccessPlan] = useState<string | null>(null);
   const [showSubscriptionSuccess, setShowSubscriptionSuccess] = useState(false);
+  const [confirmedSubscriptionUserId, setConfirmedSubscriptionUserId] = useState<string | null>(null);
   const [subscriptionActivating, setSubscriptionActivating] = useState(false);
+  const [subscriptionConfirmationDelayed, setSubscriptionConfirmationDelayed] = useState(false);
   const [showSubscriptionCancel, setShowSubscriptionCancel] = useState(false);
+  const [subscriptionCancelChecking, setSubscriptionCancelChecking] = useState(false);
+  const [subscriptionCancelActive, setSubscriptionCancelActive] = useState(false);
   const [postPaymentDashboard, setPostPaymentDashboard] = useState(false);
   const [legalPath, setLegalPath] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
@@ -734,6 +738,8 @@ export default function App() {
       }
       if (params.get("paid") === "subscription") {
         const returnTo = params.get("returnTo");
+        const upgradeOwner = sessionStorage.getItem("fixbridge.ai-after-plan");
+        if (upgradeOwner && upgradeOwner === String(getStoredUser()?.id)) sessionStorage.setItem("fixbridge.ai-upgrade-return", upgradeOwner);
         if (returnTo) {
           try {
             sessionStorage.setItem("fixbridge-upgrade-return", returnTo);
@@ -743,6 +749,7 @@ export default function App() {
         }
         if (planCode) setSubscriptionSuccessPlan(planCode);
         setSubscriptionActivating(true);
+        setSubscriptionConfirmationDelayed(false);
         setShowSubscriptionSuccess(true);
         setPostPaymentDashboard(returnTo !== "diy" && returnTo !== "report" && returnTo !== "hire");
         validateToken({ syncCheckout: true }).then((result) => {
@@ -754,18 +761,29 @@ export default function App() {
             // Plan activates only after verified webhook — poll until plan_code matches.
             const expected = planCode || PAID_HOME_CARE_PLAN_CODE;
             if (
-              hasProEntitlement(result.user.planCode, result.user.homeCareSubscription) &&
+              result.source !== "cached" && hasProEntitlement(result.user.planCode, result.user.homeCareSubscription) &&
               (result.user.planCode === expected ||
                 (isPaidHomeCarePlan(expected) && isPaidHomeCarePlan(result.user.planCode)))
             ) {
+              setConfirmedSubscriptionUserId(String(result.user.id));
               setSubscriptionActivating(false);
             }
           }
         });
       }
       if (params.get("canceled") === "subscription") {
+        sessionStorage.removeItem("fixbridge.ai-upgrade-return");
         setShowSubscriptionCancel(true);
-        setPage("go-pro");
+        setSubscriptionCancelChecking(true);
+        setSubscriptionCancelActive(false);
+        setPage(getStoredUser()?.role === "homeowner" ? "homeowner-dashboard" : "go-pro");
+        validateToken({ syncCheckout: true }).then(result => {
+          if (result.ok) {
+            setCurrentUser(result.user);
+            if (result.user.role === "homeowner") setPage("homeowner-dashboard");
+            setSubscriptionCancelActive(result.source !== "cached" && hasProEntitlement(result.user.planCode, result.user.homeCareSubscription));
+          }
+        }).finally(() => setSubscriptionCancelChecking(false));
       }
       params.delete("paid");
       params.delete("canceled");
@@ -903,6 +921,15 @@ export default function App() {
     }
   }, [page, marketingContext]);
 
+  // A refresh after checkout must reverify server entitlement, never trust the return URL.
+  useEffect(() => {
+    const owner = sessionStorage.getItem("fixbridge.ai-upgrade-return");
+    if (owner && owner === String(getStoredUser()?.id)) {
+      setShowSubscriptionSuccess(true);
+      setSubscriptionActivating(true);
+    }
+  }, []);
+
   // After Stripe Checkout return, poll until webhook activates plan_code.
   useEffect(() => {
     if (!showSubscriptionSuccess || !subscriptionActivating) return;
@@ -916,14 +943,19 @@ export default function App() {
       if (result.ok) {
         setCurrentUser(result.user);
         if (
-          hasProEntitlement(result.user.planCode, result.user.homeCareSubscription) &&
+          result.source !== "cached" && hasProEntitlement(result.user.planCode, result.user.homeCareSubscription) &&
           (result.user.planCode === expected ||
             (isPaidHomeCarePlan(expected) && isPaidHomeCarePlan(result.user.planCode)) ||
             attempts >= 20)
         ) {
+          setConfirmedSubscriptionUserId(String(result.user.id));
           setSubscriptionActivating(false);
           return;
         }
+      }
+      if (attempts >= 20) {
+        setSubscriptionConfirmationDelayed(true);
+        return;
       }
       window.setTimeout(() => void tick(), 1500);
     };
@@ -1155,6 +1187,8 @@ export default function App() {
 
           <SubscriptionCancelModal
             open={showSubscriptionCancel}
+            checking={subscriptionCancelChecking}
+            membershipActive={subscriptionCancelActive}
             onClose={() => setShowSubscriptionCancel(false)}
             onTryAgain={() => {
               setShowSubscriptionCancel(false);
@@ -1259,7 +1293,9 @@ export default function App() {
               }
               showSubscriptionSuccess={showSubscriptionSuccess}
               subscriptionSuccessPlanCode={subscriptionSuccessPlan}
+              confirmedSubscriptionUserId={confirmedSubscriptionUserId}
               subscriptionActivating={subscriptionActivating}
+              subscriptionConfirmationDelayed={subscriptionConfirmationDelayed}
               onDismissSubscriptionSuccess={() => {
                 setShowSubscriptionSuccess(false);
                 setSubscriptionSuccessPlan(null);
