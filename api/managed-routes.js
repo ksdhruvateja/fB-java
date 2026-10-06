@@ -12,6 +12,7 @@ function requireSelectedContractorService(contractor, job, res) {
 
 // FIXBRIDGE_STAGE_B_CONTRACTOR_BIDS_PROFILE_FINAL
 import crypto from 'crypto';
+import { reportedMaterials } from './reported-materials.js';
 import bcrypt from 'bcryptjs';
 import {
   mergePricingRules,
@@ -2548,11 +2549,33 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     return propertySystemLabelFromKey(homeSystemKeyFromJob({ category: s, title: s })) || s;
   }
 
+  // Commit the repair outcome and its property history together. Buffer the HTTP
+  // response so a failed write cannot report success before rollback.
+  function outcomeTransaction(handler, failureCode = 'DIY_OUTCOME_SAVE_FAILED') {
+    return async (req, res) => {
+      let client;
+      let status = 200, payload;
+      const response = { status(code) { status = code; return this; }, json(value) { payload = value; return this; } };
+      try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        await handler(req, response, client);
+        await client.query(status >= 400 ? 'ROLLBACK' : 'COMMIT');
+        return res.status(status).json(payload);
+      } catch (error) {
+        if (client) await client.query('ROLLBACK').catch(() => {});
+        return res.status(500).json({ ok: false, code: failureCode, message: 'Could not save the record. Please retry.' });
+      } finally { client?.release(); }
+    };
+  }
+
   /** Update passport home_systems + health history when a FixBridge job completes. */
   async function syncPropertyHistoryFromCompletedJob(pool, job, report) {
     if (!job.property_id) return;
-    const { rows: props } = await pool.query(`SELECT * FROM properties WHERE id=$1`, [job.property_id]);
-    if (!props[0]) return;
+    const access = await assertPropertyAccess(pool, job.property_id, job.homeowner_user_id);
+    if (!access) throw new Error('Property access could not be verified for completion history.');
+    const { rows: props } = await pool.query('SELECT * FROM properties WHERE id=$1 AND owner_user_id=$2', [job.property_id, access.owner_user_id]);
+    if (!props[0]) throw new Error('Property was not found for completion history.');
 
     const completedAt = report?.completedAt || new Date().toISOString();
     const completedDate = completedAt.slice(0, 10);
@@ -2608,7 +2631,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       else systems.push(entry);
     }
 
-    const previousServices = Array.isArray(profile.previousServices) ? [...profile.previousServices] : [];
+    const previousServices = Array.isArray(profile.previousServices) ? profile.previousServices.filter(entry => entry?.id !== `job-${job.id}`) : [];
     previousServices.unshift({
       id: `job-${job.id}`,
       system: propSystem || 'Other',
@@ -2619,12 +2642,18 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         .join(' · ')
         .slice(0, 400),
       relatedJobId: Number(job.id),
+      equipmentKey: job.equipment_key || systemKey || null,
+      source: report?.completedBy?.role === 'admin' ? 'ADMIN_REPORTED' : 'CONTRACTOR_REPORTED',
+      verification: job.customer_confirmed_at ? 'CUSTOMER_CONFIRMED' : 'TECHNICIAN_REPORTED',
+      diagnosis: report?.actualDiagnosis || report?.diagnosis || report?.findings || null,
+      repair: report?.actualRepair || report?.repairPerformed || report?.summary || null,
+      partsUsed: reportedMaterials(report),
     });
 
     const homeUpdateState = profile.homeUpdateState && typeof profile.homeUpdateState === 'object'
       ? { ...profile.homeUpdateState }
       : {};
-    const history = Array.isArray(homeUpdateState.history) ? [...homeUpdateState.history] : [];
+    const history = Array.isArray(homeUpdateState.history) ? homeUpdateState.history.filter(entry => entry?.id !== `job-${job.id}-resolved`) : [];
     history.unshift({
       id: `job-${job.id}-resolved`,
       systemLabel: propSystem || systemKey || 'Home system',
@@ -2644,10 +2673,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       homeUpdateState,
     };
 
-    await pool.query(`UPDATE properties SET home_systems=$1, health_profile=$2 WHERE id=$3`, [
+    await pool.query(`UPDATE properties SET home_systems=$1, health_profile=$2 WHERE id=$3 AND owner_user_id=$4`, [
       JSON.stringify(homeSystems),
       JSON.stringify(nextProfile),
       job.property_id,
+      access.owner_user_id,
     ]);
 
     try {
@@ -2688,7 +2718,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     const source = String(memorySource || 'contractor').slice(0, 40);
     const { rows: existing } = await pool.query(
       `SELECT id FROM property_memory_suggestions
-       WHERE property_id=$1 AND owner_user_id=$2 AND source_ref=$3 AND status='pending'
+       WHERE property_id=$1 AND owner_user_id=$2 AND source_ref=$3
          AND source IN ('contractor','completed_job','admin','ai_extraction')`,
       [job.property_id, job.homeowner_user_id, String(job.id)]
     );
@@ -2774,6 +2804,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         notes: d.notes,
         systemKey: d.system_key,
         createdAt: d.created_at,
+        analysisStatus: 'not_analyzed',
       })),
       healthProfile,
       timezone: r.timezone || null,
@@ -3181,21 +3212,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       );
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Document not found.' });
       const d = rows[0];
-      const result = await extractDocument({
-        category: d.category,
-        title: d.title,
-        fileName: d.file_name,
-        mimeType: d.mime_type,
-        notes: d.notes,
-        dataUrl: d.data_url,
-        systemKey: d.system_key,
-      });
+      // No supported local parser exists for the accepted formats. Never send vault
+      // file bytes to a provider merely to review saved property details.
       res.json({
         ok: true,
-        extraction: result.extraction,
-        source: result.source,
-        model: result.model || null,
-        message: result.error || null,
+        extraction: { systemKey: d.system_key || '' },
+        source: 'not_analyzed',
+        analysisStatus: 'not_analyzed',
+        message: 'File saved. Contents have not been analyzed. Enter only details you have reviewed yourself.',
       });
     } catch (e) {
       console.error(e);
@@ -3203,7 +3227,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
-  app.post('/api/properties/:id/documents/:docId/apply-extract', requireAuth, requireHomeCareFeature('document_vault'), async (req, res) => {
+  app.post('/api/properties/:id/documents/:docId/apply-extract', requireAuth, requireHomeCareFeature('document_vault'), outcomeTransaction(async (req, res, pool) => {
     try {
       const propertyId = Number(req.params.id);
       const docId = Number(req.params.docId);
@@ -3212,7 +3236,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         return res.status(400).json({ ok: false, message: 'extraction is required.' });
       }
       const { rows: owned } = await pool.query(
-        `SELECT * FROM properties WHERE id=$1 AND owner_user_id=$2`,
+        `SELECT * FROM properties WHERE id=$1 AND owner_user_id=$2 FOR UPDATE`,
         [propertyId, req.authUser.id]
       );
       if (!owned[0]) return res.status(404).json({ ok: false, message: 'Property not found.' });
@@ -3255,23 +3279,27 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         if (extraction.date) patch.lastInspection = String(extraction.date).slice(0, 32);
       }
 
+      patch.documentSourceRefs = [
+        ...(idx >= 0 && Array.isArray(homeSystems[idx].documentSourceRefs) ? homeSystems[idx].documentSourceRefs.filter(ref => Number(ref.documentId) !== docId) : []),
+        { documentId: docId, source: 'HOMEOWNER_REVIEWED', verification: 'HOMEOWNER_REPORTED', reviewedAt: new Date().toISOString() },
+      ];
       if (idx >= 0) homeSystems[idx] = { ...homeSystems[idx], ...patch };
       else homeSystems.push(patch);
 
       if (extraction.systemKey) {
         await pool.query(
-          `UPDATE property_documents SET system_key=$1, notes=COALESCE($2, notes) WHERE id=$3`,
+          `UPDATE property_documents SET system_key=$1, notes=COALESCE($2, notes) WHERE id=$3 AND property_id=$4 AND owner_user_id=$5`,
           [
             String(extraction.systemKey).slice(0, 60),
             extraction.summary ? String(extraction.summary).slice(0, 500) : null,
-            docId,
+            docId, propertyId, req.authUser.id,
           ]
         );
       }
 
-      await pool.query(`UPDATE properties SET home_systems=$1 WHERE id=$2`, [
+      await pool.query(`UPDATE properties SET home_systems=$1 WHERE id=$2 AND owner_user_id=$3`, [
         JSON.stringify(homeSystems),
-        propertyId,
+        propertyId, req.authUser.id,
       ]);
       const docsAll = await loadPropertyDocuments(propertyId, req.authUser.id);
       const { rows: fresh } = await pool.query(`SELECT * FROM properties WHERE id=$1`, [propertyId]);
@@ -3280,7 +3308,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       console.error(e);
       res.status(500).json({ ok: false, message: 'Could not apply extraction.' });
     }
-  });
+  }, 'DOCUMENT_REVIEW_SAVE_FAILED'));
 
   app.put('/api/properties/:id/health', requireAuth, async (req, res) => {
     try {
@@ -4312,7 +4340,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
-  app.post('/api/managed/jobs/:id/fixera-diy', requireAuth, async (req, res) => {
+  app.post('/api/managed/jobs/:id/fixera-diy', requireAuth, outcomeTransaction(async (req, res, pool) => {
     try {
       if (!(await getHomeCareEntitlement(pool, req.authUser.id)).hasAccess) {
         return res.status(403).json({ ok: false, code: 'HOMECARE_PLAN_REQUIRED', message: 'An active HomeCare plan is required for DIY guidance.' });
@@ -4323,7 +4351,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
       const { rows } = await pool.query(
         `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, ai_assessment, completion_report
-         FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2`,
+         FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2 FOR UPDATE`,
         [jobId, req.authUser.id]
       );
       const job = rows[0];
@@ -4349,10 +4377,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (event.startsWith('step_') && stepIndex >= diySteps.length) {
         return res.status(400).json({ ok: false, code: 'STEP_NOT_IN_ASSESSMENT', message: 'That repair step is not part of this assessment.' });
       }
-      const propertyAccess = event === 'fixed' && job.property_id
+      const recordsOutcome = event === 'fixed' || event === 'still_broken';
+      const propertyAccess = recordsOutcome && job.property_id
         ? await assertPropertyAccess(pool, job.property_id, req.authUser.id)
         : null;
-      if (event === 'fixed' && job.property_id && !propertyAccess) {
+      if (recordsOutcome && job.property_id && !propertyAccess) {
         return res.status(403).json({ ok: false, code: 'PROPERTY_ACCESS_DENIED', message: 'Property access could not be verified.' });
       }
       const outcomeList = (value) => [...new Set(String(value || '').split(/[,;\n]/).map((item) => item.trim().slice(0, 100)).filter(Boolean))].slice(0, 12);
@@ -4414,7 +4443,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         [JSON.stringify(nextReport), jobId, req.authUser.id]
       );
 
-      if (event === 'fixed' && job.property_id) {
+      if (recordsOutcome && job.property_id) {
         const { rows: propertyRows } = await pool.query(
           `SELECT health_profile, home_systems FROM properties WHERE id=$1 AND owner_user_id=$2`,
           [job.property_id, propertyAccess.owner_user_id]
@@ -4442,7 +4471,8 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           date: new Date().toISOString().slice(0, 10),
           notes: serviceNotes,
           source: 'HOMEOWNER_DIY',
-          verification: 'CUSTOMER_CONFIRMED_OUTCOME',
+          verification: event === 'fixed' ? 'CUSTOMER_CONFIRMED_OUTCOME' : 'CUSTOMER_REPORTED_STILL_BROKEN',
+          outcome,
           relatedJobId: jobId,
           equipmentKey: job.equipment_key || null,
           equipment: equipment ? { name: equipment.name || null, brand: equipment.brand || null, model: equipment.model || null } : null,
@@ -4465,7 +4495,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       console.error('[fixera-diy] outcome save failed', { jobId: req.params.id, error: e?.message || String(e) });
       return res.status(500).json({ ok: false, code: 'DIY_OUTCOME_SAVE_FAILED', message: 'Could not save the repair outcome.' });
     }
-  });
+  }));
 
   app.post('/api/managed/jobs/:id/assess', requireAuth, async (req, res) => {
     try {
@@ -9209,6 +9239,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
       const completedStatuses = ['work_completed', 'customer_review_pending', 'admin_review_pending', 'payout_pending', 'paid_out', 'closed'];
       if (job.completion_report && completedStatuses.includes(String(job.status))) {
+        try {
+          await syncPropertyHistoryFromCompletedJob(pool, job, parseJsonSafe(job.completion_report, {}) || {});
+        } catch (error) {
+          return res.status(500).json({ ok: false, code: 'PROPERTY_HISTORY_SYNC_FAILED', message: 'Work is completed, but the property record could not be saved. Retry to finish saving it.' });
+        }
         return res.json({ ok: true, alreadyCompleted: true, job: serializeJob(job, req.authUser) });
       }
       if (!['work_started', 'change_order_pending'].includes(String(job.status))) {
@@ -9229,6 +9264,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const report = {
         summary: req.body?.summary || '',
         materialsUsed: req.body?.materialsUsed || '',
+        partsUsed: reportedMaterials(req.body || {}),
         beforePhotoUrl: req.body?.beforePhotoUrl || null,
         afterPhotoUrl: req.body?.afterPhotoUrl || null,
         equipmentLabelPhotoUrl: req.body?.equipmentLabelPhotoUrl || null,
@@ -9343,10 +9379,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         await pushStatus(pool, jobId, 'work_completed', 'customer_review_pending', req.authUser.id, 'Awaiting remaining payment');
       }
 
+      let propertyHistorySaved = true;
       try {
         await syncPropertyHistoryFromCompletedJob(pool, { ...job, completion_report: JSON.stringify(report) }, report);
       } catch (_e) {
-        /* non-fatal */
+        propertyHistorySaved = false;
       }
 
       try {
@@ -9409,6 +9446,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
 
       const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      if (!propertyHistorySaved) return res.status(500).json({ ok: false, code: 'PROPERTY_HISTORY_SYNC_FAILED', message: 'Work is completed, but the property record could not be saved. Retry to finish saving it.' });
       res.json({ ok: true, job: serializeJob(fresh[0], req.authUser) });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Server error' });

@@ -12,7 +12,7 @@ export const MEMORY_TRUST = {
 
 export function trustLevelForRecord(record) {
   if (!record) return 0;
-  const verification = String(record.verification || record.modelConfirmed ? 'confirmed' : '').toLowerCase();
+  const verification = String(record.verification || (record.modelConfirmed ? 'confirmed' : '')).toLowerCase();
   const source = String(record.source || '').toLowerCase();
   if (verification === 'confirmed' || source === 'confirmed' || source === 'homeowner') {
     return MEMORY_TRUST.homeowner_confirmed;
@@ -35,7 +35,14 @@ export function canOverwriteMemory(existing, incoming) {
 }
 
 export function mergeEquipmentRecord(existing, incoming) {
-  if (!existing) return { ...incoming, verification: incoming.verification || 'confirmed', source: incoming.source || 'homeowner' };
+  if (!existing) {
+    const source = incoming.source || 'homeowner';
+    return {
+      ...incoming,
+      verification: incoming.verification || (['homeowner', 'confirmed'].includes(source) ? 'confirmed' : 'unconfirmed'),
+      source,
+    };
+  }
   if (!canOverwriteMemory(existing, incoming)) return existing;
   return {
     ...existing,

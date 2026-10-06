@@ -35,7 +35,7 @@ export function propertyMemoryFromRecord(property = {}) {
     property.previousServices || property.serviceHistory || health.previousServices || passport.previousServices
   );
   const equipment = homeSystems
-    .filter((item) => item && typeof item === 'object')
+    .filter((item) => item && typeof item === 'object' && item.ignored !== true && item.dismissed !== true)
     .slice(0, 20)
     .map((item) => {
       const key = String(item.key || item.name || 'equipment').trim();
