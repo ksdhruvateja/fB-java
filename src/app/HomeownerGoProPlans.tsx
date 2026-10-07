@@ -197,6 +197,7 @@ export default function HomeownerGoProPlans({
   onSubscribeSuccess,
   showFeatureMatrix = true,
   checkPricingUpdates = true,
+  headingLevel = "h1",
 }: {
   currentPlanCode?: string | null;
   busy?: boolean;
@@ -208,7 +209,9 @@ export default function HomeownerGoProPlans({
   onSubscribeSuccess?: (user: AuthUser) => void;
   showFeatureMatrix?: boolean;
   checkPricingUpdates?: boolean;
+  headingLevel?: "h1" | "h2";
 }) {
+  const Heading = headingLevel;
   const [plans, setPlans] = useState<GoProPlanCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -277,7 +280,7 @@ export default function HomeownerGoProPlans({
   if (plans.length === 0) {
     return (
       <section className="rounded-xl border border-border bg-card p-6" aria-label="HomeCare plans">
-        <h1 className="text-2xl font-semibold">HomeCare plans</h1>
+        <Heading className="text-2xl font-semibold">HomeCare plans</Heading>
         <p className="mt-3 text-sm text-muted-foreground">No subscription plans are available yet. Check back soon.</p>
       </section>
     );
@@ -308,9 +311,9 @@ export default function HomeownerGoProPlans({
       <section className={compact ? "space-y-4" : "mx-auto max-w-5xl space-y-6"}>
         {!compact && (
           <div className="text-center sm:text-left">
-            <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight sm:text-4xl">
+            <Heading className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase tracking-tight sm:text-4xl">
               HomeCare Subscription
-            </h1>
+            </Heading>
             <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
               FixBridge Free includes service requests, quotes, payments, and a basic home profile. HomeCare Pro adds AI assessment, safe DIY guidance, and year-round property
               management - maintenance, documents, recurring services, and priority routing.

@@ -1,3 +1,4 @@
+import { registerPublicSite } from './api/public-site.js';
 // Replit dev server — runs the Express API on port 3001
 import { randomUUID } from 'crypto'; // Imported to generate unique structural request tracking IDs
 import express from 'express';
@@ -18,12 +19,7 @@ app.use((req, res, next) => {
 });
 
 if (process.env.PORT) {
-  app.use(express.static(distDir));
-  app.get(/^(?!\/api(?:\/|$)).*/, (_req, res, next) => {
-    res.sendFile(path.join(distDir, 'index.html'), (err) => {
-      if (err) next(err);
-    });
-  });
+  registerPublicSite(app, distDir);
 }
 
 initDb()

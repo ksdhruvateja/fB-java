@@ -5,7 +5,7 @@ import {
   FileCheck, Bell, MessageSquare, DollarSign, Briefcase,
   Wrench, Zap, Flame, PaintBucket, Home, Layers, Hammer,
 } from "lucide-react";
-import { ScrollReveal, Counter, SectionLabel } from "./shared";
+import { ScrollReveal, SectionLabel } from "./shared";
 import { Icon3D } from "./Icon3D";
 import { BrandLogo } from "./BrandLogo";
 import { FeatureTileIcon } from "./FeatureTileIcon";
@@ -44,7 +44,7 @@ const BENEFITS = [
   {
     icon: FileCheck,
     title: "One-Time Verification",
-    desc: "License & insurance verified once. Not re-uploaded every job.",
+    desc: "License and insurance details reviewed where required. Keep records current.",
   },
   {
     icon: Briefcase,
@@ -80,10 +80,10 @@ const TRADES = [
 ];
 
 const STATS = [
-  { value: 312, suffix: "+", label: "Active Contractors" },
-  { value: 2847, suffix: "+", label: "Jobs Posted" },
-  { value: 60, suffix: "%", label: "Avg. Bid Close Rate" },
-  { value: 100, suffix: "%", label: "Secure Stripe Payouts" },
+  { value: "Scope", label: "Review requests" },
+  { value: "Quote", label: "Submit proposals" },
+  { value: "Track", label: "Keep work records" },
+  { value: "Pay", label: "Payment setup" },
 ];
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
@@ -241,7 +241,7 @@ export default function ContractorPage({
                     className="[font-family:'Barlow_Condensed',sans-serif] font-black leading-none text-foreground mb-2"
                     style={{ fontSize: "clamp(2rem,8vw,4.5rem)" }}
                   >
-                    <Counter value={stat.value} suffix={stat.suffix} decimal={stat.decimal} />
+                    {stat.value}
                   </div>
                   <p className="font-mono text-[9px] sm:text-[11px] tracking-widest text-muted-foreground uppercase leading-snug">
                     {stat.label}
@@ -371,21 +371,19 @@ export default function ContractorPage({
                 className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.9] mb-6"
                 style={{ fontSize: "clamp(2.5rem,5vw,4.5rem)" }}
               >
-                VERIFIED ONCE.
+                SUBMIT DETAILS.
                 <br />
-                <span className="text-primary">TRUSTED ALWAYS.</span>
+                <span className="text-primary">REVIEW STATUS.</span>
               </h2>
               <p className="text-muted-foreground text-lg leading-relaxed mb-8">
-                Upload your license and insurance once during onboarding. We verify it,
-                badge your profile, and homeowners see it on every bid. No re-uploading per
-                job, no paperwork friction — just professional credibility, automatic.
+                Submit the documents requested for your account and services. Approval and compliance status depend on review; keep information current when documents expire or requirements change.
               </p>
               <ul className="space-y-4">
                 {[
-                  "License number verified with state licensing board",
-                  "Insurance certificate stored & shown to homeowners",
-                  "Background check badge displayed on your profile",
-                  "Re-verification only when documents expire",
+                  "License details submitted for review where required",
+                  "Insurance documents and review status retained",
+                  "Badges depend on the recorded verification status",
+                  "Keep documents current as requirements change",
                 ].map((item, i) => (
                   <li key={i} className="flex items-start gap-3 text-muted-foreground">
                     <CheckCircle size={14} className="text-primary shrink-0 mt-0.5" />
@@ -400,7 +398,7 @@ export default function ContractorPage({
             <div className="relative aspect-[4/3] bg-muted overflow-hidden">
               <img
                 src="https://images.unsplash.com/photo-1504148455328-c376907d081c?w=800&h=600&fit=crop&auto=format"
-                alt="Trade tools ready for a verified job"
+                alt="Trade tools prepared for residential work"
                 className="w-full h-full object-cover"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-background/70 to-transparent" />
@@ -448,11 +446,10 @@ export default function ContractorPage({
               BUSINESS?
             </h2>
             <p className="text-white text-base sm:text-lg mb-6 max-w-md leading-relaxed">
-              Join 312+ licensed contractors already winning jobs on {brand.productName}. It takes 10 minutes to
-              apply. Zero dollars to join.
+              Explore contractor service coordination on {brand.productName}. Review account requirements, service categories and availability before applying.
             </p>
             <p className="text-sm font-medium text-white/95 leading-relaxed max-w-md">
-              Verified professionals · Secure payments · Nationwide coverage
+              Service requests · Proposal review · Work records
             </p>
           </ScrollReveal>
 

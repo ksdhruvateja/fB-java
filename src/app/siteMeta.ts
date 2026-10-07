@@ -1,77 +1,54 @@
-import { brand } from "../config/brand";
-
-export type SiteMetaPage =
-  | "home"
-  | "contractors"
-  | "about"
-  | "go-pro"
-  | "homeowner-login"
-  | "contractor-login"
-  | "admin-login"
-  | "partner"
-  | "homeowner-dashboard"
-  | "contractor-dashboard"
-  | "admin";
-
-const PAGE_TITLES: Record<SiteMetaPage, string> = {
-  home: "AI-Powered Home Repair & Property Care",
-  contractors: "For Contractors",
-  about: "About FixBridge and Fixera",
-  "go-pro": "HomeCare Pro",
-  "homeowner-login": "Homeowner Sign In",
-  "contractor-login": "Contractor Sign In",
-  "admin-login": "Admin Sign In",
-  partner: "Partner Portal",
-  "homeowner-dashboard": "Homeowner Dashboard",
-  "contractor-dashboard": "Contractor Dashboard",
-  admin: "Admin",
-};
-
-const DEFAULT_DESCRIPTION = brand.tagline;
-
-function absoluteAssetUrl(pathname: string) {
-  if (typeof window !== "undefined" && window.location?.origin) {
-    return new URL(pathname, window.location.origin).href;
-  }
-  const base = brand.siteUrl.replace(/\/$/, "");
-  return base ? `${base}${pathname}` : pathname;
-}
-
-function setMetaTag(attr: "name" | "property", key: string, content: string) {
-  if (typeof document === "undefined") return;
-  let el = document.head.querySelector(`meta[${attr}="${key}"]`) as HTMLMetaElement | null;
+import { pageMeta, structuredData, SITE_ORIGIN } from "../../shared/public-seo.js";
+import type { AppPage } from "./navigation";
+export type SiteMetaPage = AppPage;
+function setMeta(attr: "name" | "property", key: string, content: string) {
+  let el = document.head.querySelector('meta[' + attr + '="' + key + '"]') as HTMLMetaElement | null;
   if (!el) {
-    el = document.createElement("meta");
+    el = document.createElement('meta');
     el.setAttribute(attr, key);
     document.head.appendChild(el);
   }
   el.content = content;
 }
-
-/** Keep browser tab title and social preview meta in sync with the active page. */
-export function applySiteMeta(page: SiteMetaPage) {
-  if (typeof document === "undefined") return;
-
-  const pageTitle = PAGE_TITLES[page] ?? brand.productName;
-  const title = page === "home" ? `${brand.productName} — ${pageTitle}` : `${pageTitle} · ${brand.productName}`;
-  const description = DEFAULT_DESCRIPTION;
-  const image = absoluteAssetUrl("/og-image.png");
-  const url = typeof window !== "undefined" ? window.location.href : brand.siteUrl || "/";
-
+export function applySiteMeta(page: SiteMetaPage, path = '', search = '') {
+  if (typeof document === 'undefined') return;
+  const meta = pageMeta(page);
+  const special = path.startsWith('/legal') || path === '/reset-password' || path === '/marketing/unsubscribe' || new URLSearchParams(search).has('action') || new URLSearchParams(search).has('paid') || new URLSearchParams(search).has('portal');
+  const privatePage = Boolean(meta.private || special);
+  const title = special ? 'Account & Legal Information | FixBridge' : meta.title;
+  const description = special ? 'FixBridge account and legal information.' : meta.description;
+  const canonical = SITE_ORIGIN + meta.path;
   document.title = title;
-  setMetaTag("name", "description", description);
-  setMetaTag("property", "og:title", title);
-  setMetaTag("property", "og:description", description);
-  setMetaTag("property", "og:image", image);
-  setMetaTag("property", "og:image:secure_url", image);
-  setMetaTag("property", "og:image:type", "image/png");
-  setMetaTag("property", "og:image:width", "1200");
-  setMetaTag("property", "og:image:height", "630");
-  setMetaTag("property", "og:image:alt", "FixBridge logo");
-  setMetaTag("property", "og:url", url);
-  setMetaTag("name", "twitter:card", "summary_large_image");
-  setMetaTag("name", "twitter:title", title);
-  setMetaTag("name", "twitter:description", description);
-  setMetaTag("name", "twitter:image", image);
-  setMetaTag("name", "twitter:image:alt", "FixBridge logo");
+  setMeta('name', 'description', description);
+  setMeta('name', 'robots', privatePage ? 'noindex, follow' : 'index, follow');
+  let link = document.head.querySelector('link[rel="canonical"]') as HTMLLinkElement | null;
+  if (privatePage) {
+    link?.remove();
+  } else {
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'canonical';
+      document.head.appendChild(link);
+    }
+    link.href = canonical;
+  }
+  for (const key of ['og:title', 'twitter:title']) setMeta(key.startsWith('og:') ? 'property' : 'name', key, title);
+  for (const key of ['og:description', 'twitter:description']) setMeta(key.startsWith('og:') ? 'property' : 'name', key, description);
+  setMeta('property', 'og:url', canonical);
+  setMeta('property', 'og:type', 'website');
+  setMeta('name', 'twitter:card', 'summary');
+  for (const key of ['og:image', 'og:image:secure_url', 'twitter:image']) setMeta(key.startsWith('og:') ? 'property' : 'name', key, SITE_ORIGIN + '/fixbridge-authoritative.png');
+  document.head.querySelectorAll('meta[property="og:image:width"],meta[property="og:image:height"]').forEach(el => el.remove());
+  let script = document.getElementById('public-structured-data');
+  if (privatePage) {
+    script?.remove();
+  } else {
+    if (!script) {
+      script = document.createElement('script');
+      script.id = 'public-structured-data';
+      script.setAttribute('type', 'application/ld+json');
+      document.head.appendChild(script);
+    }
+    script.textContent = JSON.stringify(structuredData(page));
+  }
 }

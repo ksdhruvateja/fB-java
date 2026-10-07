@@ -1,3 +1,4 @@
+import { pagePath } from "../../shared/public-seo.js";
 /** Role-aware navigation helpers for FixBridge (state-based routing, not react-router). */
 
 import { sanitizeAdminTab } from "./adminNav";
@@ -9,6 +10,11 @@ export type AppPage =
   | "contractors"
   | "about"
   | "go-pro"
+  | "home-repair"
+  | "appliance-repair"
+  | "home-maintenance"
+  | "property-care"
+  | "broken-home-items"
   | "homeowner-login"
   | "contractor-login"
   | "admin-login"
@@ -315,8 +321,9 @@ export function hasInternalHistory() {
   return currentHistoryDepth() > 1;
 }
 
-function historyUrl() {
-  return window.location.pathname + window.location.search;
+function historyUrl(page?: AppPage) {
+  // Keep payment, OAuth and referral parameters while assigning stable route paths.
+  return (page ? pagePath(page) : window.location.pathname) + window.location.search;
 }
 
 function writeHistory(mode: "push" | "replace", page: AppPage, nav?: NavFrame) {
@@ -332,8 +339,8 @@ function writeHistory(mode: "push" | "replace", page: AppPage, nav?: NavFrame) {
     fixbridgeNav: nav,
     fixbridgeDepth: depth,
   };
-  if (mode === "push") window.history.pushState(state, "", historyUrl());
-  else window.history.replaceState(state, "", historyUrl());
+  if (mode === "push") window.history.pushState(state, "", historyUrl(page));
+  else window.history.replaceState(state, "", historyUrl(page));
 }
 
 /** Tag the landing entry as FixBridge without adding a fake step. External referrer stays behind it. */

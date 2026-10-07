@@ -60,6 +60,11 @@ function figmaAssetsResolver(): Plugin {
   }
 }
 
+function prerenderPublicPages(): Plugin {
+ let outputDir = 'dist';
+ return { name: 'prerender-public-pages', apply: 'build', configResolved(config) { outputDir = config.build.outDir }, async closeBundle() { const { prerenderPublic } = await import('./scripts/prerender-public.mjs'); await prerenderPublic(outputDir) } };
+}
+
 function resolveApiProxyTarget(env: Record<string, string>): string {
   const fromUrl = String(env.API_BASE_URL || env.API_BASE || '').trim().replace(/\/$/, '')
   if (fromUrl) return fromUrl
@@ -72,7 +77,7 @@ export default defineConfig(({ mode }) => {
   const apiProxyTarget = resolveApiProxyTarget(env)
 
   return {
-    plugins: [react(), tailwindcss(), figmaAssetsResolver(), removeVersionSpecifiers(), injectSiteMeta()],
+    plugins: [react(), tailwindcss(), figmaAssetsResolver(), removeVersionSpecifiers(), injectSiteMeta(), prerenderPublicPages()],
     define: {
       __FIXBRIDGE_BUILD__: JSON.stringify(BUILD_STAMP),
     },
