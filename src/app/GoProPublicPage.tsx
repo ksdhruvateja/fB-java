@@ -42,7 +42,7 @@ export default function GoProPublicPage({
   }, [currentUser, loadedPlans, onLoginSuccess]);
 
   return (
-    <div className="min-h-screen bg-background px-4 py-8 sm:px-6">
+    <div className="fixbridge-plans min-h-screen bg-background px-4 pb-8 pt-24 sm:px-6 sm:pt-28">
       <div className="mx-auto max-w-5xl">
         <button
           type="button"
@@ -58,7 +58,9 @@ export default function GoProPublicPage({
           </p>
         ) : null}
 
+        <header className="mb-8"><h1 className="text-3xl font-semibold">HomeCare plans</h1><p className="mt-3 max-w-3xl leading-relaxed text-muted-foreground">Review current plan options for eligible Fixera assessments and property-care features. Features, prices and terms are confirmed below before purchase; AI guidance is advisory and does not replace a professional inspection.</p></header>
         <HomeownerGoProPlans
+          headingLevel="h2"
           currentPlanCode={currentUser?.planCode}
           busy={busy}
           isAuthenticated={isAuthenticated}

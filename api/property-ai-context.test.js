@@ -24,6 +24,7 @@ test('property context scopes equipment and completion history to the authorized
   const calls = [];
   const pool = {
     async query(sql, params) {
+      if (sql.includes('FROM property_documents')) { assert.deepEqual(params.slice(0,2),[77,12]); return {rows:[]}; }
       calls.push({ sql, params });
       if (calls.length === 1) return { rows: [{ id: 77, owner_user_id: 12 }] };
       if (calls.length === 2) return { rows: [{
@@ -120,6 +121,7 @@ test('selected equipment context excludes other equipment service history', asyn
   const calls = [];
   const pool = {
     async query(sql, params) {
+      if (sql.includes('FROM property_documents')) { assert.deepEqual(params.slice(0,2),[77,12]); return {rows:[]}; }
       calls.push({ sql, params });
       if (calls.length === 1) return { rows: [{ id: 77, owner_user_id: 12 }] };
       if (calls.length === 2) return { rows: [{
@@ -155,4 +157,10 @@ test('selected equipment context excludes other equipment service history', asyn
   assert.match(context.text, /Replaced fan/);
   assert.doesNotMatch(context.text, /Dishwasher pump repair/);
   assert.doesNotMatch(context.text, /Pump replaced/);
+});
+
+test('dismissed equipment is excluded from future context even if it was previously confirmed', async () => {
+ let call=0;const pool={async query(){call++;if(call===1)return {rows:[{id:77,owner_user_id:12}]};if(call===2)return {rows:[{id:77,owner_user_id:12,label:'Home',home_systems:[{key:'ignored',name:'DISMISSED-EQUIPMENT',model:'STALE-MODEL',verification:'confirmed',ignored:true},{key:'kept',name:'Current equipment',model:'CURRENT',source:'homeowner'}],health_profile:{}}]};return {rows:[]};}};
+ const context=await buildPropertyAIContext(pool,77,12);assert.doesNotMatch(context.text,/DISMISSED-EQUIPMENT|STALE-MODEL/);assert.equal(context.memory.homeSystems.length,1);
+ const direct=propertyMemoryFromRecord({id:77,home_systems:[{key:'ignored',ignored:true},{key:'dismissed',dismissed:true},{key:'kept',source:'homeowner'}]});assert.deepEqual(direct.equipment.map(item=>item.key),['kept']);
 });

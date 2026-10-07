@@ -51,10 +51,12 @@ export default function GoogleSignInButton({
   onError,
   disabled,
   text = "continue_with",
+  showEmailSeparator = false,
 }: {
   onCredential: (credential: string) => void;
   onError?: (message: string) => void;
   disabled?: boolean;
+  showEmailSeparator?: boolean;
   text?: "signin_with" | "signup_with" | "continue_with";
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -192,6 +194,13 @@ export default function GoogleSignInButton({
         </div>
       )}
       <div ref={containerRef} className={`flex justify-center ${ready ? "" : "hidden"}`} />
+      {ready && showEmailSeparator && (
+        <div data-google-email-separator className="mt-3 flex items-center gap-3 text-xs text-neutral-400">
+          <span className="h-px flex-1 bg-neutral-200" />
+          or
+          <span className="h-px flex-1 bg-neutral-200" />
+        </div>
+      )}
     </div>
   );
 }

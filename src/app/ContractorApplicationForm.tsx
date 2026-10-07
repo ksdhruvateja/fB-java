@@ -1,3 +1,4 @@
+import ContractorServiceChoices from './ContractorServiceChoices';
 import { useState, useEffect, type ReactNode } from "react";
 import type { Unicon } from "./contractorIcons";
 import {
@@ -119,15 +120,14 @@ function ChipToggle({
   icon?: Unicon;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-xs font-medium transition ${
+    <label
+      className={`flex items-center gap-2 rounded-lg border min-h-[44px] px-2.5 py-2 text-left text-xs font-medium transition ${
         selected
           ? "border-primary bg-primary/10 text-foreground"
           : "border-border bg-background text-muted-foreground hover:border-primary/40"
       }`}
     >
+      <input type="checkbox" checked={selected} onChange={onToggle} className="h-5 w-5 shrink-0 accent-orange-600" />
       {Icon ? (
         <Icon
           size={16}
@@ -136,7 +136,7 @@ function ChipToggle({
         />
       ) : null}
       <span>{label}</span>
-    </button>
+    </label>
   );
 }
 
@@ -721,6 +721,7 @@ export default function ContractorApplicationForm({
             {value.primaryServices.length === 1 ? " — add more if you cover additional services" : ""}
           </p>
         ) : null}
+        <ContractorServiceChoices selected={value.selectedServiceIds || []} onChange={(ids) => set("selectedServiceIds", ids)} legacy={value.selectedServiceIds === undefined} />
         <Field label="Services description">
           <textarea
             className={`${inputClass} min-h-[72px]`}

@@ -1,3 +1,6 @@
+import { ServiceThumb } from "./serviceVisuals";
+import { HOMEOWNER_SERVICES } from "./homeownerCategories";
+import RepairPhotoPicker from "./RepairPhotoPicker";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   ArrowLeft,
@@ -17,6 +20,7 @@ import {
   SERVICE_LOCATION_OPTIONS,
   serviceRequestTitle,
   tradeToCategory,
+  categoryToTradeId,
   resolveRequestTradeId,
   inferTradeFromDescription,
   type AdaptiveAnswers,
@@ -110,6 +114,7 @@ type Props = {
   intakePhase: IntakePhase;
   setIntakePhase: (p: IntakePhase) => void;
   requestSystemId: string;
+  serviceCategory?: string;
   setRequestSystemId: (id: string) => void;
   setCategory: (c: string) => void;
   issueArea: ServiceLocation | "";
@@ -125,6 +130,8 @@ type Props = {
   fileRef: RefObject<HTMLInputElement | null>;
   onFile: (file: File | null) => void | Promise<void>;
   mediaDataUrl: string | null;
+  mediaDataUrls?: string[];
+  onRemovePhoto?: (index: number) => void;
   mediaType: string | null;
   propertyId: number | "";
   setPropertyId: (id: number | "") => void;
@@ -236,6 +243,7 @@ export default function HomeownerServiceIntake(props: Props) {
     intakePhase,
     setIntakePhase,
     requestSystemId,
+    serviceCategory,
     setRequestSystemId,
     setCategory,
     issueArea,
@@ -251,6 +259,8 @@ export default function HomeownerServiceIntake(props: Props) {
     fileRef,
     onFile,
     mediaDataUrl,
+    mediaDataUrls = [],
+    onRemovePhoto,
     mediaType,
     propertyId,
     setPropertyId,
@@ -276,49 +286,12 @@ export default function HomeownerServiceIntake(props: Props) {
   } = props;
 
   const isMobile = useIsMobile();
-  const cameraRef = useRef<HTMLInputElement | null>(null);
-  const [uploadState, setUploadState] = useState<"idle" | "adding" | "added">("idle");
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const [photoConfirmed, setPhotoConfirmed] = useState(false);
   const safeIntakePhase = normalizeIntakePhase(intakePhase);
   const stepMeta = INTAKE_STEP_META[safeIntakePhase];
   const resolvedTradeId = resolveRequestTradeId(requestSystemId, description);
   const selectedProperty = properties.find((property) => Number(property.id) === Number(propertyId));
   const equipmentOptions = selectedProperty?.homeSystems || [];
 
-  useEffect(() => {
-    if (!mediaDataUrl) {
-      setUploadState("idle");
-      setPreviewOpen(false);
-      setPhotoConfirmed(false);
-      return;
-    }
-    setUploadState("added");
-    setPhotoConfirmed(false);
-  }, [mediaDataUrl]);
-
-  async function addMedia(file: File | null) {
-    if (!file) return;
-    setError(null);
-    setUploadState("adding");
-    setPhotoConfirmed(false);
-    try {
-      await onFile(file);
-      setUploadState("added");
-    } catch {
-      setUploadState("idle");
-      setError("This photo could not be prepared. Choose a supported JPG, PNG, or WEBP and try again.");
-    }
-  }
-
-  function runAfterPhotoConfirmation(action: () => void) {
-    if (mediaType === "image" && !photoConfirmed) {
-      setError("Preview and confirm the photo before continuing.");
-      setPreviewOpen(true);
-      return;
-    }
-    action();
-  }
 
   function goNextFromLocation() {
     if (!issueArea) {
@@ -349,7 +322,7 @@ export default function HomeownerServiceIntake(props: Props) {
   }
 
   return (
-    <div className="space-y-5 rounded-[1.5rem] border border-border/70 bg-card p-5 shadow-sm sm:p-6 pb-24 sm:pb-6">
+    <div className="homeowner-intake max-w-3xl space-y-7 pb-24 sm:pb-6">
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2 text-xs font-medium text-muted-foreground">
           <span>
@@ -382,9 +355,23 @@ export default function HomeownerServiceIntake(props: Props) {
               Describe the issue and add a photo if it helps clarify what is happening.
             </p>
             {requestSystemId ? (
-              <p className="mt-2 text-sm font-semibold">Selected service: {tradeToCategory(resolvedTradeId)}</p>
+              <div className="mt-2 flex items-center gap-3"><ServiceThumb name={serviceCategory || tradeToCategory(resolvedTradeId)} className="h-16 w-20" /><p className="text-sm font-semibold">Selected service: {serviceCategory || tradeToCategory(resolvedTradeId)}</p></div>
             ) : null}
           </div>
+          <label className="grid gap-1.5 text-sm">
+            <span className="font-semibold">Service category</span>
+            <select aria-label="Service category" value={serviceCategory || (requestSystemId ? tradeToCategory(resolvedTradeId) : "")} disabled={busy} onChange={(event) => {
+              const nextCategory = event.target.value;
+              setCategory(nextCategory);
+              setRequestSystemId(nextCategory ? categoryToTradeId(nextCategory) : "");
+              setAdaptiveAnswers({});
+              setEquipmentKey("");
+            }} className="rounded-xl border border-border bg-background p-3">
+              <option value="">Choose a service</option>
+              {HOMEOWNER_SERVICES.map((category) => <option key={category} value={category}>{category}</option>)}
+            </select>
+            {serviceCategory === "Other" ? <span className="text-xs text-muted-foreground">Describe the service you need in the issue description below.</span> : null}
+          </label>
           {equipmentOptions.length > 0 ? (
             <label className="grid gap-1.5 text-sm">
               <span className="font-semibold">Equipment (optional)</span>
@@ -434,81 +421,27 @@ export default function HomeownerServiceIntake(props: Props) {
             <Mic className="h-4 w-4 text-primary" />
             {voiceListening ? "Listening…" : "Speak"}
           </button>
-          <div className="space-y-2">
-            <p className="text-sm font-semibold">Add a photo</p>
-            <p className="text-sm text-muted-foreground">Help us understand what&apos;s happening.</p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <button type="button" title="Take Photo" onClick={() => cameraRef.current?.click()} className="min-h-16 rounded-xl border border-dashed border-primary/40 bg-primary/5 px-3 py-3 text-sm font-semibold">
-                <Camera className="mx-auto mb-1 h-5 w-5 text-primary" />
-                Take Photo
-              </button>
-              <button type="button" title="Upload Photo" onClick={() => fileRef.current?.click()} className="min-h-16 rounded-xl border border-dashed border-border px-3 py-3 text-sm font-semibold">
-                <ImagePlus className="mx-auto mb-1 h-5 w-5 text-primary" />
-                Upload Photo
-              </button>
-            </div>
-          </div>
-          <input ref={cameraRef} type="file" accept="image/*" capture="environment" aria-label="Take a photo with the camera" className="sr-only" onChange={(e) => { void addMedia(e.target.files?.[0] || null); e.currentTarget.value = ""; }} />
-          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" aria-label="Choose a photo from this device" className="sr-only" onChange={(e) => { void addMedia(e.target.files?.[0] || null); e.currentTarget.value = ""; }} />
-          {uploadState === "adding" ? <p className="text-sm text-muted-foreground">Adding photo…</p> : null}
-          {mediaDataUrl ? (
-            <div className="rounded-xl border border-border bg-muted/20 p-3 motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <p className="text-xs font-medium text-emerald-700">{photoConfirmed ? "Photo confirmed" : "Photo selected"}</p>
-                <div className="flex gap-2">
-                  <button type="button" onClick={() => setPreviewOpen(true)} className="text-xs font-semibold text-primary">
-                    Preview and confirm
-                  </button>
-                  <button type="button" onClick={() => fileRef.current?.click()} className="text-xs font-semibold">
-                    Replace
-                  </button>
-                  {onClearMedia ? (
-                    <button type="button" onClick={onClearMedia} className="inline-flex items-center gap-1 text-xs font-semibold text-muted-foreground hover:text-foreground">
-                      <X size={12} /> Remove
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-              <button type="button" onClick={() => setPreviewOpen(true)} className="block w-full">
-                {mediaType === "image" ? (
-                  <img src={mediaDataUrl} alt="Uploaded issue photo" className="max-h-48 w-full rounded-xl border object-contain" />
-                ) : mediaType?.startsWith("video") ? (
-                  <span className="flex min-h-24 items-center justify-center rounded-xl border text-sm font-semibold">Video attached</span>
-                ) : null}
-              </button>
-            </div>
-          ) : null}
-          {previewOpen && mediaDataUrl ? (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Attachment preview">
-              <div className="w-full max-w-lg rounded-2xl bg-card p-3">
-                {mediaType === "image" ? (
-                  <img src={mediaDataUrl} alt="Uploaded issue photo" className="max-h-[70vh] w-full object-contain" />
-                ) : (
-                  <video src={mediaDataUrl} controls className="max-h-[70vh] w-full" />
-                )}
-                <div className="mt-3 flex justify-end gap-2">
-                  {onClearMedia ? (
-                    <button type="button" onClick={() => { onClearMedia(); setPreviewOpen(false); }} className="min-h-11 rounded-xl border px-3 text-sm font-semibold">
-                      Remove
-                    </button>
-                  ) : null}
-                  {mediaType === "image" ? (
-                    <button type="button" onClick={() => { setPhotoConfirmed(true); setPreviewOpen(false); setError(null); }} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-semibold text-white">
-                      Use this photo
-                    </button>
-                  ) : null}
-                  <button type="button" onClick={() => setPreviewOpen(false)} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-semibold text-white">
-                    Close
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : null}
+          <label className="grid gap-1.5 text-sm">
+            <span className="font-semibold">Property address</span>
+            <select aria-label="Property address" value={propertyId} onChange={(event) => { if (event.target.value === "__add_property__") { onAddAddress(); return; } setPropertyId(event.target.value ? Number(event.target.value) : ""); }} className="rounded-xl border border-border bg-background p-3">
+              <option value="">Select a property</option>
+              <option value="__add_property__">Add new property</option>
+              {properties.map((property) => <option key={property.id} value={property.id}>{[property.label, property.addressLine1, property.city, property.state].filter(Boolean).join(" · ")}</option>)}
+            </select>
+            <button type="button" onClick={onAddAddress} className="justify-self-start text-xs font-semibold text-primary">Add a new address</button>
+          </label>
+          <RepairPhotoPicker
+            photos={mediaDataUrls}
+            onFile={async (file) => { setError(null); await onFile(file); }}
+            onRemove={(index) => onRemovePhoto?.(index)}
+            disabled={busy}
+          />
+          {mediaType?.startsWith("video") && mediaDataUrl ? <div><video src={mediaDataUrl} controls className="max-h-48" /><button type="button" onClick={onClearMedia}>Remove video</button></div> : null}
           <IntakeActionButtons
             busy={busy}
             description={description}
-            onSubmitAi={() => runAfterPhotoConfirmation(onSubmitAi)}
-            onHirePro={() => runAfterPhotoConfirmation(onHirePro)}
+            onSubmitAi={onSubmitAi}
+            onHirePro={onHirePro}
             preferHire={preferHire}
           />
           <div className="hidden justify-end sm:flex">
@@ -577,34 +510,18 @@ export default function HomeownerServiceIntake(props: Props) {
             <ArrowLeft size={14} /> Back
           </button>
           <div className="rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm">
-            <p className="font-semibold">{serviceRequestTitle(issueArea, resolvedTradeId)}</p>
+            <div className="flex items-center gap-3"><ServiceThumb name={serviceCategory || tradeToCategory(resolvedTradeId)} className="h-16 w-20" /><p className="font-semibold">{serviceRequestTitle(issueArea, resolvedTradeId)}</p></div>
             <p className="mt-1 line-clamp-3 text-muted-foreground">{description}</p>
           </div>
 
           <ServiceAdaptiveQuestions tradeId={resolvedTradeId} answers={adaptiveAnswers} onChange={setAdaptiveAnswers} />
 
-          <div className="grid gap-1.5 text-sm">
-            <span className="font-medium">
-              Property address <span className="text-red-500">*</span>
-            </span>
-            <select
-              className="w-full rounded-lg border border-border bg-background px-3 py-2"
-              value={propertyId}
-              onChange={(e) => setPropertyId(e.target.value ? Number(e.target.value) : "")}
-            >
-              <option value="">Select property</option>
-              {properties.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label || p.addressLine1}
-                </option>
-              ))}
-            </select>
-            <button type="button" onClick={onAddAddress} className="text-xs font-semibold text-primary hover:underline self-start">
-              Add a new address
-            </button>
+          <div className="text-sm text-muted-foreground">
+            <p>Property: {selectedProperty ? [selectedProperty.addressLine1, selectedProperty.city, selectedProperty.state].filter(Boolean).join(", ") : "Select a property on the first step."}</p>
+            <button type="button" onClick={() => setIntakePhase("describe")} className="mt-1 text-xs font-semibold text-primary">Change property</button>
           </div>
 
-          <div className="space-y-4 rounded-xl border border-border bg-muted/30 p-4">
+          <div className="space-y-4 border-t border-border pt-6">
             <p className="text-sm font-semibold">Referral</p>
             <label className="grid gap-1.5 text-sm">
               <span className="font-medium">Referral code</span>

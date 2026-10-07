@@ -49,8 +49,8 @@
 # SPA fallback for client-side navigation (login/dashboard state lives in history)
 [[redirects]]
   from = "/*"
-  to = "/index.html"
-  status = 200
+  to = "/404.html"
+  status = 404
 
 # Browser security headers for the static site
 [[headers]]

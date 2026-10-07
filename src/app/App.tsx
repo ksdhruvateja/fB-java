@@ -1,6 +1,10 @@
+import SolutionPage from "./ServiceSolutions";
+import { PUBLIC_PAGES, SOLUTION_PAGES, PRIVATE_PATHS, publicPageForPath } from "../../shared/public-seo.js";
+import { Nav, Footer } from "./MarketingLayout";
+import "./portalDensity.css";
 import { useEffect, useState, useRef } from "react";
 import { motion } from "motion/react";
-import { Sun, Moon, Menu, X, MapPin, ArrowRight, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import CustomerPage from "./CustomerPage";
 import ContractorPage from "./ContractorPage";
 import AboutPage from "./AboutPage";
@@ -16,7 +20,7 @@ import ResetPassword from "./ResetPassword";
 import GoProPublicPage from "./GoProPublicPage";
 import SubscriptionSuccessModal from "./SubscriptionSuccessModal";
 import SubscriptionCancelModal from "./SubscriptionCancelModal";
-import { getStoredUser, validateToken, clearSession, loadAllUsers, saveSession, type AuthUser, type UserRole, type ResetRole } from "./auth";
+import { getStoredToken, getStoredUser, validateToken, clearSession, loadAllUsers, saveSession, type AuthUser, type UserRole, type ResetRole } from "./auth";
 import { storePendingReferralCode } from "./referralSession";
 import { brand } from "../config/brand";
 import { PAID_HOME_CARE_PLAN_CODE, isPaidHomeCarePlan } from "./subscriptionCatalog";
@@ -37,7 +41,6 @@ import {
 } from "./navigation";
 import LegalDocumentPage from "./LegalDocumentPage";
 import MarketingUnsubscribePage from "./MarketingUnsubscribePage";
-import { PUBLIC_FOOTER_LEGAL_LINKS, PUBLIC_CONTRACTOR_LEGAL_LINKS } from "./legalDocuments";
 import { applySiteMeta } from "./siteMeta";
 import LeadConnectorChatWidget, { shouldShowLeadConnectorChat } from "./LeadConnectorChatWidget";
 
@@ -57,6 +60,11 @@ type Page =
   | "contractors"
   | "about"
   | "go-pro"
+  | "home-repair"
+  | "appliance-repair"
+  | "home-maintenance"
+  | "property-care"
+  | "broken-home-items"
   | "homeowner-login"
   | "contractor-login"
   | "admin-login"
@@ -97,6 +105,7 @@ function isValidPage(value: unknown): value is Page {
     value === "contractors" ||
     value === "about" ||
     value === "go-pro" ||
+    SOLUTION_PAGES.some(p => p.page === value) ||
     value === "homeowner-login" ||
     value === "contractor-login" ||
     value === "admin-login" ||
@@ -142,399 +151,18 @@ function loadInitialState(): {
 
     return { page, marketingContext, currentUser };
   } catch {
-    return fallback;
+    const currentUser = getStoredUser();
+    return currentUser ? { ...fallback, currentUser, page: roleHomePage(currentUser.role) as Page } : fallback;
   }
 }
 
 // ─── Shared Nav (marketing pages only) ───────────────────────────────────────
 
-function Nav({
-  page,
-  onNavigate,
-  marketingContext,
-  isDark,
-  onToggleDark,
-  scrolled,
-}: {
-  page: Page;
-  onNavigate: (p: Page) => void;
-  marketingContext: "home" | "contractors";
-  isDark: boolean;
-  onToggleDark: () => void;
-  scrolled: boolean;
-}) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const overHero =
-    (page === "home" || page === "contractors" || page === "about" || page === "go-pro") &&
-    !scrolled &&
-    !menuOpen;
-  const ink = overHero ? "text-white" : "text-foreground";
-  const muted = overHero ? "text-white/65 hover:text-white" : "text-muted-foreground hover:text-foreground";
-  const active = overHero ? "text-white" : "text-foreground";
-  const border = overHero ? "border-white/30" : "border-border";
-  const navLogoTone = !overHero && !isDark ? "black" : "color";
-
-  const goToHome = () => {
-    onNavigate("home");
-    requestAnimationFrame(() => {
-      document.querySelector<HTMLElement>("[data-scroll-root]")?.scrollTo({ top: 0, behavior: "smooth" });
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    });
-  };
-
-  return (
-    <nav className="fixed top-0 left-0 right-0 z-50 bg-transparent pt-[env(safe-area-inset-top)] transition-colors duration-300">
-      <div className="relative w-full px-5 sm:px-6 lg:px-10 xl:px-12 2xl:px-16 py-2.5 sm:py-3.5 min-h-[3.25rem] flex items-center">
-        <button
-          type="button"
-          onClick={goToHome}
-          className="relative z-10 flex shrink-0 items-center min-w-0"
-          aria-label={`${brand.productName} home`}
-        >
-          <BrandLogo
-            variant="nav"
-            tone={navLogoTone}
-            className="transition-opacity duration-300 shrink-0"
-          />
-        </button>
-
-        {/* Desktop center links — truly centered in the viewport */}
-        <div className="pointer-events-none absolute inset-x-0 top-1/2 hidden -translate-y-1/2 justify-center lg:flex">
-          <div className="pointer-events-auto flex items-center gap-1">
-            <button
-              onClick={() => onNavigate("home")}
-              className={`relative px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
-                page === "home" ? active : muted
-              }`}
-            >
-              For Homeowners
-              {page === "home" && (
-                <span className={`absolute bottom-0 left-4 right-4 h-0.5 ${overHero ? "bg-white" : "bg-primary"}`} />
-              )}
-            </button>
-            <button
-              onClick={() => onNavigate("contractors")}
-              className={`relative px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
-                page === "contractors" ? active : muted
-              }`}
-            >
-              For Contractors
-              {page === "contractors" && (
-                <span className={`absolute bottom-0 left-4 right-4 h-0.5 ${overHero ? "bg-white" : "bg-primary"}`} />
-              )}
-            </button>
-            <button
-              onClick={() => onNavigate("about")}
-              className={`relative px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
-                page === "about" ? active : muted
-              }`}
-            >
-              About
-              {page === "about" && (
-                <span className={`absolute bottom-0 left-4 right-4 h-0.5 ${overHero ? "bg-white" : "bg-primary"}`} />
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* Right actions — flush right within page gutters */}
-        <div className="relative z-10 ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
-          <div className="hidden md:flex items-center gap-3">
-            <button
-              onClick={onToggleDark}
-              className={`w-9 h-9 flex items-center justify-center border transition-colors ${border} ${muted}`}
-              aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-            >
-              {isDark ? <Sun size={15} /> : <Moon size={15} />}
-            </button>
-
-            <button
-              onClick={() =>
-                marketingContext === "contractors"
-                  ? onNavigate("contractor-login")
-                  : onNavigate("homeowner-login")
-              }
-              className={`text-sm font-medium transition-colors whitespace-nowrap ${muted}`}
-            >
-              Sign In
-            </button>
-
-            <button
-              onClick={() =>
-                marketingContext === "contractors"
-                  ? onNavigate("contractor-login")
-                  : onNavigate("homeowner-login")
-              }
-              className={`text-sm px-4 py-2 transition-colors font-medium whitespace-nowrap ${
-                overHero
-                  ? "bg-white text-black hover:bg-white/90"
-                  : "bg-primary text-white hover:bg-primary/90"
-              }`}
-            >
-              {marketingContext === "contractors" ? "Apply Now" : "Post a Repair"}
-            </button>
-          </div>
-
-          {/* Mobile menu (below md) */}
-          <div className="flex md:hidden items-center gap-2">
-            <button
-              onClick={onToggleDark}
-              className={`w-9 h-9 flex items-center justify-center border ${border} ${muted}`}
-              aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-            >
-              {isDark ? <Sun size={14} /> : <Moon size={14} />}
-            </button>
-            <button
-              className={`w-9 h-9 flex items-center justify-center ${ink}`}
-              onClick={() => setMenuOpen(!menuOpen)}
-              aria-label={menuOpen ? "Close menu" : "Open menu"}
-            >
-              {menuOpen ? <X size={20} /> : <Menu size={20} />}
-            </button>
-          </div>
-
-          {/* Tablet: page links menu while center nav is hidden (md–lg) */}
-          <button
-            type="button"
-            className={`hidden md:flex lg:hidden w-9 h-9 items-center justify-center ${ink}`}
-            onClick={() => setMenuOpen(!menuOpen)}
-            aria-label={menuOpen ? "Close menu" : "Open menu"}
-          >
-            {menuOpen ? <X size={20} /> : <Menu size={20} />}
-          </button>
-        </div>
-      </div>
-
-      {/* Mobile menu */}
-      {menuOpen && (
-        <motion.div
-          initial={{ opacity: 0, y: -8 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="lg:hidden bg-background border-t border-border px-5 sm:px-6 lg:px-10 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] flex flex-col gap-1 max-h-[min(80svh,520px)] overflow-y-auto"
-        >
-          <button
-            onClick={() => { onNavigate("home"); setMenuOpen(false); }}
-            className={`text-sm text-left font-medium py-3 ${page === "home" ? "text-primary" : "text-muted-foreground"}`}
-          >
-            For Homeowners
-          </button>
-          <button
-            onClick={() => { onNavigate("contractors"); setMenuOpen(false); }}
-            className={`text-sm text-left font-medium py-3 ${page === "contractors" ? "text-primary" : "text-muted-foreground"}`}
-          >
-            For Contractors
-          </button>
-          <button
-            onClick={() => { onNavigate("about"); setMenuOpen(false); }}
-            className={`text-sm text-left font-medium py-3 ${page === "about" ? "text-primary" : "text-muted-foreground"}`}
-          >
-            About
-          </button>
-          <div className="pt-3 mt-1 border-t border-border flex flex-col gap-2">
-            <button
-              onClick={() => { onNavigate("homeowner-login"); setMenuOpen(false); }}
-              className="text-sm border border-border text-foreground px-4 py-3 text-left rounded-sm"
-            >
-              Sign In as Homeowner
-            </button>
-            <button
-              onClick={() => { onNavigate("contractor-login"); setMenuOpen(false); }}
-              className="text-sm bg-primary text-white px-4 py-3 text-left font-medium rounded-sm"
-            >
-              Sign In as Contractor
-            </button>
-          </div>
-        </motion.div>
-      )}
-    </nav>
-  );
-}
-
-// ─── Shared Footer ────────────────────────────────────────────────────────────
-
-function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
-  const linkGroups = [
-    {
-      title: "Homeowners",
-      links: [
-        { label: "Post a Job", page: "homeowner-login" as Page },
-        { label: "How It Works", page: "home" as Page },
-        { label: "Fixera Assessment", page: "home" as Page },
-        { label: "Find a Contractor", page: "home" as Page },
-        { label: "Pricing", page: "go-pro" as Page },
-        { label: "HomeCare Plans", page: "go-pro" as Page },
-      ],
-    },
-    {
-      title: "Contractors",
-      links: [
-        { label: "Join the Network", page: "contractor-login" as Page },
-        { label: "How Bidding Works", page: "contractors" as Page },
-        { label: "Compliance Docs", page: "contractors" as Page },
-        { label: "Contractor Portal", page: "contractor-login" as Page },
-        { label: "FAQ", page: "contractors" as Page },
-      ],
-    },
-    {
-      title: "Company",
-      links: [
-        { label: `About ${brand.productName}`, page: "about" as Page },
-        { label: "Blog", page: "home" as Page },
-        { label: "Press", page: "home" as Page },
-        { label: "Careers", page: "home" as Page },
-        { label: "Contact", page: "home" as Page },
-        { label: "Staff login", page: "admin-login" as Page },
-        // { label: "Partner portal", page: "partner" as Page },
-      ],
-    },
-  ];
-
-  return (
-    <footer className="border-t border-border bg-background px-4 py-10 sm:px-6 sm:py-12 md:py-16 pb-[max(2.5rem,env(safe-area-inset-bottom))]">
-      <div className="max-w-7xl mx-auto">
-        {/* Brand */}
-        <div className="pb-8 mb-8 border-b border-border/70 lg:border-0 lg:pb-0 lg:mb-0">
-          <div className="lg:hidden">
-            <button
-              type="button"
-              onClick={() => onNavigate("home")}
-              className="mb-4 inline-flex rounded-md outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-primary/40"
-              aria-label={`${brand.productName} home`}
-            >
-              <BrandLogo variant="nav" />
-            </button>
-            <p className="text-sm text-muted-foreground max-w-sm leading-relaxed mb-3">
-              The middle layer between homeowners and licensed contractors nationwide — handling
-              matching, trust, and paperwork so neither side has to.
-            </p>
-            <div className="flex items-center gap-2">
-              <MapPin size={11} className="text-primary shrink-0" />
-              <span className="font-mono text-[11px] text-muted-foreground">Nationwide</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Desktop / tablet: brand + 3 columns · Mobile: 2-column link split */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-x-4 gap-y-8 sm:gap-x-8 sm:gap-y-10 mb-8 sm:mb-10 md:mb-12">
-          <div className="hidden lg:block lg:col-span-2 pr-6">
-            <button
-              type="button"
-              onClick={() => onNavigate("home")}
-              className="mb-4 inline-flex rounded-md outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-primary/40"
-              aria-label={`${brand.productName} home`}
-            >
-              <BrandLogo variant="nav" />
-            </button>
-            <p className="text-sm text-muted-foreground max-w-xs leading-relaxed mb-4">
-              The middle layer between homeowners and licensed contractors nationwide — handling
-              matching, trust, and paperwork so neither side has to.
-            </p>
-            <div className="flex items-center gap-2">
-              <MapPin size={11} className="text-primary shrink-0" />
-              <span className="font-mono text-[11px] text-muted-foreground">Nationwide</span>
-            </div>
-          </div>
-
-          {linkGroups.map(({ title, links }) => (
-            <div key={title} className="min-w-0">
-              <p className="font-mono text-[11px] tracking-widest text-foreground uppercase mb-3 sm:mb-4">
-                {title}
-              </p>
-              <ul className="space-y-2 sm:space-y-2.5">
-                {links.map(({ label, page }) => (
-                  <li key={label}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onNavigate(page);
-                        if (label === "Contact") {
-                          requestAnimationFrame(() => {
-                            document.querySelector<HTMLElement>("[data-scroll-root]")?.scrollTo({ top: 0, behavior: "smooth" });
-                            window.scrollTo({ top: 0, behavior: "smooth" });
-                          });
-                        }
-                      }}
-                      className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left leading-snug"
-                    >
-                      {label}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-
-        {/* Cross-promo strip */}
-        <div className="border border-border p-4 sm:p-5 mb-8 sm:mb-10 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 sm:gap-4 bg-background">
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-foreground mb-0.5">
-              Are you a licensed contractor?
-            </p>
-            <p className="font-mono text-[11px] text-muted-foreground leading-relaxed">
-              Join 312+ pros getting matched with real jobs — zero monthly fees.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => onNavigate("contractor-login")}
-            className="font-medium text-sm text-primary border border-primary/40 px-4 py-2.5 hover:bg-primary hover:text-white transition-all flex items-center justify-center gap-2 group shrink-0 w-full sm:w-auto"
-          >
-            See Contractor Platform
-            <ArrowRight size={14} className="transition-transform group-hover:translate-x-1" />
-          </button>
-        </div>
-
-        <div className="border-t border-border pt-6 sm:pt-8 flex flex-col gap-4">
-          <p className="font-mono text-[11px] text-muted-foreground text-center sm:text-left">
-            © 2026 {brand.legalName} AI, Inc. All rights reserved.
-          </p>
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Legal</p>
-              <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:gap-4">
-                {PUBLIC_FOOTER_LEGAL_LINKS.map((item) => (
-                  <a
-                    key={item.href}
-                    href={item.href}
-                    className="font-mono text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    {item.label}
-                  </a>
-                ))}
-              </div>
-              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground mt-4 mb-2">
-                Contractors
-              </p>
-              <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:gap-4">
-                {PUBLIC_CONTRACTOR_LEGAL_LINKS.map((item) => (
-                  <a
-                    key={item.href}
-                    href={item.href}
-                    className="font-mono text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    {item.label}
-                  </a>
-                ))}
-              </div>
-            </div>
-            <span
-              className="font-mono text-[10px] text-primary/80 tracking-wider self-center sm:self-auto"
-              title="Deploy build stamp — hard-refresh if this does not match the latest release"
-            >
-              Build {typeof __FIXBRIDGE_BUILD__ !== "undefined" ? __FIXBRIDGE_BUILD__ : "dev"} · v0.0.2
-            </span>
-          </div>
-        </div>
-      </div>
-    </footer>
-  );
-}
-
-// ─── App ─────────────────────────────────────────────────────────────────────
-
 export default function App() {
-  const initialState = loadInitialState();
+  const savedState = loadInitialState();
+  const path = window.location.pathname.replace(/\/+$/, "") || "/";
+  const explicitPage = publicPageForPath(path)?.page || Object.entries(PRIVATE_PATHS).find(([,url]) => url === path)?.[0];
+  const initialState = { ...savedState, page: (explicitPage && (path !== "/" || !DASHBOARD_PAGE_KEYS.includes(savedState.page)) ? explicitPage : savedState.page) as Page };
   const [page, setPage] = useState<Page>(initialState.page);
   const [marketingContext, setMarketingContext] = useState<"home" | "contractors">(initialState.marketingContext);
   const [isDark, setIsDark] = useState(() => {
@@ -555,7 +183,13 @@ export default function App() {
   }, [isDark]);
 
   useEffect(() => {
-    applySiteMeta(page);
+    applySiteMeta(page, window.location.pathname, window.location.search);
+  }, [page]);
+
+  useEffect(() => {
+    if (!window.location.hash) return;
+    const id = decodeURIComponent(window.location.hash.slice(1));
+    requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ block: "start" }));
   }, [page]);
 
   const toggleDark = () => setIsDark((d) => !d);
@@ -565,13 +199,20 @@ export default function App() {
   // the first render when a cached user exists but the token hasn't been validated yet.
   // Cached session renders immediately. /api/auth/me refreshes in the background
   // and must not hide the dashboard behind a full-screen spinner.
-  const [authLoading, setAuthLoading] = useState(false);
+  const [authLoading, setAuthLoading] = useState(() => Boolean(getStoredToken() && !initialState.currentUser));
+  const lastSignedInRole = useRef<UserRole | null>(initialState.currentUser?.role || null);
+  const [authRecoveryMessage, setAuthRecoveryMessage] = useState("");
+  const [authRetry, setAuthRetry] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [resetParams, setResetParams] = useState<{ token: string; role: ResetRole } | null>(null);
   const [subscriptionSuccessPlan, setSubscriptionSuccessPlan] = useState<string | null>(null);
   const [showSubscriptionSuccess, setShowSubscriptionSuccess] = useState(false);
+  const [confirmedSubscriptionUserId, setConfirmedSubscriptionUserId] = useState<string | null>(null);
   const [subscriptionActivating, setSubscriptionActivating] = useState(false);
+  const [subscriptionConfirmationDelayed, setSubscriptionConfirmationDelayed] = useState(false);
   const [showSubscriptionCancel, setShowSubscriptionCancel] = useState(false);
+  const [subscriptionCancelChecking, setSubscriptionCancelChecking] = useState(false);
+  const [subscriptionCancelActive, setSubscriptionCancelActive] = useState(false);
   const [postPaymentDashboard, setPostPaymentDashboard] = useState(false);
   const [legalPath, setLegalPath] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
@@ -729,6 +370,8 @@ export default function App() {
       }
       if (params.get("paid") === "subscription") {
         const returnTo = params.get("returnTo");
+        const upgradeOwner = sessionStorage.getItem("fixbridge.ai-after-plan");
+        if (upgradeOwner && upgradeOwner === String(getStoredUser()?.id)) sessionStorage.setItem("fixbridge.ai-upgrade-return", upgradeOwner);
         if (returnTo) {
           try {
             sessionStorage.setItem("fixbridge-upgrade-return", returnTo);
@@ -738,6 +381,7 @@ export default function App() {
         }
         if (planCode) setSubscriptionSuccessPlan(planCode);
         setSubscriptionActivating(true);
+        setSubscriptionConfirmationDelayed(false);
         setShowSubscriptionSuccess(true);
         setPostPaymentDashboard(returnTo !== "diy" && returnTo !== "report" && returnTo !== "hire");
         validateToken({ syncCheckout: true }).then((result) => {
@@ -749,18 +393,29 @@ export default function App() {
             // Plan activates only after verified webhook — poll until plan_code matches.
             const expected = planCode || PAID_HOME_CARE_PLAN_CODE;
             if (
-              hasProEntitlement(result.user.planCode, result.user.homeCareSubscription) &&
+              result.source !== "cached" && hasProEntitlement(result.user.planCode, result.user.homeCareSubscription) &&
               (result.user.planCode === expected ||
                 (isPaidHomeCarePlan(expected) && isPaidHomeCarePlan(result.user.planCode)))
             ) {
+              setConfirmedSubscriptionUserId(String(result.user.id));
               setSubscriptionActivating(false);
             }
           }
         });
       }
       if (params.get("canceled") === "subscription") {
+        sessionStorage.removeItem("fixbridge.ai-upgrade-return");
         setShowSubscriptionCancel(true);
-        setPage("go-pro");
+        setSubscriptionCancelChecking(true);
+        setSubscriptionCancelActive(false);
+        setPage(getStoredUser()?.role === "homeowner" ? "homeowner-dashboard" : "go-pro");
+        validateToken({ syncCheckout: true }).then(result => {
+          if (result.ok) {
+            setCurrentUser(result.user);
+            if (result.user.role === "homeowner") setPage("homeowner-dashboard");
+            setSubscriptionCancelActive(result.source !== "cached" && hasProEntitlement(result.user.planCode, result.user.homeCareSubscription));
+          }
+        }).finally(() => setSubscriptionCancelChecking(false));
       }
       params.delete("paid");
       params.delete("canceled");
@@ -871,6 +526,7 @@ export default function App() {
 
   const handleSignOut = (nextPage: Page) => {
     clearSession();
+    setAuthRecoveryMessage("");
     clearNavFrames();
     setCurrentUser(null);
     // Clear stored page so the next cold load doesn't start on a dashboard page
@@ -881,7 +537,7 @@ export default function App() {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   };
 
-  const isMarketing = page === "home" || page === "contractors" || page === "about" || page === "go-pro";
+  const isMarketing = PUBLIC_PAGES.some(p => p.page === page);
   const isDashboard = page === "homeowner-dashboard" || page === "contractor-dashboard";
 
   // Persist nav state (no user data — that lives in the secure token cache)
@@ -897,6 +553,15 @@ export default function App() {
     }
   }, [page, marketingContext]);
 
+  // A refresh after checkout must reverify server entitlement, never trust the return URL.
+  useEffect(() => {
+    const owner = sessionStorage.getItem("fixbridge.ai-upgrade-return");
+    if (owner && owner === String(getStoredUser()?.id)) {
+      setShowSubscriptionSuccess(true);
+      setSubscriptionActivating(true);
+    }
+  }, []);
+
   // After Stripe Checkout return, poll until webhook activates plan_code.
   useEffect(() => {
     if (!showSubscriptionSuccess || !subscriptionActivating) return;
@@ -910,14 +575,19 @@ export default function App() {
       if (result.ok) {
         setCurrentUser(result.user);
         if (
-          hasProEntitlement(result.user.planCode, result.user.homeCareSubscription) &&
+          result.source !== "cached" && hasProEntitlement(result.user.planCode, result.user.homeCareSubscription) &&
           (result.user.planCode === expected ||
             (isPaidHomeCarePlan(expected) && isPaidHomeCarePlan(result.user.planCode)) ||
             attempts >= 20)
         ) {
+          setConfirmedSubscriptionUserId(String(result.user.id));
           setSubscriptionActivating(false);
           return;
         }
+      }
+      if (attempts >= 20) {
+        setSubscriptionConfirmationDelayed(true);
+        return;
       }
       window.setTimeout(() => void tick(), 1500);
     };
@@ -927,31 +597,45 @@ export default function App() {
     };
   }, [showSubscriptionSuccess, subscriptionActivating, subscriptionSuccessPlan]);
 
-  // Validate the stored JWT and populate user list cache on startup
+  // A failed refresh is not a missing account; stale requests never switch accounts.
   useEffect(() => {
-    // Verify the token first so the shell can render. Public user cache is secondary.
-    validateToken().then((result) => {
+    let cancelled = false;
+    const cached = getStoredUser();
+    if (getStoredToken() && !cached) setAuthLoading(true);
+    validateToken().then(result => {
+      if (cancelled) return;
       if (result.ok) {
         setCurrentUser(result.user);
-        if (result.user.role === "admin" || result.user.role === "contractor") {
-          void loadAllUsers();
-        }
-        const params = new URLSearchParams(window.location.search);
-        const stripe = params.get("stripe");
-        if (result.user.role === "contractor" && (stripe === "return" || stripe === "refresh")) {
-          setPage("contractor-dashboard");
-        }
+        setAuthRecoveryMessage(result.source === "cached" ? "Your saved sign-in is available, but the server could not refresh it. Your account has not been removed." : "");
+        if (!cached) setPage(roleHomePage(result.user.role));
+        if (result.user.role === "admin" || result.user.role === "contractor") void loadAllUsers();
+        const stripe = new URLSearchParams(window.location.search).get("stripe");
+        if (result.user.role === "contractor" && (stripe === "return" || stripe === "refresh")) setPage("contractor-dashboard");
       } else if (result.reason === "invalid") {
-        // Server rejected the JWT — clear the stale session
-        clearSession();
         setCurrentUser(null);
-        setPage("home");
+        setAuthRecoveryMessage("Your sign-in expired. Sign in again to access your saved profile and properties.");
+        setPage(cached?.role === "admin" ? "admin-login" : cached?.role === "contractor" ? "contractor-login" : "homeowner-login");
+      } else if (result.reason === "network") {
+        setAuthRecoveryMessage("We could not verify your saved sign-in. Retry when the connection returns; you do not need to create another account.");
       }
-      // Always resolve the auth loading state so dashboards can render (or redirect)
       setAuthLoading(false);
     });
-    // Only run on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { cancelled = true; };
+  }, [authRetry]);
+
+  useEffect(() => { if (currentUser) lastSignedInRole.current = currentUser.role; }, [currentUser]);
+
+  useEffect(() => {
+    const syncSession = (event: StorageEvent) => {
+      if (event.key !== "fixbridge-auth-token" && event.key !== "fixbridge-user-cache" && event.key !== null) return;
+      const cached = getStoredUser();
+      setCurrentUser(cached);
+      if (!getStoredToken()) { setAuthRecoveryMessage(""); setPage(lastSignedInRole.current === "admin" ? "admin-login" : lastSignedInRole.current === "contractor" ? "contractor-login" : "homeowner-login"); }
+      else if (cached) setPage(roleHomePage(cached.role));
+      setAuthRetry(attempt => attempt + 1);
+    };
+    window.addEventListener("storage", syncSession);
+    return () => window.removeEventListener("storage", syncSession);
   }, []);
 
   useEffect(() => {
@@ -1094,6 +778,7 @@ export default function App() {
           />
         )}
 
+        {authRecoveryMessage && <div role="status" className="relative z-50 flex flex-wrap items-center justify-center gap-3 border-b border-border bg-muted p-3 text-sm"><span>{authRecoveryMessage}</span><button type="button" disabled={authLoading} onClick={() => setAuthRetry(attempt => attempt + 1)} className="rounded-lg border border-border bg-background px-3 py-1.5 font-semibold disabled:opacity-50">Retry sign-in check</button></div>}
         {/* Page content */}
         <motion.div
           key={page}
@@ -1121,6 +806,8 @@ export default function App() {
             />
           )}
 
+          {SOLUTION_PAGES.some(p => p.page === page) && <SolutionPage page={page} />}
+
           {page === "go-pro" && (
             <GoProPublicPage
               currentUser={currentUser}
@@ -1134,6 +821,8 @@ export default function App() {
 
           <SubscriptionCancelModal
             open={showSubscriptionCancel}
+            checking={subscriptionCancelChecking}
+            membershipActive={subscriptionCancelActive}
             onClose={() => setShowSubscriptionCancel(false)}
             onTryAgain={() => {
               setShowSubscriptionCancel(false);
@@ -1218,11 +907,12 @@ export default function App() {
               }}
             >
               <HomeownerDashboard
+              key={`homeowner-session-${currentUser.id}`}
               onLogout={() => handleSignOut("home")}
               user={currentUser}
               isDark={isDark}
               onToggleDark={toggleDark}
-              onUserUpdated={(u) => setCurrentUser(u)}
+              onUserUpdated={setCurrentUser}
               initialTab={
                 postPaymentDashboard
                   ? "go-pro"
@@ -1237,7 +927,9 @@ export default function App() {
               }
               showSubscriptionSuccess={showSubscriptionSuccess}
               subscriptionSuccessPlanCode={subscriptionSuccessPlan}
+              confirmedSubscriptionUserId={confirmedSubscriptionUserId}
               subscriptionActivating={subscriptionActivating}
+              subscriptionConfirmationDelayed={subscriptionConfirmationDelayed}
               onDismissSubscriptionSuccess={() => {
                 setShowSubscriptionSuccess(false);
                 setSubscriptionSuccessPlan(null);
@@ -1251,6 +943,7 @@ export default function App() {
           {page === "contractor-dashboard" && currentUser && currentUser.role === "contractor" && !authLoading && (
             <AppErrorBoundary section="contractor-dashboard">
               <ContractorDashboard
+              key={`contractor-session-${currentUser.id}`}
               onLogout={() => handleSignOut("contractors")}
               user={currentUser}
               isDark={isDark}
@@ -1262,6 +955,7 @@ export default function App() {
           {page === "admin" && currentUser?.role === "admin" && !authLoading && (
             <AppErrorBoundary section="admin-dashboard">
               <AdminPanel
+                key={`admin-session-${currentUser.id}`}
                 onBack={() => navigate(marketingContext)}
                 onSignOut={() => handleSignOut("admin-login")}
                 user={currentUser}

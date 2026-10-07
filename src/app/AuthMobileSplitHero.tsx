@@ -1,5 +1,6 @@
 import { motion } from "motion/react";
 import { ArrowLeft, Shield, Star, MapPin, HardHat, TrendingUp, Lock, KeyRound } from "lucide-react";
+import RoleBrandLogo from "./RoleBrandLogo";
 import { BrandLogo } from "./BrandLogo";
 import { brand } from "../config/brand";
 import { AUTH_ROLE_PHOTOS } from "./authRoleAssets";
@@ -62,10 +63,10 @@ export default function AuthMobileSplitHero({
               className="rounded-md outline-none transition active:scale-95 focus-visible:ring-2 focus-visible:ring-white/40"
               aria-label={`${brand.productName} home`}
             >
-              <BrandLogo variant="auth" tone="color" className="brightness-0 invert" />
+              {role === "homeowner" ? <BrandLogo variant="auth" tone="color" className="brightness-0 invert" /> : <RoleBrandLogo />}
             </button>
           ) : (
-            <BrandLogo variant="auth" tone="color" className="brightness-0 invert" />
+            role === "homeowner" ? <BrandLogo variant="auth" tone="color" className="brightness-0 invert" /> : <RoleBrandLogo />
           )}
           {onBack ? (
             <button

@@ -1,0 +1,41 @@
+{
+  "home-sample-brick.jpg": {
+    "photographer": "Roger Starnes Sr",
+    "source": "https://unsplash.com/photos/a-brick-house-with-a-green-lawn-and-trees-RUy7Q-8K6ag",
+    "license": "https://unsplash.com/license",
+    "usage": "Illustrative sample property cover; never identified as the homeowner's property",
+    "verification": "Source and commercial-use license inspected by parent research, 2026-10-02"
+  },
+  "login-living-room.jpg": {
+    "source": "https://www.pexels.com/photo/a-tidy-interior-of-a-house-7404940/",
+    "photographer": "cottonbro studio",
+    "license": "https://www.pexels.com/license/",
+    "usage": "Illustrative login interior"
+  },
+  "service-garden.jpg": {
+    "source": "https://www.pexels.com/photo/a-person-mowing-the-lawn-6728926/",
+    "photographer": "Magic K",
+    "license": "https://www.pexels.com/license/",
+    "usage": "Optional illustrative garden image"
+  },
+  "service-electrical.jpg": {
+    "photographer": "Clay Banks",
+    "source": "https://unsplash.com/photos/modern-kitchen-with-island-and-pendant-lights-i6SOaGYmNOA",
+    "license": "https://unsplash.com/license",
+    "usage": "Illustrative household service context; not work evidence or a booked professional",
+    "verification": "Source, image and free commercial-use license inspected by parent research, 2026-10-02"
+  },
+  "service-hvac.jpg": {
+    "source": "https://www.pexels.com/photo/repairman-repairing-a-air-conditioner-5463587/",
+    "photographer": "Jose Andres Pacheco Cortes",
+    "license": "https://www.pexels.com/license/",
+    "usage": "Illustrative HVAC category image; not a booked professional"
+  },
+  "service-plumbing.jpg": {
+    "photographer": "GoodLifeConstruction",
+    "source": "https://unsplash.com/photos/kitchen-sink-and-cabinets-with-a-large-window-view-J9o4fBedgqY",
+    "license": "https://unsplash.com/license",
+    "usage": "Illustrative household service context; not work evidence or a booked professional",
+    "verification": "Source, image and free commercial-use license inspected by parent research, 2026-10-02"
+  }
+}

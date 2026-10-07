@@ -3,7 +3,7 @@
  * Uses real service area data — no fabricated ratings.
  */
 
-import { contractorTradesMatchCategory } from './service-catalog.js';
+import { contractorHasSelectedService } from './contractor-service-capabilities.js';
 
 function normalizeZip(value) {
   if (value == null || value === '') return null;
@@ -43,12 +43,13 @@ export function contractorCoversJobZip(contractor, jobZip) {
 export function isContractorEligibleForJob(contractor, job, { requireCompliance = true } = {}) {
   if (!contractor || contractor.role !== 'contractor') return false;
   if (contractor.is_blocked) return false;
+  if (contractor.temporary_unavailable === true) return false;
   if (requireCompliance) {
-    if (contractor.dispatch_eligible === false) return false;
+    if (contractor.dispatch_eligible !== true) return false;
     const compliance = String(contractor.compliance_status || '').toLowerCase();
     if (['suspended', 'rejected', 'blocked'].includes(compliance)) return false;
   }
-  if (!contractorTradesMatchCategory(job.category, contractor.trade)) return false;
+  if (!contractorHasSelectedService(contractor, job)) return false;
   return contractorCoversJobZip(contractor, job.zip || job.city_state_zip);
 }
 
@@ -56,7 +57,7 @@ export function rankEligibleContractors(contractors, job) {
   return contractors
     .map((c) => {
       let score = 0;
-      if (contractorTradesMatchCategory(job.category, c.trade)) score += 40;
+      if (contractorHasSelectedService(c, job)) score += 40;
       if (contractorCoversJobZip(c, job.zip || job.city_state_zip)) score += 40;
       if (c.dispatch_eligible === true) score += 20;
       else {

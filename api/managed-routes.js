@@ -1,5 +1,18 @@
+import { contractorHasSelectedService, validateSelectedServiceIds } from './contractor-service-capabilities.js';
+import { validateBookingSchedule } from './booking-schedule.js';
+import { checkoutPaymentState, reconcileSubscriptionCheckoutPayment } from './checkout-payment-state.js';
+import { reconcileBookingCheckout, assertPendingBookingPayment, withBookingCheckoutLock } from './professional-booking-checkout.js';
+import {registerPropertyCoverRoutes,propertyCoverDto} from './property-cover.js';
+import { normalizeRepairPhotos, repairPhotosFromRow } from './repair-photos.js';
+function requireSelectedContractorService(contractor, job, res) {
+  if (contractorHasSelectedService(contractor, job)) return true;
+  res.status(409).json({ ok: false, code: 'CONTRACTOR_SERVICE_NOT_SELECTED', message: 'Contractor must explicitly select this service before accepting new work.' });
+  return false;
+}
+
 // FIXBRIDGE_STAGE_B_CONTRACTOR_BIDS_PROFILE_FINAL
 import crypto from 'crypto';
+import { reportedMaterials } from './reported-materials.js';
 import bcrypt from 'bcryptjs';
 import {
   mergePricingRules,
@@ -12,10 +25,13 @@ import {
   getLocationFactorByZip,
   getZipMarketLabel,
   resolveCustomerVisitFee,
+  resolveBookingFeeCents,
+  validateBookingFeeCents,
   applyVisitFeeCredit,
 } from './pricing.js';
 import {
   buildProfessionalDispatchBreakdown,
+  validateServiceBookingPricing,
   buildProfessionalRequestBetaSnapshot,
   saveProfessionalDispatchSnapshot,
 } from './professional-dispatch-pricing.js';
@@ -40,7 +56,7 @@ import {
   resolveFeatureEntitlement,
 } from './homecare-config.js';
 import { buildPropertyAIContext } from './property-ai-context.js';
-import { storeFixeraCaseMedia } from './fixera/case-media.js';
+import { storeFixeraCaseMedia, storeFixeraCasePhotos } from './fixera/case-media.js';
 import { recordFixeraInteraction, persistFixeraInteraction } from './fixera/experience/store.js';
 import { retrieveGlobalKnowledge } from './fixa/knowledge/knowledgeWriter.js';
 import { appendAssessmentRevision } from './fixera/assessment-history.js';
@@ -541,6 +557,7 @@ function serializeJob(row, viewer) {
     title: row.title,
     description: row.description,
     mediaDataUrl: row.media_data_url,
+    mediaDataUrls: repairPhotosFromRow(row),
     mediaType: row.media_type,
     equipmentKey: row.equipment_key || null,
     preferredDate: row.preferred_date,
@@ -1156,6 +1173,7 @@ async function runManagedJobAssessment(pool, job, viewer) {
     category: job.category,
     description: job.description,
     imageDataUrl: job.media_data_url,
+    imageDataUrls: repairPhotosFromRow(job),
     task: 'repair_assessment',
     jobId: recordId,
     homeownerId: job.homeowner_user_id,
@@ -2149,6 +2167,17 @@ export async function convertPendingServiceRequest(pool, pendingServiceRequestId
     }
     job.booking_id = bookingId;
     job.equipment_key = pending.equipment_key || null;
+    await client.query(`UPDATE managed_jobs SET media_data_urls=$1::jsonb WHERE id=$2 AND homeowner_user_id=$3`, [JSON.stringify(repairPhotosFromRow(pending)), job.id, pending.homeowner_user_id]);
+    job.media_data_urls = repairPhotosFromRow(pending);
+    if (isProfessionalPayment && stripeSessionId) {
+      const receipt = (await client.query("SELECT meta FROM payments WHERE stripe_session_id=$1 AND user_id=$2 ORDER BY id DESC LIMIT 1", [stripeSessionId, pending.homeowner_user_id])).rows[0];
+      const snapshot = parseJson(receipt?.meta)?.bookingBreakdown;
+      if (snapshot && snapshot.authorizedNowCents === paidAmountCents) {
+        await client.query('UPDATE managed_jobs SET checkout_snapshot=$2::jsonb WHERE id=$1', [job.id, JSON.stringify(snapshot)]);
+        job.checkout_snapshot = snapshot;
+      }
+    }
+
 
     await client.query(
       `UPDATE media_objects
@@ -2256,6 +2285,7 @@ async function purgeExpiredPendingServiceRequests(pool) {
 }
 
 export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser }) {
+  registerPropertyCoverRoutes(app,{pool,requireAuth});
   void ensurePendingServiceRequestExpiry(pool)
     .then(() => purgeExpiredPendingServiceRequests(pool))
     .catch((error) => console.warn('[PENDING SERVICE REQUEST] expiry setup failed:', error?.message || error));
@@ -2280,6 +2310,20 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
   });
 
   // ── Pricing rules ──────────────────────────────────────────────────────────
+  app.get('/api/professional-booking-fee', requireAuth, async (req, res) => {
+    try {
+      const rules = await loadPricingRules(pool);
+      let job = { category: String(req.query.category || ''), service_timing: String(req.query.serviceTiming || 'weekday') };
+      if (req.query.pendingServiceRequestId) {
+        const pending = (await pool.query('SELECT * FROM pending_service_requests WHERE id=$1 AND homeowner_user_id=$2', [Number(req.query.pendingServiceRequestId), req.authUser.id])).rows[0];
+        if (!pending) return res.status(404).json({ ok:false, message:'Request not found.' });
+        job = { ...pending, service_timing: job.service_timing };
+      }
+      const breakdown = buildProfessionalDispatchBreakdown(job, rules);
+      res.json({ ok:breakdown.ok, amountCents:breakdown.authorizedNowCents, amount:breakdown.authorizedNow, currency:'usd', breakdown });
+    } catch { res.status(500).json({ ok:false, message:'Could not load booking fee.' }); }
+  });
+
   app.get('/api/pricing/rules', requireAuth, requireAdmin, need('pricing.view'), async (_req, res) => {
     try {
       const rules = await loadPricingRules(pool);
@@ -2292,7 +2336,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
   app.put('/api/pricing/rules', requireAuth, requireAdmin, requireAdminWrite, need('pricing.edit'), async (req, res) => {
     try {
       const prevRules = await loadPricingRules(pool);
-      const rules = mergePricingRules(req.body?.rules || req.body);
+      const patch = req.body?.rules || req.body || {};
+      if (patch.booking_fee_cents != null && !validateBookingFeeCents(patch.booking_fee_cents)) {
+        return res.status(400).json({ ok:false, code:'INVALID_BOOKING_FEE', message:'Booking fee must be a positive USD amount with at most two decimal places.' });
+      }
+      const bookingPricingValidation = validateServiceBookingPricing(patch.professional_dispatch_pricing || prevRules.professional_dispatch_pricing || {});
+      if (!bookingPricingValidation.ok) return res.status(400).json({ ok:false, code:'INVALID_SERVICE_BOOKING_PRICING', message:bookingPricingValidation.message });
+      const rules = mergePricingRules({ ...prevRules, ...patch });
       const prevVersion = prevRules?.professional_dispatch_pricing?.version || 0;
       const nextVersion = rules?.professional_dispatch_pricing?.version || prevVersion;
       const pricingChanged =
@@ -2499,11 +2549,33 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     return propertySystemLabelFromKey(homeSystemKeyFromJob({ category: s, title: s })) || s;
   }
 
+  // Commit the repair outcome and its property history together. Buffer the HTTP
+  // response so a failed write cannot report success before rollback.
+  function outcomeTransaction(handler, failureCode = 'DIY_OUTCOME_SAVE_FAILED') {
+    return async (req, res) => {
+      let client;
+      let status = 200, payload;
+      const response = { status(code) { status = code; return this; }, json(value) { payload = value; return this; } };
+      try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        await handler(req, response, client);
+        await client.query(status >= 400 ? 'ROLLBACK' : 'COMMIT');
+        return res.status(status).json(payload);
+      } catch (error) {
+        if (client) await client.query('ROLLBACK').catch(() => {});
+        return res.status(500).json({ ok: false, code: failureCode, message: 'Could not save the record. Please retry.' });
+      } finally { client?.release(); }
+    };
+  }
+
   /** Update passport home_systems + health history when a FixBridge job completes. */
   async function syncPropertyHistoryFromCompletedJob(pool, job, report) {
     if (!job.property_id) return;
-    const { rows: props } = await pool.query(`SELECT * FROM properties WHERE id=$1`, [job.property_id]);
-    if (!props[0]) return;
+    const access = await assertPropertyAccess(pool, job.property_id, job.homeowner_user_id);
+    if (!access) throw new Error('Property access could not be verified for completion history.');
+    const { rows: props } = await pool.query('SELECT * FROM properties WHERE id=$1 AND owner_user_id=$2', [job.property_id, access.owner_user_id]);
+    if (!props[0]) throw new Error('Property was not found for completion history.');
 
     const completedAt = report?.completedAt || new Date().toISOString();
     const completedDate = completedAt.slice(0, 10);
@@ -2559,7 +2631,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       else systems.push(entry);
     }
 
-    const previousServices = Array.isArray(profile.previousServices) ? [...profile.previousServices] : [];
+    const previousServices = Array.isArray(profile.previousServices) ? profile.previousServices.filter(entry => entry?.id !== `job-${job.id}`) : [];
     previousServices.unshift({
       id: `job-${job.id}`,
       system: propSystem || 'Other',
@@ -2570,12 +2642,18 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         .join(' · ')
         .slice(0, 400),
       relatedJobId: Number(job.id),
+      equipmentKey: job.equipment_key || systemKey || null,
+      source: report?.completedBy?.role === 'admin' ? 'ADMIN_REPORTED' : 'CONTRACTOR_REPORTED',
+      verification: job.customer_confirmed_at ? 'CUSTOMER_CONFIRMED' : 'TECHNICIAN_REPORTED',
+      diagnosis: report?.actualDiagnosis || report?.diagnosis || report?.findings || null,
+      repair: report?.actualRepair || report?.repairPerformed || report?.summary || null,
+      partsUsed: reportedMaterials(report),
     });
 
     const homeUpdateState = profile.homeUpdateState && typeof profile.homeUpdateState === 'object'
       ? { ...profile.homeUpdateState }
       : {};
-    const history = Array.isArray(homeUpdateState.history) ? [...homeUpdateState.history] : [];
+    const history = Array.isArray(homeUpdateState.history) ? homeUpdateState.history.filter(entry => entry?.id !== `job-${job.id}-resolved`) : [];
     history.unshift({
       id: `job-${job.id}-resolved`,
       systemLabel: propSystem || systemKey || 'Home system',
@@ -2595,10 +2673,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       homeUpdateState,
     };
 
-    await pool.query(`UPDATE properties SET home_systems=$1, health_profile=$2 WHERE id=$3`, [
+    await pool.query(`UPDATE properties SET home_systems=$1, health_profile=$2 WHERE id=$3 AND owner_user_id=$4`, [
       JSON.stringify(homeSystems),
       JSON.stringify(nextProfile),
       job.property_id,
+      access.owner_user_id,
     ]);
 
     try {
@@ -2639,7 +2718,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     const source = String(memorySource || 'contractor').slice(0, 40);
     const { rows: existing } = await pool.query(
       `SELECT id FROM property_memory_suggestions
-       WHERE property_id=$1 AND owner_user_id=$2 AND source_ref=$3 AND status='pending'
+       WHERE property_id=$1 AND owner_user_id=$2 AND source_ref=$3
          AND source IN ('contractor','completed_job','admin','ai_extraction')`,
       [job.property_id, job.homeowner_user_id, String(job.id)]
     );
@@ -2692,6 +2771,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     return {
       id: Number(r.id),
       label: r.label,
+      cover: propertyCoverDto(r),
       addressLine1: r.address_line1,
       addressLine2: r.address_line2,
       city: r.city,
@@ -2724,6 +2804,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         notes: d.notes,
         systemKey: d.system_key,
         createdAt: d.created_at,
+        analysisStatus: 'not_analyzed',
       })),
       healthProfile,
       timezone: r.timezone || null,
@@ -3131,21 +3212,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       );
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Document not found.' });
       const d = rows[0];
-      const result = await extractDocument({
-        category: d.category,
-        title: d.title,
-        fileName: d.file_name,
-        mimeType: d.mime_type,
-        notes: d.notes,
-        dataUrl: d.data_url,
-        systemKey: d.system_key,
-      });
+      // No supported local parser exists for the accepted formats. Never send vault
+      // file bytes to a provider merely to review saved property details.
       res.json({
         ok: true,
-        extraction: result.extraction,
-        source: result.source,
-        model: result.model || null,
-        message: result.error || null,
+        extraction: { systemKey: d.system_key || '' },
+        source: 'not_analyzed',
+        analysisStatus: 'not_analyzed',
+        message: 'File saved. Contents have not been analyzed. Enter only details you have reviewed yourself.',
       });
     } catch (e) {
       console.error(e);
@@ -3153,7 +3227,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
-  app.post('/api/properties/:id/documents/:docId/apply-extract', requireAuth, requireHomeCareFeature('document_vault'), async (req, res) => {
+  app.post('/api/properties/:id/documents/:docId/apply-extract', requireAuth, requireHomeCareFeature('document_vault'), outcomeTransaction(async (req, res, pool) => {
     try {
       const propertyId = Number(req.params.id);
       const docId = Number(req.params.docId);
@@ -3162,7 +3236,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         return res.status(400).json({ ok: false, message: 'extraction is required.' });
       }
       const { rows: owned } = await pool.query(
-        `SELECT * FROM properties WHERE id=$1 AND owner_user_id=$2`,
+        `SELECT * FROM properties WHERE id=$1 AND owner_user_id=$2 FOR UPDATE`,
         [propertyId, req.authUser.id]
       );
       if (!owned[0]) return res.status(404).json({ ok: false, message: 'Property not found.' });
@@ -3205,23 +3279,27 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         if (extraction.date) patch.lastInspection = String(extraction.date).slice(0, 32);
       }
 
+      patch.documentSourceRefs = [
+        ...(idx >= 0 && Array.isArray(homeSystems[idx].documentSourceRefs) ? homeSystems[idx].documentSourceRefs.filter(ref => Number(ref.documentId) !== docId) : []),
+        { documentId: docId, source: 'HOMEOWNER_REVIEWED', verification: 'HOMEOWNER_REPORTED', reviewedAt: new Date().toISOString() },
+      ];
       if (idx >= 0) homeSystems[idx] = { ...homeSystems[idx], ...patch };
       else homeSystems.push(patch);
 
       if (extraction.systemKey) {
         await pool.query(
-          `UPDATE property_documents SET system_key=$1, notes=COALESCE($2, notes) WHERE id=$3`,
+          `UPDATE property_documents SET system_key=$1, notes=COALESCE($2, notes) WHERE id=$3 AND property_id=$4 AND owner_user_id=$5`,
           [
             String(extraction.systemKey).slice(0, 60),
             extraction.summary ? String(extraction.summary).slice(0, 500) : null,
-            docId,
+            docId, propertyId, req.authUser.id,
           ]
         );
       }
 
-      await pool.query(`UPDATE properties SET home_systems=$1 WHERE id=$2`, [
+      await pool.query(`UPDATE properties SET home_systems=$1 WHERE id=$2 AND owner_user_id=$3`, [
         JSON.stringify(homeSystems),
-        propertyId,
+        propertyId, req.authUser.id,
       ]);
       const docsAll = await loadPropertyDocuments(propertyId, req.authUser.id);
       const { rows: fresh } = await pool.query(`SELECT * FROM properties WHERE id=$1`, [propertyId]);
@@ -3230,7 +3308,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       console.error(e);
       res.status(500).json({ ok: false, message: 'Could not apply extraction.' });
     }
-  });
+  }, 'DOCUMENT_REVIEW_SAVE_FAILED'));
 
   app.put('/api/properties/:id/health', requireAuth, async (req, res) => {
     try {
@@ -3611,7 +3689,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         });
       }
 
-      const b = req.body || {};
+      const b = { ...(req.body || {}) };
+      const repairPhotos = normalizeRepairPhotos(b.mediaDataUrls, b.mediaDataUrl);
+      if (b.mediaDataUrls != null) { b.mediaDataUrl = repairPhotos[0] || null; b.mediaType = repairPhotos.length ? "image" : null; }
 
       if (!b.description && !b.title) {
         return res.status(400).json({
@@ -3973,6 +4053,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           );
 
         const pending = pendingRows[0];
+        pending.media_data_urls = repairPhotos;
 
         if (equipmentKey) {
           await pool.query(
@@ -3983,13 +4064,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         }
         let mediaObject = null;
         try {
-          mediaObject = await storeFixeraCaseMedia(pool, {
+          mediaObject = await storeFixeraCasePhotos(pool, {
             userId: req.authUser.id,
             caseType: 'pending_service_request',
             caseId: pending.id,
             propertyId: selectedProperty?.id || null,
             equipmentKey,
             dataUrl: b.mediaDataUrl,
+            photos: repairPhotos,
           });
         } catch (mediaError) {
           await pool.query(
@@ -4124,6 +4206,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       );
 
       let job = rows[0];
+      job.media_data_urls = repairPhotos;
 
       if (equipmentKey) {
         await pool.query(
@@ -4134,13 +4217,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
       let mediaObject = null;
       try {
-        mediaObject = await storeFixeraCaseMedia(pool, {
+        mediaObject = await storeFixeraCasePhotos(pool, {
           userId: req.authUser.id,
           caseType: 'managed_job',
           caseId: job.id,
           propertyId: selectedProperty?.id || null,
           equipmentKey,
           dataUrl: b.mediaDataUrl,
+            photos: repairPhotos,
         });
       } catch (mediaError) {
         await pool.query(
@@ -4248,22 +4332,26 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         e
       );
 
-      return res.status(500).json({
+      return res.status(e.status || 500).json({
         ok: false,
-        message: 'Could not create job.',
+        code: e.code || undefined,
+        message: e.status === 400 ? e.message : 'Could not create job.',
       });
     }
   });
 
-  app.post('/api/managed/jobs/:id/fixera-diy', requireAuth, async (req, res) => {
+  app.post('/api/managed/jobs/:id/fixera-diy', requireAuth, outcomeTransaction(async (req, res, pool) => {
     try {
+      if (!(await getHomeCareEntitlement(pool, req.authUser.id)).hasAccess) {
+        return res.status(403).json({ ok: false, code: 'HOMECARE_PLAN_REQUIRED', message: 'An active HomeCare plan is required for DIY guidance.' });
+      }
       const jobId = Number(req.params.id);
       if (!Number.isInteger(jobId) || jobId <= 0) {
         return res.status(400).json({ ok: false, code: 'INVALID_JOB_ID', message: 'A valid repair case is required.' });
       }
       const { rows } = await pool.query(
         `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, ai_assessment, completion_report
-         FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2`,
+         FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2 FOR UPDATE`,
         [jobId, req.authUser.id]
       );
       const job = rows[0];
@@ -4279,14 +4367,21 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         return res.status(400).json({ ok: false, code: 'INVALID_STEP_INDEX', message: 'A valid repair step is required.' });
       }
       const assessment = parseJsonSafe(job.ai_assessment, {}) || {};
-      const diySteps = Array.isArray(assessment.diy_steps) ? assessment.diy_steps : [];
+      if (event.startsWith('step_') && (assessment.professional_required === true || assessment.safe_diy_allowed === false || ['red', 'high', 'danger', 'critical'].includes(String(assessment.diy_risk_level || '').toLowerCase()))) {
+        return res.status(409).json({ ok: false, code: 'DIY_NOT_ALLOWED', message: 'This assessment requires professional assistance. DIY steps cannot be unlocked by an acknowledgment.' });
+      }
+      // Validate against the same usable instructions shown by the homeowner guide.
+      const diySteps = Array.isArray(assessment.diy_guide_steps) && assessment.diy_guide_steps.length
+        ? assessment.diy_guide_steps.filter((step) => step && typeof step === 'object' && String(step.instruction || '').trim())
+        : (Array.isArray(assessment.diy_steps) ? assessment.diy_steps.filter((step) => typeof step === 'string' && step.trim()) : []);
       if (event.startsWith('step_') && stepIndex >= diySteps.length) {
         return res.status(400).json({ ok: false, code: 'STEP_NOT_IN_ASSESSMENT', message: 'That repair step is not part of this assessment.' });
       }
-      const propertyAccess = event === 'fixed' && job.property_id
+      const recordsOutcome = event === 'fixed' || event === 'still_broken';
+      const propertyAccess = recordsOutcome && job.property_id
         ? await assertPropertyAccess(pool, job.property_id, req.authUser.id)
         : null;
-      if (event === 'fixed' && job.property_id && !propertyAccess) {
+      if (recordsOutcome && job.property_id && !propertyAccess) {
         return res.status(403).json({ ok: false, code: 'PROPERTY_ACCESS_DENIED', message: 'Property access could not be verified.' });
       }
       const outcomeList = (value) => [...new Set(String(value || '').split(/[,;\n]/).map((item) => item.trim().slice(0, 100)).filter(Boolean))].slice(0, 12);
@@ -4348,7 +4443,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         [JSON.stringify(nextReport), jobId, req.authUser.id]
       );
 
-      if (event === 'fixed' && job.property_id) {
+      if (recordsOutcome && job.property_id) {
         const { rows: propertyRows } = await pool.query(
           `SELECT health_profile, home_systems FROM properties WHERE id=$1 AND owner_user_id=$2`,
           [job.property_id, propertyAccess.owner_user_id]
@@ -4376,7 +4471,8 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           date: new Date().toISOString().slice(0, 10),
           notes: serviceNotes,
           source: 'HOMEOWNER_DIY',
-          verification: 'CUSTOMER_CONFIRMED_OUTCOME',
+          verification: event === 'fixed' ? 'CUSTOMER_CONFIRMED_OUTCOME' : 'CUSTOMER_REPORTED_STILL_BROKEN',
+          outcome,
           relatedJobId: jobId,
           equipmentKey: job.equipment_key || null,
           equipment: equipment ? { name: equipment.name || null, brand: equipment.brand || null, model: equipment.model || null } : null,
@@ -4399,7 +4495,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       console.error('[fixera-diy] outcome save failed', { jobId: req.params.id, error: e?.message || String(e) });
       return res.status(500).json({ ok: false, code: 'DIY_OUTCOME_SAVE_FAILED', message: 'Could not save the repair outcome.' });
     }
-  });
+  }));
 
   app.post('/api/managed/jobs/:id/assess', requireAuth, async (req, res) => {
     try {
@@ -4410,6 +4506,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const job = rows[0];
       if (Number(job.homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
+      }
+      if (req.authUser.role === 'homeowner' && !(await getHomeCareEntitlement(pool, req.authUser.id)).hasAccess) {
+        return res.status(403).json({ ok: false, code: 'HOMECARE_PLAN_REQUIRED', message: 'An active HomeCare plan is required for AI assessment.' });
       }
 
       const currentStatus = resolveAssessmentStatus(job);
@@ -4585,25 +4684,25 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
-  app.post('/api/pending-service-requests/:id/professional-checkout', requireAuth, async (req, res) => {
+  app.post('/api/pending-service-requests/:id/professional-checkout', requireAuth, withBookingCheckoutLock(pool, 'pending_service_requests', async (req, res) => {
+    const checkoutPool = req.bookingCheckoutPool;
     try {
-      await purgeExpiredPendingServiceRequests(pool);
       const pendingId = Number(req.params.id);
       if (!Number.isFinite(pendingId) || pendingId <= 0) {
         return res.status(400).json({ ok: false, message: 'Invalid pending service request.' });
       }
-      const { rows } = await pool.query(`SELECT * FROM pending_service_requests WHERE id=$1`, [pendingId]);
+      const { rows } = await checkoutPool.query(`SELECT * FROM pending_service_requests WHERE id=$1`, [pendingId]);
       const pending = rows[0];
       if (!pending) return res.status(404).json({ ok: false, message: 'Pending service request not found or expired.' });
-      if (pending.checkout_expires_at && new Date(pending.checkout_expires_at).getTime() <= Date.now()) {
-        await pool.query(`DELETE FROM pending_service_requests WHERE id=$1`, [pendingId]);
-        return res.status(410).json({ ok: false, code: 'PENDING_SERVICE_REQUEST_EXPIRED', message: 'This saved request expired after 36 hours without payment.' });
-      }
       if (Number(pending.homeowner_user_id) !== Number(req.authUser.id)) {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
+      if (pending.checkout_expires_at && new Date(pending.checkout_expires_at).getTime() <= Date.now()) {
+        await checkoutPool.query(`DELETE FROM pending_service_requests WHERE id=$1`, [pendingId]);
+        return res.status(410).json({ ok: false, code: 'PENDING_SERVICE_REQUEST_EXPIRED', message: 'This saved request expired after 36 hours without payment.' });
+      }
       if (pending.managed_job_id) {
-        const { rows: jobs } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [pending.managed_job_id]);
+        const { rows: jobs } = await checkoutPool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [pending.managed_job_id]);
         return res.json({ ok: true, alreadyConverted: true, managedJob: jobs[0] ? serializeJob(jobs[0], req.authUser) : null });
       }
       // Professional checkout is intentionally available without a completed
@@ -4617,12 +4716,22 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const serviceTiming = String(req.body?.serviceTiming || pending.service_timing || 'weekday').slice(0, 40);
       const preferredDate = req.body?.preferredDate ? String(req.body.preferredDate).slice(0, 32) : null;
       const preferredTimeSlot = String(req.body?.preferredTimeSlot || pending.preferred_time_slot || '9-11').slice(0, 40);
+      const scheduleError = validateBookingSchedule({ serviceTiming, preferredTimeSlot, preferredDate });
+      if (scheduleError) return res.status(400).json({ ok:false, code:'INVALID_BOOKING_SCHEDULE', message:scheduleError });
       const propertyPurpose = String(req.body?.propertyPurpose || pending.property_purpose || 'current_homeowner').slice(0, 80);
       const transactionStage = String(req.body?.transactionStage || pending.transaction_stage || 'ongoing_maintenance').slice(0, 80);
       const contactPhone = req.body?.contactPhone != null ? String(req.body.contactPhone).slice(0, 40) : pending.contact_phone;
-      const amountCents = 12500;
+      const bookingBreakdown = buildProfessionalDispatchBreakdown({ ...pending, service_timing: serviceTiming }, await loadPricingRules(checkoutPool));
+      const amountCents = bookingBreakdown.authorizedNowCents;
+      if (!bookingBreakdown.ok || amountCents <= 0) return res.status(400).json({ ok:false, code:'BOOKING_FEE_NOT_PAYABLE', message:'A zero-dollar booking fee requires a separately approved no-charge booking workflow. No payment was started.' });
+      if (Number(req.body?.authorizedAmountCents) !== amountCents) {
+        return res.status(409).json({ ok:false, code:'PRICING_MISMATCH', amountCents, amount:amountCents / 100, message:'Booking fee changed. Review the current amount and acknowledge it before continuing.' });
+      }
+      if (['succeeded','paid','authorized','captured'].includes(String(pending.payment_status))) {
+        return res.status(409).json({ ok:false, code:'BOOKING_PAYMENT_CONFIRMING', message:'Your booking payment is being confirmed. Refresh before trying again.' });
+      }
 
-      await pool.query(
+      await checkoutPool.query(
         `UPDATE pending_service_requests SET
            service_timing=$2,
            preferred_date=$3,
@@ -4646,8 +4755,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
       const origin = req.get('origin') || req.get('referer');
       let checkout;
+      let checkoutReused = false;
       try {
-        checkout = await createCheckoutSession({
+        const existing = await reconcileBookingCheckout(checkoutPool, { entityId:pendingId, userId:req.authUser.id, paymentType:'pending_professional_fee', amountCents });
+        checkoutReused = Boolean(existing.checkout);
+        checkout = existing.checkout || await createCheckoutSession({
+          idempotencyKey: `booking:pending:${pendingId}:${amountCents}:${existing.previousSessionId}`,
           amountCents,
           customerEmail: req.authUser.email,
           description: `${brand.productName} Professional Service Request — Pending #${pendingId}`,
@@ -4666,7 +4779,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         return res.status(payErr.status || 502).json({ ok: false, code: payErr.code || 'STRIPE_CHECKOUT_FAILED', message: payErr.message || 'Could not start Stripe checkout.' });
       }
 
-      await pool.query(
+      await checkoutPool.query(
         `UPDATE pending_service_requests SET stripe_session_id=$2, updated_at=NOW() WHERE id=$1`,
         [pendingId, checkout.sessionId]
       );
@@ -4674,7 +4787,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       // Create the payment row before redirecting to Stripe. This gives the
       // authenticated post-return sync a durable reconciliation record even
       // when Stripe's webhook arrives late or is temporarily unavailable.
-      await pool.query(
+      if (!checkoutReused) await checkoutPool.query(
         `INSERT INTO payments (
            user_id,
            payment_type,
@@ -4686,7 +4799,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
            simulated,
            meta
          )
-         SELECT $1,'pending_professional_fee',$2,'usd','pending',$3,'stripe',false,$4
+         SELECT $1::integer,'pending_professional_fee',$2::numeric,'usd','pending',$3,'stripe',false,$4::jsonb
           WHERE NOT EXISTS (
             SELECT 1 FROM payments WHERE stripe_session_id=$3
           )`,
@@ -4697,16 +4810,17 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           JSON.stringify({
             pendingServiceRequestId: pendingId,
             source: 'pending_service_request_checkout',
+            bookingBreakdown,
           }),
         ]
       );
 
-      return res.json({ ok: true, url: checkout.url, amount: 125, amountCents, pendingServiceRequestId: pendingId });
+      return res.json({ ok: true, url: checkout.url, amount: amountCents / 100, amountCents, pendingServiceRequestId: pendingId });
     } catch (e) {
       console.error('pending professional checkout:', e);
       return res.status(500).json({ ok: false, message: 'Could not start professional payment.' });
     }
-  });
+  }));
 
   app.post('/api/pending-service-requests/:id/assess', requireAuth, async (req, res) => {
     try {
@@ -4739,6 +4853,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           message: 'Not allowed.',
         });
       }
+
+      const entitlement = await getHomeCareEntitlement(pool, pending.homeowner_user_id);
+      if (!entitlement.hasAccess) return res.status(403).json({ ok: false, code: 'HOMECARE_PLAN_REQUIRED', message: 'Choose an eligible active HomeCare plan before AI assessment.' });
 
       const currentStatus =
         resolveAssessmentStatus(pending);
@@ -5452,6 +5569,8 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const serviceTiming = b.serviceTiming || job.service_timing || 'weekday';
       const preferredDate = b.preferredDate || null;
       const preferredTimeSlot = b.preferredTimeSlot || job.preferred_time_slot || '9-11';
+      const scheduleError = validateBookingSchedule({ serviceTiming, preferredTimeSlot, preferredDate });
+      if (scheduleError) return res.status(400).json({ ok:false, code:'INVALID_BOOKING_SCHEDULE', message:scheduleError });
       const propertyPurpose = b.propertyPurpose || job.property_purpose || 'current_homeowner';
       const transactionStage = b.transactionStage || job.transaction_stage || 'ongoing_maintenance';
 
@@ -5503,7 +5622,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
   // ── Checkout: optional coupon validate → snapshot → pay ────────────────────
   function buildCheckoutBreakdown(job, rules, discount) {
-    return buildProfessionalDispatchBreakdown(job, rules, discount);
+    if (job.visit_fee_authorized || job.visit_fee_captured) {
+      const historic = parseJson(job.checkout_snapshot);
+      if (historic) return historic;
+      const storedCents = Math.round(Number(job.visit_fee_amount || 0) * 100);
+      const legacy = buildProfessionalDispatchBreakdown(job, rules, null);
+      return { ...legacy, lines:[{ key:'historic_booking', label:'Previously paid booking / dispatch fee', amount_cents:storedCents, line_type:'charge' }], authorizedNowCents:storedCents, authorizedNow:storedCents / 100, finalAmount:storedCents / 100, serviceFee:storedCents / 100, chargesCents:storedCents, subtotalCents:storedCents, pricingLineSumCents:storedCents };
+    }
+    return buildProfessionalDispatchBreakdown(job, rules, null);
   }
 
   app.get('/api/managed/jobs/:id/dispatch-pricing', requireAuth, async (req, res) => {
@@ -5557,7 +5683,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
       const job = rows[0];
-      if (Number(job.homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
+      if (Number(job.homeowner_user_id) !== Number(req.authUser.id) || req.authUser.role !== 'homeowner') {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
       if (job.visit_fee_authorized || job.coupon_redeemed_at) {
@@ -5573,6 +5699,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         });
       }
 
+      return res.status(400).json({ ok:false, code:'BOOKING_FEE_NOT_DISCOUNTABLE', message:'The professional booking fee is the same for all homeowners and does not accept coupons.' });
       // Persist validated coupon on the job for checkout preview only (not redeemed yet).
       await applyValidatedCouponToJob(pool, jobId, checked.discount);
 
@@ -5600,7 +5727,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
       const job = rows[0];
-      if (Number(job.homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
+      if (Number(job.homeowner_user_id) !== Number(req.authUser.id) || req.authUser.role !== 'homeowner') {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
       if (job.visit_fee_authorized || job.coupon_redeemed_at) {
@@ -5628,7 +5755,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Job not found.' });
       let job = rows[0];
-      if (Number(job.homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
+      if (Number(job.homeowner_user_id) !== Number(req.authUser.id) || req.authUser.role !== 'homeowner') {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
       if (job.visit_fee_authorized) {
@@ -5701,13 +5828,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
-  app.post('/api/managed/jobs/:id/pay-dispatch', requireAuth, async (req, res) => {
+  app.post('/api/managed/jobs/:id/pay-dispatch', requireAuth, withBookingCheckoutLock(pool, 'managed_jobs', async (req, res) => {
+    const checkoutPool = req.bookingCheckoutPool;
     try {
       const jobId = Number(req.params.id);
-      let { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      let { rows } = await checkoutPool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
       let job = rows[0];
-      if (Number(job.homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
+      if (Number(job.homeowner_user_id) !== Number(req.authUser.id) || req.authUser.role !== 'homeowner') {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
       if (!['awaiting_service_payment', 'ai_review_complete'].includes(job.status)) {
@@ -5720,22 +5848,22 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       // Refresh / lock checkout snapshot from current pricing + validated coupon (backend source of truth).
       const codeFromBody = req.body?.discountCode != null ? normalizeDiscountCode(String(req.body.discountCode)) : null;
       if (codeFromBody === '') {
-        await persistJobDiscountFields(pool, jobId, null, null);
-        job = (await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId])).rows[0];
+        await persistJobDiscountFields(checkoutPool, jobId, null, null);
+        job = (await checkoutPool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId])).rows[0];
       } else if (codeFromBody) {
-        const row = await lookupDiscountByCode(pool, codeFromBody);
+        const row = await lookupDiscountByCode(checkoutPool, codeFromBody);
         const checked = validateDiscountRow(row);
         if (!checked.ok) {
           return res.status(400).json({ ok: false, message: checked.message });
         }
-        await applyValidatedCouponToJob(pool, jobId, checked.discount);
-        job = (await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId])).rows[0];
+        await applyValidatedCouponToJob(checkoutPool, jobId, checked.discount);
+        job = (await checkoutPool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId])).rows[0];
       }
 
-      const rules = await loadPricingRules(pool);
+      const rules = await loadPricingRules(checkoutPool);
       let discount = null;
       if (job.discount_code) {
-        const row = await lookupDiscountByCode(pool, job.discount_code);
+        const row = await lookupDiscountByCode(checkoutPool, job.discount_code);
         const checked = validateDiscountRow(row);
         if (!checked.ok) {
           return res.status(400).json({
@@ -5748,11 +5876,17 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
       const snapshot = buildCheckoutBreakdown(job, rules, discount);
       const amount = snapshot.finalAmount;
+      if (!snapshot.ok || snapshot.authorizedNowCents <= 0) return res.status(400).json({ok:false,code:'BOOKING_FEE_NOT_PAYABLE',message:'This booking fee requires Admin review. No payment was started.'});
+      if (!snapshot.ok || snapshot.authorizedNowCents <= 0) return res.status(400).json({ok:false,code:'BOOKING_FEE_NOT_PAYABLE',message:'This booking fee requires Admin review. No payment was started.'});
 
-      if (req.body?.authorizedAmount != null || req.body?.authorizedNow != null) {
-        const clientCents = Math.round(Number(req.body.authorizedAmount ?? req.body.authorizedNow) * 100);
+      const reviewedAmount = req.body?.authorizedAmount ?? req.body?.authorizedNow;
+      if (reviewedAmount == null) {
+        return res.status(409).json({ ok:false, code:'PRICING_REVIEW_REQUIRED', authorizedNow:snapshot.authorizedNow, message:'Review the current booking fee before continuing.' });
+      }
+      {
+        const clientCents = Math.round(Number(reviewedAmount) * 100);
         if (clientCents !== snapshot.authorizedNowCents) {
-          return res.status(400).json({
+          return res.status(409).json({
             ok: false,
             code: 'PRICING_MISMATCH',
             message: 'Authorized amount does not match current server pricing. Please refresh and try again.',
@@ -5763,7 +5897,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
       if (req.authUser.role !== 'admin') {
         const betaSnapshot = buildProfessionalRequestBetaSnapshot(snapshot, job);
-        const consentResult = await requireActionConsents(pool, req, res, {
+        const consentResult = await requireActionConsents(checkoutPool, req, res, {
           jobId,
           actionKey: 'PROFESSIONAL_DISPATCH',
           userId: req.authUser.id,
@@ -5772,14 +5906,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         });
         if (!consentResult) return;
         const payAcceptanceId = (
-          await pool.query(
+          await checkoutPool.query(
             `SELECT id FROM homeowner_acceptances
              WHERE user_id=$1 AND job_id=$2 AND acceptance_type='PROFESSIONAL_REQUEST_BETA_ACK'
              ORDER BY accepted_at DESC LIMIT 1`,
             [req.authUser.id, jobId]
           )
         ).rows[0]?.id;
-        await pool.query(
+        await checkoutPool.query(
           `INSERT INTO payment_authorization_snapshots (
              user_id, job_id, authorized_amount_cents, currency, policy_document_version, acceptance_id
            ) VALUES ($1,$2,$3,$4,$5,$6)`,
@@ -5792,14 +5926,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
             payAcceptanceId || null,
           ]
         );
-        await saveProfessionalDispatchSnapshot(pool, {
+        await saveProfessionalDispatchSnapshot(checkoutPool, {
           jobId,
           userId: req.authUser.id,
           breakdown: snapshot,
         });
       }
 
-      await pool.query(
+      await checkoutPool.query(
         `UPDATE managed_jobs SET
            checkout_snapshot=$2::jsonb,
            service_fee_amount=$3,
@@ -5831,8 +5965,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
       const origin = req.get('origin') || req.get('referer');
       let checkout;
+      let checkoutReused = false;
       try {
-        checkout = await createCheckoutSession({
+        const existing = await reconcileBookingCheckout(checkoutPool, { entityId:jobId, userId:req.authUser.id, paymentType:'dispatch_fee', amountCents:Math.round(amount * 100) });
+        checkoutReused = Boolean(existing.checkout);
+        checkout = existing.checkout || await createCheckoutSession({
+          idempotencyKey: `booking:managed:${jobId}:${Math.round(amount * 100)}:${existing.previousSessionId}`,
           amountCents: Math.round(amount * 100),
           customerEmail: req.authUser.email,
           description: `${brand.productName} Service Fee — ${snapshot.bookingId}`,
@@ -5858,9 +5996,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         });
       }
 
-      await pool.query(
+      if (!checkoutReused) await checkoutPool.query(
         `INSERT INTO payments (job_id, user_id, payment_type, amount, status, stripe_session_id, simulated, meta)
-         VALUES ($1,$2,'dispatch_fee',$3,'pending',$4,false,$5)`,
+         SELECT $1::integer,$2::integer,'dispatch_fee',$3::numeric,'pending',$4,false,$5::jsonb WHERE NOT EXISTS (SELECT 1 FROM payments WHERE stripe_session_id=$4)`,
         [
           jobId,
           req.authUser.id,
@@ -5884,7 +6022,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       console.error(e);
       res.status(500).json({ ok: false, message: 'Server error' });
     }
-  });
+  }));
 
   // ── Admin invite / assign ──────────────────────────────────────────────────
   app.post('/api/admin/managed/jobs/:id/invite', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
@@ -5932,6 +6070,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         if (['suspended', 'rejected', 'blocked'].includes(compliance)) {
           return res.status(400).json({ ok: false, message: `${contractor.name || 'Contractor'} is suspended or rejected.` });
         }
+        if (!requireSelectedContractorService(contractor, job, res)) return;
         if (requestType === 'site_visit') {
           const gateOk = await enforceContractorDispatchGate(pool, contractor, res, job);
           if (!gateOk) return;
@@ -6255,7 +6394,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       // GATE 5: contractor account is active enough to be assigned.
       const { rows: contractors } = await pool.query(
         `SELECT id, name, email, company_name, role, is_blocked, compliance_status,
-                stripe_account_id, master_agreement_accepted_at AS agreement_accepted_at, license_expires_at, insurance_expires_at
+                stripe_account_id, contractor_application, master_agreement_accepted_at AS agreement_accepted_at, license_expires_at, insurance_expires_at
            FROM users
           WHERE id=$1 AND role='contractor'`,
         [contractorUserId]
@@ -6275,6 +6414,8 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           message: 'Contractor is suspended or rejected.',
         });
       }
+
+      if (!requireSelectedContractorService(contractor, job, res)) return;
 
       console.log('[ASSIGN DEBUG] ALL ASSIGNMENT GATES PASSED', JSON.stringify({
         jobId,
@@ -6558,6 +6699,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         [invId, req.authUser.id]
       );
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Invitation not found.' });
+      let acceptedJob = null;
+      let acceptedProvider = null;
+      if (action === 'accept') {
+        acceptedJob = (await pool.query('SELECT * FROM managed_jobs WHERE id=$1', [rows[0].job_id])).rows[0];
+        if (!acceptedJob) return res.status(404).json({ ok: false, message: 'Job not found.' });
+        acceptedProvider = (await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id])).rows[0];
+        if (!requireSelectedContractorService(acceptedProvider, acceptedJob, res)) return;
+      }
       const status = action === 'accept' ? 'accepted' : 'declined';
       await pool.query(
         `UPDATE job_invitations SET status=$1, responded_at=NOW() WHERE id=$2`,
@@ -6565,15 +6714,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       );
       if (action === 'accept') {
         const jobId = rows[0].job_id;
-        const { rows: jobRows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
-        const job = jobRows[0];
-        if (!job) return res.status(404).json({ ok: false, message: 'Job not found.' });
-
-        const { rows: providerRows } = await pool.query(`SELECT * FROM users WHERE id=$1`, [req.authUser.id]);
+        const job = acceptedJob;
         try {
           await createJobAuthorization(pool, {
             job,
-            providerUser: providerRows[0],
+            providerUser: acceptedProvider,
             req,
           });
         } catch (authErr) {
@@ -6632,6 +6777,8 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (String(invited.rows[0].status).toLowerCase() !== 'accepted') {
         return res.status(409).json({ ok: false, code: 'INVITATION_NOT_ACCEPTED', message: 'Accept the contractor invitation before submitting an estimate.' });
       }
+      const bidProvider = (await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id])).rows[0];
+      if (!requireSelectedContractorService(bidProvider, jobs[0], res)) return;
       const invitationId = Number(invited.rows[0].id);
       const { rows: existingBid } = await pool.query(
         `SELECT id FROM bids WHERE invitation_id=$1 LIMIT 1`,
@@ -8253,64 +8400,26 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
-  app.post('/api/managed/jobs/:id/approve-proposal', requireAuth, async (req, res) => {
+  app.post('/api/managed/jobs/:id/approve-proposal', requireAuth, (req,res,next) => req.authUser.role === 'admin' ? requireAdmin(req,res,() => requireAdminWrite(req,res,next)) : next(), async (req, res) => {
     const client = await pool.connect();
     try {
+      await client.query('BEGIN');
       const jobId = Number(req.params.id);
-      const { rows: jobs } = await client.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      const { rows: jobs } = await client.query(`SELECT * FROM managed_jobs WHERE id=$1 FOR UPDATE`, [jobId]);
       if (!jobs[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
       if (Number(jobs[0].homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
 
-      const requestedProposalId = Number(req.body?.proposalId || 0);
-      let prop = null;
-
-      // Prefer the explicitly requested proposal only when it is currently
-      // actionable. The Admin can publish a newer proposal after the homeowner
-      // page has loaded; in that case the browser may still send the older
-      // proposalId. Never let that stale id block approval when a newer sent
-      // proposal exists for the same job.
-      if (requestedProposalId > 0) {
-        const { rows: byId } = await client.query(
-          `SELECT * FROM proposals WHERE id=$1 AND job_id=$2`,
-          [requestedProposalId, jobId]
-        );
-        if (byId[0] && ['sent','viewed','finalized'].includes(String(byId[0].status || '').toLowerCase())) {
-          prop = byId[0];
-        }
+      const requestedProposalId = Number(req.body?.proposalId);
+      const expectedVersion = Number(req.body?.expectedVersion);
+      if (!Number.isSafeInteger(requestedProposalId) || requestedProposalId <= 0 || !Number.isSafeInteger(expectedVersion) || expectedVersion <= 0) {
+        return res.status(409).json({ ok:false, code:'QUOTE_REVIEW_REQUIRED', message:'Open the current quote and review its scope and total before approving.' });
       }
-
-      // Always fall back to the newest proposal actually sent to the homeowner.
-      if (!prop) {
-        const { rows: props } = await client.query(
-          `SELECT * FROM proposals
-           WHERE job_id=$1
-             AND status IN ('sent','viewed','finalized')
-           ORDER BY published_at DESC NULLS LAST, created_at DESC
-           LIMIT 1`,
-          [jobId]
-        );
-        prop = props[0] || null;
-      }
-
-      // Last fallback: use the job's active proposal if it is an already
-      // approved/accepted proposal being retried idempotently.
-      if (!prop) {
-        const activeProposalId = Number(jobs[0].active_proposal_id || 0);
-        if (activeProposalId > 0) {
-          const { rows: activeRows } = await client.query(
-            `SELECT * FROM proposals WHERE id=$1 AND job_id=$2`,
-            [activeProposalId, jobId]
-          );
-          const candidate = activeRows[0];
-          if (candidate && ['accepted','approved'].includes(String(candidate.status || '').toLowerCase())) {
-            prop = candidate;
-          }
-        }
-      }
-      if (!prop) {
-        return res.status(400).json({ ok: false, message: 'No active quote available for approval.' });
+      let prop = (await client.query('SELECT * FROM proposals WHERE id=$1 AND job_id=$2 FOR UPDATE', [requestedProposalId,jobId])).rows[0];
+      if (!prop) return res.status(404).json({ ok:false, code:'QUOTE_NOT_FOUND', message:'The selected quote is not available for this request.' });
+      if (Number(prop.version_number || 1) !== expectedVersion) {
+        return res.status(409).json({ ok:false, code:'QUOTE_REVISION_CHANGED', message:'This quote changed. Review its current scope and total before approving.' });
       }
 
       const propStatus = String(prop.status || '').toLowerCase();
@@ -8333,7 +8442,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
 
       if (req.authUser.role !== 'admin') {
-        const ackOk = await requireHomeownerAcknowledgment(pool, req, res, {
+        const ackOk = await requireHomeownerAcknowledgment(client, req, res, {
           jobId,
           quoteId: prop.id,
           actionKey: 'QUOTE_APPROVAL',
@@ -8354,14 +8463,6 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           code: 'quote_expired',
           message: 'This quote has expired. Contact FixBridge for an updated quote.',
         });
-      }
-
-      await client.query('BEGIN');
-      const { rows: lockedProps } = await client.query(`SELECT * FROM proposals WHERE id=$1 FOR UPDATE`, [prop.id]);
-      prop = lockedProps[0];
-      if (!prop) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({ ok: false, message: 'Quote not found.' });
       }
 
       // The homeowner is approving the selected contractor estimate. Persist that
@@ -8469,7 +8570,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           req.authUser.id,
         ]
       );
-      await pushStatus(pool, jobId, jobs[0].status, 'approved', req.authUser.id, 'Customer approved proposal');
+      await pushStatus(client, jobId, jobs[0].status, 'approved', req.authUser.id, 'Customer approved proposal');
 
       const convertResult = await convertProposalToInvoice(client, {
         proposalRow: prop,
@@ -8533,6 +8634,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       console.error('approve-proposal:', e);
       res.status(500).json({ ok: false, message: 'Server error' });
     } finally {
+      await client.query('ROLLBACK').catch(() => {});
       client.release();
     }
   });
@@ -8572,6 +8674,8 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (!dispatchContractors[0]) {
         return res.status(404).json({ ok: false, message: 'Assigned contractor not found.' });
       }
+
+      if (!requireSelectedContractorService(dispatchContractors[0], job, res)) return;
 
       // Contractor compliance is intentionally enforced here, at LIVE DISPATCH.
       // Missing compliance documents may exist while a contractor is assigned,
@@ -8919,6 +9023,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     change_order_pending: ['work_started'],
   };
 
+  // Shared lifecycle routes must enforce the same staff write/MFA permissions
+  // as dedicated admin routes; an admin role alone does not authorize a write.
+  const requireLifecycleWrite = (req, res, next) => {
+    if (req.authUser.role !== 'admin') return next();
+    return requireAdmin(req, res, () => requireAdminWrite(req, res, next));
+  };
+
   async function recordContractorMilestone(req, res, { eventType, toStatus = null, note = null }) {
     try {
       const jobId = Number(req.params.id);
@@ -8964,7 +9075,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   }
 
-  app.post('/api/contractor/managed/jobs/:id/mark-travel', requireAuth, async (req, res) => {
+  app.post('/api/contractor/managed/jobs/:id/mark-travel', requireAuth, requireLifecycleWrite, async (req, res) => {
     await recordContractorMilestone(req, res, {
       eventType: 'contractor_dispatched',
       toStatus: 'contractor_en_route',
@@ -8972,7 +9083,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     });
   });
 
-  app.post('/api/contractor/managed/jobs/:id/mark-arrived', requireAuth, async (req, res) => {
+  app.post('/api/contractor/managed/jobs/:id/mark-arrived', requireAuth, requireLifecycleWrite, async (req, res) => {
     await recordContractorMilestone(req, res, {
       eventType: 'technician_arrived',
       toStatus: 'contractor_arrived',
@@ -8980,7 +9091,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     });
   });
 
-  app.post('/api/contractor/managed/jobs/:id/mark-started', requireAuth, async (req, res) => {
+  app.post('/api/contractor/managed/jobs/:id/mark-started', requireAuth, requireLifecycleWrite, async (req, res) => {
     await recordContractorMilestone(req, res, {
       eventType: 'job_started',
       toStatus: 'work_started',
@@ -8988,7 +9099,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     });
   });
 
-  app.post('/api/managed/jobs/:id/status', requireAuth, async (req, res) => {
+  app.post('/api/managed/jobs/:id/status', requireAuth, requireLifecycleWrite, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
       const toStatus = String(req.body?.status || '');
@@ -9013,7 +9124,10 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           });
         }
       } else if (isOwner && ['customer_review_pending', 'closed'].includes(toStatus)) {
-        // homeowner confirmation path
+        if (job.status === toStatus) return res.json({ ok: true, job: serializeJob(job, req.authUser) });
+        if (!['work_completed', 'customer_review_pending'].includes(job.status)) {
+          return res.status(409).json({ ok: false, code: 'WORK_COMPLETION_REQUIRED', message: 'Only completed work can be confirmed or closed.' });
+        }
       } else {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
@@ -9094,7 +9208,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
-  app.post('/api/managed/jobs/:id/complete', requireAuth, async (req, res) => {
+  app.post('/api/managed/jobs/:id/complete', requireAuth, requireLifecycleWrite, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
       const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
@@ -9123,6 +9237,15 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           message: 'A contractor must be assigned before work can be completed.',
         });
       }
+      const completedStatuses = ['work_completed', 'customer_review_pending', 'admin_review_pending', 'payout_pending', 'paid_out', 'closed'];
+      if (job.completion_report && completedStatuses.includes(String(job.status))) {
+        try {
+          await syncPropertyHistoryFromCompletedJob(pool, job, parseJsonSafe(job.completion_report, {}) || {});
+        } catch (error) {
+          return res.status(500).json({ ok: false, code: 'PROPERTY_HISTORY_SYNC_FAILED', message: 'Work is completed, but the property record could not be saved. Retry to finish saving it.' });
+        }
+        return res.json({ ok: true, alreadyCompleted: true, job: serializeJob(job, req.authUser) });
+      }
       if (!['work_started', 'change_order_pending'].includes(String(job.status))) {
         console.warn('[COMPLETE DEBUG] BLOCKED_STATUS', JSON.stringify({
           jobId,
@@ -9141,6 +9264,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const report = {
         summary: req.body?.summary || '',
         materialsUsed: req.body?.materialsUsed || '',
+        partsUsed: reportedMaterials(req.body || {}),
         beforePhotoUrl: req.body?.beforePhotoUrl || null,
         afterPhotoUrl: req.body?.afterPhotoUrl || null,
         equipmentLabelPhotoUrl: req.body?.equipmentLabelPhotoUrl || null,
@@ -9154,10 +9278,18 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           at: new Date().toISOString(),
         },
       };
-      await pool.query(
-        `UPDATE managed_jobs SET completion_report=$1, updated_at=NOW() WHERE id=$2`,
+      const claimed = await pool.query(
+        `UPDATE managed_jobs SET completion_report=$1, status='work_completed', updated_at=NOW()
+         WHERE id=$2 AND status IN ('work_started','change_order_pending') RETURNING id`,
         [JSON.stringify(report), jobId]
       );
+      if (!claimed.rows.length) {
+        const { rows: latest } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+        if (latest[0]?.completion_report && completedStatuses.includes(String(latest[0].status))) {
+          return res.json({ ok: true, alreadyCompleted: true, job: serializeJob(latest[0], req.authUser) });
+        }
+        return res.status(409).json({ ok: false, code: 'COMPLETION_STATE_CHANGED', message: 'The job changed before completion. Refresh and try again.' });
+      }
 
       // Contractor completion is the authoritative WORK COMPLETED milestone.
       // The homeowner's remaining invoice balance becomes available immediately;
@@ -9247,10 +9379,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         await pushStatus(pool, jobId, 'work_completed', 'customer_review_pending', req.authUser.id, 'Awaiting remaining payment');
       }
 
+      let propertyHistorySaved = true;
       try {
         await syncPropertyHistoryFromCompletedJob(pool, { ...job, completion_report: JSON.stringify(report) }, report);
       } catch (_e) {
-        /* non-fatal */
+        propertyHistorySaved = false;
       }
 
       try {
@@ -9313,13 +9446,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
 
       const { rows: fresh } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
+      if (!propertyHistorySaved) return res.status(500).json({ ok: false, code: 'PROPERTY_HISTORY_SYNC_FAILED', message: 'Work is completed, but the property record could not be saved. Retry to finish saving it.' });
       res.json({ ok: true, job: serializeJob(fresh[0], req.authUser) });
     } catch (e) {
       res.status(500).json({ ok: false, message: 'Server error' });
     }
   });
 
-  app.post('/api/managed/jobs/:id/confirm-completion', requireAuth, async (req, res) => {
+  app.post('/api/managed/jobs/:id/confirm-completion', requireAuth, requireLifecycleWrite, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
       const { rows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1`, [jobId]);
@@ -9327,9 +9461,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (Number(rows[0].homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
-      await pool.query(`UPDATE managed_jobs SET customer_confirmed_at=NOW() WHERE id=$1`, [jobId]);
+      if (!['work_completed', 'customer_review_pending', 'admin_review_pending', 'payout_pending', 'paid_out', 'closed'].includes(String(rows[0].status))) {
+        return res.status(409).json({ ok: false, code: 'WORK_NOT_COMPLETED', message: 'Completion can only be confirmed after the professional finishes the work.' });
+      }
+      const { rows: firstConfirmation } = await pool.query(`UPDATE managed_jobs SET customer_confirmed_at=NOW() WHERE id=$1 AND customer_confirmed_at IS NULL RETURNING id`, [jobId]);
 
-      if (await hasSucceededRetailPayment(pool, jobId)) {
+      if (firstConfirmation.length && ['work_completed', 'customer_review_pending'].includes(String(rows[0].status)) && await hasSucceededRetailPayment(pool, jobId)) {
         await pushStatus(pool, jobId, rows[0].status, 'admin_review_pending', req.authUser.id, 'Customer confirmed completion');
         await pushStatus(pool, jobId, 'admin_review_pending', 'payout_pending', req.authUser.id, 'Ready for payout');
         try {
@@ -9737,6 +9874,10 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (!beforeRows[0]) return res.status(404).json({ ok: false, message: 'Contractor not found.' });
       const before = beforeRows[0];
       const body = req.body || {};
+      if (Object.prototype.hasOwnProperty.call(body.contractorApplication || {}, 'selectedServiceIds') &&
+          !validateSelectedServiceIds(body.contractorApplication.selectedServiceIds)) {
+        return res.status(400).json({ ok: false, code: 'INVALID_SELECTED_SERVICES', message: 'Select valid canonical service IDs without duplicates.' });
+      }
 
       const name = typeof body.name === 'string' ? body.name.trim() : before.name;
       if (!name) return res.status(400).json({ ok: false, message: 'Name is required.' });
@@ -11150,7 +11291,10 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       });
       if (claim.alreadyProcessed) return res.json({ ok: true, duplicate: true });
 
-      if (event.type === 'checkout.session.completed') {
+      if (['checkout.session.completed', 'checkout.session.async_payment_succeeded', 'checkout.session.async_payment_failed', 'checkout.session.expired'].includes(event.type)) {
+        await reconcileSubscriptionCheckoutPayment(pool, event.data?.object || {}, event.type);
+      }
+      if (event.type === 'checkout.session.completed' || (event.type === 'checkout.session.async_payment_succeeded' && event.data?.object?.metadata?.paymentType === 'subscription')) {
         const session = event.data?.object || {};
         const jobId = Number(session.metadata?.jobId);
         const paymentType = session.metadata?.paymentType;
@@ -11183,10 +11327,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           if (!Number.isFinite(pendingId) || pendingId <= 0) {
             return res.status(400).json({ ok: false, message: 'Invalid pending service request payment metadata.' });
           }
-          const amountCents = session.amount_total != null ? Number(session.amount_total) : 12500;
-          if (amountCents !== 12500) {
-            return res.status(400).json({ ok: false, message: 'Pending professional payment amount mismatch.' });
-          }
+          const amountCents = await assertPendingBookingPayment(pool, session, userId, pendingId);
           const pendingPaymentUpdate = await pool.query(
             `UPDATE pending_service_requests SET
                payment_status='succeeded',
@@ -11257,7 +11398,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           return res.json({ ok: true, converted: Boolean(converted.job), managedJobId: converted.job?.id || null });
         }
 
-        if (jobId && paymentType) {
+        if (jobId && paymentType && (paymentType !== 'subscription' || checkoutPaymentState(session) === 'succeeded')) {
           let paymentStatus = 'succeeded';
           if (paymentType === 'dispatch_fee') {
             paymentStatus = 'authorized';
@@ -11416,7 +11557,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
             );
           }
         }
-        if (paymentType === 'subscription' && userId && planCode) {
+        if (paymentType === 'subscription' && userId && planCode && checkoutPaymentState(session) === 'succeeded') {
           const paidAmt =
             session.amount_total != null ? Number(session.amount_total) / 100 : null;
           const stripeSubId = session.subscription || null;
@@ -11568,7 +11709,8 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (event.type === 'payment_intent.payment_failed') {
         const pi = event.data?.object || {};
         await pool.query(
-          `UPDATE payments SET status='failed' WHERE stripe_payment_intent=$1`,
+          `UPDATE payments SET status='failed' WHERE stripe_payment_intent=$1
+             AND (payment_type <> 'subscription' OR status='pending')`,
           [pi.id]
         );
         try {

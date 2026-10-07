@@ -4,49 +4,44 @@
  */
 
 import { applyDiscountToAmount } from './discounts.js';
-import { getDispatchFee } from './pricing.js';
+import { getDispatchFee, resolveBookingFeeCents } from './pricing.js';
 
-export const DEFAULT_PROFESSIONAL_DISPATCH_LINES = [
-  {
-    key: 'assessment_coordination',
-    label: 'FixBridge Assessment / Coordination',
-    amount_cents: 14900,
-    enabled: true,
-    line_type: 'charge',
-  },
-  {
-    key: 'visit_diagnostic',
-    label: 'Contractor Visit / Diagnostic',
-    amount_cents: 9500,
-    enabled: true,
-    line_type: 'charge',
-    timing_adjustable: true,
-  },
-  {
-    key: 'beta_discount',
-    label: 'Beta Discount',
-    amount_cents: 14900,
-    enabled: true,
-    line_type: 'discount',
-  },
-];
+export const DEFAULT_PROFESSIONAL_DISPATCH_LINES = [{ key: 'professional_booking', label: 'Professional booking / dispatch fee', amount_cents: 12500, enabled: true, line_type: 'charge' }];
 
-export function resolveProfessionalDispatchConfig(rules = {}) {
-  const cfg = rules?.professional_dispatch_pricing || {};
-  const lines = Array.isArray(cfg.lines) && cfg.lines.length
-    ? cfg.lines
-    : DEFAULT_PROFESSIONAL_DISPATCH_LINES;
+export function bookingServiceId(job = {}) {
+  const category = String(job.category || job.serviceCategory || '').toLowerCase();
+  const aliases = { hvac: 'hvac_heating_cooling', roofing: 'roofing_gutters', snow_removal: 'snow_removal', appliance_repair: 'appliances' };
+  return aliases[category] || category.replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+}
+
+export function validateServiceBookingPricing(config = {}) {
+  const centsValid = value => Number.isSafeInteger(value) && value >= 0 && value <= 99999999;
+  const serviceValid = id => /^[a-z0-9][a-z0-9_]{0,99}$/.test(id);
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return { ok:false, message:'Invalid service pricing configuration.' };
+  if (config.by_service != null && (!config.by_service || typeof config.by_service !== 'object' || Array.isArray(config.by_service))) return { ok:false, message:'Service fees must be keyed by service.' };
+  for (const [id, value] of Object.entries(config.by_service || {})) {
+    if (!serviceValid(id) || !centsValid(value)) return { ok:false, message:'Service fees must be nonnegative integer USD cents, up to $999,999.99.' };
+  }
+  if (config.additional_charges != null && (!Array.isArray(config.additional_charges) || config.additional_charges.length > 30)) return { ok:false, message:'Use up to 30 additional charges.' };
+  const keys = new Set();
+  for (const line of config.additional_charges || []) {
+    if (!line || !serviceValid(line.key || '') || keys.has(line.key) || line.key === 'professional_booking' || typeof line.label !== 'string' || !line.label.trim() || line.label.length > 100 || !centsValid(line.amount_cents) || line.basis !== 'flat' || !['always','weekday','same-day','evening-weekend'].includes(line.applies_when) || !Array.isArray(line.service_ids) || !line.service_ids.every(serviceValid)) return { ok:false, message:'Every additional charge needs a unique key, name, valid amount, flat-per-booking basis, service scope and timing condition.' };
+    keys.add(line.key);
+  }
+  return { ok:true };
+}
+
+export function resolveProfessionalDispatchConfig(rules = {}, job = {}) {
+  const config = rules.professional_dispatch_pricing || {};
+  const id = bookingServiceId(job);
+  const override = config.by_service?.[id];
+  const base = Number.isSafeInteger(override) && override >= 0 ? override : resolveBookingFeeCents(rules);
+  const extra = (Array.isArray(config.additional_charges) ? config.additional_charges : []).filter(line => line.enabled !== false &&
+    (Array.isArray(line.service_ids) && (line.service_ids.length === 0 || line.service_ids.includes(id))) &&
+    (line.applies_when === 'always' || line.applies_when === String(job.service_timing || 'weekday')));
   return {
-    version: cfg.version != null ? String(cfg.version) : '1',
-    effective_from: cfg.effective_from || null,
-    lines: lines.map((line) => ({
-      key: String(line.key || ''),
-      label: String(line.label || line.key || 'Fee'),
-      amount_cents: Math.max(0, Math.round(Number(line.amount_cents) || 0)),
-      enabled: line.enabled !== false,
-      line_type: line.line_type === 'discount' ? 'discount' : 'charge',
-      timing_adjustable: line.timing_adjustable === true,
-    })),
+    version: String(config.version || '1'), effective_from: config.effective_from || null,
+    lines: [{ ...DEFAULT_PROFESSIONAL_DISPATCH_LINES[0], amount_cents: base }, ...extra.map(line => ({ ...line, line_type: 'charge', enabled:true, label: `${line.label} (${line.applies_when === 'always' ? 'per booking' : line.applies_when.replace(/-/g,' ')})` }))],
   };
 }
 
@@ -187,9 +182,9 @@ export function assertProfessionalDispatchPricingIntegrity(breakdown) {
  * Build homeowner-facing dispatch pricing breakdown (integer cents internally).
  */
 export function buildProfessionalDispatchBreakdown(job, rules = {}, discount = null) {
-  const config = resolveProfessionalDispatchConfig(rules);
+  const config = resolveProfessionalDispatchConfig(rules, job);
   const visitOverride =
-    config.lines.some((l) => l.key === 'visit_diagnostic' && l.timing_adjustable)
+    config.lines.some((l) => l.key === 'visit_diagnostic' || l.key === 'professional_booking' && l.timing_adjustable)
       ? visitAmountCentsForTiming(job, rules, config.lines.find((l) => l.key === 'visit_diagnostic')?.amount_cents || 0)
       : null;
 
@@ -227,13 +222,7 @@ export function buildProfessionalDispatchBreakdown(job, rules = {}, discount = n
   let couponCode = null;
   let couponId = null;
   let couponLabel = null;
-  if (discount) {
-    const applied = applyDiscountToAmount(linePricing.pricingLineSumCents / 100, discount);
-    couponDiscountCents = Math.round(applied.discountAmount * 100);
-    couponCode = discount.code || null;
-    couponId = discount.id || null;
-    couponLabel = discount.label || null;
-  }
+  // Booking fees have no plan, beta or coupon discount.
 
   const authorizedNowCents = linePricing.pricingLineSumCents - couponDiscountCents;
   if (authorizedNowCents < 0) {

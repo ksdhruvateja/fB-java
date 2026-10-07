@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { ServiceThumb } from "./serviceVisuals";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   ArrowLeft,
@@ -19,8 +20,8 @@ import {
   Zap,
 } from "lucide-react";
 import type { ManagedJob, PendingProfessionalRequest } from "./managedJobs";
-import { payDispatchFee, prepareCheckout, requestProfessionalDispatch, retailRangeLabel, fetchDispatchPricing, formatMoney, type CheckoutBreakdown, startPendingProfessionalCheckout, getPendingProfessionalRequest } from "./managedJobs";
-import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
+import { payDispatchFee, prepareCheckout, requestProfessionalDispatch, retailRangeLabel, fetchDispatchPricing, formatMoney, type CheckoutBreakdown, startPendingProfessionalCheckout, getPendingProfessionalRequest, fetchProfessionalBookingFee } from "./managedJobs";
+import "./hireProfessionalWizard.css";
 import ProfessionalServiceRequestBetaCard from "./ProfessionalServiceRequestBetaCard";
 import { consentsFromState, allChecked } from "./ConsentCheckbox";
 import type { ConsentState } from "./ConsentCheckbox";
@@ -150,8 +151,6 @@ function ManagedHireProfessionalWizard({
   const [preferredDate, setPreferredDate] = useState(job.preferredDate || "");
   const [propertyPurpose, setPropertyPurpose] = useState(job.propertyPurpose || "current_homeowner");
   const [transactionStage, setTransactionStage] = useState(job.transactionStage || "ongoing_maintenance");
-  const [discountCode, setDiscountCode] = useState(job.discountCode || "");
-  const [dispatchCouponPreview, setDispatchCouponPreview] = useState<DispatchCouponPreview | null>(null);
   const [prefsSaved, setPrefsSaved] = useState(job.status === "awaiting_service_payment");
   const [dispatchConsents, setDispatchConsents] = useState<ConsentState>({
     PROFESSIONAL_REQUEST_BETA_ACK: false,
@@ -162,11 +161,10 @@ function ManagedHireProfessionalWizard({
 
   const dispatchConsentKeys: AcceptanceType[] = ["PROFESSIONAL_REQUEST_BETA_ACK"];
 
-  const baseDispatchFee = job.visitFeeAmount ?? job.pricing?.contractor_visit_fee ?? 125;
-  const dispatchHoldAmount =
-    dispatchPricing?.authorizedNow ??
-    dispatchCouponPreview?.discountedAmount ??
-    baseDispatchFee;
+  const dispatchHoldAmount = dispatchPricing?.authorizedNow ?? (job.visitFeeAuthorized ? job.visitFeeAmount ?? null : null);
+  const displayedDispatchAmount = dispatchHoldAmount == null ? "Loading price..." : formatMoney(dispatchHoldAmount);
+  const [pricingAttempt, setPricingAttempt] = useState(0);
+  const managedCheckoutInFlight = useRef(false);
   const dispatchReady =
     ["ai_review_complete", "awaiting_service_payment", "paid_for_dispatch", "awaiting_contractor"].includes(job.status) ||
     (job.assessmentStatus === "failed" && job.status === "draft");
@@ -181,7 +179,6 @@ function ManagedHireProfessionalWizard({
     setPreferredDate(job.preferredDate || dateForTiming(timing) || "");
     setPropertyPurpose(job.propertyPurpose || "current_homeowner");
     setTransactionStage(job.transactionStage || "ongoing_maintenance");
-    setDiscountCode(job.discountCode || "");
     setPrefsSaved(job.status === "awaiting_service_payment" || dispatchPaid);
     if (dispatchPaid) setStep("checkout");
     else if (job.status === "awaiting_service_payment") setStep("checkout");
@@ -191,8 +188,8 @@ function ManagedHireProfessionalWizard({
     if (step !== "checkout" && step !== "review") return;
     let cancelled = false;
     setPricingLoading(true);
-    const code = dispatchCouponPreview?.code || discountCode.trim() || undefined;
-    void fetchDispatchPricing(job.id, code).then((r) => {
+    setDispatchPricing(null);
+    void fetchDispatchPricing(job.id).then((r) => {
       if (cancelled) return;
       setPricingLoading(false);
       if (r.ok && r.breakdown) setDispatchPricing(r.breakdown);
@@ -200,7 +197,7 @@ function ManagedHireProfessionalWizard({
     return () => {
       cancelled = true;
     };
-  }, [step, job.id, dispatchCouponPreview?.code, discountCode, serviceTiming]);
+  }, [step, job.id, serviceTiming, pricingAttempt]);
 
   function formatLineAmount(cents: number) {
     const abs = Math.abs(cents) / 100;
@@ -235,11 +232,11 @@ function ManagedHireProfessionalWizard({
             ) : null}
           </div>
         ) : (
-          <p className="text-xs text-muted-foreground">Pricing will be confirmed at authorization.</p>
+          <p className="text-xs text-muted-foreground">Pricing is unavailable. <button type="button" className="underline" onClick={() => setPricingAttempt((n) => n + 1)}>Retry loading price</button></p>
         )}
         <div className="border-t border-border pt-3">
           <p className="text-[11px] font-bold uppercase tracking-widest text-primary">Authorized now</p>
-          <p className="text-2xl font-black tabular-nums text-primary">{formatMoney(dispatchHoldAmount)}</p>
+          <p className="text-2xl font-black tabular-nums text-primary">{displayedDispatchAmount}</p>
         </div>
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-relaxed">
           <p className="font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-200">Repair work</p>
@@ -268,6 +265,7 @@ function ManagedHireProfessionalWizard({
   }
 
   function goNext() {
+    if (preferredDate && (preferredDate < toDateInputValue(new Date()) || Number.isNaN(new Date(`${preferredDate}T12:00:00`).getTime()))) { onError("Choose today or a valid future service date."); return; }
     onError(null);
     const idx = HIRE_STEPS.indexOf(step);
     if (idx < HIRE_STEPS.length - 1) setStep(HIRE_STEPS[idx + 1]);
@@ -297,7 +295,7 @@ function ManagedHireProfessionalWizard({
         preferredTimeSlot,
         propertyPurpose,
         transactionStage,
-        discountCode: discountCode.trim() || undefined,
+        discountCode: undefined,
         consents: consentsFromState(consentState),
       });
       if (!r.ok || !r.job) {
@@ -330,6 +328,8 @@ function ManagedHireProfessionalWizard({
   }
 
   async function handlePay(extraConsents?: Record<string, boolean>) {
+    if (managedCheckoutInFlight.current) return;
+    if (dispatchHoldAmount == null || pricingLoading) { onError("Load the current booking fee before continuing."); return; }
     const consentState = combinedConsentState(extraConsents);
     const missing = ackGate.missingConsentKeys(consentState, dispatchConsentKeys);
     if (missing.length) {
@@ -344,6 +344,7 @@ function ManagedHireProfessionalWizard({
       });
       return;
     }
+    managedCheckoutInFlight.current = true;
     setBusy(true);
     onError(null);
     try {
@@ -351,7 +352,7 @@ function ManagedHireProfessionalWizard({
         const ok = await savePreferences(extraConsents);
         if (!ok) return;
       }
-      const code = dispatchCouponPreview?.code || job.discountCode || undefined;
+      const code = undefined;
       const prepared = await prepareCheckout(job.id, {
         discountCode: code || null,
         clearCoupon: !code,
@@ -361,8 +362,10 @@ function ManagedHireProfessionalWizard({
         return;
       }
       if (prepared.job) onJobUpdated(prepared.job);
-      const r = await payDispatchFee(job.id, code, consentsFromState(consentState));
+      const r = await payDispatchFee(job.id, code, consentsFromState(consentState), dispatchHoldAmount);
       if (!r.ok) {
+        if (r.code === 'PRICING_MISMATCH') { setDispatchConsents({ PROFESSIONAL_REQUEST_BETA_ACK:false }); setStep("checkout"); setPricingAttempt((n) => n + 1); }
+
         if (
           ackGate.promptFromResponse(r, {
             currentState: consentState,
@@ -389,6 +392,7 @@ function ManagedHireProfessionalWizard({
       }
       onError("Secure payment could not be started. Check payment configuration.");
     } finally {
+      managedCheckoutInFlight.current = false;
       setBusy(false);
     }
   }
@@ -423,10 +427,11 @@ function ManagedHireProfessionalWizard({
   }
 
   return (
-    <div className="space-y-5 rounded-2xl border border-[#FF4D1C]/20 bg-gradient-to-br from-[#FFF7F3] via-card to-[#F3FAF8] p-4 sm:p-6 dark:from-[#2a1812] dark:via-card dark:to-[#142a28]">
+    <div className="homeowner-hire-flow max-w-3xl space-y-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#FF4D1C]">Hire a professional</p>
+          <ServiceThumb name={job.category || job.title} className="mt-2 h-16 w-20" />
           <h3 className="mt-1 font-[family-name:var(--font-display)] text-xl tracking-wide sm:text-2xl">
             Schedule & authorize dispatch
           </h3>
@@ -436,7 +441,7 @@ function ManagedHireProfessionalWizard({
         </span>
       </div>
 
-      <div className="flex flex-wrap gap-1.5">
+      <div className="hire-stepper" aria-label="Booking progress">
         {HIRE_STEPS.map((s, i) => (
           <span
             key={s}
@@ -470,7 +475,7 @@ function ManagedHireProfessionalWizard({
                       <button
                         key={opt.value}
                         type="button"
-                        onClick={() => selectServiceTiming(opt.value)}
+                        aria-pressed={serviceTiming === opt.value} onClick={() => selectServiceTiming(opt.value)}
                         className={`rounded-xl border px-4 py-4 text-left transition ${
                           selected
                             ? "border-[#FF4D1C] bg-[#FF4D1C] text-white shadow-lg"
@@ -497,7 +502,7 @@ function ManagedHireProfessionalWizard({
                       <button
                         key={opt.value}
                         type="button"
-                        onClick={() => setPreferredTimeSlot(opt.value)}
+                        aria-pressed={preferredTimeSlot === opt.value} onClick={() => setPreferredTimeSlot(opt.value)}
                         className={`rounded-xl border px-3 py-3 text-left text-sm transition ${
                           selected
                             ? "border-[#FF4D1C] bg-[#FF4D1C]/10 ring-1 ring-[#FF4D1C]/30"
@@ -526,7 +531,7 @@ function ManagedHireProfessionalWizard({
                   <details className="text-xs text-muted-foreground">
                     <summary className="cursor-pointer font-medium text-foreground/80">Pick a different date</summary>
                     <input
-                      type="date"
+                      aria-label="Preferred service date" type="date"
                       min={toDateInputValue(new Date())}
                       value={preferredDate}
                       onChange={(e) => setPreferredDate(e.target.value)}
@@ -573,7 +578,7 @@ function ManagedHireProfessionalWizard({
                     ) : null}
                   </div>
                   <input
-                    type="date"
+                    aria-label="Preferred service date" type="date"
                     min={toDateInputValue(new Date())}
                     value={preferredDate}
                     onChange={(e) => setPreferredDate(e.target.value)}
@@ -633,35 +638,15 @@ function ManagedHireProfessionalWizard({
                   })}
                 </div>
               </fieldset>
-              <fieldset className="space-y-2">
-                <legend className="flex items-center gap-2 text-sm font-semibold">
-                  <DollarSign className="h-4 w-4 text-[#FF4D1C]" /> Discount code (optional)
-                </legend>
-                <input
-                  type="text"
-                  value={discountCode}
-                  onChange={(e) => setDiscountCode(e.target.value.toUpperCase())}
-                  placeholder="PROMO2026"
-                  className="w-full rounded-xl border border-border bg-white/80 px-4 py-2.5 text-sm uppercase dark:bg-background/60"
-                />
-              </fieldset>
+
             </div>
           )}
 
           {step === "checkout" && (
             <div className="space-y-4">
               <PricingBreakdownCard />
-              <DispatchCouponField
-                jobId={job.id}
-                baseAmount={baseDispatchFee}
-                initialCode={job.discountCode}
-                disabled={busy}
-                onVerified={(preview) => {
-                  setDispatchCouponPreview(preview);
-                  onError(null);
-                }}
-                onClear={() => setDispatchCouponPreview(null)}
-              />
+              <p className="text-xs text-muted-foreground">Your service fee and any applicable additional charges are set by FixBridge. HomeCare Pro does not include these charges. Coupons do not apply to this fee.</p>
+
             </div>
           )}
 
@@ -674,7 +659,7 @@ function ManagedHireProfessionalWizard({
               <div className="rounded-xl border border-border bg-card p-4 space-y-3 text-sm">
                 <div>
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Service</p>
-                  <p className="font-medium">{job.title || job.category || "Service request"}</p>
+                  <div className="mt-2 flex items-center gap-3"><ServiceThumb name={job.category || job.title} className="h-16 w-20" /><p className="font-medium">{job.title || job.category || "Service request"}</p></div>
                 </div>
                 <div>
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Appointment</p>
@@ -779,11 +764,11 @@ function ManagedHireProfessionalWizard({
             <button
               type="button"
               onClick={() => void handlePay()}
-              disabled={busy || !dispatchReady || !allChecked(dispatchConsents, dispatchConsentKeys)}
+              disabled={busy || pricingLoading || dispatchHoldAmount == null || !dispatchReady || !allChecked(dispatchConsents, dispatchConsentKeys)}
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white shadow-lg disabled:opacity-60"
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              {dispatchReady ? `Authorize & Request Professional — ${formatMoney(dispatchHoldAmount)}` : "Authorization waiting on recommendation"}
+              {dispatchReady ? `Authorize & Request Professional — ${displayedDispatchAmount}` : "Authorization waiting on recommendation"}
             </button>
           </div>
         )}
@@ -822,7 +807,24 @@ function PendingHireProfessionalWizard({
   const [convertedJob, setConvertedJob] = useState<ManagedJob | null>(null);
   const [consent, setConsent] = useState(false);
   const [paymentMessage, setPaymentMessage] = useState<string | null>(null);
-  const amount = 125;
+  const checkoutInFlight = useRef(false);
+  const [amount, setAmount] = useState<number | null>(null);
+  const [bookingLines, setBookingLines] = useState<NonNullable<CheckoutBreakdown["lines"]>>([]);
+  const [bookingFeeError, setBookingFeeError] = useState<string | null>(null);
+  const [bookingFeeAttempt, setBookingFeeAttempt] = useState(0);
+  useEffect(() => {
+    let canceled = false;
+    setBookingFeeError(null);
+    setAmount(null);
+    setConsent(false);
+    setBookingLines([]);
+    void fetchProfessionalBookingFee({ pendingServiceRequestId: pendingServiceRequest.id, serviceTiming }).then((result) => {
+      if (canceled) return;
+      if (result.ok && Number.isSafeInteger(result.amountCents) && Number(result.amountCents) > 0) { setAmount(Number(result.amountCents) / 100); setBookingLines(result.breakdown?.lines || []); }
+      else { setAmount(null); setBookingFeeError(result.ok && result.amountCents === 0 ? 'This service has a $0 booking fee. Contact FixBridge for Admin review; no payment will be started.' : result.message || 'Could not load the current booking fee.'); }
+    });
+    return () => { canceled = true; };
+  }, [pendingServiceRequest.id, serviceTiming, bookingFeeAttempt]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -887,6 +889,8 @@ function PendingHireProfessionalWizard({
   const validContactPhone = contactPhoneDigits.length >= 7 && contactPhoneDigits.length <= 15;
 
   async function saveAndCheckout() {
+    if (checkoutInFlight.current) return;
+    if (amount == null) { onError("Load the current booking fee before continuing."); return; }
     if (!validContactPhone) {
       setContactPhoneTouched(true);
       onError("Please enter a valid contact phone number (7–15 digits).");
@@ -897,10 +901,12 @@ function PendingHireProfessionalWizard({
       onError("Please acknowledge the professional-service payment terms before continuing.");
       return;
     }
+    checkoutInFlight.current = true;
     setBusy(true);
     onError(null);
     try {
       const result = await startPendingProfessionalCheckout(pendingServiceRequest.id, {
+        authorizedAmountCents: Math.round(amount * 100),
         serviceTiming,
         preferredDate: preferredDate || undefined,
         preferredTimeSlot,
@@ -911,6 +917,9 @@ function PendingHireProfessionalWizard({
         consents: { PROFESSIONAL_REQUEST_ACK: true },
       });
       if (!result.ok || !result.url) {
+        if ((result.code === 'PRICING_MISMATCH' && result.amountCents != null) || result.code === 'BOOKING_FEE_NOT_PAYABLE') {
+          setAmount(null); setBookingLines([]); setConsent(false); setStep("checkout"); setBookingFeeAttempt(n => n + 1);
+        }
         onError(result.message || "Could not start secure payment.");
         return;
       }
@@ -921,6 +930,7 @@ function PendingHireProfessionalWizard({
       }
       window.location.href = result.url;
     } finally {
+      checkoutInFlight.current = false;
       setBusy(false);
     }
   }
@@ -933,7 +943,7 @@ function PendingHireProfessionalWizard({
             <CheckCircle className="h-7 w-7" />
           </div>
           <h3 className="mt-4 text-xl font-bold">Payment Successful</h3>
-          <p className="mt-2 text-sm text-muted-foreground">Your $125 payment was received successfully.</p>
+          <p className="mt-2 text-sm text-muted-foreground">Your {formatMoney(convertedJob.visitFeeAmount ?? Number(pendingServiceRequest.paidAmountCents || 0) / 100)} payment was received successfully.</p>
           <p className="mt-1 text-sm text-muted-foreground">Your professional service request has been submitted to FixBridge.</p>
           <button
             type="button"
@@ -952,7 +962,8 @@ function PendingHireProfessionalWizard({
 
   const stepIndex = HIRE_STEPS.indexOf(step);
   return (
-    <div className="space-y-5 rounded-2xl border border-[#FF4D1C]/20 bg-gradient-to-br from-[#FFF7F3] via-card to-[#F3FAF8] p-4 sm:p-6 dark:from-[#2a1812] dark:via-card dark:to-[#142a28]">
+    <div className="homeowner-hire-flow max-w-3xl space-y-8">
+      {bookingFeeError ? <p role="alert" className="text-sm text-red-600">{bookingFeeError} <button type="button" onClick={() => setBookingFeeAttempt((n) => n + 1)} className="underline">Retry loading fee</button></p> : null}
       {paymentMessage ? (
         <div className="rounded-xl border border-amber-300/70 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
           {paymentMessage}
@@ -962,8 +973,8 @@ function PendingHireProfessionalWizard({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#FF4D1C]">Hire a professional</p>
-          <h3 className="mt-1 text-xl font-semibold sm:text-2xl">Professional service request</h3>
-          <p className="mt-1 text-xs text-muted-foreground">Pending request #{pendingServiceRequest.id} · payment converts it to a managed job.</p>
+          <div className="mt-2 flex items-center gap-3"><ServiceThumb name={pendingServiceRequest.category || pendingServiceRequest.title} className="h-16 w-20" /><h3 className="text-xl font-semibold sm:text-2xl">Professional service request</h3></div>
+          <p className="mt-1 text-xs text-muted-foreground">Pending request #{pendingServiceRequest.id} · choose a service window, then review pricing.</p>
         </div>
         <div className="flex items-center gap-2">
           <span className="rounded-xl border border-[#FF4D1C]/25 px-3 py-1.5 text-xs font-medium text-[#FF4D1C]">Step {stepIndex + 1} of {HIRE_STEPS.length}</span>
@@ -980,7 +991,7 @@ function PendingHireProfessionalWizard({
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-1.5">
+      <div className="hire-stepper" aria-label="Booking progress">
         {HIRE_STEPS.map((s, i) => (
           <span key={s} className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${i <= stepIndex ? "bg-[#FF4D1C] text-white" : "bg-muted text-muted-foreground"}`}>{STEP_LABELS[s]}</span>
         ))}
@@ -1004,7 +1015,7 @@ function PendingHireProfessionalWizard({
           <fieldset className="space-y-3">
             <legend className="text-sm font-semibold">Preferred arrival window</legend>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {TIME_WINDOW_OPTIONS.map((opt) => <button key={opt.value} type="button" onClick={() => setPreferredTimeSlot(opt.value)} className={`rounded-xl border px-3 py-3 text-left ${preferredTimeSlot === opt.value ? "border-[#FF4D1C] bg-[#FF4D1C]/10" : "border-border bg-background"}`}><span className="block text-[10px] uppercase text-muted-foreground">{opt.period}</span><span className="font-semibold">{opt.label}</span></button>)}
+              {TIME_WINDOW_OPTIONS.map((opt) => <button key={opt.value} type="button" aria-pressed={preferredTimeSlot === opt.value} onClick={() => setPreferredTimeSlot(opt.value)} className={`rounded-xl border px-3 py-3 text-left ${preferredTimeSlot === opt.value ? "border-[#FF4D1C] bg-[#FF4D1C]/10" : "border-border bg-background"}`}><span className="block text-[10px] uppercase text-muted-foreground">{opt.period}</span><span className="font-semibold">{opt.label}</span></button>)}
             </div>
           </fieldset>
           <fieldset className="space-y-3">
@@ -1029,13 +1040,13 @@ function PendingHireProfessionalWizard({
               ))}
             </div>
             <label className="block text-sm font-medium">Pick a date
-              <input type="date" value={preferredDate} min={toDateInputValue(new Date())} onChange={(e) => setPreferredDate(e.target.value)} className="mt-2 w-full rounded-xl border border-border bg-background px-3 py-3" />
+              <input aria-label="Preferred service date" type="date" value={preferredDate} min={toDateInputValue(new Date())} onChange={(e) => setPreferredDate(e.target.value)} className="mt-2 w-full rounded-xl border border-border bg-background px-3 py-3" />
             </label>
             <p className="text-xs text-muted-foreground">
               {preferredDate ? `Selected date: ${formatDisplayDate(preferredDate)}` : "No date selected — we'll use the next available weekday slot."}
             </p>
           </fieldset>
-          <button type="button" onClick={() => setStep("info")} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white">Continue <ArrowRight className="h-4 w-4" /></button>
+          <button type="button" onClick={() => { if (preferredDate && preferredDate < toDateInputValue(new Date())) { onError("Choose today or a future service date."); return; } onError(null); setStep("info"); }} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white">Continue <ArrowRight className="h-4 w-4" /></button>
         </div>
       ) : null}
 
@@ -1076,18 +1087,20 @@ function PendingHireProfessionalWizard({
         <div className="space-y-5">
           <div className="rounded-xl border border-[#FF4D1C]/25 bg-background p-5">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Professional service payment</p>
-            <div className="mt-3 flex items-end justify-between gap-4"><span className="text-sm text-muted-foreground">Professional request</span><span className="text-3xl font-black">{formatMoney(amount)}</span></div>
+            <div className="mt-3 space-y-2">{bookingLines.map(line => <p key={line.key} className="flex justify-between gap-4 text-sm"><span>{line.label}</span><span className="shrink-0 tabular-nums">{formatMoney(line.amount_cents / 100)}</span></p>)}</div>
+            <div className="mt-3 flex items-end justify-between gap-4"><span className="text-sm text-muted-foreground">Professional request</span><span className="text-3xl font-black">{amount == null ? "Loading price..." : formatMoney(amount)}</span></div>
             <p className="mt-3 text-xs leading-relaxed text-muted-foreground">This is the required professional-service payment for this pending request. After successful Stripe payment, FixBridge converts the request into a managed job.</p>
           </div>
-          <label className="flex items-start gap-3 rounded-xl border border-border p-4 text-sm"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-1" /><span>I understand that the {formatMoney(amount)} professional-service payment is required to submit this request.</span></label>
-          <div className="flex gap-2"><button type="button" onClick={() => setStep("info")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 font-semibold"><ArrowLeft className="h-4 w-4" /> Back</button><button type="button" disabled={busy || !consent} onClick={() => setStep("review")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Review <ArrowRight className="h-4 w-4" /></button></div>
+          <label className="flex items-start gap-3 rounded-xl border border-border p-4 text-sm"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-1" /><span>I understand that the {(amount == null ? "Loading price..." : formatMoney(amount))} professional-service payment is required to submit this request.</span></label>
+          <div className="flex gap-2"><button type="button" onClick={() => setStep("info")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 font-semibold"><ArrowLeft className="h-4 w-4" /> Back</button><button type="button" disabled={busy || !consent || amount == null} onClick={() => setStep("review")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Review <ArrowRight className="h-4 w-4" /></button></div>
         </div>
       ) : null}
 
       {step === "review" ? (
         <div className="space-y-5">
-          <div className="rounded-xl border border-border bg-background p-4 text-sm"><p className="font-semibold">Ready to pay</p><dl className="mt-3 grid gap-2 sm:grid-cols-2"><div><dt className="text-xs text-muted-foreground">Timing</dt><dd>{SERVICE_TIMING_OPTIONS.find((o) => o.value === serviceTiming)?.label}</dd></div><div><dt className="text-xs text-muted-foreground">Arrival</dt><dd>{TIME_WINDOW_OPTIONS.find((o) => o.value === preferredTimeSlot)?.label}</dd></div><div><dt className="text-xs text-muted-foreground">Date</dt><dd>{formatDisplayDate(preferredDate) || "Flexible"}</dd></div><div><dt className="text-xs text-muted-foreground">Amount</dt><dd className="font-bold">{formatMoney(amount)}</dd></div></dl></div>
-          <div className="flex gap-2"><button type="button" onClick={() => setStep("checkout")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 font-semibold"><ArrowLeft className="h-4 w-4" /> Back</button><button type="button" disabled={busy || !consent} onClick={() => void saveAndCheckout()} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white disabled:opacity-60">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <DollarSign className="h-4 w-4" />} Pay {formatMoney(amount)}</button></div>
+          <div className="rounded-xl border border-border bg-background p-4 text-sm"><p className="font-semibold">Ready to pay</p><dl className="mt-3 grid gap-2 sm:grid-cols-2"><div><dt className="text-xs text-muted-foreground">Timing</dt><dd>{SERVICE_TIMING_OPTIONS.find((o) => o.value === serviceTiming)?.label}</dd></div><div><dt className="text-xs text-muted-foreground">Arrival</dt><dd>{TIME_WINDOW_OPTIONS.find((o) => o.value === preferredTimeSlot)?.label}</dd></div><div><dt className="text-xs text-muted-foreground">Date</dt><dd>{formatDisplayDate(preferredDate) || "Flexible"}</dd></div><div><dt className="text-xs text-muted-foreground">Amount</dt><dd className="font-bold">{(amount == null ? "Loading price..." : formatMoney(amount))}</dd></div></dl></div>
+          <div className="space-y-2">{bookingLines.map(line => <p key={line.key} className="flex justify-between gap-4 text-sm"><span>{line.label}</span><span className="shrink-0 tabular-nums">{formatMoney(line.amount_cents / 100)}</span></p>)}</div>
+          <div className="flex gap-2"><button type="button" onClick={() => setStep("checkout")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 font-semibold"><ArrowLeft className="h-4 w-4" /> Back</button><button type="button" disabled={busy || !consent} onClick={() => void saveAndCheckout()} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white disabled:opacity-60">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <DollarSign className="h-4 w-4" />} Pay {(amount == null ? "Loading price..." : formatMoney(amount))}</button></div>
         </div>
       ) : null}
     </div>

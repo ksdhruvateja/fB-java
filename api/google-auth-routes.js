@@ -298,15 +298,16 @@ async function linkGoogleToUser(pool, user, googleUser) {
   if (existingSub && existingSub !== googleUser.sub) {
     return { conflict: 'GOOGLE_SUB_MISMATCH', user };
   }
-  await pool.query(
+  const { rows } = await pool.query(
     `UPDATE users SET
-       oauth_google_sub=COALESCE(oauth_google_sub, $2),
+       oauth_google_sub=COALESCE(NULLIF(oauth_google_sub,''), $2),
        google_avatar_url=COALESCE(google_avatar_url, $3),
        signup_method=COALESCE(signup_method, 'google')
-     WHERE id=$1`,
+     WHERE id=$1 AND COALESCE(NULLIF(oauth_google_sub,''),$2)=$2
+     RETURNING *`,
     [user.id, googleUser.sub, googleUser.picture]
   );
-  const { rows } = await pool.query(`SELECT * FROM users WHERE id=$1`, [user.id]);
+  if (!rows[0]) return { conflict: 'GOOGLE_SUB_MISMATCH', user };
   return { user: rows[0] };
 }
 
@@ -395,7 +396,7 @@ async function handleHomeownerGoogle(pool, req, res, { googleUser, makeToken, ro
     }
 
     const phone = String(req.body?.phone || '').trim() || null;
-    const randomPass = `GOOGLE_OAUTH_${googleUser.sub}`;
+    const randomPass = randomUUID();
     const hashed = await bcrypt.hash(randomPass, 10);
     const referredByCode =
       typeof req.body?.referredByCode === 'string' && req.body.referredByCode.trim()
@@ -417,7 +418,9 @@ async function handleHomeownerGoogle(pool, req, res, { googleUser, makeToken, ro
       // Race: another request created the same email/role — link instead of duplicate.
       if (insertErr?.code === '23505') {
         const retry = await findUserByGoogleIdentity(pool, { role: 'homeowner', googleUser });
+        if (retry.conflict) return rejectPortalMismatch(res,{requestId,role:'homeowner',existingRole:retry.user?.role});
         if (retry.user) {
+          if (!assertAccountActive(retry.user,res)) return;
           user = await applyGoogleLink(pool, retry.user, googleUser, res, { requestId, role: 'homeowner' });
           if (!user) return;
           isNew = false;
@@ -551,7 +554,7 @@ async function handleContractorGoogle(pool, req, res, { googleUser, makeToken, r
     });
   }
 
-  const randomPass = `GOOGLE_OAUTH_${googleUser.sub}`;
+  const randomPass = randomUUID();
   const hashed = await bcrypt.hash(randomPass, 10);
   try {
     const { rows: inserted } = await pool.query(
@@ -565,7 +568,9 @@ async function handleContractorGoogle(pool, req, res, { googleUser, makeToken, r
   } catch (insertErr) {
     if (insertErr?.code === '23505') {
       const retry = await findUserByGoogleIdentity(pool, { role: 'contractor', googleUser });
+      if (retry.conflict) return rejectPortalMismatch(res,{requestId,role:'contractor',existingRole:retry.user?.role});
       if (retry.user) {
+        if (!assertAccountActive(retry.user,res)) return;
         user = await applyGoogleLink(pool, retry.user, googleUser, res, { requestId, role: 'contractor' });
         if (!user) return;
         await recordGoogleLogin(pool, user.id);
@@ -737,12 +742,12 @@ export function registerGoogleAuthRoutes(app, {
       });
 
       if (role === 'contractor') {
-        return handleContractorGoogle(pool, req, res, { googleUser, makeToken, rowToUser, bcrypt, requestId });
+        return await handleContractorGoogle(pool, req, res, { googleUser, makeToken, rowToUser, bcrypt, requestId });
       }
       if (role === 'admin') {
-        return handleAdminGoogle(pool, req, res, { googleUser, makeToken, rowToUser, requestId });
+        return await handleAdminGoogle(pool, req, res, { googleUser, makeToken, rowToUser, requestId });
       }
-      return handleHomeownerGoogle(pool, req, res, { googleUser, makeToken, rowToUser, bcrypt, requestId });
+      return await handleHomeownerGoogle(pool, req, res, { googleUser, makeToken, rowToUser, bcrypt, requestId });
     } catch (e) {
       oauthLog('oauth_google_denied', {
         requestId,

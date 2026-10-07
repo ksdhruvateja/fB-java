@@ -1,0 +1,5 @@
+.role-brand-logo { display:inline-flex; flex-shrink:0; align-items:center; max-width:100%; padding:8px 10px; border-radius:8px; background:#181818; vertical-align:middle; }
+.role-brand-logo img { display:block; width:176px; max-width:100%; height:auto; max-height:none; object-fit:contain; object-position:center; filter:none; }
+button.role-brand-logo { cursor:pointer; }
+button.role-brand-logo:focus-visible { outline:3px solid #c87846; outline-offset:3px; }
+@media(max-width:600px) { .role-brand-logo { padding:7px 9px; } .role-brand-logo img { width:148px; } }

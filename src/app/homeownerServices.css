@@ -1,0 +1,94 @@
+.homeowner-services .service-discovery-hero { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(180px,.65fr); align-items:center; gap:24px; min-height:220px; }
+.homeowner-services .service-discovery-copy h1 { max-width:650px; font-size:clamp(30px,3.4vw,46px); font-weight:500; line-height:1.12; letter-spacing:-.045em; }
+.homeowner-services .service-discovery-copy > p:not(:first-child) { max-width:580px; line-height:1.8; }
+.service-discovery-note { display:flex; flex-wrap:wrap; gap:7px 18px; margin-top:23px; font-size:10px; color:var(--muted-foreground); }
+.service-discovery-art { position:relative; display:flex; flex-direction:column; align-items:center; justify-content:center; isolation:isolate; }
+.service-discovery-art::before { content:""; position:absolute; inset:5% 2% 12%; z-index:-1; border-radius:50%; background:radial-gradient(ellipse,#e5a52a20,transparent 68%); }
+.homeowner-services .service-hero-image { width:100%; max-width:290px; height:180px; background:transparent; border-radius:0; }
+.service-art-caption { font-size:11px; color:var(--muted-foreground); letter-spacing:.02em; }
+.homeowner-services .service-homecare-rail { display:flex; align-items:center; gap:18px; padding:24px 0; border-block:1px solid var(--border); }
+.service-homecare-mark { flex:none; display:grid; place-items:center; width:46px; height:46px; border-radius:50%; background:color-mix(in srgb,var(--primary) 12%,transparent); color:var(--primary); }
+.service-eyebrow { font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted-foreground); }
+.service-homecare-rail h2 { font-size:17px; font-weight:600; margin:4px 0; }
+.service-homecare-rail p:last-child { font-size:12px; line-height:1.7; color:var(--muted-foreground); max-width:540px; }
+.service-homecare-rail > button { display:flex; align-items:center; justify-content:center; gap:10px; flex:none; min-height:44px; margin-left:auto; border-radius:24px; border:1px solid var(--border); padding:10px 19px; font-size:12px; font-weight:600; }
+.service-homecare-rail > button:hover { border-color:var(--primary); color:var(--primary); }
+.service-catalog-intro { display:flex; align-items:end; justify-content:space-between; gap:24px; }
+.service-catalog-intro h2 { margin-top:7px; font-size:25px; letter-spacing:-.03em; font-weight:500; }
+.service-catalog-intro > p { max-width:300px; font-size:12px; line-height:1.7; color:var(--muted-foreground); }
+.homeowner-services .service-search { max-width:none; }
+.homeowner-services .service-gallery { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:34px 24px; }
+.homeowner-services .service-gallery-entry { min-width:0; display:block; padding:0; border:0; }
+.service-gallery-image { position:relative; display:block; width:100%; overflow:hidden; border-radius:18px; background:#f5f1e9; }
+.homeowner-services .service-catalog-image { display:flex; width:100%; height:170px; border-radius:0; background:transparent; }
+.homeowner-services .service-catalog-image img { padding:18px; transition:transform .2s ease; }
+.service-gallery-image:hover img { transform:scale(1.035); }
+.service-popular-label { position:absolute; top:12px; left:12px; border-radius:20px; background:#ffffffdd; color:#4b3d22; padding:4px 9px; font-size:10px; }
+.service-gallery-copy { padding:16px 2px 0; }
+.service-gallery-copy h2 { font-size:16px; }
+.service-gallery-copy > p { min-height:34px; }
+.service-gallery-copy > button { margin-top:8px; font-size:12px; }
+.homeowner-services .service-detail-image { width:100%; max-width:300px; height:190px; }
+.service-catalog-notice { display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding:14px 0; font-size:12px; color:var(--muted-foreground); }
+.service-catalog-notice button { min-height:44px; color:var(--primary); text-decoration:underline; }
+.homeowner-services button:focus-visible { outline:2px solid var(--primary); outline-offset:4px; }
+.dark .homeowner-services .service-gallery-image { background:#29271f; }
+.dark .homeowner-services .service-popular-label { background:#171717db; color:#edcb8c; }
+.dark .homeowner-services .service-catalog-image img { background:transparent; }
+@media (max-width:1100px) { .homeowner-services .service-gallery { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:600px) {
+ .homeowner-services .service-discovery-hero { grid-template-columns:minmax(0,1fr); gap:12px; }
+ .service-discovery-art { display:none; }
+ .homeowner-services .service-homecare-rail { flex-wrap:wrap; gap:12px; padding-block:20px; }
+ .service-homecare-rail > div:nth-child(2) { flex:1; }
+ .service-homecare-rail > button { margin-left:58px; }
+ .service-catalog-intro { display:block; }
+ .service-catalog-intro > p { margin-top:8px; max-width:none; }
+ .homeowner-services .service-gallery { grid-template-columns:repeat(2,minmax(0,1fr)); gap:26px 14px; }
+ .homeowner-services .service-catalog-image { height:125px; }
+ .homeowner-services .service-catalog-image img { padding:10px; }
+ .service-gallery-copy h2 { font-size:14px; line-height:1.4; }
+ .service-gallery-copy > p { font-size:11px; }
+ .service-gallery-copy ul { gap:4px 8px; }
+ .service-popular-label { top:8px; left:8px; font-size:9px; }
+}
+@media (max-width:360px) { .homeowner-services .service-gallery { grid-template-columns:minmax(0,1fr); } .homeowner-services .service-catalog-image { height:160px; } }
+@media (prefers-reduced-motion:reduce) { .homeowner-services .service-catalog-image img { transition:none; } .service-gallery-image:hover img { transform:none; } }
+.service-reviewed-artwork { display:inline-flex; align-items:center; justify-content:center; overflow:hidden; background:#f5f1e9; border-radius:14px; }
+.service-reviewed-artwork > img { width:100%; height:100%; object-fit:contain; }
+.service-photo-artwork > img, .homeowner-services .service-photo-artwork > img { object-fit:cover; padding:0; }
+.service-photo-credits { display:inline-block; margin-top:24px; color:inherit; font-size:11px; opacity:.7; text-decoration:underline; }
+.homeowner-services .service-designed-artwork { position:relative; isolation:isolate; background:radial-gradient(circle at 50% 50%,#fff8e9,#f0e4cb); }
+.service-designed-artwork .service-illustration-symbol { width:100%; height:100%; position:relative; z-index:1; }
+.service-designed-artwork .service-illustration-symbol svg { width:64px; height:64px; color:#a46d18; stroke-width:1.25; }
+.service-illustration-ring { position:absolute; width:104px; height:104px; border:1px solid #bc903945; border-radius:50%; }
+.service-illustration-line { position:absolute; bottom:18%; width:65%; height:1px; background:linear-gradient(90deg,transparent,#bc903945,transparent); }
+.dark .homeowner-services .service-designed-artwork { background:radial-gradient(circle at 50% 50%,#393225,#26231d); }
+.dark .service-designed-artwork .service-illustration-symbol svg { color:#e9b95f; }
+@media (max-width:480px) {
+ .homeowner-services .service-homecare-rail { display:grid; grid-template-columns:38px minmax(0,1fr); align-items:start; gap:10px 14px; }
+ .homeowner-services .service-homecare-mark { width:38px; height:38px; }
+ .homeowner-services .service-homecare-rail > div:nth-child(2) { width:auto; min-width:0; }
+ .homeowner-services .service-homecare-rail > button { grid-column:2; justify-self:start; margin:2px 0 0; }
+ .homeowner-services .service-homecare-rail h2 { font-size:16px; }
+ .homeowner-services .service-homecare-rail p:last-child { font-size:12px; line-height:1.65; }
+}
+
+/* Keep catalog sections and action rows aligned without changing the illustrated style. */
+.service-catalog-groups { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:28px; align-items:start; }
+.service-catalog-group { min-width:0; }
+.service-group-heading { min-height:106px; padding-bottom:20px; border-bottom:1px solid var(--border); margin-bottom:24px; }
+.service-group-heading h2 { font-size:20px; font-weight:600; line-height:1.35; }
+.service-group-heading p { margin-top:8px; font-size:12px; line-height:1.7; color:var(--muted-foreground); }
+.homeowner-services .service-catalog-group .service-gallery { grid-template-columns:repeat(2,minmax(0,1fr)); gap:26px 18px; }
+.homeowner-services .service-gallery-entry { display:flex; flex-direction:column; height:100%; }
+.service-gallery-copy { display:flex; flex-direction:column; flex:1; }
+.service-gallery-copy h3 { min-height:44px; font-size:15px; line-height:1.45; }
+.service-gallery-copy ul { min-height:32px; }
+.service-gallery-copy > button { margin-top:auto; align-self:flex-start; }
+.service-catalog-scope { font-size:11px; line-height:1.6; }
+.service-catalog-group:only-child { grid-column:1 / -1; }
+.homeowner-services .service-catalog-group:only-child .service-gallery { grid-template-columns:repeat(4,minmax(0,1fr)); }
+@media(max-width:1100px) { .service-catalog-groups { grid-template-columns:minmax(0,1fr); gap:40px; } .service-group-heading { min-height:0; } .homeowner-services .service-catalog-group .service-gallery, .homeowner-services .service-catalog-group:only-child .service-gallery { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media(max-width:600px) { .homeowner-services .service-catalog-group .service-gallery, .homeowner-services .service-catalog-group:only-child .service-gallery { grid-template-columns:repeat(2,minmax(0,1fr)); gap:24px 14px; } .service-group-heading h2 { font-size:19px; } }
+@media(max-width:360px) { .homeowner-services .service-catalog-group .service-gallery, .homeowner-services .service-catalog-group:only-child .service-gallery { grid-template-columns:minmax(0,1fr); } }

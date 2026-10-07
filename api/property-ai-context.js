@@ -1,6 +1,7 @@
 /** Safe property context for AI features — never cross-property or internal admin data. */
 
 import { assertPropertyAccess } from './property-access.js';
+import { reportedMaterials } from './reported-materials.js';
 import { classifyDiyRisk, safetySystemPrompt } from './diy-safety.js';
 
 function parseJson(value, fallback = null) {
@@ -34,10 +35,10 @@ function equipmentSummary(homeSystems = []) {
 
 function isConfirmedMemoryRecord(record) {
   if (!record || typeof record !== 'object') return false;
+  if (record.ignored === true || record.dismissed === true) return false;
   const verification = String(record.verification || (record.modelConfirmed ? 'confirmed' : '')).toLowerCase();
   const source = String(record.source || '').toLowerCase();
   if (verification === 'confirmed' || source === 'confirmed' || source === 'homeowner') return true;
-  if (record.ignored === true || record.dismissed === true) return false;
   return false;
 }
 
@@ -99,7 +100,10 @@ export async function buildPropertyAIContext(pool, propertyId, userId, options =
   const passport = health.passport || {};
   const maintenance = includeProDetails && Array.isArray(health.maintenance) ? health.maintenance.slice(0, 12) : [];
   const previousServices = Array.isArray(health.previousServices) ? health.previousServices.slice(0, 20) : [];
-  const homeSystems = parseJson(property.home_systems, []) || [];
+  const storedSystems = parseJson(property.home_systems, []) || [];
+  const homeSystems = Array.isArray(storedSystems)
+    ? storedSystems.filter((record) => record && record.ignored !== true && record.dismissed !== true)
+    : [];
   const confirmedSystems = confirmedEquipmentLines(homeSystems);
   const systems = confirmedSystems.length ? confirmedSystems : equipmentSummary(homeSystems);
 
@@ -161,7 +165,7 @@ export async function buildPropertyAIContext(pool, propertyId, userId, options =
       const source = j.customer_confirmed_at ? 'CUSTOMER_CONFIRMED' : diyOutcome || 'TECHNICIAN_REPORTED';
       const diagnosis = report.actualDiagnosis || report.diagnosis || report.findings || null;
       const repair = report.actualRepair || report.repairPerformed || report.workPerformed || report.summary || null;
-      const parts = Array.isArray(report.partsUsed) ? report.partsUsed.map((p) => p?.name || p).filter(Boolean).join(', ') : '';
+      const parts = reportedMaterials(report).join(', ');
       const diyDetails = diyOutcome
         ? `Fixera DIY outcome: ${diyOutcome}; action: ${String(diy.latestOutcomeDetails?.actualAction || 'not specified').slice(0, 160)}; parts: ${(diy.latestOutcomeDetails?.partsUsed || []).slice(0, 8).join(', ') || 'not specified'}; homeowner-reported, not a verified diagnosis`
         : '';
@@ -191,9 +195,16 @@ export async function buildPropertyAIContext(pool, propertyId, userId, options =
     );
   }
 
-  const docs = includeProDetails && Array.isArray(passport.documents) ? passport.documents.slice(0, 6) : [];
+  const docs = includeProDetails ? (await pool.query(
+    `SELECT id, category, system_key FROM property_documents
+     WHERE property_id=$1 AND owner_user_id=$2
+       AND ($3::text IS NULL OR system_key=$3 OR system_key IS NULL)
+     ORDER BY created_at DESC LIMIT 6`,
+    [propertyId, property.owner_user_id, equipmentKey || null]
+  )).rows.map(d => ({ id: Number(d.id), category: d.category, systemKey: d.system_key || null,
+    source: 'DOCUMENT_VAULT_METADATA', analysisStatus: 'not_analyzed' })) : [];
   if (docs.length) {
-    lines.push(`Documents on file: ${docs.map((d) => d.title || d.name || d.category).filter(Boolean).join('; ')}`);
+    lines.push(`Document vault: ${docs.map(d => d.category || 'document').join('; ')}. Metadata only; contents not analyzed. Do not infer equipment facts, diagnoses or warranty coverage from these files.`);
   }
 
   return {
@@ -224,7 +235,7 @@ export async function buildPropertyAIContext(pool, propertyId, userId, options =
           verification: j.customer_confirmed_at ? 'CUSTOMER_CONFIRMED' : diyVerification || 'TECHNICIAN_REPORTED',
           diagnosis: report.actualDiagnosis || report.diagnosis || report.findings || null,
           repair: report.actualRepair || report.repairPerformed || report.workPerformed || report.summary || null,
-          partsUsed: Array.isArray(report.partsUsed) ? report.partsUsed.slice(0, 12) : [],
+          partsUsed: reportedMaterials(report),
           diyOutcome: diy.outcome || null,
           diyActualAction: diy.latestOutcomeDetails?.actualAction || null,
           diyPartsUsed: Array.isArray(diy.latestOutcomeDetails?.partsUsed) ? diy.latestOutcomeDetails.partsUsed.slice(0, 12) : [],
@@ -237,7 +248,7 @@ export async function buildPropertyAIContext(pool, propertyId, userId, options =
       ].filter((service, index, all) => all.findIndex((item) => item.id === service.id) === index).slice(0, 20),
       passport: includeProDetails ? {
         warranties: Array.isArray(passport.warranties) ? passport.warranties.slice(0, 8) : [],
-        documents: Array.isArray(passport.documents) ? passport.documents.slice(0, 6) : [],
+        documents: docs,
         maintenance,
       } : {},
     },
@@ -311,27 +322,7 @@ export async function buildHomeAssistantContext(pool, { userId, propertyId, jobI
       /* optional */
     }
 
-    try {
-      const { rows: docRows } = await pool.query(
-        `SELECT category, title, notes, system_key, created_at
-         FROM property_documents
-         WHERE property_id=$1 AND owner_user_id=$2
-         ORDER BY created_at DESC LIMIT 8`,
-        [propertyId, userId]
-      );
-      if (docRows.length) {
-        parts.push('Document vault (structured metadata only):');
-        for (const d of docRows) {
-          const label = [d.category, d.title].filter(Boolean).join(' — ') || 'Document';
-          const meta = [d.system_key ? `system: ${d.system_key}` : null, d.notes ? String(d.notes).slice(0, 120) : null]
-            .filter(Boolean)
-            .join('; ');
-          parts.push(`- ${label}${meta ? ` (${meta})` : ''}`);
-        }
-      }
-    } catch {
-      /* optional */
-    }
+
   }
 
   if (jobId) {

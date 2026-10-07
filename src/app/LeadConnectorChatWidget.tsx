@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 /**
  * Temporary HighLevel / LeadConnector chat widget integration.
@@ -109,9 +109,14 @@ export default function LeadConnectorChatWidget({
   enabled: boolean;
   liftForNav?: boolean;
 }) {
+  // App consumes checkout/OAuth query parameters after render. Keep the original
+  // sensitive-entry exclusion for this page session rather than injecting later.
+  const [blockedAtEntry] = useState(isBlockedBrowserLocation);
+  const widgetEnabled = enabled && !blockedAtEntry;
+
   useEffect(() => {
-    document.documentElement.dataset.fbChat = enabled ? (liftForNav ? "portal" : "on") : "off";
-    if (!enabled) {
+    document.documentElement.dataset.fbChat = widgetEnabled ? (liftForNav ? "portal" : "on") : "off";
+    if (!widgetEnabled) {
       setWidgetVisible(false);
       return;
     }
@@ -127,15 +132,15 @@ export default function LeadConnectorChatWidget({
       cancelled = true;
       window.clearTimeout(start);
     };
-  }, [enabled, liftForNav]);
+  }, [widgetEnabled, liftForNav]);
 
   useEffect(() => {
-    if (enabled) return;
+    if (widgetEnabled) return;
     const hideLateNodes = () => setWidgetVisible(false);
     const observer = new MutationObserver(hideLateNodes);
     observer.observe(document.body, { childList: true });
     return () => observer.disconnect();
-  }, [enabled]);
+  }, [widgetEnabled]);
 
   return null;
 }

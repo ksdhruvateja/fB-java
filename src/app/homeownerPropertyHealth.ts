@@ -253,6 +253,7 @@ export function normalizeHealthProfile(raw?: Partial<PropertyHealthProfile> | nu
     previousServices,
     aiSuggestions,
     onboardingComplete: raw.onboardingComplete === true,
+    passport: raw.passport && typeof raw.passport === "object" ? raw.passport : undefined,
     homeUpdateState:
       raw.homeUpdateState && typeof raw.homeUpdateState === "object"
         ? {

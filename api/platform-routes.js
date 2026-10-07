@@ -250,8 +250,8 @@ async function startSubscriptionCheckout(pool, {
     ? `/?paid=subscription&plan=${encodeURIComponent(planCode)}&jobId=${jobId}${pendingQuery}${returnQuery}`
     : `/?paid=subscription&plan=${encodeURIComponent(planCode)}${pendingQuery}${returnQuery}`;
   const cancelPath = jobId
-    ? `/?canceled=subscription&plan=${encodeURIComponent(planCode)}&jobId=${jobId}${pendingQuery}`
-    : `/?canceled=subscription&plan=${encodeURIComponent(planCode)}${pendingQuery}`;
+    ? `/?canceled=subscription&plan=${encodeURIComponent(planCode)}&jobId=${jobId}${pendingQuery}${returnQuery}`
+    : `/?canceled=subscription&plan=${encodeURIComponent(planCode)}${pendingQuery}${returnQuery}`;
 
   const checkout = await createCheckoutSession({
     amountCents: Math.round(amount * 100),
@@ -1373,9 +1373,10 @@ export function registerPlatformRoutes(app, { pool, requireAuth, requireAdmin, r
       if (!jobs[0]) return res.status(404).json({ ok: false, message: 'Not found.' });
       const job = jobs[0];
       const { rows: contractors } = await pool.query(
-        `SELECT id, name, email, trade, compliance_status, service_zips, is_blocked
-         FROM users
-         WHERE role='contractor' AND COALESCE(is_blocked,false)=false`
+        `SELECT u.id, u.name, u.email, u.role, u.trade, u.compliance_status, u.dispatch_eligible, u.contractor_application, u.service_zips, u.is_blocked, a.temporary_unavailable
+         FROM users u
+         LEFT JOIN contractor_availability a ON a.contractor_user_id=u.id
+         WHERE u.role='contractor' AND COALESCE(u.is_blocked,false)=false`
       );
       const { filterEligibleContractors, rankEligibleContractors } = await import('./contractor-matching.js');
       const eligible = filterEligibleContractors(contractors, job);

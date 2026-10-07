@@ -1,4 +1,6 @@
-﻿import { motion } from "motion/react";
+import PropertyCoverPicker from "./PropertyCoverPicker";
+import HomeownerHomeIllustration from "./HomeownerHomeIllustration";
+import { motion, useReducedMotion } from "motion/react";
 import { useMemo } from "react";
 import {
   ArrowRight,
@@ -88,6 +90,7 @@ export default function HomeownerOverview({
   onOpenHomeUpdates,
   onOpenServices,
   quotesWaiting = 0,
+  hasHomeCarePro = false, onOpenFixera, onOpenPlans,
 }: {
   userName: string;
   property?: Property | null;
@@ -102,16 +105,20 @@ export default function HomeownerOverview({
   onOpenHomeUpdates?: () => void;
   onOpenServices?: (offeringId?: string) => void;
   quotesWaiting?: number;
+  hasHomeCarePro?: boolean; onOpenFixera?: () => void; onOpenPlans?: () => void;
 }) {
   const propertyJobs = useMemo(
     () =>
       property?.id != null
-        ? jobs.filter((j) => !j.propertyId || Number(j.propertyId) === property.id)
+        ? jobs.filter((j) => Number(j.propertyId) === property.id)
         : jobs,
     [jobs, property?.id]
   );
 
+  const reduceMotion = useReducedMotion();
+  const recordedSystems = new Set((property?.healthProfile?.systems || []).filter(system => Boolean(system.updatedAt) || system.updatedBy === "homeowner" || system.updatedBy === "contractor").map((system) => system.system));
   const merged = mergeHealthWithJobs(health, propertyJobs, property?.id);
+  const hasCompleteHealthProfile = merged.systems.every((system) => recordedSystems.has(system.system));
   const score = healthScore(merged);
   const stats = jobStats(propertyJobs);
   const activeJobs = activeJobsForHome(propertyJobs);
@@ -122,16 +129,13 @@ export default function HomeownerOverview({
   const recurring = visibleOfferings(defaultServiceOfferings()).filter((item) => item.subscriptionEligible).slice(0, 4);
   const firstName = String(userName || "there").split(" ")[0];
   const ring = scoreRingColor(score);
-  const radius = 54;
-  const circumference = 2 * Math.PI * radius;
-  const progress = Math.max(0, Math.min(100, score)) / 100;
   const attention = merged.systems.filter((s) => s.status !== "good");
   const sortedSystems = [...merged.systems].sort((a, b) => {
     const rank = { critical: 0, attention: 1, due_soon: 2, good: 3 } as const;
     return rank[a.status] - rank[b.status];
   });
 
-  const upcomingMaint = (merged.maintenance || []).slice(0, 3);
+  const upcomingMaint = [...(merged.maintenance || [])].sort((a,b) => a.dueDate.localeCompare(b.dueDate)).slice(0, 3);
   const homeUpdates = useMemo(
     () =>
       buildHomeUpdatesSnapshot({
@@ -147,163 +151,70 @@ export default function HomeownerOverview({
   const tileTones = ["bg-[#FF4D1C] text-white", "bg-[#FFF1EB] text-[#2C2926]", "bg-white text-[#2C2926]", "bg-[#F7F2EB] text-[#2C2926]"];
 
   return (
-    <section className="mx-auto max-w-6xl space-y-4">
-      {onOpenServices ? (
-        <button
-          type="button"
-          onClick={() => onOpenServices()}
-          className="w-full rounded-2xl border border-border/70 bg-card px-4 py-3 text-left text-sm text-muted-foreground shadow-sm"
-        >
-          Search services...
-        </button>
-      ) : null}
-
-      <div className="overflow-hidden rounded-[1.75rem] bg-[#FFF4EE] shadow-sm">
-        <div className="flex items-center justify-between gap-4 p-5 sm:p-6">
-          <div className="min-w-0">
-            <h1 className="text-2xl font-semibold tracking-tight text-[#2C2926] sm:text-3xl">
-              {greetingForNow()}, {firstName}!
-            </h1>
-            <p className="mt-1 max-w-md text-sm text-[#7A746C]">
-              Welcome home. FixBridge can diagnose, guide, or connect you with a professional.
-            </p>
-            <button
-              type="button"
-              onClick={onOpenPropertyPicker || onOpenProperty}
-              className="mt-3 inline-flex max-w-full items-center gap-1 text-sm font-medium text-[#2C2926]"
-            >
-              <Home className="h-4 w-4 text-[#FF4D1C]" />
-              <span className="truncate">{formatPropertyLine(property)}</span>
-            </button>
-            <button
-              type="button"
-              onClick={onRequestService}
-              className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-[#FF4D1C] px-4 py-2.5 text-sm font-semibold text-white"
-            >
-              <Plus size={16} /> Request Service
-            </button>
-          </div>
-          <img
-            src="/brand/homeowner-welcome.png"
-            alt=""
-            className="hidden h-28 w-28 shrink-0 rounded-3xl bg-[#111] object-contain sm:block sm:h-36 sm:w-36"
-          />
+    <section className="homeowner-overview mx-auto max-w-6xl space-y-8">
+      <header className="homeowner-workspace-toolbar flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Your home, connected</p>
+          <h1 className="text-2xl tracking-tight sm:text-3xl">{greetingForNow()}, {firstName}!</h1>
         </div>
-      </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={onOpenPropertyPicker || onOpenProperty} className="inline-flex max-w-full items-center gap-2 rounded-full bg-card px-4 py-2.5 text-xs font-medium">
+            <Home size={14} className="text-primary" /><span className="max-w-64 truncate">{formatPropertyLine(property)}</span>
+          </button>
+          {onOpenServices ? <button type="button" onClick={() => onOpenServices()} className="rounded-full bg-card px-4 py-2.5 text-xs font-medium">Search services</button> : null}
+          <button type="button" onClick={onRequestService} className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-xs font-semibold text-white"><Plus size={15} /> Request Service</button>
+        </div>
+      </header>
 
       {booked ? <BookedServiceNotice job={booked} onOpenJob={onOpenJob} /> : null}
+      <div className="flex flex-wrap items-center gap-3 text-xs">
+        <button type="button" onClick={hasHomeCarePro ? (onOpenFixera || onRequestService) : (onOpenPlans || onRequestService)} className="inline-flex min-h-11 items-center gap-2 text-primary">{hasHomeCarePro ? "Open Fixera" : "Explore HomeCare plans"}<ArrowRight size={15}/></button>
+        <details className="w-full"><summary className="cursor-pointer py-2 text-muted-foreground">Property cover</summary><div className="max-w-md"><PropertyCoverPicker key={`property-cover-${property?.id || "none"}`} propertyId={property?.id} label={property?.label || "Your home workspace"} address={formatPropertyLine(property)} onOpenProperty={onOpenProperty} /></div></details>
+      </div>
 
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.8fr)]">
-        <div className="space-y-4">
-          <div className="rounded-[1.75rem] border border-border/60 bg-card p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-base font-semibold">{firstName}&apos;s Home</p>
-              <button type="button" onClick={onOpenHealth} className="text-xs font-semibold text-[#FF4D1C]">
-                View systems
-              </button>
-            </div>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {homeTiles.map((system, index) => {
-                const Icon = SYSTEM_ICONS[system.system] || Home;
-                return (
-                  <button
-                    key={system.system}
-                    type="button"
-                    onClick={onOpenHealth}
-                    className={`min-h-[92px] rounded-2xl p-3 text-left ${tileTones[index % tileTones.length]}`}
-                  >
-                    <Icon size={16} />
-                    <p className="mt-3 text-sm font-semibold">{system.system}</p>
-                    <p className="mt-0.5 text-[11px] opacity-80">{statusLabel(system.status)}</p>
-                  </button>
-                );
-              })}
-            </div>
+      <div className="homeowner-workspace-grid grid items-start gap-8 xl:grid-cols-[minmax(170px,.7fr)_minmax(280px,1.65fr)_minmax(220px,.9fr)]">
+        <div className="homeowner-scene-stage relative flex min-h-72 flex-col items-center justify-center xl:col-start-2 xl:row-start-1 xl:min-h-[420px]">
+          <div className="absolute left-0 top-0">
+            <p className="text-xs font-medium text-muted-foreground">{property?.label || "Your home workspace"}</p>
           </div>
-
-          <button type="button" onClick={onOpenHealth} className="flex w-full items-center gap-4 rounded-[1.75rem] border border-border/60 bg-card p-4 text-left shadow-sm">
-            <div className="relative h-24 w-24 shrink-0">
-              <svg viewBox="0 0 128 128" className="h-full w-full -rotate-90">
-                <circle cx="64" cy="64" r={radius} fill="none" stroke="currentColor" strokeWidth="10" className="text-[#F3EBE3]" />
-                <motion.circle
-                  cx="64"
-                  cy="64"
-                  r={radius}
-                  fill="none"
-                  stroke={ring.stroke}
-                  strokeWidth="10"
-                  strokeLinecap="round"
-                  strokeDasharray={circumference}
-                  initial={{ strokeDashoffset: circumference }}
-                  animate={{ strokeDashoffset: circumference * (1 - progress) }}
-                  transition={{ duration: 0.8 }}
-                />
-              </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <p className="text-2xl font-semibold" style={{ color: ring.stroke }}>{score}</p>
-                <p className="text-[10px] text-muted-foreground">Health</p>
-              </div>
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold">{healthHeadline(score)}</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {attention.length === 0 ? "All major systems look good." : `${attention.length} system${attention.length === 1 ? "" : "s"} need attention.`}
-              </p>
-            </div>
-          </button>
-
-          <ActiveServiceCards jobs={activeJobs} onOpenJob={onOpenJob} onRequestService={onRequestService} />
+          <HomeownerHomeIllustration />
+          <p className="max-w-xs text-center text-xs leading-relaxed text-muted-foreground">Diagnose an issue, arrange a professional, or keep your home records together.</p>
         </div>
 
-        <div className="space-y-4">
-          <div className="rounded-[1.75rem] border border-border/60 bg-card p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-base font-semibold">Popular Services</p>
-              {onOpenServices ? (
-                <button type="button" onClick={() => onOpenServices()} className="text-xs font-semibold text-[#FF4D1C]">
-                  View all
-                </button>
-              ) : null}
-            </div>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {popular.slice(0, 4).map((item, index) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => onOpenServices?.(item.id)}
-                  className={`flex min-h-[72px] items-center gap-2 rounded-2xl p-2 text-left ${tileTones[index % tileTones.length]}`}
-                >
-                  <ServiceThumb name={item.name} className="h-12 w-14 bg-white/70" />
-                  <p className="line-clamp-2 text-sm font-semibold">{item.name}</p>
-                </button>
-              ))}
-            </div>
-          </div>
+        <div className="homeowner-systems-panel space-y-5 xl:col-start-1 xl:row-start-1">
+          <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-medium">{firstName}&apos;s home</h2><button type="button" onClick={onOpenHealth} className="text-[11px] font-medium text-primary">All systems</button></div>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-3 xl:grid-cols-1">{homeTiles.map((system) => {
+            const Icon = SYSTEM_ICONS[system.system] || Home;
+            return <button key={system.system} type="button" onClick={onOpenHealth} className="flex min-h-14 items-center gap-3 text-left">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/5 text-primary"><Icon size={17} /></span>
+              <span><span className="block text-sm font-medium">{system.system}</span><span className="mt-0.5 block text-[11px] text-muted-foreground">{recordedSystems.has(system.system) || system.status !== "good" ? statusLabel(system.status) : "Not assessed"}</span></span>
+            </button>;
+          })}</div>
+          <button type="button" onClick={onOpenHealth} className="homeowner-health-note w-full rounded-2xl bg-card p-4 text-left">
+            <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Home health</p>
+            {hasCompleteHealthProfile ? <p className="mt-2 text-3xl font-medium" style={{color:ring.stroke}}>{score}<span className="ml-1 text-xs text-muted-foreground">/100</span></p> : null}
+            <p className="mt-2 text-xs font-medium">{hasCompleteHealthProfile ? healthHeadline(score) : "Build your home's profile"}</p>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{hasCompleteHealthProfile ? (attention.length ? attention.length + " systems need attention." : "Recorded systems are marked good.") : "Add system details to see an informed health summary."}</p>
+          </button>
+        </div>
 
-          <div className="rounded-[1.75rem] border border-border/60 bg-card p-4 shadow-sm">
-            <p className="text-base font-semibold">Recurring care</p>
-            <p className="mt-1 text-xs text-muted-foreground">Set it once. FixBridge helps keep your home maintained.</p>
-            <div className="mt-3 space-y-2">
-              {recurring.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => onOpenServices?.(item.id)}
-                  className="flex w-full items-center gap-3 rounded-2xl bg-[#F7F2EB] p-3 text-left"
-                >
-                  <ServiceThumb name={item.name} className="h-11 w-14" />
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold">{item.name}</p>
-                    <p className="text-[11px] text-muted-foreground">
-                      {item.recommendedFrequency ? frequencyLabel(item.recommendedFrequency) : "Recurring"}
-                    </p>
-                  </div>
-                </button>
-              ))}
-            </div>
+        <div className="space-y-7 xl:col-start-3 xl:row-start-1">
+          <div>
+            <div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-medium">Popular services</h2>{onOpenServices ? <button type="button" onClick={() => onOpenServices()} className="text-[11px] text-primary">View all</button> : null}</div>
+            <div className="grid grid-cols-2 gap-3 xl:grid-cols-1">{popular.slice(0,4).map(item => <button key={item.id} type="button" onClick={() => onOpenServices?.(item.id)} className="homeowner-service-link flex min-h-14 items-center gap-3 text-left">
+              <ServiceThumb name={item.name} serviceId={item.id} category={item.category} className="h-10 w-10 rounded-xl" /><span className="min-w-0 text-xs font-medium">{item.name}</span><ArrowRight size={13} className="ml-auto shrink-0 text-muted-foreground" />
+            </button>)}</div>
+          </div>
+          <div>
+            <h2 className="text-sm font-medium">Recurring care</h2><p className="mt-1 text-[11px] text-muted-foreground">A little upkeep, on your schedule.</p>
+            <div className="mt-3 grid grid-cols-2 gap-3 xl:grid-cols-1">{recurring.map(item => <button key={item.id} type="button" onClick={() => onOpenServices?.(item.id)} className="homeowner-service-link flex items-center gap-3 text-left">
+              <ServiceThumb name={item.name} serviceId={item.id} category={item.category} className="h-10 w-10 rounded-xl" /><span><span className="block text-xs font-medium">{item.name}</span><span className="mt-0.5 block text-[10px] text-muted-foreground">{item.recommendedFrequency ? frequencyLabel(item.recommendedFrequency) : "Recurring"}</span></span>
+            </button>)}</div>
           </div>
         </div>
       </div>
+
+      <div className="homeowner-service-activity"><ActiveServiceCards jobs={activeJobs} onOpenJob={onOpenJob} onRequestService={onRequestService} /></div>
 
       {onOpenHomeUpdates ? (
         <button
@@ -318,7 +229,7 @@ export default function HomeownerOverview({
               {homeUpdates.summary.trackedSystems === 1 ? "" : "s"}.
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {homeUpdates.summary.needsAttention} may need attention Â· {homeUpdates.summary.upToDate} up to date Â·{" "}
+              {homeUpdates.summary.needsAttention} may need attention · {homeUpdates.summary.upToDate} up to date ·{" "}
               {homeUpdates.summary.needsInfo} need more information
             </p>
           </div>
@@ -412,7 +323,7 @@ export default function HomeownerOverview({
               merged.sqft != null ? `${merged.sqft.toLocaleString()} sq ft` : null,
             ]
               .filter(Boolean)
-              .join(" Â· ") || "Add details in Property Health"}
+              .join(" · ") || "Add details in Property Health"}
           </p>
         </button>
       </div>

@@ -1,3 +1,4 @@
+import ServiceBookingFeesEditor from "./ServiceBookingFeesEditor";
 import { useEffect, useMemo, useState } from "react";
 import {
   ChevronDown,
@@ -18,6 +19,7 @@ import { formatMoney } from "./managedJobs";
 export type FeePair = { customer: number; contractor: number };
 export type TradeBaseline = { trip: number; hourly: number; materials_allowance: number };
 export type PricingRules = {
+  booking_fee_cents?: number;
   dispatch_fees: Record<string, FeePair>;
   trade_baselines: Record<string, TradeBaseline>;
   fixed_platform_cost: number;
@@ -723,23 +725,7 @@ export default function AdminPricingPanel({
                   suffix="$"
                   dirty={isDirtyPath("subscription_discount")}
                 />
-                <NumField
-                  label="Free coordination fee"
-                  value={Number(pricingRules.standard_coordination_fee ?? 125)}
-                  onChange={(n) => setPricingRules({ ...pricingRules, standard_coordination_fee: n })}
-                  suffix="$"
-                  dirty={isDirtyPath("standard_coordination_fee")}
-                />
-                <NumField
-                  label="HomeCare Pro coordination fee"
-                  value={Number(pricingRules.homecare_pro_coordination_fee ?? 99)}
-                  onChange={(n) => setPricingRules({ ...pricingRules, homecare_pro_coordination_fee: n })}
-                  suffix="$"
-                  dirty={isDirtyPath("homecare_pro_coordination_fee")}
-                />
-                <p className="sm:col-span-2 text-xs text-muted-foreground">
-                  Coordination fees apply to new quotes only. Existing accepted quotes keep their snapshotted amounts.
-                </p>
+                <p className="sm:col-span-2 text-xs text-muted-foreground">Professional booking fee: {formatMoney(Number(pricingRules.booking_fee_cents ?? 12500) / 100)} is the fallback. Set service-specific fees and conditional additional charges in Dispatch pricing. Existing paid amounts remain unchanged.</p>
                 <NumField
                   label="Assessment credit"
                   value={pricingRules.assessment_credit}
@@ -830,97 +816,7 @@ export default function AdminPricingPanel({
 
           {section === "dispatch" && (
             <div className="space-y-3">
-              <div className="rounded-2xl border border-border/70 bg-card p-5 shadow-sm space-y-4">
-                <div>
-                  <h2 className="font-semibold">Professional dispatch pricing</h2>
-                  <p className="text-xs text-muted-foreground">
-                    Homeowner-facing authorization lines (AUTHORIZED NOW). Version{" "}
-                    {String((pricingRules.professional_dispatch_pricing as { version?: number })?.version || 1)}.
-                  </p>
-                </div>
-                {(
-                  (pricingRules.professional_dispatch_pricing as {
-                    lines?: Array<{
-                      key: string;
-                      label: string;
-                      amount_cents: number;
-                      enabled: boolean;
-                      line_type: string;
-                      timing_adjustable?: boolean;
-                    }>;
-                  })?.lines || []
-                ).map((line, idx) => (
-                  <div key={line.key || idx} className="rounded-xl border border-border/60 p-3 space-y-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <input
-                        className="min-w-[12rem] flex-1 rounded-lg border border-border bg-background px-2 py-1.5 text-sm font-medium"
-                        value={line.label}
-                        onChange={(e) => {
-                          const lines = [
-                            ...((pricingRules.professional_dispatch_pricing as { lines?: typeof line[] })?.lines ||
-                              []),
-                          ];
-                          lines[idx] = { ...line, label: e.target.value };
-                          setPricingRules({
-                            ...pricingRules,
-                            professional_dispatch_pricing: {
-                              ...(pricingRules.professional_dispatch_pricing as object),
-                              lines,
-                            },
-                          });
-                        }}
-                      />
-                      <label className="flex items-center gap-2 text-xs">
-                        <input
-                          type="checkbox"
-                          checked={line.enabled !== false}
-                          onChange={(e) => {
-                            const lines = [
-                              ...((pricingRules.professional_dispatch_pricing as { lines?: typeof line[] })?.lines ||
-                                []),
-                            ];
-                            lines[idx] = { ...line, enabled: e.target.checked };
-                            setPricingRules({
-                              ...pricingRules,
-                              professional_dispatch_pricing: {
-                                ...(pricingRules.professional_dispatch_pricing as object),
-                                lines,
-                              },
-                            });
-                          }}
-                        />
-                        Enabled
-                      </label>
-                    </div>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <NumField
-                        label={line.line_type === "discount" ? "Discount amount" : "Amount"}
-                        value={Number(line.amount_cents || 0) / 100}
-                        onChange={(n) => {
-                          const lines = [
-                            ...((pricingRules.professional_dispatch_pricing as { lines?: typeof line[] })?.lines ||
-                              []),
-                          ];
-                          lines[idx] = { ...line, amount_cents: Math.round(n * 100) };
-                          setPricingRules({
-                            ...pricingRules,
-                            professional_dispatch_pricing: {
-                              ...(pricingRules.professional_dispatch_pricing as object),
-                              lines,
-                            },
-                          });
-                        }}
-                        suffix="$"
-                        dirty={isDirtyPath(`professional_dispatch_pricing.lines.${idx}.amount_cents`)}
-                      />
-                      <div className="flex items-end text-xs text-muted-foreground">
-                        Type: {line.line_type === "discount" ? "Discount" : "Charge"}
-                        {line.timing_adjustable ? " · timing-adjustable visit fee" : ""}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <ServiceBookingFeesEditor rules={pricingRules} onChange={setPricingRules} disabled={disabled || busy} />
               <div className="rounded-2xl border border-border/70 bg-card p-5 shadow-sm">
                 <h2 className="font-semibold">Dispatch / assessment fees</h2>
                 <p className="text-xs text-muted-foreground">
@@ -949,21 +845,7 @@ export default function AdminPricingPanel({
                       </span>
                     </div>
                     <div className="grid gap-3 sm:grid-cols-2">
-                      <NumField
-                        label="Customer fee"
-                        value={Number(fee.customer)}
-                        onChange={(n) =>
-                          setPricingRules({
-                            ...pricingRules,
-                            dispatch_fees: {
-                              ...pricingRules.dispatch_fees,
-                              [key]: { ...fee, customer: n },
-                            },
-                          })
-                        }
-                        suffix="$"
-                        dirty={isDirtyPath(`dispatch_fees.${key}.customer`)}
-                      />
+                      <div className="text-sm"><p className="text-muted-foreground">Customer booking fee (all timings)</p><p className="mt-2 font-semibold">{formatMoney(Number(pricingRules.booking_fee_cents ?? 12500) / 100)}</p></div>
                       <NumField
                         label="Contractor visit payout"
                         value={Number(fee.contractor)}

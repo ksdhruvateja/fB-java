@@ -5,6 +5,7 @@ export default function SubscriptionSuccessModal({
   open,
   plan,
   activating = false,
+  confirmationDelayed = false,
   onClose,
   onViewFeatures,
 }: {
@@ -12,6 +13,7 @@ export default function SubscriptionSuccessModal({
   plan?: GoProPlanCard | null;
   /** True while waiting for Stripe webhook to activate the plan. */
   activating?: boolean;
+  confirmationDelayed?: boolean;
   onClose: () => void;
   onViewFeatures?: () => void;
 }) {
@@ -38,10 +40,9 @@ export default function SubscriptionSuccessModal({
               <div className="flex h-14 w-14 items-center justify-center rounded-full bg-sky-500/15 text-sky-600">
                 <Loader2 className="h-8 w-8 animate-spin" strokeWidth={2.5} />
               </div>
-              <h2 className="mt-4 text-xl font-bold">Payment Successful</h2>
+              <h2 className="mt-4 text-xl font-bold">{confirmationDelayed ? "Membership Confirmation Pending" : "Confirming Checkout"}</h2>
               <p className="mt-2 text-sm text-muted-foreground">
-                Confirming your HomeCare Pro membership… This uses verified Stripe billing, not the return URL
-                alone.
+                {confirmationDelayed ? "Your membership has not been confirmed yet. Check your payment history for its current status." : "We're checking your HomeCare Pro membership with verified billing information."}
               </p>
             </>
           ) : (
@@ -49,7 +50,7 @@ export default function SubscriptionSuccessModal({
               <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600">
                 <Check className="h-8 w-8" strokeWidth={2.5} />
               </div>
-              <h2 className="mt-4 text-xl font-bold">Payment Successful</h2>
+              <h2 className="mt-4 text-xl font-bold">Membership Active</h2>
               <p className="mt-2 text-sm text-muted-foreground">
                 {planName} is now active.
               </p>
@@ -90,7 +91,7 @@ export default function SubscriptionSuccessModal({
           </>
         ) : (
           <p className="mt-5 text-center text-xs text-muted-foreground">
-            Do not refresh — activation uses the verified payment webhook as the source of truth.
+            You can close this message and return to your saved request.
           </p>
         )}
       </div>

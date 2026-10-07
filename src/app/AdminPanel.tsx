@@ -1,3 +1,5 @@
+import RoleBrandLogo from "./RoleBrandLogo";
+import "./adminPortalPresentation.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft, LogOut, Loader2, Shield, DollarSign, Users, Briefcase,
@@ -1022,7 +1024,7 @@ export default function AdminPanel({
   // );
 
   const sidebarNav = (
-    <nav className="flex flex-col gap-1 p-3 select-none">
+    <nav className="min-h-0 flex-1 overflow-y-auto flex flex-col gap-1 p-3 select-none">
       {NAV_GROUPS.map((group, index) => {
         // Overview is a standalone navigation item.
         if (!group.label) {
@@ -1092,7 +1094,7 @@ export default function AdminPanel({
       })}
     </nav>
   );
-  
+
   const openJobDrawer = (jobId: number) => {
     setSelectedJobId(jobId);
     setDrawerOpen(true);
@@ -1352,19 +1354,16 @@ export default function AdminPanel({
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="admin-workspace min-h-screen bg-background text-foreground" data-theme={isDark ? "dark" : "light"}>
       {/* Mobile top bar */}
       <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-background/95 px-4 py-3 backdrop-blur lg:hidden">
         <div className="flex items-center gap-2">
           {(canBack || mobileNav) && (
             <AppBackButton onBack={handleBack} className="-ml-1 shrink-0 p-2" />
           )}
-          <button type="button" onClick={goHome} className="text-left outline-none focus-visible:ring-2 focus-visible:ring-primary/40 rounded-md" aria-label="Go to dashboard">
-            <p className="flex items-center gap-1.5 font-[family-name:var(--font-display)] text-lg tracking-wide text-[#FF4D1C]">
-              <Shield className="h-4 w-4" /> {brand.productName} Control
-            </p>
+          <RoleBrandLogo onHome={goHome} />
             <p className="text-xs text-muted-foreground">Admin · Managed network pilot</p>
-          </button>
+
         </div>
         <div className="flex items-center gap-1">
           {onToggleDark && (
@@ -1384,11 +1383,7 @@ export default function AdminPanel({
           <button type="button" className="absolute inset-0 bg-black/40" aria-label="Close menu" onClick={() => setMobileNav(false)} />
           <aside className="absolute inset-y-0 left-0 flex w-72 flex-col border-r border-border bg-background shadow-xl">
             <div className="border-b border-border px-4 py-4">
-              <button type="button" onClick={goHome} className="text-left outline-none focus-visible:ring-2 focus-visible:ring-primary/40 rounded-md" aria-label="Go to dashboard">
-                <p className="flex items-center gap-2 font-[family-name:var(--font-display)] text-xl tracking-wide text-[#FF4D1C]">
-                  <Shield className="h-5 w-5" /> {brand.productName} Control
-                </p>
-              </button>
+              <RoleBrandLogo onHome={goHome} />
               <p className="text-xs text-muted-foreground">Admin · Managed network pilot</p>
             </div>
             {sidebarNav}
@@ -1416,11 +1411,7 @@ export default function AdminPanel({
         {/* Desktop left sidebar */}
         <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-card lg:flex">
           <div className="border-b border-border px-4 py-5">
-            <button type="button" onClick={goHome} className="text-left outline-none focus-visible:ring-2 focus-visible:ring-primary/40 rounded-md" aria-label="Go to dashboard">
-              <p className="flex items-center gap-2 font-[family-name:var(--font-display)] text-xl tracking-wide text-[#FF4D1C]">
-                <Shield className="h-5 w-5" /> {brand.productName} Control
-              </p>
-            </button>
+            <RoleBrandLogo onHome={goHome} />
             <p className="mt-1 text-xs text-muted-foreground">Admin · Managed network pilot</p>
           </div>
           <div className="flex-1 overflow-y-auto">{sidebarNav}</div>
@@ -1442,7 +1433,7 @@ export default function AdminPanel({
           </div>
         </aside>
 
-        <main className="min-w-0 flex-1 space-y-4 bg-muted px-4 py-6 lg:px-8">
+        <main className="admin-workspace-main min-w-0 flex-1 space-y-4 bg-muted px-4 py-6 lg:px-8">
           {/* Desktop ops top bar */}
           {/* <div className="hidden items-center gap-3 lg:flex">
             <label className="relative min-w-0 flex-1">
@@ -1601,7 +1592,7 @@ export default function AdminPanel({
                   <div className="space-y-3">
                     <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Queue</h2>
                     {filteredDispatch.length === 0 ? (
-                      <EmptyState title="No jobs in the dispatch queue" hint="New paid jobs will show up here." />
+                      <EmptyState title="No jobs in the dispatch queue" hint="Paid bookings and recurring coordination requests will show up here." />
                     ) : (
                       filteredDispatch.map((job, i) => (
                         <motion.button
@@ -3556,7 +3547,7 @@ export default function AdminPanel({
               <section className="space-y-4">
                 <SectionHeader
                   title="Platform controls"
-                  subtitle="Integrations, overdue dispatch, and admin MFA. Neon + Express is the source of truth (RLS-equivalent auth in API handlers)."
+                  subtitle="Review connected services, dispatch deadlines and staff verification."
                 />
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className={`${cardClass} space-y-2 p-4`}>
@@ -3567,7 +3558,7 @@ export default function AdminPanel({
                           (k) => (
                             <li key={k} className="flex justify-between gap-2">
                               <span className="capitalize">{k}</span>
-                              <span className="font-mono text-foreground">{String(platformInfo[k])}</span>
+                              <span className="font-mono text-foreground">{platformInfo[k] == null ? "Not available" : typeof platformInfo[k] === "boolean" ? (platformInfo[k] ? "Configured" : "Not configured") : String(platformInfo[k])}</span>
                             </li>
                           )
                         )}
@@ -3596,14 +3587,17 @@ export default function AdminPanel({
                     </button>
                     <div className="flex gap-2">
                       <input
-                        className={fieldClass}
+                        className={`${fieldClass} min-w-0 flex-1`}
+                        aria-label="Admin verification code"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
                         placeholder="6-digit code"
                         value={mfaCode}
                         onChange={(e) => setMfaCode(e.target.value)}
                       />
                       <button
                         type="button"
-                        className={btnPrimary}
+                        className={`${btnPrimary} shrink-0 whitespace-nowrap`}
                         disabled={busy || !mfaCode}
                         onClick={async () => {
                           setBusy(true);

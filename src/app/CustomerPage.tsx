@@ -14,9 +14,10 @@ import {
   Cpu,
   HardDrive,
 } from "lucide-react";
-import { ScrollReveal, Counter } from "./shared";
+import { ScrollReveal } from "./shared";
 import { FeatureTileIcon } from "./FeatureTileIcon";
 import CustomerTrustSection from "./CustomerTrustSection";
+import { FixeraAboutVisual } from "./FixeraAboutVisual";
 import { brand } from "../config/brand";
 
 const HERO_IMAGE = "/hero-homeowner.png";
@@ -35,15 +36,15 @@ const FEATURES = [
     tone: "ink" as const,
   },
   {
-    title: "Certified Process",
+    title: "Organized Process",
     year: "2026",
-    body: "Built for homeowners nationwide who want clarity first.",
+    body: "Keep issue photos, property records and next steps together.",
     icon: BadgeCheck,
     tone: "steel" as const,
   },
   {
-    title: "Fast First Bids",
-    body: "Average first bid under 48 hours. Free to post — always.",
+    title: "Clear Next Steps",
+    body: "Review the scope and quotes before confirming work.",
     icon: Zap,
     tone: "coral" as const,
   },
@@ -62,13 +63,13 @@ const MOBILE_STEPS = [
   {
     num: "02",
     title: "Get an AI assessment",
-    body: "Cost range, urgency, and what the repair likely involves — in minutes.",
+    body: "An advisory overview and next steps with an eligible active plan.",
     icon: Sparkles,
   },
   {
     num: "03",
     title: "Compare real bids",
-    body: "Verified pros send priced estimates you can review side by side.",
+    body: "Review proposed scope and estimates before confirming work.",
     icon: Scale,
   },
   {
@@ -80,19 +81,19 @@ const MOBILE_STEPS = [
 ];
 
 const MOBILE_STATS = [
-  { value: "48h", label: "Avg. first bid" },
-  { value: "4.9★", label: "Customer rating" },
-  { value: "312+", label: "Vetted pros" },
-  { value: "$0", label: "To post a job" },
+  { value: "Scope", label: "Review quotes" },
+  { value: "Home", label: "Property records" },
+  { value: "Pro", label: "Request help" },
+  { value: "Plans", label: "Check eligibility" },
 ];
 
 const MOBILE_PERKS = [
-  { icon: Zap, label: "Instant AI triage" },
+  { icon: Zap, label: "Eligible AI assessment" },
   { icon: Camera, label: "Photo uploads" },
   { icon: Clock, label: "No pressure calls" },
-  { icon: BadgeCheck, label: "Verified process" },
-  { icon: Cpu, label: "AI + human check" },
-  { icon: MapPin, label: "Nationwide" },
+  { icon: BadgeCheck, label: "Organized requests" },
+  { icon: Cpu, label: "AI + property context" },
+  { icon: MapPin, label: "Property context" },
 ];
 
 function BentoCard({
@@ -131,7 +132,7 @@ export default function CustomerPage({
   const contentOpacity = useTransform(scrollYProgress, [0, 0.55], [1, 0]);
 
   return (
-    <>
+    <div className="fixbridge-public">
       {/* ── Hero: full-bleed photo ───────────────────────────────────────── */}
       <section ref={heroRef} className="relative min-h-[100svh] min-h-[100dvh] flex flex-col overflow-hidden bg-black">
         <motion.div className="absolute inset-0" style={{ scale: imageScale }}>
@@ -222,35 +223,30 @@ export default function CustomerPage({
         <div className="max-w-7xl mx-auto">
           <ScrollReveal>
             <h2
-              className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.92] tracking-tight mb-14 md:mb-20"
+              className="[font-family:'Barlow_Condensed',sans-serif] font-black uppercase leading-[0.92] tracking-tight mb-10 md:mb-14"
               style={{ fontSize: "clamp(2.5rem,7vw,5.5rem)" }}
             >
-              <span className="block">We connect homeowners</span>
-              <span className="block md:pl-[8%]">with vetted contractors nationwide —</span>
-              <span className="block md:pl-[16%]">no guesswork, no cold calls.</span>
+              <span className="block">Know your home.</span>
+              <span className="block md:pl-[8%]">Understand your options.</span>
+              <span className="block md:pl-[16%]">Move forward with Fixera.</span>
             </h2>
           </ScrollReveal>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-10 md:gap-20 border-t border-border pt-12">
+          <div className="grid grid-cols-1 lg:grid-cols-2 items-center gap-10 lg:gap-16 border-t border-border pt-10 md:pt-12">
             <ScrollReveal delay={0.08}>
               <p className="text-muted-foreground text-base md:text-lg leading-relaxed max-w-md">
-                {brand.productName} turns a vague repair into a clear assessment and competing bids —
-                so you hire with confidence anywhere in the United States.
+                Meet Fixera, the AI assistant inside {brand.productName}. Describe the issue, choose your property,
+                and add photos when helpful. With an active HomeCare plan, Fixera brings your inputs and available
+                property history into one assessment so you can understand likely causes and decide what to do next.
+              </p>
+              <p className="text-muted-foreground text-base md:text-lg leading-relaxed max-w-md mt-4">
+                When suitable guidance is available, review the tools, parts and numbered steps. When professional
+                help is needed, carry the same issue into a service request. AI assessments can be incomplete or
+                mistaken; they do not replace an on-site inspection or make hazardous work safe.
               </p>
             </ScrollReveal>
             <ScrollReveal delay={0.16}>
-              <ul className="space-y-4 border-l border-border pl-6">
-                {[
-                  "AI-assisted assessment in minutes",
-                  "Transparent regional cost ranges",
-                  "Licensed, background-checked pros",
-                  "Free to post — pay only when you book",
-                ].map((line) => (
-                  <li key={line} className="font-mono text-xs md:text-sm tracking-wide text-muted-foreground uppercase">
-                    — {line}
-                  </li>
-                ))}
-              </ul>
+              <FixeraAboutVisual onGetStarted={onGetStarted} />
             </ScrollReveal>
           </div>
         </div>
@@ -289,7 +285,7 @@ export default function CustomerPage({
                         {f.year}
                       </span>
                       <span className="font-mono text-[10px] tracking-[0.2em] uppercase text-muted-foreground mb-2 border border-border px-2 py-1">
-                        Certified Platform
+                        Property Care Platform
                       </span>
                     </div>
                   ) : null}
@@ -423,7 +419,7 @@ export default function CustomerPage({
                 <ArrowRight size={15} />
               </button>
               <p className="mt-2.5 text-center font-mono text-[10px] tracking-[0.16em] uppercase text-white/35">
-                Free to post · Nationwide
+                Review options · Check eligibility
               </p>
             </ScrollReveal>
           </div>
@@ -434,18 +430,18 @@ export default function CustomerPage({
           >
             <BentoCard className="md:[grid-area:a]" delay={0.02}>
               <p className={`[font-family:'Barlow_Condensed',sans-serif] font-black leading-none mb-2 ${accent}`} style={{ fontSize: "clamp(2.5rem,6vw,3.75rem)" }}>
-                48h
+                Quotes
               </p>
               <p className="text-sm text-white/55 leading-snug">
-                Faster first bids
+                Review proposals
                 <br />
-                than cold calling
+                before booking
               </p>
             </BentoCard>
 
             <BentoCard className="md:[grid-area:b]" delay={0.06}>
               <Zap className="w-11 h-11 text-white mb-3" strokeWidth={1.5} />
-              <p className="text-sm text-white/70 font-medium">Instant AI triage</p>
+              <p className="text-sm text-white/70 font-medium">Eligible AI assessment</p>
             </BentoCard>
 
             <BentoCard className="md:[grid-area:c]" delay={0.1}>
@@ -453,22 +449,22 @@ export default function CustomerPage({
                 AI Assessment
               </p>
               <p className="text-sm text-white/50 max-w-[16rem]">
-                Repair breakdown, cost range & urgency in minutes
+                Advisory repair overview and next steps for eligible plans
               </p>
             </BentoCard>
 
             <BentoCard className="md:[grid-area:d]" delay={0.08}>
-              <p className="text-sm text-white/50 mb-2">Avg. rating</p>
+              <p className="text-sm text-white/50 mb-2">Property records</p>
               <p className={`[font-family:'Barlow_Condensed',sans-serif] font-black leading-none ${accent}`} style={{ fontSize: "clamp(2.25rem,5vw,3.25rem)" }}>
-                4.9★
+                Home
               </p>
             </BentoCard>
 
             <BentoCard className="md:[grid-area:f]" delay={0.14}>
               <p className={`[font-family:'Barlow_Condensed',sans-serif] font-black leading-none mb-2 ${accent}`} style={{ fontSize: "clamp(2rem,5vw,2.75rem)" }}>
-                312+
+                Pro
               </p>
-              <p className="text-sm text-white/50">Vetted contractors</p>
+              <p className="text-sm text-white/50">Professional requests</p>
             </BentoCard>
 
             <BentoCard className="min-h-0 md:[grid-area:e]" delay={0.12}>
@@ -485,7 +481,7 @@ export default function CustomerPage({
                   </p>
                 </div>
                 <div className="flex items-center gap-2 font-mono text-[10px] tracking-[0.2em] uppercase text-white/35">
-                  <MapPin size={11} /> Nationwide
+                  <MapPin size={11} /> Property context
                 </div>
               </div>
             </BentoCard>
@@ -503,7 +499,7 @@ export default function CustomerPage({
               <p className={`[font-family:'Barlow_Condensed',sans-serif] font-black leading-none mb-1 ${accent}`} style={{ fontSize: "clamp(2rem,4.5vw,2.5rem)" }}>
                 $0
               </p>
-              <p className="text-sm text-white/50">Free to post a job</p>
+              <p className="text-sm text-white/50">Review before booking</p>
             </BentoCard>
 
             <BentoCard className="md:[grid-area:i]" delay={0.18}>
@@ -542,19 +538,19 @@ export default function CustomerPage({
                 <Cpu className="w-8 h-8" strokeWidth={1.4} />
                 <HardDrive className="w-8 h-8" strokeWidth={1.4} />
               </div>
-              <p className="mt-3 text-sm text-white/50">AI + human oversight</p>
+              <p className="mt-3 text-sm text-white/50">AI + property context</p>
             </BentoCard>
 
             <BentoCard className="md:[grid-area:o]" delay={0.2}>
               <p className={`[font-family:'Barlow_Condensed',sans-serif] font-black leading-none mb-1 ${accent}`} style={{ fontSize: "clamp(1.75rem,4vw,2.25rem)" }}>
-                2,847+
+                Home
               </p>
-              <p className="text-sm text-white/50">Jobs completed</p>
+              <p className="text-sm text-white/50">Repair history</p>
             </BentoCard>
 
             <BentoCard className="md:[grid-area:p]" delay={0.22}>
               <BadgeCheck className="w-9 h-9 text-white mb-2" strokeWidth={1.5} />
-              <p className="text-sm text-white/55">Verified process</p>
+              <p className="text-sm text-white/55">Organized requests</p>
             </BentoCard>
           </div>
         </div>
@@ -566,10 +562,10 @@ export default function CustomerPage({
       <section className="bg-muted border-b border-border">
         <div className="max-w-7xl mx-auto grid grid-cols-2 md:grid-cols-4">
           {[
-            { value: 2847, suffix: "+", label: "Jobs Completed" },
-            { value: 4.9, suffix: "★", label: "Average Rating", decimal: true },
-            { value: 312, suffix: "+", label: "Vetted Contractors" },
-            { value: 48, suffix: "h", label: "Avg. First Bid" },
+            { value: "Home", label: "Property records" },
+            { value: "AI", label: "Eligible assessments" },
+            { value: "Pro", label: "Professional requests" },
+            { value: "Work", label: "Reported outcomes" },
           ].map((s, i) => (
             <div
               key={s.label}
@@ -578,7 +574,7 @@ export default function CustomerPage({
               } ${i < 3 ? "md:border-r" : ""}`}
             >
               <p className="[font-family:'Barlow_Condensed',sans-serif] font-black text-4xl md:text-5xl tracking-tight mb-2 text-foreground">
-                <Counter value={s.value} suffix={s.suffix} decimal={s.decimal} />
+                {s.value}
               </p>
               <p className="font-mono text-[10px] tracking-[0.2em] uppercase text-muted-foreground">{s.label}</p>
             </div>
@@ -610,7 +606,7 @@ export default function CustomerPage({
               contractors.
             </h2>
             <p className="text-white/55 text-base sm:text-lg mb-8 sm:mb-10 max-w-md mx-auto leading-relaxed">
-              Post free. Get assessed. Hire with real bids — nationwide.
+              Describe the issue. Review the next step. Keep the repair record.
             </p>
             <button
               onClick={onGetStarted}
@@ -622,6 +618,6 @@ export default function CustomerPage({
           </div>
         </ScrollReveal>
       </section>
-    </>
+    </div>
   );
 }

@@ -5,13 +5,14 @@
 
 export const DEFAULT_PRICING_RULES = {
   id: 'default',
-  // Pilot dispatch fees (customer) and contractor visit payouts
+  // One customer booking fee; contractor visit payouts remain separate.
+  booking_fee_cents: 12500,
   dispatch_fees: {
-    weekday: { customer: 149, contractor: 100 },
-    same_day: { customer: 229, contractor: 150 },
-    evening_weekend: { customer: 299, contractor: 200 },
-    commercial_scheduled: { customer: 225, contractor: 150 },
-    commercial_emergency: { customer: 350, contractor: 225 },
+    weekday: { customer: 125, contractor: 100 },
+    same_day: { customer: 125, contractor: 150 },
+    evening_weekend: { customer: 125, contractor: 200 },
+    commercial_scheduled: { customer: 125, contractor: 150 },
+    commercial_emergency: { customer: 125, contractor: 225 },
   },
   // Trade baseline expected contractor net (labor hours × rate style)
   trade_baselines: {
@@ -47,8 +48,8 @@ export const DEFAULT_PRICING_RULES = {
   subscription_discount: 0,
   /** Customer coordination / visit fee for FixBridge Free homeowners */
   standard_coordination_fee: 125,
-  /** Reduced coordination fee for HomeCare Pro homeowners */
-  homecare_pro_coordination_fee: 99,
+  /** Compatibility alias: all homeowners use the same booking fee. */
+  homecare_pro_coordination_fee: 125,
   assessment_credit: 0,
   pro_subscription_price: 0,
   /** Flat homeowner visit / dispatch fee charged before a pro is sent. Credited on the final bill. */
@@ -57,31 +58,7 @@ export const DEFAULT_PRICING_RULES = {
   /** Admin-controlled multi-line professional dispatch pricing shown at authorization. */
   professional_dispatch_pricing: {
     version: 1,
-    effective_from: '2026-08-30',
-    lines: [
-      {
-        key: 'assessment_coordination',
-        label: 'FixBridge Assessment / Coordination',
-        amount_cents: 14900,
-        enabled: true,
-        line_type: 'charge',
-      },
-      {
-        key: 'visit_diagnostic',
-        label: 'Contractor Visit / Diagnostic',
-        amount_cents: 9500,
-        enabled: true,
-        line_type: 'charge',
-        timing_adjustable: true,
-      },
-      {
-        key: 'beta_discount',
-        label: 'Beta Discount',
-        amount_cents: 14900,
-        enabled: true,
-        line_type: 'discount',
-      },
-    ],
+    lines: [{ key: 'professional_booking', label: 'Professional booking / dispatch fee', amount_cents: 12500, enabled: true, line_type: 'charge' }],
   },
   /**
    * Stage A — applied to AI-generated recommended retail before homeowner sees it.
@@ -645,25 +622,27 @@ export function computeCustomerQuoteFromBid(contractorNet, rules = DEFAULT_PRICI
 export function getDispatchFee(serviceTiming, rules = DEFAULT_PRICING_RULES) {
   const fees = rules.dispatch_fees || DEFAULT_PRICING_RULES.dispatch_fees;
   const t = String(serviceTiming || '').toLowerCase();
-  if (t.includes('commercial') && t.includes('emerg')) return fees.commercial_emergency;
-  if (t.includes('commercial')) return fees.commercial_scheduled;
+  if (t.includes('commercial') && t.includes('emerg')) return { ...fees.commercial_emergency, customer: resolveCustomerVisitFee(rules) };
+  if (t.includes('commercial')) return { ...fees.commercial_scheduled, customer: resolveCustomerVisitFee(rules) };
   if (t.includes('evening') || t.includes('weekend') || t.includes('7-9') || t.includes('5-7')) {
-    return fees.evening_weekend;
+    return { ...fees.evening_weekend, customer: resolveCustomerVisitFee(rules) };
   }
-  if (t.includes('same') || t.includes('priority') || t.includes('same-day')) return fees.same_day;
-  return fees.weekday;
+  if (t.includes('same') || t.includes('priority') || t.includes('same-day')) return { ...fees.same_day, customer: resolveCustomerVisitFee(rules) };
+  return { ...fees.weekday, customer: resolveCustomerVisitFee(rules) };
 }
 
 /** Admin-configured homeowner visit / coordination fee (customer-facing dispatch fee). */
-export function resolveCustomerVisitFee(rules = DEFAULT_PRICING_RULES, { emergency = false, homeCarePro = false } = {}) {
-  if (!emergency && homeCarePro) {
-    const proFee = num(rules?.homecare_pro_coordination_fee, num(rules?.default_visit_fee, 125));
-    return Math.max(0, Math.round(proFee * 100) / 100);
-  }
-  const key = emergency ? 'default_emergency_visit_fee' : 'default_visit_fee';
-  const standard = num(rules?.standard_coordination_fee, num(rules?.[key], num(rules?.default_visit_fee, 125)));
-  const raw = emergency ? num(rules?.[key], standard) : standard;
-  return Math.max(0, Math.round(raw * 100) / 100);
+export function resolveBookingFeeCents(rules = DEFAULT_PRICING_RULES) {
+  const cents = Number(rules?.booking_fee_cents);
+  return Number.isSafeInteger(cents) && cents > 0 ? cents : 12500;
+}
+
+export function validateBookingFeeCents(value) {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value <= 99999999;
+}
+
+export function resolveCustomerVisitFee(rules = DEFAULT_PRICING_RULES, _options = {}) {
+  return resolveBookingFeeCents(rules) / 100;
 }
 
 /** Legacy alias — coordination fee for quotes/invoices */
@@ -683,8 +662,9 @@ export function applyVisitFeeCredit(retailAmount, visitFeePaid) {
 }
 
 export function mergePricingRules(stored) {
-  if (!stored || typeof stored !== 'object') return { ...DEFAULT_PRICING_RULES };
-  return {
+  if (!stored || typeof stored !== 'object') stored = {};
+  const bookingFeeCents = resolveBookingFeeCents(stored);
+  const merged = {
     ...DEFAULT_PRICING_RULES,
     ...stored,
     dispatch_fees: { ...DEFAULT_PRICING_RULES.dispatch_fees, ...(stored.dispatch_fees || {}) },
@@ -708,6 +688,8 @@ export function mergePricingRules(stored) {
       },
     },
     professional_dispatch_pricing: {
+      by_service: {},
+      additional_charges: [],
       ...(DEFAULT_PRICING_RULES.professional_dispatch_pricing || {}),
       ...(stored.professional_dispatch_pricing || {}),
       lines:
@@ -717,4 +699,10 @@ export function mergePricingRules(stored) {
           : DEFAULT_PRICING_RULES.professional_dispatch_pricing?.lines || [],
     },
   };
+  // Old customer-fee settings cannot reintroduce a plan/timing discount.
+  merged.booking_fee_cents = bookingFeeCents;
+  for (const key of ['default_visit_fee','default_emergency_visit_fee','standard_coordination_fee','homecare_pro_coordination_fee']) merged[key] = bookingFeeCents / 100;
+  merged.dispatch_fees = Object.fromEntries(Object.entries(merged.dispatch_fees).map(([key, fee]) => [key, { ...fee, customer: bookingFeeCents / 100 }]));
+  merged.professional_dispatch_pricing.lines = [{ key: 'professional_booking', label: 'Professional booking / dispatch fee', amount_cents: bookingFeeCents, enabled: true, line_type: 'charge' }];
+  return merged;
 }

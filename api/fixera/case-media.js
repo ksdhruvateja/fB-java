@@ -1,3 +1,4 @@
+import { normalizeRepairPhotos } from '../repair-photos.js';
 import { randomUUID } from 'node:crypto';
 
 export async function storeFixeraCaseMedia(pool, {
@@ -64,4 +65,20 @@ export async function storeFixeraCaseMedia(pool, {
     ]
   );
   return rows[0] || null;
+}
+export async function storeFixeraCasePhotos(pool, options) {
+  const photos = normalizeRepairPhotos(options.photos, options.dataUrl);
+  const table = options.caseType === 'managed_job' ? 'managed_jobs' : 'pending_service_requests';
+  const { rows } = await pool.query(
+    `UPDATE ${table} SET media_data_urls=$1::jsonb WHERE id=$2 AND homeowner_user_id=$3 RETURNING id`,
+    [JSON.stringify(photos), options.caseId, options.userId]
+  );
+  if (!rows[0]) throw new Error('Repair case was not found for this homeowner.');
+  let first = null;
+  for (const photo of photos) {
+    const stored = await storeFixeraCaseMedia(pool, { ...options, dataUrl: photo });
+    first ||= stored;
+  }
+  if (!photos.length && options.dataUrl) return storeFixeraCaseMedia(pool, options);
+  return first;
 }

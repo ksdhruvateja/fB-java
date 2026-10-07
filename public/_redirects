@@ -1,2 +1,3 @@
-/api/*  /.netlify/functions/api/:splat  200!
-/*    /index.html   200
+/api/* /.netlify/functions/api/:splat 200!
+# Build generates public/private route rules before the genuine 404 fallback.
+/* /404.html 404

@@ -358,6 +358,7 @@ function serializeInvoiceRow(row) {
   return {
     id: Number(row.id),
     invoiceNumber: row.invoice_number,
+    financialDocumentVersion: String(snapshot.versionNumber || 1),
     proposalId: row.proposal_id != null ? Number(row.proposal_id) : null,
     jobId: Number(row.job_id),
     homeownerUserId: row.homeowner_user_id != null ? Number(row.homeowner_user_id) : null,
@@ -591,6 +592,25 @@ export async function markInvoicePaidFromStripe(pool, {
   return rows[0];
 }
 
+function withQuoteDocumentLock(pool, handler) {
+  return async (req,res) => {
+    const client=await pool.connect();
+    const send=res.json.bind(res);let payload;
+    res.json=body=>{payload=body;return res;};
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT id FROM proposals WHERE id=$1 FOR UPDATE',[Number(req.params.id)]);
+      req.quoteDocumentPool=client;
+      await handler(req,res);
+      await client.query(res.statusCode>=400?'ROLLBACK':'COMMIT');
+      res.json=send;if(payload!==undefined)send(payload);
+    } catch(error) {
+      await client.query('ROLLBACK').catch(()=>{});res.json=send;
+      if(!res.headersSent)res.status(500).json({ok:false,message:'Could not save quote.'});
+    } finally {client.release();}
+  };
+}
+
 export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite }) {
   app.get('/api/admin/quotes/:id/workspace', requireAuth, requireAdmin, async (req, res) => {
     try {
@@ -693,12 +713,13 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
     }
   });
 
-  app.put('/api/admin/quotes/:id/document', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+  app.put('/api/admin/quotes/:id/document', requireAuth, requireAdmin, requireAdminWrite, withQuoteDocumentLock(pool, async (req, res) => {
+    const quotePool = req.quoteDocumentPool;
     try {
       const id = Number(req.params.id);
       const expectedJobId = Number(req.query.jobId ?? req.body?.jobId);
       const hasExpectedJobId = Number.isFinite(expectedJobId) && expectedJobId > 0;
-      const { rows } = await pool.query(`SELECT * FROM proposals WHERE id=$1`, [id]);
+      const { rows } = await quotePool.query(`SELECT * FROM proposals WHERE id=$1`, [id]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Quote not found.' });
       if (hasExpectedJobId && Number(rows[0].job_id) !== expectedJobId) {
         console.warn('[QUOTE DOCUMENT SCOPE] job mismatch', {
@@ -724,7 +745,7 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
         });
       }
       const st = String(rows[0].status || '').toLowerCase();
-      if (['sent', 'viewed'].includes(st)) {
+      if (['sent', 'viewed', 'finalized'].includes(st)) {
         const changeReason = String(
           req.body?.changeReason ||
           req.body?.revisionReason ||
@@ -738,9 +759,9 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
           changeReason,
           actorUserId: req.authUser?.id || null,
         });
-        await snapshotQuoteRevision(pool, rows[0], req.authUser.id, changeReason);
+        await snapshotQuoteRevision(quotePool, rows[0], req.authUser.id, changeReason);
         const prevVersion = Number(rows[0].version_number || 1);
-        await pool.query(
+        await quotePool.query(
           `UPDATE proposals SET
              version_number=$1,
              previous_version_id=COALESCE(previous_version_id, id),
@@ -748,7 +769,7 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
            WHERE id=$3`,
           [prevVersion + 1, changeReason, id]
         );
-        await logQuoteActivity(pool, {
+        await logQuoteActivity(quotePool, {
           proposalId: id,
           jobId: rows[0].job_id,
           actorUserId: req.authUser.id,
@@ -757,12 +778,15 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
         });
       }
       const doc = documentBodyFromRequest(req.body || {}, rows[0]);
-      const status = req.body?.status ? String(req.body.status) : rows[0].status;
+      const status = ['sent','viewed','finalized'].includes(st) ? 'draft' : (req.body?.status ? String(req.body.status) : rows[0].status);
+      if (!['draft','sent','viewed','finalized'].includes(String(status).toLowerCase())) {
+        return res.status(400).json({ok:false,code:'INVALID_QUOTE_DOCUMENT_STATUS',message:'Quote approval and cancellation use their dedicated actions.'});
+      }
       const validUntil = doc.quoteValidUntil
         ? new Date(doc.quoteValidUntil).toISOString()
         : rows[0].quote_valid_until;
 
-      await pool.query(
+      await quotePool.query(
         `UPDATE proposals SET
            customer_line_items=$1,
            line_items=$1,
@@ -836,7 +860,7 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
       );
 
       if (req.body?.discountValue != null || req.body?.discountType != null) {
-        await logQuoteActivity(pool, {
+        await logQuoteActivity(quotePool, {
           proposalId: id,
           jobId: rows[0].job_id,
           actorUserId: req.authUser.id,
@@ -848,7 +872,7 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
           },
         });
       } else {
-        await logQuoteActivity(pool, {
+        await logQuoteActivity(quotePool, {
           proposalId: id,
           jobId: rows[0].job_id,
           actorUserId: req.authUser.id,
@@ -857,18 +881,18 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
         });
       }
 
-      await audit(pool, req.authUser.id, 'quote_document_saved', 'proposal', id, {
+      await audit(quotePool, req.authUser.id, 'quote_document_saved', 'proposal', id, {
         total: doc.totals.total,
         status,
       });
 
-      const { rows: refreshed } = await pool.query(quoteSelectSql(`WHERE p.id=$1`), [id]);
+      const { rows: refreshed } = await quotePool.query(quoteSelectSql(`WHERE p.id=$1`), [id]);
       res.json({ ok: true, quote: serializeQuoteDocument(refreshed[0]) });
     } catch (e) {
       console.error('save quote document:', e);
       res.status(500).json({ ok: false, message: 'Could not save quote.' });
     }
-  });
+  }));
 
   app.post('/api/admin/quotes/:id/send', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
     try {
@@ -1438,8 +1462,7 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
       }
 
       await pool.query(
-        `UPDATE homeowner_invoices SET status=CASE WHEN status='paid' THEN status ELSE 'sent' END,
-           status=CASE WHEN status='paid' THEN status ELSE 'due' END,
+        `UPDATE homeowner_invoices SET status=CASE WHEN status='paid' THEN status ELSE 'due' END,
            sent_via=$1, sent_by=$2 WHERE id=$3`,
         [
           JSON.stringify({
@@ -2030,7 +2053,7 @@ export function registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAd
       const { rows } = await pool.query(`SELECT * FROM homeowner_invoices WHERE id=$1`, [id]);
       if (!rows[0]) return res.status(404).json({ ok: false, message: 'Invoice not found.' });
       const invoice = serializeInvoiceRow(rows[0]);
-      if (req.authUser.role === 'homeowner' && !isHomeownerOwner(req.authUser, invoice.homeownerUserId)) {
+      if (!isAdminRole(req.authUser) && (req.authUser.role !== 'homeowner' || !isHomeownerOwner(req.authUser, invoice.homeownerUserId))) {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
       if (req.authUser.role === 'contractor') {

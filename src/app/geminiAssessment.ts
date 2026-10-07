@@ -32,6 +32,11 @@ type AssessInput = {
   category: JobCategory;
   description: string;
   imageDataUrl?: string | null;
+  imageDataUrls?: string[];
+  assessmentInvocationId: string;
+  consents: { AI_ASSESSMENT_ACK: boolean };
+  jobId?: number;
+  propertyId?: number;
   mode?: "summary" | "detail";
 };
 
@@ -162,6 +167,11 @@ export async function analyzeWithAi(input: AssessInput): Promise<AnalyzeResult> 
         category: input.category,
         description: input.description,
         imageDataUrl: input.imageDataUrl ?? null,
+        imageDataUrls: input.imageDataUrls,
+        assessmentInvocationId: input.assessmentInvocationId,
+        consents: input.consents,
+        jobId: input.jobId,
+        propertyId: input.propertyId,
         mode: input.mode ?? "summary",
       }),
     });

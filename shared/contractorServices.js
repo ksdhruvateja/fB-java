@@ -1,0 +1,36 @@
+// Stable IDs match the homeowner offering catalog. Trade headings never select services.
+export const CONTRACTOR_SERVICE_OPTIONS = [
+  "Appliances",
+  "Carpentry",
+  "Concrete & Driveways",
+  "Doors & Hardware",
+  "Electrical",
+  "Fences & Gates",
+  "Flooring",
+  "Garage & Garage Doors",
+  "Handyman",
+  "HVAC & Heating/Cooling",
+  "Landscaping",
+  "Landscaping & Yard",
+  "Lighting",
+  "Locks & Security",
+  "Painting",
+  "Pest Control",
+  "Plumbing",
+  "Roofing & Gutters",
+  "Siding",
+  "Snow Removal",
+  "Windows & Glass",
+  "Bathroom",
+  "Kitchen",
+  "Water Damage",
+  "Drywall & Wall Repair",
+  "Cleaning",
+  "Smart Home & Technology",
+  "Other",
+].map(name => ({ id: name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''), name }));
+export const SERVICE_GROUPS = [
+{ name: 'Mechanical and electrical', services: ['Appliances','Electrical','HVAC & Heating/Cooling','Lighting','Plumbing','Smart Home & Technology'] },
+{ name: 'Building and repairs', services: ['Carpentry','Doors & Hardware','Flooring','Garage & Garage Doors','Handyman','Locks & Security','Painting','Roofing & Gutters','Siding','Windows & Glass','Bathroom','Kitchen','Water Damage','Drywall & Wall Repair'] },
+{ name: 'Outdoor and home care', services: ['Concrete & Driveways','Fences & Gates','Landscaping','Landscaping & Yard','Pest Control','Snow Removal','Cleaning','Other'] }
+];

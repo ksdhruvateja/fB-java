@@ -1,0 +1,982 @@
+[
+  {
+    "service": "Appliances",
+    "id": "appliances",
+    "title": "Freezer door open on refrigerator in home kitchen in New Orleans, March 2025",
+    "artist": "Infrogmation of New Orleans",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Freezer_door_open_on_refrigerator_in_home_kitchen_in_New_Orleans,_March_2025.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/9/96/Freezer_door_open_on_refrigerator_in_home_kitchen_in_New_Orleans%2C_March_2025.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/96/Freezer_door_open_on_refrigerator_in_home_kitchen_in_New_Orleans%2C_March_2025.jpg/960px-Freezer_door_open_on_refrigerator_in_home_kitchen_in_New_Orleans%2C_March_2025.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY-SA 2.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/2.0",
+    "credit": "https://www.flickr.com/photos/infrogmation/54397803459/",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "27d3042bc325f7a405b919099ed92659247ddccc4b7ab6e9dd0e5ee8eb018d95",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Open freezer in a home kitchen",
+    "files": [
+      {
+        "file": "appliances-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 14750,
+        "sha256": "db6c810061b51b9f77ca27e0ee0d5d311eba52b31f7cf2e7599e83982beb4a7e"
+      },
+      {
+        "file": "appliances-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 43540,
+        "sha256": "933ec16386a53ee93cb03940c1f3dd47e10be909e154a7f8cd98100efccc066c"
+      }
+    ]
+  },
+  {
+    "service": "Carpentry",
+    "id": "carpentry",
+    "title": "Carpenter working on an item 4",
+    "artist": "Kambai Akau",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Carpenter_working_on_an_item_4.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/5/56/Carpenter_working_on_an_item_4.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/56/Carpenter_working_on_an_item_4.jpg/960px-Carpenter_working_on_an_item_4.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY-SA 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "a94b49a946815063f0b77cb0543b052e5101fdf4406a754f17362a582166d934",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Carpenter measuring a piece of wood",
+    "files": [
+      {
+        "file": "carpentry-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 31040,
+        "sha256": "fa30e8e5d103c5f007577ba792878b2cc0fc40f1034794731d4d55208a7714bd"
+      },
+      {
+        "file": "carpentry-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 113170,
+        "sha256": "d5409d312cc60b8dc7a1946780eb499171de09af7ce215c0e0a1756ae6c5f497"
+      }
+    ]
+  },
+  {
+    "service": "Concrete & Driveways",
+    "id": "concrete_driveways",
+    "title": "Concrete raking",
+    "artist": "Panamitsu",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Concrete_raking.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/5/54/Concrete_raking.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/54/Concrete_raking.jpg/960px-Concrete_raking.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY-SA 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "78a72b10e34b5100b31c429cc24314c27570a457a0597fb06873ab1c61ab346a",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Workers spreading concrete for a driveway",
+    "files": [
+      {
+        "file": "concrete_driveways-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 45410,
+        "sha256": "0471b3ecb5bd88fd13f9eeaad1926a9bdf0c9c6af780b08a499c7dbb2fdabf58"
+      },
+      {
+        "file": "concrete_driveways-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 168954,
+        "sha256": "5971d65353f256e822959a3737ee8d3e2d2707e3cb9a7d241dca81dc6452e84e"
+      }
+    ]
+  },
+  {
+    "service": "Doors & Hardware",
+    "id": "doors_hardware",
+    "title": "Door handle",
+    "artist": "marya from San Luis Obispo, USA",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Door_handle.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/8/87/Door_handle.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/87/Door_handle.jpg/960px-Door_handle.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY 2.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/2.0",
+    "credit": "windows, doors and handles",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "ac76994946e7f23a572cceb6e2e2996be54c6123ad31b40e3baf800168d6e165",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Lever handles on a glazed door",
+    "files": [
+      {
+        "file": "doors_hardware-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 15760,
+        "sha256": "51f9f4a96f9899ff5c6c2b35f09a038602ed01678706b16ca9a029e61345ac74"
+      },
+      {
+        "file": "doors_hardware-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 39950,
+        "sha256": "5d7a3ae8a6b4d6b6f993824c1ebbc12c61fe5a0b7c42a83b4924db8884a164d2"
+      }
+    ]
+  },
+  {
+    "service": "Electrical",
+    "id": "electrical",
+    "title": "Electrical-Outlet-8830c",
+    "artist": "Loadmaster (David R. Tribble)",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Electrical-Outlet-8830c.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/4/44/Electrical-Outlet-8830c.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/4/44/Electrical-Outlet-8830c.jpg/960px-Electrical-Outlet-8830c.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY-SA 3.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0",
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "bb04c4f47b9724500f205853ad297c6f638e3d719bd88a487ef549dcddb4e31e",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Grounded electrical wall outlet",
+    "files": [
+      {
+        "file": "electrical-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 8062,
+        "sha256": "9da3cabb002013055f7f5da46a9a93869158a433c762f52e6f6ac0b7cc8e66de"
+      },
+      {
+        "file": "electrical-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 33146,
+        "sha256": "a1fd3e203384872476d0bd3600cad062f103f413889dc9e1b14bdbae4ce7f933"
+      }
+    ]
+  },
+  {
+    "service": "Fences & Gates",
+    "id": "fences_gates",
+    "title": "Arched wooden garden gate in residential fencing, Gillingham - red-brown stained timber with metal hinges and latch",
+    "artist": "OathOn",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Arched_wooden_garden_gate_in_residential_fencing,_Gillingham_-_red-brown_stained_timber_with_metal_hinges_and_latch.png",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/7/75/Arched_wooden_garden_gate_in_residential_fencing%2C_Gillingham_-_red-brown_stained_timber_with_metal_hinges_and_latch.png?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/7/75/Arched_wooden_garden_gate_in_residential_fencing%2C_Gillingham_-_red-brown_stained_timber_with_metal_hinges_and_latch.png/960px-Arched_wooden_garden_gate_in_residential_fencing%2C_Gillingham_-_red-brown_stained_timber_with_metal_hinges_and_latch.png?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY-SA 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "60ac40880b92fccc6bd956e87351637976c953733c6c2c7732472f68cd61753a",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Wooden garden gate and residential fence",
+    "files": [
+      {
+        "file": "fences_gates-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 31212,
+        "sha256": "41ad2d4ff2754e3563086079a49c6575933424b946a4b4680b3e9e2b5b8256e9"
+      },
+      {
+        "file": "fences_gates-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 122726,
+        "sha256": "da237e295ed90baea14db8190f0720dd018e3641bb61a4b20ca445f138bb51ae"
+      }
+    ]
+  },
+  {
+    "service": "Flooring",
+    "id": "flooring",
+    "title": "9 Irving A 2014 hardwood floors living room and part of bedroom",
+    "artist": "Tomwsulcer",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:9_Irving_A_2014_hardwood_floors_living_room_and_part_of_bedroom.JPG",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/d/d9/9_Irving_A_2014_hardwood_floors_living_room_and_part_of_bedroom.JPG?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://upload.wikimedia.org/wikipedia/commons/d/d9/9_Irving_A_2014_hardwood_floors_living_room_and_part_of_bedroom.JPG?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+    "license": "CC0",
+    "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "58ff9ccc6c084ea5b860a8af3023c9bede904e0ed5f48afa473b4211dbb0ed8f",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Renovated room with hardwood flooring",
+    "files": [
+      {
+        "file": "flooring-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 10266,
+        "sha256": "8f971c3b493823f4353fc027e329cd9c8454730350f093d3ecde0e0f097fba8f"
+      },
+      {
+        "file": "flooring-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 25456,
+        "sha256": "6042ad89d8aef277a0e700059e339a53fe4fa5fdb4740bbbd515a94842acd5e1"
+      }
+    ]
+  },
+  {
+    "service": "Garage & Garage Doors",
+    "id": "garage_garage_doors",
+    "title": "Garage door opener",
+    "artist": "Oleg Alexandrov 21:31, 9 February 2008 (UTC)",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Garage_door_opener.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/f/f1/Garage_door_opener.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f1/Garage_door_opener.jpg/960px-Garage_door_opener.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "Public domain",
+    "licenseUrl": null,
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "6e9f2636384ce6431745691c01efcbae20c6b2e71af9a24f0efb5c2fa71c48a5",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Garage door with overhead opener and track",
+    "files": [
+      {
+        "file": "garage_garage_doors-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 14596,
+        "sha256": "9fd706257e6c0e2c9b40c4ca273a44e1cade99ece4a8c56178ab32852e513ac4"
+      },
+      {
+        "file": "garage_garage_doors-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 48052,
+        "sha256": "58f4c6bf59abef16007e80d61dcb01a8f49e2b3de7fa4421ad1c09cb3470001d"
+      }
+    ]
+  },
+  {
+    "service": "Handyman",
+    "id": "handyman",
+    "title": "Various hand tools and hardware items scattered on an old green workbench in a workshop",
+    "artist": "Shixart1985",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Various_hand_tools_and_hardware_items_scattered_on_an_old_green_workbench_in_a_workshop.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/4/43/Various_hand_tools_and_hardware_items_scattered_on_an_old_green_workbench_in_a_workshop.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/4/43/Various_hand_tools_and_hardware_items_scattered_on_an_old_green_workbench_in_a_workshop.jpg/960px-Various_hand_tools_and_hardware_items_scattered_on_an_old_green_workbench_in_a_workshop.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY 2.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/2.0",
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "c223b526d90bced6dcdedd51f43566b4da290217eff123d9d041b352cce8b4f1",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Pliers and other hand tools on a workbench",
+    "files": [
+      {
+        "file": "handyman-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 34016,
+        "sha256": "d9f13d5ec40ab0634095a6cfdddb3ba4628adcd921df39468e9ebba8c5dd3036"
+      },
+      {
+        "file": "handyman-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 142754,
+        "sha256": "0da5128ae619749fb527c2277d31e4a0d2b7f8e8f7881b1086a0ccd0d1258203"
+      }
+    ]
+  },
+  {
+    "service": "HVAC & Heating/Cooling",
+    "id": "hvac_heating_cooling",
+    "title": "Panasonic AIR CONDITIONER OUTDOOR UNIT (381)",
+    "artist": "Dinkun Chen",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Panasonic_AIR_CONDITIONER_OUTDOOR_UNIT_(381).jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/4/47/Panasonic_AIR_CONDITIONER_OUTDOOR_UNIT_%28381%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/4/47/Panasonic_AIR_CONDITIONER_OUTDOOR_UNIT_%28381%29.jpg/960px-Panasonic_AIR_CONDITIONER_OUTDOOR_UNIT_%28381%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY-SA 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "6c46879c4f365cf9febb89208c9f61ccaa70e899662e4a24b6fea9b68b3ba405",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Outdoor air-conditioning unit",
+    "files": [
+      {
+        "file": "hvac_heating_cooling-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 37354,
+        "sha256": "5ae85345042789b062575296c35318adf9a1ea2c9c1395f123707042d6488302"
+      },
+      {
+        "file": "hvac_heating_cooling-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 113808,
+        "sha256": "7c8be7667bcf5a3d7453b9d2f58d2240c3580994879abd0852b7c6a937336701"
+      }
+    ]
+  },
+  {
+    "service": "Landscaping",
+    "id": "landscaping",
+    "title": "Lawn Mowing DVIDS119604",
+    "artist": "Staff Sgt. Brian Jopek",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Lawn_Mowing_DVIDS119604.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/6/68/Lawn_Mowing_DVIDS119604.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/68/Lawn_Mowing_DVIDS119604.jpg/960px-Lawn_Mowing_DVIDS119604.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "Public domain",
+    "licenseUrl": null,
+    "credit": "https://www.dvidshub.net/image/119604",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "ce7dfcfa95b87d3f61c6205b1f124d9a531dd4efbd8510ef64765c05e55eb96a",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Worker mowing a lawn",
+    "files": [
+      {
+        "file": "landscaping-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 56950,
+        "sha256": "f4aad3d7fd5246dbd5c20ee4de1ff20084e1457d4b5bc967a69dba440d2d0baf"
+      },
+      {
+        "file": "landscaping-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 245930,
+        "sha256": "c34b6a49928a5bb3bcf0289aa318939c4bb43e988e0659a52738d639feaf613e"
+      }
+    ]
+  },
+  {
+    "service": "Landscaping & Yard",
+    "id": "landscaping_yard",
+    "title": "BnDHedgeTrimmerExtended",
+    "artist": "Simon Speed",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:BnDHedgeTrimmerExtended.JPG",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/8/84/BnDHedgeTrimmerExtended.JPG?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/84/BnDHedgeTrimmerExtended.JPG/960px-BnDHedgeTrimmerExtended.JPG?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC0",
+    "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "0eb4cae216efb3bc398066c3f65d833a59b77110f9d46ec695b2f52c31909f52",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Electric hedge trimmer on grass",
+    "files": [
+      {
+        "file": "landscaping_yard-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 65836,
+        "sha256": "d6324bc9d1404c34ef5443b60f00803dc415a66410def5077d434e37be9c13b1"
+      },
+      {
+        "file": "landscaping_yard-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 259056,
+        "sha256": "831dbce60218d46879dac1482148e88ba54567ca97c74a25e22e880c4fd45728"
+      }
+    ]
+  },
+  {
+    "service": "Lighting",
+    "id": "lighting",
+    "title": "Geometric white pendant lamp chandelier",
+    "artist": "Oleslawlama",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Geometric_white_pendant_lamp_chandelier.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/7/7d/Geometric_white_pendant_lamp_chandelier.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/7/7d/Geometric_white_pendant_lamp_chandelier.jpg/960px-Geometric_white_pendant_lamp_chandelier.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY-SA 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "fface47271306c4e98473cbbeadc70fe55244e157134b0377d81be7c27877c3d",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Illuminated geometric pendant light",
+    "files": [
+      {
+        "file": "lighting-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 8740,
+        "sha256": "f7e83109b3c16eb7e78ec1ad0d0fb056b968dc9fe5fabd1a790500dee4fd1825"
+      },
+      {
+        "file": "lighting-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 21038,
+        "sha256": "102902d622b086d7318e48a2f31871619d9bed33ee59b6df7733be5000682efb"
+      }
+    ]
+  },
+  {
+    "service": "Locks & Security",
+    "id": "locks_security",
+    "title": "Kwikset 270 CNT Electronic Deadbolt Lock",
+    "artist": "TaurusEmerald",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Kwikset_270_CNT_Electronic_Deadbolt_Lock.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/f/fe/Kwikset_270_CNT_Electronic_Deadbolt_Lock.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/fe/Kwikset_270_CNT_Electronic_Deadbolt_Lock.jpg/960px-Kwikset_270_CNT_Electronic_Deadbolt_Lock.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY-SA 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "3364616f3a39b29dd098780a01b93dd8c4b81d1f7f4357bbd54363fd818c248d",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Electronic deadbolt keypad on a door",
+    "files": [
+      {
+        "file": "locks_security-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 5494,
+        "sha256": "6174bf1854e67a6be8e890340b98c7351974f81cd04c21b041dc6163b85f5153"
+      },
+      {
+        "file": "locks_security-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 24092,
+        "sha256": "dfe3953ccb301cdf0c44be9a27076abe92962b86d332dde492b9acb88f73a598"
+      }
+    ]
+  },
+  {
+    "service": "Painting",
+    "id": "painting",
+    "title": "Paint roller 4",
+    "artist": "Michael Cory",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Paint_roller_4.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/c/c0/Paint_roller_4.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/c/c0/Paint_roller_4.jpg/960px-Paint_roller_4.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY 2.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/2.0",
+    "credit": "https://www.flickr.com/photos/khouri/4491791249/",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "23ceb059e3c9f7ad7d7a29135e05ed8986abab96fedb3a0cbfafab719ce044f1",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Paint roller beside a freshly painted wall",
+    "files": [
+      {
+        "file": "painting-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 34670,
+        "sha256": "d97957e88ba1accd08540859290f4137b5f6c28436628d2968914ce88384d7e4"
+      },
+      {
+        "file": "painting-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 164986,
+        "sha256": "9ff1ae56bbce5615a2f3ed860495a08f2ff387acadf32544889358698531262f"
+      }
+    ]
+  },
+  {
+    "service": "Pest Control",
+    "id": "pest_control",
+    "title": "CSIRO ScienceImage 2184 Termite Damage to a House",
+    "artist": "Entomology, CSIRO",
+    "requestedAttribution": "CSIRO",
+    "source": "https://commons.wikimedia.org/wiki/File:CSIRO_ScienceImage_2184_Termite_Damage_to_a_House.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/6/62/CSIRO_ScienceImage_2184_Termite_Damage_to_a_House.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/62/CSIRO_ScienceImage_2184_Termite_Damage_to_a_House.jpg/960px-CSIRO_ScienceImage_2184_Termite_Damage_to_a_House.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY 3.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/3.0",
+    "credit": "http://www.scienceimage.csiro.au/image/2184",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "0ee706d56128a7638e5217e4724a5d76cd18fd5c16f7bc8fda9c29b31efb5254",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Termite damage in a house timber",
+    "files": [
+      {
+        "file": "pest_control-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 57806,
+        "sha256": "d3a230b3b4326ec96b262dc7df693bba204f213a9eccbd37a076fbbfcc552367"
+      },
+      {
+        "file": "pest_control-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 200570,
+        "sha256": "82a0da0f40542f507073be416b066bccfc66330d89c25939e29fbf18b8774835"
+      }
+    ]
+  },
+  {
+    "service": "Plumbing",
+    "id": "plumbing",
+    "title": "Leaking PVC Pipe Under Sink - P Trap (52842956605)",
+    "artist": "Tony Webster",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Leaking_PVC_Pipe_Under_Sink_-_P_Trap_(52842956605).jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/3/3e/Leaking_PVC_Pipe_Under_Sink_-_P_Trap_%2852842956605%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/3/3e/Leaking_PVC_Pipe_Under_Sink_-_P_Trap_%2852842956605%29.jpg/960px-Leaking_PVC_Pipe_Under_Sink_-_P_Trap_%2852842956605%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY 2.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/2.0",
+    "credit": "Leaking PVC Pipe Under Sink - P Trap",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "31aafd43803144b2952a55998f0eeee016552955d55af000bc7832086e33789b",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "P-trap plumbing beneath a sink",
+    "files": [
+      {
+        "file": "plumbing-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 5056,
+        "sha256": "f0b7f560433612b98c4a0dc48d8051ef721c3b70e07c4ae96d4448390a763bff"
+      },
+      {
+        "file": "plumbing-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 12638,
+        "sha256": "bd56dc1eb01ded54728c506b95ff7c0dea4edd84f4b093b1c285275dc0fbbfcd"
+      }
+    ]
+  },
+  {
+    "service": "Roofing & Gutters",
+    "id": "roofing_gutters",
+    "title": "-2020-05-23 Roof tiles and plastic guttering, Trimingham, Norfolk",
+    "artist": "Kolforn",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:-2020-05-23_Roof_tiles_and_plastic_guttering,_Trimingham,_Norfolk.JPG",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/1/1d/-2020-05-23_Roof_tiles_and_plastic_guttering%2C_Trimingham%2C_Norfolk.JPG?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/1/1d/-2020-05-23_Roof_tiles_and_plastic_guttering%2C_Trimingham%2C_Norfolk.JPG/960px--2020-05-23_Roof_tiles_and_plastic_guttering%2C_Trimingham%2C_Norfolk.JPG?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY-SA 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "d3e71633f5eca8b88a7c3e6069cfee0bc0fb21c81c9b303df545e8aebae871a4",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Roof tiles and rain gutter",
+    "files": [
+      {
+        "file": "roofing_gutters-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 33976,
+        "sha256": "597adfd67288d5515b280e7a39e71f86c345daad82fdc4f7535d3fb63ae53b05"
+      },
+      {
+        "file": "roofing_gutters-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 122890,
+        "sha256": "4b3b6d3a585f9f9ca4c7ad3f0b14ba8e56ecf85e72771f50d3c9cf40e1df0921"
+      }
+    ]
+  },
+  {
+    "service": "Siding",
+    "id": "siding",
+    "title": "New House Siding (23781939893)",
+    "artist": "daryl_mitchell from Saskatoon, Saskatchewan, Canada",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:New_House_Siding_(23781939893).jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/a/a6/New_House_Siding_%2823781939893%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/a6/New_House_Siding_%2823781939893%29.jpg/960px-New_House_Siding_%2823781939893%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY-SA 2.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/2.0",
+    "credit": "New House Siding",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "988c7ea8070b71730bce3ecd4e08f7f5390ed94469d904ffe906435f23f08281",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "House exterior with new siding",
+    "files": [
+      {
+        "file": "siding-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 43338,
+        "sha256": "dbfa77dfda61affc3bd26a1bfe6b8b6a5e6697a28e0a0b2c15e5d13857f40087"
+      },
+      {
+        "file": "siding-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 163512,
+        "sha256": "aaf70f28758f9335745390c05e00457c315827e49b016696cb94a3c210a35b5f"
+      }
+    ]
+  },
+  {
+    "service": "Snow Removal",
+    "id": "snow_removal",
+    "title": "Snow shovelling",
+    "artist": "Jeff the quiet",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Snow_shovelling.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/9/93/Snow_shovelling.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://upload.wikimedia.org/wikipedia/commons/9/93/Snow_shovelling.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+    "license": "Public domain",
+    "licenseUrl": null,
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "c956163dfb0adca5f05d7c59d9e873c165a56ec7dabb07cac430ba23de3565fe",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Snow shovel on a cleared snowy path",
+    "files": [
+      {
+        "file": "snow_removal-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 22152,
+        "sha256": "10cf05f055559cf6cf50652b1a2519ae9a02eb34ca627da1fb032c5548b7b2e6"
+      },
+      {
+        "file": "snow_removal-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 49316,
+        "sha256": "b705b7994dbcbe3d21766368bf68ebf9c6ab3753ffbf58b0c3de886fbce31bd3"
+      }
+    ]
+  },
+  {
+    "service": "Windows & Glass",
+    "id": "windows_glass",
+    "title": "Double glazing",
+    "artist": "Ftm100",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Double_glazing.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/4/41/Double_glazing.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://upload.wikimedia.org/wikipedia/commons/4/41/Double_glazing.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+    "license": "CC BY-SA 3.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0",
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "69fdb87af6ff3eccb15cc8b31eebde1288b83515efbfc5083fbfa51ccd0a22ea",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Double-glazed window and frame",
+    "files": [
+      {
+        "file": "windows_glass-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 4232,
+        "sha256": "cb13881f34634feef88f382a6cd43a6c7ec2526e8bf89a1ce97ae1032f547232"
+      },
+      {
+        "file": "windows_glass-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 10056,
+        "sha256": "0c4d81dd8999c31a820dd4af403c74a49ebbbb56a415d53f9bb248d027a31e15"
+      }
+    ]
+  },
+  {
+    "service": "Bathroom",
+    "id": "bathroom",
+    "title": "Modern Bathroom Designs",
+    "artist": "Alyssacrafto",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Modern_Bathroom_Designs.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/6/6e/Modern_Bathroom_Designs.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://upload.wikimedia.org/wikipedia/commons/6/6e/Modern_Bathroom_Designs.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+    "license": "CC BY-SA 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "f4a722bbe37868c8f6d63863a10f11d24669d367063f4df9a8e751b3b8045e52",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Bathroom with glass shower and vanity",
+    "files": [
+      {
+        "file": "bathroom-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 14828,
+        "sha256": "7f8958221fbe5556323c4afa078d0368f9566819818ac9110441c10a6eecc908"
+      },
+      {
+        "file": "bathroom-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 34652,
+        "sha256": "3c6ef72af91c5311b7747d1814a199f6f2e5500e6fc08f8ae3b03a620394791e"
+      }
+    ]
+  },
+  {
+    "service": "Kitchen",
+    "id": "kitchen",
+    "title": "Modern kitchen gnangarra",
+    "artist": "User:Gnangarra",
+    "requestedAttribution": "Photographs by Gnangarra...commons.wikimedia.org",
+    "source": "https://commons.wikimedia.org/wiki/File:Modern_kitchen_gnangarra.JPG",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/7/72/Modern_kitchen_gnangarra.JPG?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/7/72/Modern_kitchen_gnangarra.JPG/960px-Modern_kitchen_gnangarra.JPG?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY 2.5 au",
+    "licenseUrl": "https://creativecommons.org/licenses/by/2.5/au/deed.en",
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "434be4c672af9b411567734bf266d88959663208cc381d9ec9597d3da5714485",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Home kitchen with cabinets and appliances",
+    "files": [
+      {
+        "file": "kitchen-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 13952,
+        "sha256": "ead6bac3cc6f94cf8a7148010513aa1f743df1178730fb217130c65275e8766b"
+      },
+      {
+        "file": "kitchen-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 37400,
+        "sha256": "68b944cf3fd81178fd234d8c45bae9182f252e8d17409bf5df985015d94f5011"
+      }
+    ]
+  },
+  {
+    "service": "Water Damage",
+    "id": "water_damage",
+    "title": "Courtroom 14 South water damage, Thomas F. Eagleton U.S. Courthouse (2011)",
+    "artist": "United States District Court for the Eastern District of Missouri",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Courtroom_14_South_water_damage,_Thomas_F._Eagleton_U.S._Courthouse_(2011).jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/9/9a/Courtroom_14_South_water_damage%2C_Thomas_F._Eagleton_U.S._Courthouse_%282011%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://upload.wikimedia.org/wikipedia/commons/9/9a/Courtroom_14_South_water_damage%2C_Thomas_F._Eagleton_U.S._Courthouse_%282011%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+    "license": "Public domain",
+    "licenseUrl": null,
+    "credit": "https://www.moed.uscourts.gov/sites/moed/files/documents/publications/2011_Annual_Report.pdf",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "c04d6de601893b5899d83f690a898561bfffa920bbdb6f9b9756a606861898d8",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Workers restoring an interior after water damage",
+    "files": [
+      {
+        "file": "water_damage-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 13740,
+        "sha256": "60149fedda93fbbc395208de34b26f26ad515e2797eded0c9dd5b3f8689b3923"
+      },
+      {
+        "file": "water_damage-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 29470,
+        "sha256": "2819fbda5cf4870e2b9e0c76dcd9e727eda95b1ed50994c63a0321caf9833d72"
+      }
+    ]
+  },
+  {
+    "service": "Drywall & Wall Repair",
+    "id": "drywall_wall_repair",
+    "title": "Drywall and tools",
+    "artist": "Timothyjosephwood",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Drywall_and_tools.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/f/f5/Drywall_and_tools.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f5/Drywall_and_tools.jpg/960px-Drywall_and_tools.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY-SA 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "1137ad01200d51cb2bc4d42c248800d77884319bc0c5e6ac2743c135efe725f7",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Drywall joint tape and finishing tools",
+    "files": [
+      {
+        "file": "drywall_wall_repair-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 18454,
+        "sha256": "fd709f2ff417f0447107ada47c2e1c18a44b761b9b1d111ec8e7b7e514e6bd98"
+      },
+      {
+        "file": "drywall_wall_repair-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 69492,
+        "sha256": "ab97b321eb055ea832ed352faf6b0738bbb52ad2f4ff79dc56b1d2737b616709"
+      }
+    ]
+  },
+  {
+    "service": "Cleaning",
+    "id": "cleaning",
+    "title": "Mohkam Mopping",
+    "artist": "Hardeep Singh from Vancouver, Canada",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Mohkam_Mopping.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/6/6c/Mohkam_Mopping.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://upload.wikimedia.org/wikipedia/commons/6/6c/Mohkam_Mopping.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+    "license": "CC BY 2.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/2.0",
+    "credit": "Mohkam Mopping",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "3520b0fcbc56c88c83c576df9a4b72968a2723945b7e893c76777b2a128572e9",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Person using a mop and bucket",
+    "files": [
+      {
+        "file": "cleaning-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 12474,
+        "sha256": "effeb803b79a2301cb66b00e9b620e3749b63f977c2c12b7bfd6f09cd2822a08"
+      },
+      {
+        "file": "cleaning-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 27486,
+        "sha256": "6f238c2e7bad1f766d4ed171061f2a35bc20a9bf02c9831110e5f67eb1468587"
+      }
+    ]
+  },
+  {
+    "service": "Smart Home & Technology",
+    "id": "smart_home_technology",
+    "title": "Honeywell E528 Smart Digital Thermostat",
+    "artist": "TaurusEmerald",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Honeywell_E528_Smart_Digital_Thermostat.jpg",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/0/02/Honeywell_E528_Smart_Digital_Thermostat.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/02/Honeywell_E528_Smart_Digital_Thermostat.jpg/960px-Honeywell_E528_Smart_Digital_Thermostat.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY-SA 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "3572a8c2da309e91354780b7b4306c829a8628a03f5a494394544c8f654de47b",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Digital thermostat with temperature controls",
+    "files": [
+      {
+        "file": "smart_home_technology-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 9316,
+        "sha256": "84e85a8199538e28b547a3cca37af057d50c4fd51889f258cf3bc9e2c4142ffa"
+      },
+      {
+        "file": "smart_home_technology-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 31582,
+        "sha256": "c15d8a1ad6256a5148e827090831833f4a7757585b94d841e2dce8cdf9b14e67"
+      }
+    ]
+  },
+  {
+    "service": "Other",
+    "id": "other",
+    "title": "Caisse à outils avec petit outillage",
+    "artist": "Rieul Techer",
+    "requestedAttribution": "",
+    "source": "https://commons.wikimedia.org/wiki/File:Caisse_%C3%A0_outils_avec_petit_outillage.JPG",
+    "original": "https://upload.wikimedia.org/wikipedia/commons/0/0a/Caisse_%C3%A0_outils_avec_petit_outillage.JPG?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "downloaded": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/0a/Caisse_%C3%A0_outils_avec_petit_outillage.JPG/960px-Caisse_%C3%A0_outils_avec_petit_outillage.JPG?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "license": "CC BY-SA 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+    "credit": "Own work",
+    "restrictions": "",
+    "modified": "Center cropped to 3:2, resized to 480/960 pixels, converted to WebP. Photo derivatives retain the original photo license.",
+    "sourceSha256": "575443d498ab58312f3a13930fb6cc2312a0c59350cfe8e7e4e08561f29954d0",
+    "googleDiscovery": "Blocked by Google unusual-traffic verification; sourced directly from Wikimedia Commons instead.",
+    "reviewedOn": "2026-10-04",
+    "alt": "Open toolbox containing repair tools",
+    "files": [
+      {
+        "file": "other-480.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 30828,
+        "sha256": "8342ca610b3d01963f6878c84fdb17d33e0c7610a8bf261d7ce7f3f0a004fa6e"
+      },
+      {
+        "file": "other-960.webp",
+        "width": 960,
+        "height": 640,
+        "bytes": 79204,
+        "sha256": "a1b25533af66051e5490100d2ecae9d601b71a353f75bcc8147ec6b75399f51e"
+      }
+    ]
+  }
+]

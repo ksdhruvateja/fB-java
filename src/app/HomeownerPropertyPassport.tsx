@@ -252,7 +252,7 @@ export default function HomeownerPropertyPassport({
         homeDetails: homeDetailsDraft,
       });
       await onSaveHealth(property.id, nextHealth);
-      await onSaveProperty(property.id, {
+      const saved = await onSaveProperty(property.id, {
         propertyType: homeDetailsDraft.propertyType || property.propertyType,
         yearBuilt: homeDetailsDraft.yearBuilt ? Number(homeDetailsDraft.yearBuilt) : null,
         beds: homeDetailsDraft.bedrooms ? Number(homeDetailsDraft.bedrooms) : null,
@@ -260,8 +260,11 @@ export default function HomeownerPropertyPassport({
         sqft: homeDetailsDraft.squareFootage ? Number(homeDetailsDraft.squareFootage) : null,
         accessNotes: homeDetailsDraft.otherNotes || property.accessNotes,
       });
+      if (!saved) throw new Error("Could not save home details. Please try again.");
       setEditingHomeDetails(false);
       setSaveMessage("Saved");
+    } catch (error) {
+      setSaveMessage(error instanceof Error ? error.message : "Could not save. Please try again.");
     } finally {
       setSaving(false);
     }
@@ -328,6 +331,8 @@ export default function HomeownerPropertyPassport({
       setEditingLocation(null);
       setLocationDraft(null);
       setSaveMessage("Saved");
+    } catch (error) {
+      setSaveMessage(error instanceof Error ? error.message : "Could not save. Please try again.");
     } finally {
       setSaving(false);
     }
@@ -351,6 +356,8 @@ export default function HomeownerPropertyPassport({
       setEditingWarranty(null);
       setWarrantyDraft(null);
       setSaveMessage("Saved");
+    } catch (error) {
+      setSaveMessage(error instanceof Error ? error.message : "Could not save. Please try again.");
     } finally {
       setSaving(false);
     }

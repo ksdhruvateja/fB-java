@@ -1025,6 +1025,7 @@ export default function HomeownerPropertyPage({
                                       DOC_CATEGORIES.find((c) => c.id === doc.category)?.label,
                                       systems.find((s) => s.key === doc.systemKey)?.name,
                                       formatDocDate(doc.createdAt),
+                                      "Contents not analyzed",
                                     ].filter(Boolean).join(" · ")}
                                   </p>
                                 </div>
@@ -1049,8 +1050,8 @@ export default function HomeownerPropertyPage({
                                   disabled={extractBusy || busy}
                                   onClick={() => void analyzeDoc(doc)}
                                   className="rounded-lg p-2 text-muted-foreground hover:bg-primary/10 hover:text-primary"
-                                  aria-label="Analyze document"
-                                  title="Extract details with AI"
+                                  aria-label="Review document details"
+                                  title="Contents not analyzed — review details yourself"
                                 >
                                   {extractBusy && extractDoc?.id === doc.id ? (
                                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -1086,9 +1087,9 @@ export default function HomeownerPropertyPage({
 
                 {extractDraft && extractDoc ? (
                   <div className="mt-5 rounded-2xl border border-primary/25 bg-primary/5 p-4">
-                    <p className="text-sm font-semibold">Confirm extracted details</p>
+                    <p className="text-sm font-semibold">Review document details</p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Review before FixBridge updates your home systems. Nothing is saved until you confirm.
+                      The file contents have not been analyzed or sent to AI. Enter details you have reviewed yourself. Nothing is saved until you confirm.
                     </p>
                     <div className="mt-3 grid gap-2 sm:grid-cols-2">
                       <label className="grid gap-1 text-xs">

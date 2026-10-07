@@ -21,13 +21,26 @@ import { activationFeeCentsFor, mergeActivationFee, mergeOfferings, offeringById
 import { createRecurringAdminJob, fulfillRecurringActivation } from './recurring-activation.js';
 import { createCheckoutSession, stripeConfigured } from './stripe.js';
 
-function addRecurrenceDays(dateStr, recurrence) {
-  const d = new Date(dateStr || Date.now());
-  if (Number.isNaN(d.getTime())) return null;
-  if (recurrence === 'weekly') d.setDate(d.getDate() + 7);
-  else if (recurrence === 'biweekly') d.setDate(d.getDate() + 14);
-  else if (recurrence === 'monthly') d.setMonth(d.getMonth() + 1);
-  return d.toISOString().slice(0, 10);
+import { addRecurrenceDays, calendarDate } from './recurring-calendar.js';
+import { queueRecurringOccurrence, cancelPendingOccurrences, assignedOccurrence } from './recurring-scheduler.js';
+
+// Buffer the response until the transaction commits, including early validation exits.
+function recurringTransaction(pool, handler) {
+  return async (req, res) => {
+    const client = await pool.connect();
+    let status = 200, payload;
+    const buffered = { status(code) { status = code; return this; }, json(value) { payload = value; return this; } };
+    try {
+      await client.query('BEGIN');
+      await handler(req, buffered, client);
+      await client.query(status >= 500 ? 'ROLLBACK' : 'COMMIT');
+      return res.status(status).json(payload);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('recurring transaction:', error.message);
+      return res.status(500).json({ ok: false, message: 'Could not update recurring service. Please try again.' });
+    } finally { client.release(); }
+  };
 }
 
 function recurringFeatureFor(row) {
@@ -58,9 +71,9 @@ function serializeRecurring(row) {
     recurrence: row.recurrence,
     preferredDay: row.preferred_day || null,
     preferredTimeWindow: row.preferred_time_window || null,
-    startDate: row.start_date ? String(row.start_date).slice(0, 10) : null,
+    startDate: row.start_date ? calendarDate(row.start_date) : null,
     status: row.status,
-    nextServiceDate: row.next_service_date ? String(row.next_service_date).slice(0, 10) : null,
+    nextServiceDate: row.next_service_date ? calendarDate(row.next_service_date) : null,
     assignedContractorUserId: row.assigned_contractor_user_id != null ? Number(row.assigned_contractor_user_id) : null,
     providerName: row.providerName || row.contractor_company || row.contractor_name || null,
     notes: row.notes || null,
@@ -184,22 +197,29 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
     }
   });
 
-  app.patch('/api/recurring-services/:id', requireAuth, requireAnyRecurringFeature, async (req, res) => {
+  app.patch('/api/recurring-services/:id', requireAuth, requireAnyRecurringFeature, recurringTransaction(pool, async (req, res, pool) => {
     try {
       const config = await getHomeCareConfig(pool);
       const id = Number(req.params.id);
       const b = req.body || {};
       const { rows: existing } = await pool.query(
-        `SELECT * FROM recurring_services WHERE id=$1 AND owner_user_id=$2`,
+        `SELECT * FROM recurring_services WHERE id=$1 AND owner_user_id=$2 FOR UPDATE`,
         [id, req.authUser.id]
       );
       if (!existing[0]) return res.status(404).json({ ok: false, message: 'Recurring service not found.' });
+      const access = await assertRecurringServiceAccess(pool, req, existing[0]);
+      if (!access.ok) return res.status(access.status).json(access.payload || {ok:false,message:access.message});
+      if (b.nextServiceDate != null && calendarDate(b.nextServiceDate) !== calendarDate(existing[0].next_service_date)) return res.status(400).json({ok:false,message:'Use reschedule to change an upcoming date.'});
       const status = b.status != null ? String(b.status) : existing[0].status;
       if (!['active', 'paused', 'cancelled'].includes(status)) {
         return res.status(400).json({ ok: false, message: 'Invalid status.' });
       }
+      if (status === 'active' && !['active','paused'].includes(existing[0].status)) return res.status(409).json({ ok:false, message:'Admin pricing review is required before activating this service.' });
       const recurrence = b.recurrence ? String(b.recurrence) : existing[0].recurrence;
-      if (b.recurrence && !isRecurrenceAllowed(config, recurrence)) {
+      const currentMeta = typeof existing[0].metadata === 'string' ? JSON.parse(existing[0].metadata) : existing[0].metadata || {};
+      if (status === 'active' && currentMeta.offeringId && ((Number(currentMeta.activationFeeAmountCents || 0) > 0 && currentMeta.activationFeeStatus !== 'paid') || (existing[0].status === 'paused' && currentMeta.pipelineStatus === 'pricing_required'))) return res.status(409).json({ok:false,message:'Activation payment and Admin pricing review are required before restarting this recurring service.'});
+      const currentOffering = currentMeta.offeringId ? offeringById(config,currentMeta.offeringId) : null;
+      if (b.recurrence && (!isRecurrenceAllowed(config, recurrence) || (currentOffering && !currentOffering.frequencies.includes(recurrence)))) {
         return res.status(400).json({ ok: false, message: 'Invalid recurrence.' });
       }
       const { rows } = await pool.query(
@@ -224,18 +244,19 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
           b.nextServiceDate || null,
         ]
       );
+      if (status !== 'active') await cancelPendingOccurrences(pool, rows[0]);
       res.json({ ok: true, service: serializeRecurring(rows[0]) });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, message: 'Could not update recurring service.' });
     }
-  });
+  }));
 
-  app.post('/api/recurring-services/:id/skip', requireAuth, requireAnyRecurringFeature, async (req, res) => {
+  app.post('/api/recurring-services/:id/skip', requireAuth, requireAnyRecurringFeature, recurringTransaction(pool, async (req, res, pool) => {
     try {
       const id = Number(req.params.id);
       const { rows: existing } = await pool.query(
-        `SELECT * FROM recurring_services WHERE id=$1 AND owner_user_id=$2`,
+        `SELECT * FROM recurring_services WHERE id=$1 AND owner_user_id=$2 FOR UPDATE`,
         [id, req.authUser.id]
       );
       if (!existing[0]) return res.status(404).json({ ok: false, message: 'Recurring service not found.' });
@@ -244,8 +265,11 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
       if (!access.ok) {
         return res.status(access.status).json(access.payload || { ok: false, message: access.message });
       }
-      const skipDate = req.body?.date || row.next_service_date;
+      const skipDate = calendarDate(req.body?.date || row.next_service_date);
+      if (!skipDate || skipDate !== calendarDate(row.next_service_date)) return res.status(400).json({ok:false,message:'Choose the current upcoming occurrence to skip.'});
+      if (await assignedOccurrence(pool, row, skipDate)) return res.status(409).json({ok:false,message:'This visit is already being coordinated. Contact FixBridge to change it.'});
       if (!skipDate) return res.status(400).json({ ok: false, message: 'No upcoming date to skip.' });
+      await cancelPendingOccurrences(pool, row, calendarDate(row.next_service_date));
       let metadata = {};
       try {
         metadata = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata || {};
@@ -253,10 +277,10 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
         metadata = {};
       }
       const skippedDates = Array.isArray(metadata.skippedDates) ? metadata.skippedDates : [];
-      const dateStr = String(skipDate).slice(0, 10);
+      const dateStr = calendarDate(skipDate);
       if (!skippedDates.includes(dateStr)) skippedDates.push(dateStr);
       metadata.skippedDates = skippedDates.slice(-24);
-      const nextDate = addRecurrenceDays(dateStr, row.recurrence);
+      const nextDate = addRecurrenceDays(dateStr, row.recurrence, row.start_date);
       const { rows } = await pool.query(
         `UPDATE recurring_services SET metadata=$3, next_service_date=$4, updated_at=NOW()
          WHERE id=$1 AND owner_user_id=$2 RETURNING *`,
@@ -267,13 +291,13 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
       console.error(e);
       res.status(500).json({ ok: false, message: 'Could not skip service.' });
     }
-  });
+  }));
 
-  app.post('/api/recurring-services/:id/reschedule', requireAuth, requireAnyRecurringFeature, async (req, res) => {
+  app.post('/api/recurring-services/:id/reschedule', requireAuth, requireAnyRecurringFeature, recurringTransaction(pool, async (req, res, pool) => {
     try {
       const id = Number(req.params.id);
-      const newDate = String(req.body?.newDate || '').slice(0, 10);
-      if (!newDate || !/^\d{4}-\d{2}-\d{2}$/.test(newDate)) {
+      const newDate = String(req.body?.newDate || '');
+      if (!calendarDate(newDate)) {
         return res.status(400).json({ ok: false, message: 'Valid newDate (YYYY-MM-DD) required.' });
       }
       const today = new Date().toISOString().slice(0, 10);
@@ -283,7 +307,7 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
       const preferredTimeWindow =
         req.body?.preferredTimeWindow != null ? String(req.body.preferredTimeWindow).slice(0, 40) : null;
       const { rows: existing } = await pool.query(
-        `SELECT * FROM recurring_services WHERE id=$1 AND owner_user_id=$2`,
+        `SELECT * FROM recurring_services WHERE id=$1 AND owner_user_id=$2 FOR UPDATE`,
         [id, req.authUser.id]
       );
       if (!existing[0]) return res.status(404).json({ ok: false, message: 'Recurring service not found.' });
@@ -291,6 +315,14 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
       const access = await assertRecurringServiceAccess(pool, req, row);
       if (!access.ok) {
         return res.status(access.status).json(access.payload || { ok: false, message: access.message });
+      }
+      const previousDate = calendarDate(row.next_service_date);
+      if (await assignedOccurrence(pool, row, previousDate)) return res.status(409).json({ok:false,message:'This visit is already being coordinated. Contact FixBridge to change it.'});
+      if (newDate !== previousDate) {
+        if ((await pool.query('SELECT id FROM managed_jobs WHERE source_recurring_service_id=$1 AND preferred_date=$2 LIMIT 1', [row.id,newDate])).rows.length) return res.status(409).json({ok:false,message:'A request already exists for this date. Contact FixBridge to review it.'});
+        await cancelPendingOccurrences(pool, row, previousDate);
+      } else if (preferredTimeWindow) {
+        await pool.query("UPDATE managed_jobs SET preferred_time_slot=$3, updated_at=NOW() WHERE source_recurring_service_id=$1 AND preferred_date=$2 AND status='awaiting_contractor' AND assigned_contractor_user_id IS NULL", [row.id,newDate,preferredTimeWindow]);
       }
       let metadata = {};
       try {
@@ -300,7 +332,7 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
       }
       const reschedules = Array.isArray(metadata.reschedules) ? metadata.reschedules : [];
       reschedules.push({
-        from: row.next_service_date ? String(row.next_service_date).slice(0, 10) : null,
+        from: row.next_service_date ? calendarDate(row.next_service_date) : null,
         to: newDate,
         timeWindow: preferredTimeWindow || row.preferred_time_window || null,
         at: new Date().toISOString(),
@@ -317,7 +349,7 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
       console.error(e);
       res.status(500).json({ ok: false, message: 'Could not reschedule service.' });
     }
-  });
+  }));
 
   app.post('/api/recurring-services/:id/request-visit', requireAuth, requireAnyRecurringFeature, async (req, res) => {
     try {
@@ -335,60 +367,11 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
       if (!access.ok) {
         return res.status(access.status).json(access.payload || { ok: false, message: access.message });
       }
-      if (rs.status !== 'active') {
+      if (!['active','pricing_required'].includes(rs.status)) {
         return res.status(400).json({ ok: false, message: 'Recurring service is not active.' });
       }
-      const category = rs.service_type === 'recurring_landscaping' ? 'landscaping' : 'cleaning';
-      const title =
-        rs.service_type === 'recurring_landscaping' ? 'Recurring landscaping visit' : 'Recurring cleaning visit';
-      const visitDate = rs.next_service_date || new Date().toISOString().slice(0, 10);
-      const serviceType = rs.service_type === 'recurring_landscaping' ? 'landscaping' : 'cleaning';
-      let preferredContractorId = rs.assigned_contractor_user_id || null;
-      if (!preferredContractorId) {
-        try {
-          const { rows: pref } = await pool.query(
-            `SELECT contractor_user_id FROM preferred_contractors
-             WHERE property_id=$1 AND owner_user_id=$2 AND service_type=$3
-             ORDER BY is_favorite DESC, created_at DESC LIMIT 1`,
-            [rs.property_id, req.authUser.id, serviceType]
-          );
-          preferredContractorId = pref[0]?.contractor_user_id || null;
-        } catch {
-          /* optional */
-        }
-      }
-      const { rows: jobRows } = await pool.query(
-        `INSERT INTO managed_jobs
-          (homeowner_user_id, property_id, job_mode, status, category, title, description,
-           full_address, city_state_zip, preferred_date, preferred_time_slot, source_recurring_service_id, preferred_contractor_user_id)
-         VALUES ($1,$2,'managed','draft',$3,$4,$5,$6,$7,$8,$9,$10,$11)
-         RETURNING *`,
-        [
-          req.authUser.id,
-          rs.property_id,
-          category,
-          title,
-          `Recurring ${rs.recurrence} service. ${rs.notes || ''}`.trim().slice(0, 500),
-          rs.address_line1,
-          [rs.city, rs.state, rs.zip].filter(Boolean).join(', '),
-          visitDate,
-          rs.preferred_time_window || null,
-          id,
-          preferredContractorId,
-        ]
-      );
-      const job = jobRows[0];
-      const nextDate = addRecurrenceDays(visitDate, rs.recurrence);
-      await pool.query(`UPDATE recurring_services SET next_service_date=$2, updated_at=NOW() WHERE id=$1`, [
-        id,
-        nextDate,
-      ]);
-      try {
-        await upsertServiceReminderEligibility(pool, job, { recurringServiceId: id });
-      } catch (_e) {
-        /* non-fatal */
-      }
-      res.json({ ok: true, jobId: Number(job.id), nextServiceDate: nextDate, preferredContractorUserId: preferredContractorId });
+      const result = await queueRecurringOccurrence(pool, { recurringServiceId: id, ownerUserId: req.authUser.id, expectedDate: calendarDate(req.body?.date || rs.next_service_date) });
+      return res.status(result.ok ? 200 : 400).json(result);
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, message: 'Could not create service visit request.' });
@@ -400,7 +383,7 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
       const config = await getHomeCareConfig(pool);
       res.json({
         ok: true,
-        offerings: mergeOfferings(config.serviceCatalog?.offerings).filter((row) => row.active && row.homeownerVisible),
+        offerings: mergeOfferings(config.serviceCatalog?.offerings).filter((row) => row.active && row.homeownerVisible).map(row => ({ ...row, frequencies: row.frequencies.filter(id => isRecurrenceAllowed(config, id)) })),
         activationFee: mergeActivationFee(config.recurring?.activationFee),
       });
     } catch (e) {
@@ -409,16 +392,19 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
     }
   });
 
-  app.post('/api/recurring-services/setup', requireAuth, async (req, res) => {
+  app.post('/api/recurring-services/setup', requireAuth, recurringTransaction(pool, async (req, res, pool) => {
     try {
       const config = await getHomeCareConfig(pool);
       const b = req.body || {};
+      await pool.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [req.authUser.id]);
+      const setupInvocationId = String(b.setupInvocationId || '').slice(0, 100);
+      const existingSetup = setupInvocationId ? (await pool.query("SELECT * FROM recurring_services WHERE owner_user_id=$1 AND metadata->>'setupInvocationId'=$2 ORDER BY id LIMIT 1", [req.authUser.id, setupInvocationId])).rows[0] : null;
       const offering = offeringById(config, b.offeringId);
       if (!offering?.active || !offering.subscriptionEligible) {
         return res.status(400).json({ ok: false, message: 'This service is not available for recurring setup.' });
       }
       const recurrence = String(b.recurrence || '').trim();
-      if (!offering.frequencies.includes(recurrence)) {
+      if (!offering.frequencies.includes(recurrence) || !isRecurrenceAllowed(config, recurrence)) {
         return res.status(400).json({ ok: false, message: 'Choose an available frequency for this service.' });
       }
       const propertyId = Number(b.propertyId);
@@ -430,9 +416,11 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
       const gate = await resolveFeatureEntitlement(pool, { user: req.authUser, feature: featureId });
       if (!gate.allowed) return res.status(403).json(entitlementDeniedPayload(gate));
       const fee = mergeActivationFee(config.recurring?.activationFee);
-      const feeCents = activationFeeCentsFor(offering, fee);
-      const startDate = String(b.startDate || new Date().toISOString().slice(0, 10)).slice(0, 10);
+      let feeCents = activationFeeCentsFor(offering, fee);
+      const startDate = calendarDate(b.startDate || new Date());
+      if (!startDate || startDate < calendarDate(new Date())) return res.status(400).json({ ok: false, message: 'Choose today or a future start date.' });
       const metadata = {
+        setupInvocationId: setupInvocationId || null,
         offeringId: offering.id,
         serviceName: offering.name,
         category: offering.category,
@@ -445,7 +433,7 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
         details: b.details ? String(b.details).slice(0, 800) : null,
       };
       const status = feeCents > 0 ? 'awaiting_activation_fee' : 'pricing_required';
-      const { rows } = await pool.query(
+      const { rows } = existingSetup ? { rows: [existingSetup] } : await pool.query(
         `INSERT INTO recurring_services
           (owner_user_id, property_id, service_type, recurrence, preferred_day, preferred_time_window,
            start_date, status, next_service_date, notes, metadata)
@@ -460,11 +448,19 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
           b.preferredTimeWindow ? String(b.preferredTimeWindow).slice(0, 40) : 'Flexible',
           startDate,
           status,
-          [b.notes, metadata.details].filter(Boolean).join('\n').slice(0, 500) || null,
+          [...new Set([b.notes, metadata.details].filter(Boolean))].join('\n').slice(0, 500) || null,
           JSON.stringify(metadata),
         ]
       );
       const created = rows[0];
+      const existingMetadata = typeof created.metadata === 'string' ? JSON.parse(created.metadata) : created.metadata || {};
+      if (existingSetup && (Number(existingSetup.property_id) !== propertyId || existingMetadata.offeringId !== offering.id || existingSetup.recurrence !== recurrence)) return res.status(409).json({ ok: false, message: 'This submission was already used for a different service. Start a new setup.' });
+      if (existingSetup) {
+        const submittedNotes = [...new Set([b.notes, b.details ? String(b.details).slice(0,800) : null].filter(Boolean))].join('\n').slice(0,500) || null;
+        if ((b.startDate && calendarDate(existingSetup.start_date) !== startDate) || String(existingSetup.preferred_day || 'Flexible') !== String(b.preferredDay || 'Flexible') || String(existingSetup.preferred_time_window || 'Flexible') !== String(b.preferredTimeWindow || 'Flexible') || existingSetup.notes !== submittedNotes || existingMetadata.commitment !== metadata.commitment) return res.status(409).json({ok:false,message:'This submission already has a saved schedule. Start a new setup to change it.'});
+        feeCents = Number(existingMetadata.activationFeeAmountCents || 0);
+      }
+      if (existingMetadata.checkoutUrl) return res.json({ ok: true, service: serializeRecurring(created), checkoutUrl: existingMetadata.checkoutUrl, activationFeeCents: existingMetadata.activationFeeAmountCents });
       if (feeCents <= 0) {
         const job = await createRecurringAdminJob(pool, { recurring: created, homeowner: req.authUser });
         return res.json({
@@ -479,11 +475,12 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
         return res.status(503).json({
           ok: false,
           serviceId: Number(created.id),
-          message: 'Payment is not available right now. Your request was saved. Try the activation fee again.',
+          message: 'Payment is not available right now. No activation was completed. Please try again.',
         });
       }
       const origin = req.headers.origin || undefined;
       const session = await createCheckoutSession({
+        idempotencyKey: `recurring-activation:${req.authUser.id}:${created.id}`,
         amountCents: feeCents,
         currency: 'usd',
         customerEmail: req.authUser.email,
@@ -512,6 +509,7 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
           }),
         ]
       );
+      await pool.query('UPDATE recurring_services SET metadata=$2, updated_at=NOW() WHERE id=$1', [created.id, JSON.stringify({ ...existingMetadata, checkoutUrl: session.url })]);
       res.json({
         ok: true,
         service: serializeRecurring(created),
@@ -523,12 +521,12 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
       console.error(e);
       res.status(500).json({ ok: false, message: e.message || 'Could not start recurring service setup.' });
     }
-  });
+  }));
 
-  app.post('/api/recurring-services/:id/confirm-activation', requireAuth, async (req, res) => {
+  app.post('/api/recurring-services/:id/confirm-activation', requireAuth, recurringTransaction(pool, async (req, res, pool) => {
     try {
       const id = Number(req.params.id);
-      const { rows } = await pool.query(`SELECT * FROM recurring_services WHERE id=$1 AND owner_user_id=$2`, [
+      const { rows } = await pool.query(`SELECT * FROM recurring_services WHERE id=$1 AND owner_user_id=$2 FOR UPDATE`, [
         id,
         req.authUser.id,
       ]);
@@ -543,18 +541,18 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
       if (!paid[0]) {
         return res.json({ ok: true, pending: true, service: serializeRecurring(rows[0]) });
       }
-      const result = await fulfillRecurringActivation(pool, {
-        recurringServiceId: id,
-        paymentId: paid[0].id,
-        amountCents: Math.round(Number(paid[0].amount) * 100),
-      });
+      const metadata = typeof rows[0].metadata === 'string' ? JSON.parse(rows[0].metadata) : rows[0].metadata || {};
+      if (['cancelled','paused'].includes(rows[0].status)) return res.status(409).json({ ok:false, message:'This recurring service is paused or cancelled. Contact FixBridge before activation.' });
+      metadata.activationFeeStatus='paid'; metadata.activationPaymentId=paid[0].id;
+      await pool.query('UPDATE recurring_services SET metadata=$2, updated_at=NOW() WHERE id=$1',[id,JSON.stringify(metadata)]);
+      const result = await createRecurringAdminJob(pool, { recurring:{...rows[0],metadata}, homeowner:req.authUser });
       const fresh = (await pool.query(`SELECT * FROM recurring_services WHERE id=$1`, [id])).rows[0];
       res.json({ ok: true, pending: false, service: serializeRecurring(fresh), jobId: result.jobId });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, message: 'Could not confirm activation.' });
     }
-  });
+  }));
 
   // ── Maintenance items (health_profile.maintenance) ───────────────────────
   app.put('/api/properties/:id/maintenance', requireAuth, requireHomeCareFeature('maintenance_calendar'), async (req, res) => {

@@ -1,3 +1,6 @@
+import { useEffect, useRef } from 'react';
+import ContractorServiceChoices from './ContractorServiceChoices';
+import { updateContractorServices, type AuthUser } from './auth';
 import { useState } from "react";
 import { Check, Plus, Power, Trash2 } from "lucide-react";
 import {
@@ -10,10 +13,28 @@ import {
 export default function ContractorServicesPanel({
   workspace,
   onChange,
+  user,
+  onUserUpdated,
 }: {
+  user: AuthUser;
+  onUserUpdated?: (user: AuthUser) => void;
   workspace: ContractorWorkspace;
   onChange: (next: ContractorWorkspace) => void;
 }) {
+  const [selected, setSelected] = useState<string[]>(() => Array.isArray(user.contractorApplication?.selectedServiceIds) ? user.contractorApplication.selectedServiceIds as string[] : []);
+  const [saving, setSaving] = useState(false);
+  const inFlight = useRef(false);
+  const owner = useRef(user.id); owner.current = user.id;
+  const [message, setMessage] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => { setSelected(Array.isArray(user.contractorApplication?.selectedServiceIds) ? user.contractorApplication.selectedServiceIds as string[] : []); setMessage(null); }, [user.id, user.contractorApplication?.selectedServiceIds]);
+  const saveServices = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true; setSaving(true); setMessage(null); setSaved(false);
+    const savingOwner = user.id;
+    try { const result = await updateContractorServices(selected); if (owner.current !== savingOwner) return; if (result.ok) { onUserUpdated?.(result.user); setSaved(true); } else setMessage(result.message); }
+    finally { inFlight.current = false; setSaving(false); }
+  };
   const [addingTrade, setAddingTrade] = useState(false);
   const [newTrade, setNewTrade] = useState("");
   const [newServiceByTrade, setNewServiceByTrade] = useState<Record<string, string>>({});
@@ -41,9 +62,16 @@ export default function ContractorServicesPanel({
     <section className="mx-auto max-w-3xl space-y-5">
       <div>
         <h1 className="[font-family:'Barlow_Condensed',sans-serif] text-3xl font-black uppercase">Services</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Your trades and offerings shown to FixBridge dispatch.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Select your homeowner services for matching. Verification, coverage and dispatch checks still apply.</p>
       </div>
 
+      <div className="rounded-xl border border-border bg-card p-4 space-y-4">
+        <ContractorServiceChoices selected={selected} onChange={ids => { setSelected(ids); setSaved(false); setMessage(null); }} disabled={saving} legacy={user.contractorApplication?.selectedServiceIds === undefined} />
+        <button type="button" onClick={saveServices} disabled={saving} className="min-h-[44px] rounded-lg bg-primary px-4 py-2 font-semibold text-primary-foreground">{saving ? 'Saving…' : 'Save services'}</button>
+        {message && <p role="alert" className="text-sm text-red-600">{message}</p>}
+        {saved && <p role="status" className="text-sm">Services saved to your account.</p>}
+      </div>
+      <p className="text-sm text-muted-foreground">Custom workspace offerings below are saved in this browser. They do not qualify you for additional homeowner services.</p>
       <div className="space-y-4">
         <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Your trades</p>
         {workspace.trades.map((group) => (

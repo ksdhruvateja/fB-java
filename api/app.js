@@ -1,3 +1,10 @@
+import { validateSelectedServiceIds } from './contractor-service-capabilities.js';
+import { isContractorEligibleForJob } from './contractor-matching.js';
+import { assertPendingBookingPayment } from './professional-booking-checkout.js';
+import { checkoutPaymentState, reconcileSubscriptionCheckoutPayment } from './checkout-payment-state.js';
+import { resolveRuntimeDatabase } from './runtime-database-config.js';
+import { normalizeRepairPhotos, repairPhotosFromRow } from './repair-photos.js';
+import { getHomeCareEntitlement } from './subscription-state.js';
 import { listKnowledgeEntries, retrieveGlobalKnowledge, writeKnowledgeEntry } from './fixa/knowledge/knowledgeWriter.js';
 import { storeFixeraCaseMedia } from './fixera/case-media.js';
 import { appendAssessmentRevision } from './fixera/assessment-history.js';
@@ -12,7 +19,7 @@ import crypto from 'crypto';
 import { assessRepair, complete, reassessRepair, prepareProfessionalHandoff, getFixeraPublicStatus, getFixeraHealth, getFixeraAdminProviders } from './fixera/index.js';
 import { persistFixeraInteraction, recordFixeraFeedback, recordFixeraInteraction, trainingOverview, exportApprovedTraining, listRecentExperiences } from './fixera/experience/store.js';
 import { getPricingIntelligence } from './fixera/pricing/intelligence.js';
-import { initManagedSchema, ensureReferralCodeColumns } from './schema-managed.js';
+import { initManagedSchema, ensureReferralCodeColumns, ensureRepairPhotoColumns, ensurePropertyCoverColumns } from './schema-managed.js';
 import { initSupportTicketSchema, registerSupportTicketRoutes } from './support-tickets.js';
 import { initInAppNotificationSchema, registerInAppNotificationRoutes } from './in-app-notifications.js';
 import { initMessagingSchema, registerMessagingRoutes } from './messaging.js';
@@ -93,9 +100,10 @@ import {
   userHasPermission,
 } from './rbac.js';
 
-const isProduction = process.env.NODE_ENV === 'production';
+const runtimeDatabase = resolveRuntimeDatabase();
+const isProduction = runtimeDatabase.deployed;
 
-/** Netlify may run with NODE_ENV unset; use hosting signals for health/status only. */
+/** Startup, authentication and health use the same hosted-environment policy. */
 function isDeployedProduction() {
   return (
     isProduction ||
@@ -103,7 +111,9 @@ function isDeployedProduction() {
     process.env.FIXBRIDGE_HOSTING === 'netlify'
   );
 }
-const useInMemoryDb = !process.env.NEON_DATABASE_URL;
+const useInMemoryDb = runtimeDatabase.useInMemoryDb;
+// Preserve existing internal consumers while accepting standard PostgreSQL hosting configuration.
+if (runtimeDatabase.connectionString) process.env.NEON_DATABASE_URL = runtimeDatabase.connectionString;
 
 // ── Require SESSION_SECRET at startup ─────────────────────────────────────────
 const JWT_SECRET = process.env.SESSION_SECRET || (!isProduction ? 'local-dev-secret' : undefined);
@@ -428,7 +438,8 @@ async function ensureDemoUsers() {
   }
 }
 
-const SCHEMA_READY_VERSION = 20261001;
+const BASE_SCHEMA_READY_VERSION = 20261001;
+const SCHEMA_READY_VERSION = 20261003;
 
 async function readSchemaReadyVersion() {
   try {
@@ -464,7 +475,17 @@ export async function initDb() {
   }
   // Cold Netlify isolates used to run hundreds of sequential DDL statements
   // before any save, upload, or navigation request could start.
-  if ((await readSchemaReadyVersion()) >= SCHEMA_READY_VERSION) {
+  const readyVersion = await readSchemaReadyVersion();
+  if (readyVersion >= SCHEMA_READY_VERSION) {
+    initDb._done = true;
+    return;
+  }
+  // A previously ready database needs only this version's additive upgrade,
+  // not the hundreds of unrelated initialization queries.
+  if (readyVersion >= BASE_SCHEMA_READY_VERSION) {
+    await ensureRepairPhotoColumns(pool);
+    await ensurePropertyCoverColumns(pool);
+    await writeSchemaReadyVersion();
     initDb._done = true;
     return;
   }
@@ -1036,9 +1057,9 @@ function rowToNotification(r) {
 
 async function notifyMatchingContractors(job) {
   const { rows: contractors } = await pool.query(
-    `SELECT id, trade FROM users WHERE role='contractor' AND is_blocked=false`
+    `SELECT u.*, a.temporary_unavailable FROM users u LEFT JOIN contractor_availability a ON a.contractor_user_id=u.id WHERE u.role='contractor' AND u.is_blocked=false`
   );
-  const matching = contractors.filter((c) => contractorTradeMatchesCategory(c.trade, job.category));
+  const matching = contractors.filter((c) => isContractorEligibleForJob(c, job));
   const jobLabel = job.booking_id || job.bookingId || `JOB-${job.id}`;
   const title = job.urgent ? 'Urgent job in your trade' : 'New job in your trade';
   const message = `${jobLabel} · ${job.category}: ${job.title}`;
@@ -1309,6 +1330,11 @@ app.post('/api/auth/signin', signInLimiter, async (req, res) => {
     }
 
     // Former social-login accounts: no local password until they reset one
+    // Old Google registrations derived a password from the public provider subject.
+    // Never accept that guessable value; a reset password remains supported.
+    if (rows[0].oauth_google_sub && password === `GOOGLE_OAUTH_${rows[0].oauth_google_sub}`) {
+      return res.status(401).json({ ok:false, message:'Use Google sign-in or reset your password to sign in with email.' });
+    }
     if (['GOOGLE_OAUTH', 'APPLE_OAUTH', 'AUTH0_OAUTH'].includes(String(rows[0].password))) {
       return res.status(401).json({
         ok: false,
@@ -1405,6 +1431,7 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
 
     if (role === 'contractor') {
       const app = contractorApplication && typeof contractorApplication === 'object' ? contractorApplication : null;
+      if (app?.selectedServiceIds !== undefined && !validateSelectedServiceIds(app.selectedServiceIds)) return res.status(400).json({ ok: false, message: 'Choose valid homeowner services.' });
       if (!app) {
         return res.status(400).json({ ok: false, message: 'Contractor application details are required.' });
       }
@@ -1595,9 +1622,13 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
         const stripe = await getStripe();
         if (stripe) {
           const session = await stripe.checkout.sessions.retrieve(payment.stripe_session_id);
-          if (session.payment_status === 'paid' || session.status === 'complete') {
+          if (payment.payment_type === 'subscription') {
+            if (Number(session.metadata?.userId || session.metadata?.homeownerId) !== Number(req.authUser.id)) continue;
+            await reconcileSubscriptionCheckoutPayment(pool, session);
+          }
+          if (payment.payment_type === 'subscription' ? checkoutPaymentState(session) === 'succeeded' : session.payment_status === 'paid' || session.status === 'complete') {
             await pool.query(
-              `UPDATE payments SET status='succeeded' WHERE id=$1`,
+              `UPDATE payments SET status='succeeded' WHERE id=$1 AND status IN ('pending','failed','cancelled','canceled','succeeded')`,
               [payment.id]
             );
             const planCode = session.metadata?.planCode;
@@ -1639,10 +1670,9 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
               )
             ) {
               try {
-                const pendingAmountCents =
-                  session.amount_total != null
-                    ? Number(session.amount_total)
-                    : Number(payment.amount || 0) * 100;
+                const pendingAmountCents = payment.payment_type === 'pending_professional_fee'
+                  ? await assertPendingBookingPayment(pool, session, req.authUser.id, pendingServiceRequestId)
+                  : session.amount_total != null ? Number(session.amount_total) : Number(payment.amount || 0) * 100;
 
                 const converted = await convertPendingServiceRequest(
                   pool,
@@ -1698,10 +1728,22 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
   }
 });
 
+app.put('/api/contractor/service-capabilities', requireAuth, async (req, res) => {
+ if (req.authUser.role !== 'contractor') return res.status(403).json({ ok: false, message: 'Contractor access required.' });
+ const ids = req.body?.selectedServiceIds;
+ if (!validateSelectedServiceIds(ids)) return res.status(400).json({ ok: false, message: 'Choose valid homeowner services.' });
+ try {
+ const { rows } = await pool.query("UPDATE users SET contractor_application=COALESCE(contractor_application,'{}'::jsonb) || $1::jsonb WHERE id=$2 AND role='contractor' RETURNING *", [JSON.stringify({ selectedServiceIds: ids }), req.authUser.id]);
+ if (!rows.length) return res.status(404).json({ ok: false, message: 'Contractor not found.' });
+ return res.json({ ok: true, user: rowToUser(rows[0]) });
+ } catch (e) { return res.status(500).json({ ok: false, message: 'Could not save services. Please retry.' }); }
+});
+
 // ── PUT /api/auth/profile — update signed-in user's My Profile fields ─────────
 app.put('/api/auth/profile', requireAuth, async (req, res) => {
   try {
     const body = req.body || {};
+    if (body.contractorApplication?.selectedServiceIds !== undefined && !validateSelectedServiceIds(body.contractorApplication.selectedServiceIds)) return res.status(400).json({ ok: false, message: 'Choose valid homeowner services.' });
     const name = typeof body.name === 'string' ? body.name.trim() : '';
     if (!name) {
       return res.status(400).json({ ok: false, message: 'Name is required.' });
@@ -2534,7 +2576,8 @@ app.get('/api/jobs', requireAuth, async (req, res) => {
     if (req.authUser.role === 'admin') {
       return res.json(rows.map(rowToJob));
     }
-    return res.json(rows.map(rowToJobBoard));
+    const { rows: providers } = await pool.query('SELECT u.*, a.temporary_unavailable FROM users u LEFT JOIN contractor_availability a ON a.contractor_user_id=u.id WHERE u.id=$1', [req.authUser.id]);
+    return res.json(rows.filter(job => isContractorEligibleForJob(providers[0], job)).map(rowToJobBoard));
   } catch (e) {
     console.error('jobs list:', e);
     return res.status(500).json({ error: publicErrorMessage(e) });
@@ -2648,6 +2691,8 @@ app.put('/api/lifecycle/:jobId/status', requireAuth, async (req, res) => {
       contractorEmail = clampString(req.body?.contractorEmail, 200) || null;
     } else if (req.authUser.role === 'contractor') {
       if (status === 'accepted') {
+        const { rows: providers } = await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id]);
+        if (!isContractorEligibleForJob(providers[0], access.job)) return res.status(403).json({ error: 'This service is not eligible for your current capabilities and coverage.' });
         contractorName = req.authUser.name || null;
         contractorEmail = req.authUser.email;
       } else if (!access.mutate) {
@@ -3142,6 +3187,9 @@ app.get('/api/admin/fixera/training/export', requireAuth, requireAdmin, requireP
 
 async function handleFixaAssessment(req, res) {
   try {
+    if (req.authUser.role === 'homeowner' && !(await getHomeCareEntitlement(pool, req.authUser.id)).hasAccess) {
+      return res.status(403).json({ ok: false, code: 'HOMECARE_PLAN_REQUIRED', message: 'An active HomeCare plan is required for AI assessment.' });
+    }
     const invocationId = String(req.body?.assessmentInvocationId || req.body?.invocationId || '').trim();
     if (!invocationId) {
       return res.status(400).json({
@@ -3185,7 +3233,7 @@ async function handleFixaAssessment(req, res) {
         return res.status(400).json({ ok: false, code: 'INVALID_CASE_ID', message: 'A valid repair case is required.' });
       }
       const managed = await pool.query(
-        `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_type, ai_assessment, ai_assessment_history
+        `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_data_urls, media_type, ai_assessment, ai_assessment_history
          FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2`,
         [directJobId, req.authUser.id]
       );
@@ -3194,7 +3242,7 @@ async function handleFixaAssessment(req, res) {
         caseType = 'managed_job';
       } else {
         const pending = await pool.query(
-          `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_type, ai_assessment, ai_assessment_history
+          `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_data_urls, media_type, ai_assessment, ai_assessment_history
            FROM pending_service_requests WHERE id=$1 AND homeowner_user_id=$2`,
           [directJobId, req.authUser.id]
         );
@@ -3228,29 +3276,35 @@ async function handleFixaAssessment(req, res) {
       return res.status(403).json({ ok: false, code: 'PROPERTY_ACCESS_DENIED', message: 'You do not have access to this property.' });
     }
 
-    const globalKnowledge = await retrieveGlobalKnowledge(pool, {
-      category: authorizedCase?.category || body.category,
-      query: [authorizedCase?.title, body.description || authorizedCase?.description].filter(Boolean).join(' '),
-    });
-
     const desc = clampString(body.description || authorizedCase?.description, 4000);
     const cat = clampString(body.category || authorizedCase?.category, 80);
-    const imageDataUrl = body.imageDataUrl || authorizedCase?.media_data_url || null;
-    const hasImage = typeof imageDataUrl === 'string' && imageDataUrl.startsWith('data:');
-    if (hasImage && imageDataUrl.length > 6_000_000) {
-      return res.status(400).json({ ok: false, message: 'Image is too large.' });
+    let imageDataUrls;
+    try {
+      imageDataUrls = normalizeRepairPhotos(
+        body.imageDataUrls ?? (body.imageDataUrl != null ? null : repairPhotosFromRow(authorizedCase)),
+        body.imageDataUrl,
+      );
+    } catch (error) {
+      return res.status(error.status || 400).json({ ok: false, code: error.code, message: error.message });
     }
+    const hasImage = imageDataUrls.length > 0;
     if (!cat || (!desc && !hasImage)) {
       return res.status(400).json({
         ok: false,
         message: 'category and either a description or a photo are required.',
       });
     }
+    const globalKnowledge = await retrieveGlobalKnowledge(pool, {
+      category: authorizedCase?.category || body.category,
+      query: [authorizedCase?.title, body.description || authorizedCase?.description].filter(Boolean).join(' '),
+    });
+
     // Prefer structured assessment (no invented prices). Legacy UI still receives mapped fields.
     const structured = await assessRepair({
       category: cat,
       description: desc || 'No written description provided. Analyze the attached photo and infer the repair issue.',
-      imageDataUrl: hasImage ? imageDataUrl : null,
+      imageDataUrl: imageDataUrls[0] || null,
+      imageDataUrls,
       task: 'repair_assessment',
       jobId: authorizedCase?.id || null,
       homeownerId: req.authUser.id,
@@ -3379,6 +3433,7 @@ app.post('/api/fixera/assessment', requireAuth, aiLimiter, handleFixaAssessment)
 app.post('/api/fixa/assessment', requireAuth, aiLimiter, handleFixaAssessment);
 
 async function handleFixeraReassess(req, res) {
+  let claimedCase = null;
   try {
     const observation = clampString(req.body?.observation, 2000);
     if (!observation) {
@@ -3390,17 +3445,19 @@ async function handleFixeraReassess(req, res) {
     }
     let authorizedCase = null;
     let caseType = null;
-    const { rows: managedRows } = await pool.query(
-      `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_type, ai_assessment, ai_assessment_history
+    const requestedType = req.body?.caseType;
+    if (requestedType != null && !['managed_job', 'pending_service_request'].includes(requestedType)) return res.status(400).json({ ok: false, code: 'INVALID_CASE_TYPE' });
+    const { rows: managedRows } = requestedType === 'pending_service_request' ? { rows: [] } : await pool.query(
+      `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_data_urls, media_type, ai_assessment, ai_assessment_history
          FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2`,
       [caseId, req.authUser.id]
     );
     if (managedRows[0]) {
       authorizedCase = managedRows[0];
       caseType = 'managed_job';
-    } else {
+    } else if (requestedType !== 'managed_job') {
       const { rows: pendingRows } = await pool.query(
-        `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_type, ai_assessment, ai_assessment_history
+        `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_data_urls, media_type, ai_assessment, ai_assessment_history
            FROM pending_service_requests WHERE id=$1 AND homeowner_user_id=$2`,
         [caseId, req.authUser.id]
       );
@@ -3413,31 +3470,11 @@ async function handleFixeraReassess(req, res) {
       return res.status(404).json({ ok: false, code: 'CASE_NOT_FOUND', message: 'Repair case not found.' });
     }
 
-    let imageDataUrl = authorizedCase.media_data_url || null;
-    if (req.body?.imageDataUrl != null) {
-      if (typeof req.body.imageDataUrl !== 'string' || !req.body.imageDataUrl.startsWith('data:image/') || req.body.imageDataUrl.length > 6_000_000) {
-        return res.status(400).json({ ok: false, code: 'INVALID_REASSESSMENT_IMAGE', message: 'Choose a supported photo under 6 MB.' });
-      }
-      try {
-        await storeFixeraCaseMedia(pool, {
-          userId: req.authUser.id,
-          caseType,
-          caseId,
-          propertyId: authorizedCase.property_id,
-          equipmentKey: authorizedCase.equipment_key || null,
-          dataUrl: req.body.imageDataUrl,
-        });
-      } catch (mediaError) {
-        return res.status(400).json({ ok: false, code: 'REASSESSMENT_IMAGE_SAVE_FAILED', message: mediaError?.message || 'The new photo could not be attached to this case.' });
-      }
-      imageDataUrl = req.body.imageDataUrl;
-      await pool.query(
-        caseType === 'managed_job'
-          ? `UPDATE managed_jobs SET media_data_url=$1, media_type='image', updated_at=NOW() WHERE id=$2 AND homeowner_user_id=$3`
-          : `UPDATE pending_service_requests SET media_data_url=$1, media_type='image', updated_at=NOW() WHERE id=$2 AND homeowner_user_id=$3`,
-        [imageDataUrl, caseId, req.authUser.id]
-      );
-    }
+    const entitlement = await getHomeCareEntitlement(pool, req.authUser.id);
+    if (!entitlement.hasAccess) return res.status(403).json({ ok: false, code: 'HOMECARE_PLAN_REQUIRED', message: 'An eligible active HomeCare plan is required before reassessment.' });
+    const addedPhotos = normalizeRepairPhotos(req.body?.imageDataUrls, req.body?.imageDataUrl);
+    const imageDataUrls = normalizeRepairPhotos([...repairPhotosFromRow(authorizedCase), ...addedPhotos]);
+    const imageDataUrl = imageDataUrls[0] || null;
 
     const propertyContext = authorizedCase.property_id
       ? await buildPropertyAIContext(pool, authorizedCase.property_id, req.authUser.id, {
@@ -3449,6 +3486,12 @@ async function handleFixeraReassess(req, res) {
     if (authorizedCase.property_id && !propertyContext) {
       return res.status(403).json({ ok: false, code: 'PROPERTY_ACCESS_DENIED', message: 'Property access could not be verified.' });
     }
+    const table = caseType === 'managed_job' ? 'managed_jobs' : 'pending_service_requests';
+    const { rows: claimed } = await pool.query(`UPDATE ${table} SET assessment_status='processing' WHERE id=$1 AND homeowner_user_id=$2 AND COALESCE(assessment_status,'idle') <> 'processing' RETURNING id`, [caseId, req.authUser.id]);
+    if (!claimed[0]) return res.status(409).json({ ok: false, code: 'ASSESSMENT_IN_PROGRESS', message: 'This assessment is already running.' });
+    claimedCase = { table, caseId };
+    for (const photo of addedPhotos) await storeFixeraCaseMedia(pool, { userId: req.authUser.id, caseType, caseId, propertyId: authorizedCase.property_id, equipmentKey: authorizedCase.equipment_key, dataUrl: photo });
+    await pool.query(`UPDATE ${table} SET media_data_urls=$1::jsonb, media_data_url=$2, media_type=$3, updated_at=NOW() WHERE id=$4 AND homeowner_user_id=$5`, [JSON.stringify(imageDataUrls), imageDataUrl, imageDataUrls.length ? 'image' : authorizedCase.media_type, caseId, req.authUser.id]);
     const globalKnowledge = await retrieveGlobalKnowledge(pool, {
       category: authorizedCase.category,
       query: [authorizedCase.title, authorizedCase.description, observation, authorizedCase.equipment_key].filter(Boolean).join(' '),
@@ -3459,6 +3502,7 @@ async function handleFixeraReassess(req, res) {
       observation,
       currentStep: req.body?.currentStep ?? null,
       imageDataUrl,
+      imageDataUrls,
       propertyId: propertyContext?.propertyId || null,
       property: propertyContext?.memory || null,
       jobId: caseId,
@@ -3474,7 +3518,7 @@ async function handleFixeraReassess(req, res) {
         title: authorizedCase.title,
         description: authorizedCase.description,
         aiAssessment: authorizedCase.ai_assessment,
-        mediaType: req.body?.imageDataUrl ? 'image' : authorizedCase.media_type,
+        mediaType: imageDataUrls.length ? 'image' : authorizedCase.media_type,
       },
       locationContext: [
         propertyContext?.text || '',
@@ -3520,7 +3564,11 @@ async function handleFixeraReassess(req, res) {
         [JSON.stringify(result.assessment), JSON.stringify(assessmentHistory), caseId, req.authUser.id]
       );
     }
+    if (!result.assessment) await pool.query(`UPDATE ${table} SET assessment_status='failed', updated_at=NOW() WHERE id=$1 AND homeowner_user_id=$2`, [caseId, req.authUser.id]);
     return res.json({
+      caseType,
+      caseId,
+      mediaDataUrls: imageDataUrls,
       ok: Boolean(result.assessment),
       assessment: result.assessment,
       assistant: 'Fixera',
@@ -3528,10 +3576,12 @@ async function handleFixeraReassess(req, res) {
     });
   } catch (e) {
     console.error('fixera reassess:', e);
-    return res.status(500).json({
+    if (claimedCase) await pool.query(`UPDATE ${claimedCase.table} SET assessment_status='failed', updated_at=NOW() WHERE id=$1 AND homeowner_user_id=$2`, [claimedCase.caseId, req.authUser.id]).catch(() => {});
+    return res.status(e.status || 500).json({
+      code: e.code || undefined,
       ok: false,
       assessment: null,
-      error: "We couldn't complete the assessment right now. Please try again.",
+      error: e.status === 400 ? e.message : "We couldn't complete the assessment right now. Please try again.",
     });
   }
 }
@@ -3562,7 +3612,7 @@ registerMarketingRoutes(app, { pool, requireAuth, requireAdmin, requirePermissio
 registerGoogleAuthRoutes(app, { pool, makeToken, rowToUser, bcrypt, signupLimiter: signInLimiter, requireAuth });
 registerAssessmentProcessor(processManagedJobAssessmentTask);
 registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin });
-registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdmin });
+registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerHomeAssistantRoutes(app, { pool, requireAuth });
 registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerContractorEmployeeRoutes(app, { pool, requireAuth, requireAdmin });
@@ -3587,6 +3637,9 @@ registerServiceAreaRoutes(app);
 
 async function handleFixaChat(req, res) {
   try {
+    if (req.authUser.role === 'homeowner' && !(await getHomeCareEntitlement(pool, req.authUser.id)).hasAccess) {
+      return res.status(403).json({ ok: false, code: 'HOMECARE_PLAN_REQUIRED', message: 'An active HomeCare plan is required for Fixera AI and DIY guidance.' });
+    }
     const { messages, jobId } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ ok: false, message: 'messages array is required.' });

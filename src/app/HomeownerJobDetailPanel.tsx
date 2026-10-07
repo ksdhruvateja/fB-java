@@ -1,3 +1,4 @@
+import { ServiceThumb } from "./serviceVisuals";
 import {
   approveProposal,
   confirmCompletion,
@@ -12,7 +13,7 @@ import {
   type Property,
   type Proposal,
 } from "./managedJobs";
-import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
+import { useProfessionalBookingFee } from "./useProfessionalBookingFee";
 import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 import { ConsentCheckbox, ConsentSection, allChecked, consentsFromState } from "./ConsentCheckbox";
 import type { ConsentState } from "./ConsentCheckbox";
@@ -37,7 +38,7 @@ import {
 } from "./ServiceTrackingCard";
 import { useIsMobile } from "./components/ui/use-mobile";
 import { CalendarDays, Clock, HardHat, Loader2, MapPin, Pencil, Phone, Save } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 const TIME_WINDOW_OPTIONS = [
   { value: "9-11", label: "9–11 AM", period: "Morning" },
@@ -139,6 +140,7 @@ export default function HomeownerJobDetailPanel({
     city: string;
     state: string;
     zip: string;
+    authorizedAmount?: number;
   }) => void;
   forceEditSchedule?: boolean;
   onEditScheduleConsumed?: () => void;
@@ -161,7 +163,8 @@ export default function HomeownerJobDetailPanel({
     el?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [focus, job.id]);
 
-  const [dispatchCouponPreview, setDispatchCouponPreview] = useState<DispatchCouponPreview | null>(null);
+  const bookingFee = useProfessionalBookingFee(!job.visitFeeAuthorized, job.id);
+  const dispatchCheckoutInFlight = useRef(false);
 
   const [editingSchedule, setEditingSchedule] = useState(false);
   const [editingDetails, setEditingDetails] = useState(false);
@@ -239,8 +242,9 @@ export default function HomeownerJobDetailPanel({
     }
   }, [forceEditSchedule, editable, onEditScheduleConsumed]);
 
-  const baseDispatchFee = job.visitFeeAmount ?? job.pricing?.contractor_visit_fee ?? 125;
-  const dispatchHoldAmount = dispatchCouponPreview?.discountedAmount ?? baseDispatchFee;
+  const baseDispatchFee = job.visitFeeAuthorized ? (job.visitFeeAmount ?? 0) : (bookingFee.amount ?? 0);
+  const dispatchHoldAmount = baseDispatchFee;
+  useEffect(() => { setDispatchPaymentConsents({}); }, [baseDispatchFee]);
 
   const arrival = arrivalWindowLabel(job);
   const showDispatch = job.status === "awaiting_service_payment";
@@ -346,7 +350,7 @@ export default function HomeownerJobDetailPanel({
       return;
     }
     onBusy(true);
-    const r = await approveProposal(job.id, consentsFromState(consentState));
+    const r = await approveProposal(job.id, consentsFromState(consentState), proposal?.id, proposal?.versionNumber || 1);
     if (!r.ok) {
       if (
         ackGate.promptFromResponse(r, {
@@ -473,6 +477,7 @@ export default function HomeownerJobDetailPanel({
                 <AiEstimateDisclaimer compact />
               </div>
             ) : null}
+            <ServiceThumb name={job.category || job.title} className="mt-3 h-16 w-20" />
             {job.category ? (
               <p className="mt-2 text-xs text-muted-foreground">
                 Category: <span className="font-medium capitalize text-foreground">{job.category}</span>
@@ -744,52 +749,14 @@ export default function HomeownerJobDetailPanel({
       {showDispatch ? (
         <DetailSection mobile={isMobile} title="Payment" defaultOpen>
           <div className="space-y-3 rounded-lg border border-primary/20 bg-primary/5 p-4">
-            <div className="text-xs space-y-1">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Contractor Visit Fee:</span>
-                <span className="font-semibold text-foreground">${baseDispatchFee}</span>
-              </div>
-              {dispatchCouponPreview ? (
-                <div className="flex justify-between text-emerald-700 dark:text-emerald-300">
-                  <span>Coupon ({dispatchCouponPreview.code}):</span>
-                  <span className="font-semibold tabular-nums">−${dispatchCouponPreview.discountAmount}</span>
-                </div>
-              ) : null}
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">FixBridge Beta Fee:</span>
-                <span className="font-semibold text-emerald-600">$0.00 (Waived)</span>
-              </div>
-              <div className="flex justify-between border-t border-border/40 pt-1.5 mt-1 font-bold">
-                <span className="text-foreground">Authorization Hold:</span>
-                <span className="text-primary tabular-nums">
-                  {dispatchCouponPreview ? (
-                    <>
-                      <span className="mr-1 line-through text-muted-foreground font-normal">${baseDispatchFee}</span>
-                      ${dispatchHoldAmount}
-                    </>
-                  ) : (
-                    `$${dispatchHoldAmount}`
-                  )}
-                </span>
-              </div>
-            </div>
-            <DispatchCouponField
-              jobId={job.id}
-              baseAmount={baseDispatchFee}
-              initialCode={job.discountCode}
-              disabled={busy}
-              onVerified={(preview) => {
-                setDispatchCouponPreview(preview);
-                onError(null);
-              }}
-              onClear={() => setDispatchCouponPreview(null)}
-            />
+            <div className="flex justify-between text-sm"><span>Professional booking / dispatch fee</span><span className="font-semibold">{bookingFee.amount != null ? formatMoney(baseDispatchFee) : "Loading fee…"}</span></div>
+            {bookingFee.error ? <p role="alert" className="text-sm text-red-600">{bookingFee.error} <button type="button" onClick={bookingFee.refresh}>Retry</button></p> : null}
             <p className="text-[10px] leading-normal text-muted-foreground">
               Card hold placed now. Only charged when the contractor checks in on-site. Released if cancelled.
             </p>
             <ConsentSection title="Payment authorization (required)">
               <p className="text-sm font-semibold tabular-nums">
-                Amount authorized: {formatMoney(dispatchHoldAmount)}
+                Amount authorized: {bookingFee.amount != null ? formatMoney(dispatchHoldAmount) : "Loading fee…"}
               </p>
               <ConsentCheckbox
                 id={`dispatch-payment-${job.id}`}
@@ -809,7 +776,7 @@ export default function HomeownerJobDetailPanel({
             <button
               type="button"
               className="w-full rounded-xl bg-primary px-3 py-2.5 text-sm font-semibold text-white hover:bg-primary/90 disabled:opacity-60"
-              disabled={busy || !allChecked(dispatchPaymentConsents, paymentConsentKeys)}
+              disabled={busy || bookingFee.amount == null || !allChecked(dispatchPaymentConsents, paymentConsentKeys)}
               onClick={async () => {
                 const runPayment = async (extraConsents?: Record<string, boolean>) => {
                   const consentState = mergeConsentRecords(dispatchPaymentConsents, extraConsents);
@@ -842,12 +809,16 @@ export default function HomeownerJobDetailPanel({
                         city: prop.city || "",
                         state: prop.state || "",
                         zip: prop.zip || "",
+                        authorizedAmount: dispatchHoldAmount,
                       });
                       return;
                     }
                   }
+                  if (dispatchCheckoutInFlight.current) return;
+                  dispatchCheckoutInFlight.current = true;
                   onBusy(true);
-                  const code = dispatchCouponPreview?.code || job.discountCode || undefined;
+                  try {
+                  const code = undefined;
                   const prepared = await prepareCheckout(job.id, {
                     discountCode: code || null,
                     clearCoupon: !code,
@@ -857,8 +828,9 @@ export default function HomeownerJobDetailPanel({
                     onBusy(false);
                     return;
                   }
-                  const r = await payDispatchFee(job.id, code, consentsFromState(consentState));
+                  const r = await payDispatchFee(job.id, code, consentsFromState(consentState), dispatchHoldAmount);
                   if (!r.ok) {
+                    if (r.code === "PRICING_MISMATCH") { bookingFee.refresh(); setDispatchPaymentConsents({}); }
                     if (
                       ackGate.promptFromResponse(r, {
                         currentState: consentState,
@@ -882,6 +854,7 @@ export default function HomeownerJobDetailPanel({
                   }
                   onError("Stripe checkout could not be started.");
                   onBusy(false);
+                  } finally { dispatchCheckoutInFlight.current = false; onBusy(false); }
                 };
                 await runPayment();
               }}
