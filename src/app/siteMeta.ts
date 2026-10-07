@@ -37,7 +37,7 @@ export function applySiteMeta(page: SiteMetaPage, path = '', search = '') {
   setMeta('property', 'og:url', canonical);
   setMeta('property', 'og:type', 'website');
   setMeta('name', 'twitter:card', 'summary');
-  for (const key of ['og:image', 'og:image:secure_url', 'twitter:image']) setMeta(key.startsWith('og:') ? 'property' : 'name', key, SITE_ORIGIN + '/fixbridge-authoritative.png');
+  for (const key of ['og:image', 'og:image:secure_url', 'twitter:image']) setMeta(key.startsWith('og:') ? 'property' : 'name', key, SITE_ORIGIN + '/fixbridge-logo.png');
   document.head.querySelectorAll('meta[property="og:image:width"],meta[property="og:image:height"]').forEach(el => el.remove());
   let script = document.getElementById('public-structured-data');
   if (privatePage) {

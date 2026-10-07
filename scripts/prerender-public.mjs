@@ -14,7 +14,7 @@ export function withMeta(shell, meta, privatePage = false) {
   const title = meta.title,
     description = meta.description,
     url = SITE_ORIGIN + meta.path,
-    image = SITE_ORIGIN + '/fixbridge-authoritative.png';
+    image = SITE_ORIGIN + '/fixbridge-logo.png';
   const tags = '<title>' + escape(title) + '</title><meta name="description" content="' + escape(description) + '"><meta name="robots" content="' + (privatePage ? 'noindex, follow' : 'index, follow') + '">' + (privatePage ? '' : '<link rel="canonical" href="' + escape(url) + '">') + ['og:title', 'og:description', 'og:url', 'og:image', 'og:type', 'og:site_name'].map((key, i) => '<meta property="' + key + '" content="' + escape([title, description, url, image, 'website', 'FixBridge'][i]) + '">').join('') + ['twitter:card', 'twitter:title', 'twitter:description', 'twitter:image'].map((key, i) => '<meta name="' + key + '" content="' + escape(['summary', title, description, image][i]) + '">').join('') + (privatePage ? '' : '<script id="public-structured-data" type="application/ld+json">' + JSON.stringify(structuredData(meta.page)).replace(/</g, '\\u003c') + '</script>');
   return html.replace('</head>', tags + '</head>');
 }

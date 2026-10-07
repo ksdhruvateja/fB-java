@@ -107,7 +107,7 @@ export function structuredData(page) {
       '@id': SITE_ORIGIN + '/#organization',
       name: 'FixBridge',
       url: SITE_ORIGIN + '/',
-      logo: SITE_ORIGIN + '/fixbridge-authoritative.png',
+      logo: SITE_ORIGIN + '/fixbridge-logo.png',
       description: 'Home repair requests, property records and professional service coordination.'
     }, {
       '@type': page === 'about' ? 'AboutPage' : 'WebPage',
