@@ -93,9 +93,9 @@ export async function getFixaHealth() {
     fallbackProvider: ai.fallbackProvider || null,
     fallbackModel: ai.fallbackModel || null,
     fallbackProviders: ai.fallbackProviders || [],
-      code,
-      caseId: packed.context.jobId,
-      propertyId: packed.context.propertyId,
+    configured: Boolean(ai.configured),
+    // Configuration only. This endpoint does not call a model.
+    probed: false,
     code: ai.configured ? 'configured_not_probed' : 'not_connected',
   };
 }

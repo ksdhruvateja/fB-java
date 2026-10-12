@@ -1707,13 +1707,20 @@ export function fallbackStructuredAssessment({
 /* Assessment provider call                                                   */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Runs a provider call with a deadline. Pass a function `(signal) => promise` so the
+ * timeout actually aborts the upstream HTTP request; a bare promise can only be raced,
+ * which leaves the timed-out request running (and billing) in the background.
+ */
 async function runWithTimeout(
-  promise,
+  task,
   timeoutMs
 ) {
+  const controller = new AbortController();
   let timer;
 
   try {
+    const promise = typeof task === 'function' ? task(controller.signal) : task;
     return await Promise.race([
       promise,
 
@@ -1730,6 +1737,7 @@ async function runWithTimeout(
                 error.code =
                   'provider_timeout';
 
+                controller.abort(error);
                 reject(error);
               },
               timeoutMs
@@ -1853,7 +1861,8 @@ async function analyzeWithProvider(
     try {
       completion =
         await runWithTimeout(
-          config.adapter.analyze({
+          (signal) => config.adapter.analyze({
+            signal,
             messages,
 
             temperature:
@@ -2037,7 +2046,8 @@ async function analyzeWithProvider(
         const correctionStartedMs = Date.now();
         const correction =
           await runWithTimeout(
-            config.adapter.analyze({
+            (signal) => config.adapter.analyze({
+            signal,
               messages: [
                 ...messages,
 
@@ -2352,7 +2362,7 @@ export async function analyzeRepair(
       source:
         'error',
 
-      provider: result?.provider || result?.source || null,
+      provider: resolved.provider || null,
 
       error:
         HOMEOWNER_AI_ERROR,
@@ -2561,12 +2571,12 @@ export async function analyzeRepairStructured(
       source:
         'error',
 
-      provider: resolved.provider,
+      provider: result?.provider || result?.source || null,
 
       model:
         result?.model,
 
-      provider: result?.source || null,
+      providerCode: result?.providerCode || null,
       requestId: result?.requestId || null,
       latencyMs: result?.latencyMs || null,
       promptVersion: result?.promptVersion || FIXERA_PROMPT_VERSION,
@@ -3137,7 +3147,8 @@ async function runChatProvider(
   try {
     const completion =
       await runWithTimeout(
-        config.adapter.complete({
+        (signal) => config.adapter.complete({
+            signal,
           messages:
             payloadMessages,
 

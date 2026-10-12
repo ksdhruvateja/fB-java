@@ -467,7 +467,7 @@ export async function setDocumentApplicability(pool, {
   const nextStatus =
     applicability === APPLICABILITY.NOT_APPLICABLE
       ? DOC_STATUS.NOT_APPLICABLE
-      : deriveStatus(cur[0], applicability);
+      : deriveComplianceStatus(cur[0], applicability);
 
   await pool.query(
     `UPDATE contractor_compliance_documents SET applicability=$2, status=$3, updated_at=NOW() WHERE id=$1`,

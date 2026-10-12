@@ -3539,19 +3539,67 @@ async function handleFixeraReassess(req, res) {
 app.post('/api/fixera/reassess', requireAuth, aiLimiter, handleFixeraReassess);
 app.post('/api/fixa/reassess', requireAuth, aiLimiter, handleFixeraReassess);
 
-function handleFixeraProfessionalHandoff(req, res) {
-  return res.json(prepareProfessionalHandoff({
-    jobId: req.body?.jobId || null,
-    description: clampString(req.body?.description, 4000),
-    category: clampString(req.body?.category, 80),
-    subcategory: clampString(req.body?.subcategory, 80),
-    risk: clampString(req.body?.risk, 20),
-    completedSteps: Array.isArray(req.body?.completedSteps) ? req.body.completedSteps.slice(0, 20) : [],
-    failedStep: clampString(req.body?.failedStep, 200),
-    concern: clampString(req.body?.concern, 1000),
-    reason: clampString(req.body?.reason, 300) || 'Homeowner requested a professional',
-    assessment: req.body?.assessment || null,
-  }));
+/**
+ * Loads a repair case the caller may act on. Homeowners see only their own cases; admins
+ * any. `caseType` selects the table explicitly; without it, managed jobs are checked first
+ * (existing behaviour). Returns { row, caseType } or null.
+ */
+async function loadOwnedFixeraCase(req, rawId, rawCaseType) {
+  const id = Number(rawId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const isAdmin = req.authUser?.role === 'admin';
+  const types = rawCaseType === 'managed_job' || rawCaseType === 'pending_service_request'
+    ? [rawCaseType]
+    : ['managed_job', 'pending_service_request'];
+  for (const caseType of types) {
+    const table = caseType === 'managed_job' ? 'managed_jobs' : 'pending_service_requests';
+    const { rows } = await pool.query(
+      `SELECT id, homeowner_user_id, property_id, category, description, ai_assessment FROM ${table}
+        WHERE id=$1 AND ($2::boolean OR homeowner_user_id=$3)`,
+      [id, isAdmin, req.authUser.id]
+    );
+    if (rows[0]) return { row: rows[0], caseType };
+  }
+  return null;
+}
+
+async function handleFixeraProfessionalHandoff(req, res) {
+  try {
+    const base = {
+      completedSteps: Array.isArray(req.body?.completedSteps) ? req.body.completedSteps.slice(0, 20) : [],
+      failedStep: clampString(req.body?.failedStep, 200),
+      concern: clampString(req.body?.concern, 1000),
+      reason: clampString(req.body?.reason, 300) || 'Homeowner requested a professional',
+      subcategory: clampString(req.body?.subcategory, 80),
+    };
+    if (req.body?.jobId != null) {
+      // A case-linked handoff uses the stored case, never client-supplied case data.
+      const owned = await loadOwnedFixeraCase(req, req.body.jobId, req.body?.caseType);
+      if (!owned) return res.status(404).json({ ok: false, code: 'CASE_NOT_FOUND', message: 'The repair case could not be found.' });
+      const stored = typeof owned.row.ai_assessment === 'string' ? JSON.parse(owned.row.ai_assessment || 'null') : owned.row.ai_assessment;
+      return res.json(prepareProfessionalHandoff({
+        ...base,
+        jobId: owned.row.id,
+        caseType: owned.caseType,
+        propertyId: owned.row.property_id,
+        description: clampString(owned.row.description, 4000),
+        category: clampString(owned.row.category, 80),
+        risk: clampString(stored?.diy_risk_level, 20),
+        assessment: stored || null,
+      }));
+    }
+    return res.json(prepareProfessionalHandoff({
+      ...base,
+      jobId: null,
+      description: clampString(req.body?.description, 4000),
+      category: clampString(req.body?.category, 80),
+      risk: clampString(req.body?.risk, 20),
+      assessment: null,
+    }));
+  } catch (e) {
+    console.error('fixera handoff:', e);
+    return res.status(500).json({ ok: false, message: 'The handoff summary could not be prepared.' });
+  }
 }
 
 app.post('/api/fixera/professional-handoff', requireAuth, handleFixeraProfessionalHandoff);
@@ -3721,6 +3769,28 @@ async function handleFixaChat(req, res) {
       }
     }
 
+    if (jobIdNum == null) {
+      // No case attached: still screen before inference so general chat cannot be used to
+      // get hazardous instructions or to override Fixera's rules.
+      const lastUser = normalized.filter((m) => m.role === 'user').pop()?.content || '';
+      const { classifyDiyRiskLevel, detectPromptInjection, redSafetyReply, isEmergencyHazard } = await import('./diy-safety.js');
+      if (detectPromptInjection(lastUser)) {
+        return res.json({ ok: true, reply: redSafetyReply(), source: 'safety_policy', riskLevel: 'red', promptInjectionBlocked: true, emergencyRecommended: true });
+      }
+      const classified = classifyDiyRiskLevel(lastUser, null);
+      riskLevel = classified.level;
+      if (riskLevel === 'red') {
+        return res.json({
+          ok: true,
+          reply: redSafetyReply(),
+          source: 'safety_policy',
+          riskLevel,
+          emergencyRecommended: isEmergencyHazard(classified),
+          reasonCodes: classified.reasonCodes,
+        });
+      }
+    }
+
     const result = await complete({ messages: normalized, riskLevel, assessment, task: 'diy_guidance' });
     return res.json({ ...result, model: undefined, riskLevel });
   } catch (e) {
@@ -3739,13 +3809,21 @@ app.post('/api/fixera/chat', requireAuth, aiLimiter, handleFixaChat);
 app.post('/api/fixa/chat', requireAuth, aiLimiter, handleFixaChat);
 
 async function handleFixeraFeedback(req, res) {
+  let jobId = null;
+  if (req.body?.jobId != null) {
+    const owned = await loadOwnedFixeraCase(req, req.body.jobId, req.body?.caseType).catch(() => null);
+    if (!owned) return res.status(404).json({ ok: false, code: 'CASE_NOT_FOUND', message: 'The repair case could not be found.' });
+    jobId = owned.row.id;
+  }
   const helpful = String(req.body?.helpful || '').toLowerCase();
   const diyResult = String(req.body?.diyResult || '').toLowerCase();
   const allowedHelpful = helpful === 'yes' || helpful === 'no' ? helpful : null;
   const allowedDiy = ['solved', 'partially', 'not_solved'].includes(diyResult) ? diyResult : null;
   const row = recordFixeraFeedback({
     interactionId: req.body?.interactionId || null,
-    jobId: req.body?.jobId || null,
+    jobId,
+    // Feedback may only update the caller's own interactions.
+    userId: req.authUser.role === 'admin' ? null : req.authUser.id,
     helpful: allowedHelpful,
     diyResult: allowedDiy,
     note: req.body?.note,

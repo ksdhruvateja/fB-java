@@ -89,9 +89,11 @@ export function recordFixeraFeedback(input = {}) {
     created_at: new Date().toISOString(),
   };
   MEMORY.feedback.unshift(row);
+  const ownerId = input.userId == null ? null : String(input.userId);
   const match = MEMORY.interactions.find((item) =>
-    (row.interaction_id && item.interaction_id === row.interaction_id)
-    || (row.job_id && item.job_id === row.job_id)
+    (ownerId == null || String(item.user_id) === ownerId)
+    && ((row.interaction_id && item.interaction_id === row.interaction_id)
+      || (row.job_id && item.job_id === row.job_id))
   );
   if (match) {
     match.user_feedback = row.helpful;

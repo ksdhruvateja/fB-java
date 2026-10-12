@@ -14,6 +14,7 @@ import {
   resolveCustomerVisitFee,
   applyVisitFeeCredit,
 } from './pricing.js';
+import { assertEmployeeAssignable } from './contractor-employees.js';
 import {
   buildProfessionalDispatchBreakdown,
   buildProfessionalRequestBetaSnapshot,
@@ -11126,9 +11127,10 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
 
   // ── Stripe webhook (signature required when Stripe is configured) ──────────
   app.post('/api/stripe/webhook', async (req, res) => {
+    // Declared outside try so the catch block can mark this event failed.
+    let event = null;
     try {
       const sig = req.headers['stripe-signature'];
-      let event = null;
 
       if (stripeConfigured()) {
         if (!sig || !req.rawBody) {
