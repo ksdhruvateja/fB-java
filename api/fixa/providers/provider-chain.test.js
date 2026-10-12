@@ -67,7 +67,7 @@ test('Fixera falls back from the preferred OpenAI provider to OpenRouter with th
   };
 
   try {
-    const { analyzeRepairStructured, resolveAiProvider } = await import('../../ai.js?provider-chain-test');
+    const { analyzeRepairStructured, resolveAiProvider, FIXERA_PROMPT_VERSION } = await import('../../ai.js?provider-chain-test');
     assert.equal(resolveAiProvider().provider, 'openai');
     const imageDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p4sAAAAASUVORK5CYII=';
     const result = await analyzeRepairStructured({
@@ -81,7 +81,7 @@ test('Fixera falls back from the preferred OpenAI provider to OpenRouter with th
     assert.equal(result.provider, 'openrouter');
     assert.equal(result.model, 'openrouter/test-model');
     assert.ok(result.requestId);
-    assert.equal(result.promptVersion, 'fixera-repair-v3');
+    assert.equal(result.promptVersion, FIXERA_PROMPT_VERSION);
     assert.equal(result.assessment.category, 'appliances');
     assert.equal(result.assessment.confidence, 0.55);
     assert.equal(result.assessment.safe_diy_allowed, false);

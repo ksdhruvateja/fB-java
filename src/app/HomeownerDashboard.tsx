@@ -43,6 +43,8 @@ import {
   listPendingServiceRequests,
   getPendingProfessionalRequest,
   recordFixeraDiyEvent,
+  confirmSafetyConcern,
+  MAX_CASE_PHOTOS,
 } from "./managedJobs";
 import { cancelHomeCareSubscription, openHomeCareBillingPortal, resumeHomeCareSubscription, startSubscription } from "./platformApi";
 import { listGoProPlans } from "./subscriptionPlansApi";
@@ -126,6 +128,8 @@ import HomeownerGoProPlans, { type GoProPlanCard } from "./HomeownerGoProPlans";
 import SubscriptionSuccessModal from "./SubscriptionSuccessModal";
 import AiEstimateDisclaimer from "./AiEstimateDisclaimer";
 import DiySafetyStartModal from "./DiySafetyStartModal";
+import SafetyConcernModal from "./diy/SafetyConcernModal";
+import { DiyPartsCostCard, DiySafetyRationaleCard, FollowUpMaintenanceCard } from "./diy/AssessmentInsightCards";
 import DiyGuidedSafetyBar from "./DiyGuidedSafetyBar";
 import DiyEmergencyBanner from "./DiyEmergencyBanner";
 import DiyStopProfessionalBar from "./DiyStopProfessionalBar";
@@ -202,6 +206,12 @@ function normalizeDiyRiskLevel(value: unknown): "red" | "yellow" | "green" {
   if (["red", "high", "danger", "critical"].includes(text)) return "red";
   if (["yellow", "amber", "moderate", "caution"].includes(text)) return "yellow";
   return "green";
+}
+
+/** A detected safety concern the homeowner has not yet confirmed (DIY steps are withheld). */
+function safetyConfirmationPending(job: ManagedJob | null | undefined): boolean {
+  const sc = job?.aiAssessment?.safety_confirmation;
+  return Boolean(sc?.required && !sc.confirmed);
 }
 
 function getHomeownerDiyRisk(job: ManagedJob | null | undefined): "red" | "yellow" | "green" {
@@ -510,6 +520,8 @@ export default function HomeownerDashboard({
   const [preferredDate, setPreferredDate] = useState("");
   const [preferredTimeSlot, setPreferredTimeSlot] = useState("9-11");
   const [mediaDataUrl, setMediaDataUrl] = useState<string | null>(null);
+  // Photos after the first (cover) one. Fixera reads up to MAX_CASE_PHOTOS per request.
+  const [additionalPhotos, setAdditionalPhotos] = useState<string[]>([]);
   const [mediaType, setMediaType] = useState<string | null>(null);
   const [assistantHandoffIntent, setAssistantHandoffIntent] = useState<"remote_quote" | "site_visit" | "diy" | null>(null);
   const [propertyPurpose, setPropertyPurpose] = useState("current_homeowner");
@@ -545,7 +557,7 @@ export default function HomeownerDashboard({
   const [activeJob, setActiveJob] = useState<ManagedJob | null>(null);
   const [assessmentMsg, setAssessmentMsg] = useState<string | null>(null);
   const [assessmentFollowUp, setAssessmentFollowUp] = useState("");
-  const [assessmentFollowUpPhoto, setAssessmentFollowUpPhoto] = useState<string | null>(null);
+  const [assessmentFollowUpPhotos, setAssessmentFollowUpPhotos] = useState<string[]>([]);
   const [assessmentFollowUpPhotoConfirmed, setAssessmentFollowUpPhotoConfirmed] = useState(false);
   const [assessLoadingStep, setAssessLoadingStep] = useState<number | null>(null);
   const [hireScreenOpen, setHireScreenOpen] = useState(false);
@@ -592,6 +604,10 @@ export default function HomeownerDashboard({
   const [diyUserStopActive, setDiyUserStopActive] = useState(false);
   const [diyShowProfessionalHandoff, setDiyShowProfessionalHandoff] = useState(false);
   const [diyConsentOpen, setDiyConsentOpen] = useState(false);
+  const [safetyConcernOpen, setSafetyConcernOpen] = useState(false);
+  const [safetyConcernBusy, setSafetyConcernBusy] = useState(false);
+  const afterSafetyConfirmRef = useRef<(() => void) | null>(null);
+  const safetyConcernShownRef = useRef<Set<number>>(new Set());
   const [diyJudgmentChecked, setDiyJudgmentChecked] = useState(false);
   const [diyAbilityChecked, setDiyAbilityChecked] = useState(false);
   const [diyConsentBusy, setDiyConsentBusy] = useState(false);
@@ -701,11 +717,54 @@ export default function HomeownerDashboard({
     });
   }, [user.id]);
 
+  /** Opens the safety-concern popup first when one is pending. Returns true if it did. */
+  function requireSafetyConfirmation(after?: () => void): boolean {
+    if (!safetyConfirmationPending(activeJob)) return false;
+    afterSafetyConfirmRef.current = after || null;
+    setSafetyConcernOpen(true);
+    return true;
+  }
+
+  async function answerSafetyConcern(decision: "continue" | "hire_professional") {
+    if (!activeJob) return;
+    setSafetyConcernBusy(true);
+    const r = await confirmSafetyConcern(activeJob.id, decision);
+    setSafetyConcernBusy(false);
+    if (!r.ok) {
+      setError(r.message || "Could not save your choice. Please try again.");
+      return;
+    }
+    setSafetyConcernOpen(false);
+    if (r.job) {
+      const updated = r.job;
+      setActiveJob((prev) => (prev && prev.id === updated.id ? { ...prev, ...updated } : prev));
+    }
+    const after = afterSafetyConfirmRef.current;
+    afterSafetyConfirmRef.current = null;
+    if (decision === "hire_professional") {
+      setDiyIsGuided(false);
+      setDiyShowProfessionalHandoff(true);
+      setAssessmentMode("expert");
+      return;
+    }
+    if (after) window.setTimeout(after, 0);
+  }
+
+  // Show the safety-concern popup when the homeowner opens DIY for a case that needs it.
+  useEffect(() => {
+    if (!activeJob || assessmentMode !== "diy" || !safetyConfirmationPending(activeJob)) return;
+    if (activeJob.aiAssessment?.safety_confirmation?.declined) return;
+    if (safetyConcernShownRef.current.has(activeJob.id)) return;
+    safetyConcernShownRef.current.add(activeJob.id);
+    setSafetyConcernOpen(true);
+  }, [activeJob, assessmentMode]);
+
   async function openDiySafetyModal(after: "guided" | "chat", pendingChat?: string) {
     if (getHomeownerDiyRisk(activeJob) === "red") {
       setError("Guided DIY is not available for this safety risk. Please request a professional.");
       return;
     }
+    if (requireSafetyConfirmation(() => void openDiySafetyModal(after, pendingChat))) return;
     setDiyConsentAfter(after);
     setPendingDiyChatText(pendingChat || null);
     setDiyJudgmentChecked(false);
@@ -714,6 +773,7 @@ export default function HomeownerDashboard({
   }
 
   async function startGuidedDiy() {
+    if (requireSafetyConfirmation(() => void startGuidedDiy())) return;
     if (diySafetyAccepted) {
       setDiyIsGuided(true);
       return;
@@ -783,7 +843,7 @@ export default function HomeownerDashboard({
     setAssessmentMode("expert");
   }
 
-  async function reassessWithFixera(observation: string, imageDataUrl?: string | null): Promise<boolean> {
+  async function reassessWithFixera(observation: string, imageDataUrls?: string[] | null): Promise<boolean> {
     if (!activeJob) return false;
     setDiyChatBusy(true);
     try {
@@ -800,7 +860,7 @@ export default function HomeownerDashboard({
           description: activeJob.description,
           observation,
           currentStep: diyStepIndex,
-          ...(imageDataUrl ? { imageDataUrl } : {}),
+          ...(imageDataUrls?.length ? { imageDataUrls: imageDataUrls.slice(0, MAX_CASE_PHOTOS) } : {}),
         }),
       });
       const data = await response.json();
@@ -808,7 +868,11 @@ export default function HomeownerDashboard({
         setError(data?.error || "We couldn't complete the assessment right now. Please try again.");
         return false;
       }
-      setActiveJob((prev) => prev ? { ...prev, aiAssessment: { ...prev.aiAssessment, ...data.assessment } } : prev);
+      setActiveJob((prev) => prev ? {
+        ...prev,
+        diyRiskLevel: data.assessment.diy_risk_level || prev.diyRiskLevel,
+        aiAssessment: { ...prev.aiAssessment, ...data.assessment },
+      } : prev);
       setDiyView("step");
       return true;
     } catch {
@@ -819,40 +883,48 @@ export default function HomeownerDashboard({
     }
   }
 
-  async function prepareAssessmentFollowUpPhoto(file: File | null) {
-    if (!file) return;
-    const name = file.name.toLowerCase();
-    if (!file.type.startsWith("image/") || file.type === "image/heic" || file.type === "image/heif" || name.endsWith(".heic") || name.endsWith(".heif")) {
-      setError("Choose a JPG, PNG, or WEBP photo for Fixera to review.");
+  async function prepareAssessmentFollowUpPhotos(files: File[]) {
+    if (!files.length) return;
+    const room = MAX_CASE_PHOTOS - assessmentFollowUpPhotos.length;
+    if (room <= 0) {
+      setError(`You can add up to ${MAX_CASE_PHOTOS} photos at a time.`);
       return;
     }
+    const prepared: string[] = [];
     try {
-      const dataUrl = await compressImageForAssessment(file);
-      if (dataUrl.length > 6_000_000) throw new Error("This photo is too large to attach.");
-      setAssessmentFollowUpPhoto(dataUrl);
+      for (const file of files.slice(0, room)) {
+        const name = file.name.toLowerCase();
+        if (!file.type.startsWith("image/") || file.type === "image/heic" || file.type === "image/heif" || name.endsWith(".heic") || name.endsWith(".heif")) {
+          throw new Error("Choose JPG, PNG, or WEBP photos for Fixera to review.");
+        }
+        const dataUrl = await compressImageForAssessment(file);
+        if (dataUrl.length > 6_000_000) throw new Error("A photo is too large to attach.");
+        prepared.push(dataUrl);
+      }
+      setAssessmentFollowUpPhotos((current) => [...current, ...prepared].slice(0, MAX_CASE_PHOTOS));
       setAssessmentFollowUpPhotoConfirmed(false);
-      setError(null);
+      setError(files.length > room ? `Only ${MAX_CASE_PHOTOS} photos can be added at a time. The extra photos were not added.` : null);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Could not prepare this photo.");
     }
   }
 
   async function submitAssessmentFollowUp() {
-    if (!assessmentFollowUp.trim() && !assessmentFollowUpPhoto) {
+    if (!assessmentFollowUp.trim() && !assessmentFollowUpPhotos.length) {
       setError("Answer a question or add a photo before reassessing.");
       return;
     }
-    if (assessmentFollowUpPhoto && !assessmentFollowUpPhotoConfirmed) {
-      setError("Preview and confirm the added photo before reassessing.");
+    if (assessmentFollowUpPhotos.length && !assessmentFollowUpPhotoConfirmed) {
+      setError("Preview and confirm the added photos before reassessing.");
       return;
     }
     const succeeded = await reassessWithFixera(
       `Homeowner answers to Fixera's questions: ${assessmentFollowUp.trim() || "No additional text."}`,
-      assessmentFollowUpPhotoConfirmed ? assessmentFollowUpPhoto : null
+      assessmentFollowUpPhotoConfirmed ? assessmentFollowUpPhotos : null
     );
     if (succeeded) {
       setAssessmentFollowUp("");
-      setAssessmentFollowUpPhoto(null);
+      setAssessmentFollowUpPhotos([]);
       setAssessmentFollowUpPhotoConfirmed(false);
     }
   }
@@ -978,6 +1050,7 @@ export default function HomeownerDashboard({
       setDiyView("step");
       return;
     }
+    if (requireSafetyConfirmation(() => void openGuidedDiyStep())) return;
     if (!diySafetyAccepted) {
       await startGuidedDiy();
       return;
@@ -1350,6 +1423,7 @@ export default function HomeownerDashboard({
       setDescription(prefill?.description || "");
       setMediaDataUrl(null);
       setMediaType(null);
+      setAdditionalPhotos([]);
     }
     navigateTo({
       role: "homeowner",
@@ -1416,6 +1490,7 @@ export default function HomeownerDashboard({
         preferredDate: undefined,
         preferredTimeSlot: "9-11",
         mediaDataUrl,
+        mediaDataUrls: additionalPhotos,
         mediaType,
         contactName: user.name,
         contactPhone: user.phone || "",
@@ -2633,6 +2708,26 @@ export default function HomeownerDashboard({
     setMediaType("image");
   }
 
+  async function addAdditionalPhotos(files: File[]): Promise<void> {
+    setError(null);
+    const room = MAX_CASE_PHOTOS - (mediaDataUrl ? 1 : 0) - additionalPhotos.length;
+    if (room <= 0) throw new Error(`You can add up to ${MAX_CASE_PHOTOS} photos.`);
+    const prepared: string[] = [];
+    for (const file of files.slice(0, room)) {
+      const name = file.name.toLowerCase();
+      if (!file.type.startsWith("image/") || file.type === "image/heic" || file.type === "image/heif" || name.endsWith(".heic") || name.endsWith(".heif")) {
+        throw new Error("Choose JPG, PNG, or WEBP photos.");
+      }
+      const dataUrl = await compressImageForAssessment(file);
+      if (!dataUrl.startsWith("data:image/") || dataUrl.length > 6_000_000) {
+        throw new Error("A photo is too large to attach. Choose a smaller image and try again.");
+      }
+      prepared.push(dataUrl);
+    }
+    setAdditionalPhotos((current) => [...current, ...prepared].slice(0, MAX_CASE_PHOTOS - 1));
+    if (files.length > room) setError(`Only ${MAX_CASE_PHOTOS} photos can be attached. The extra photos were not added.`);
+  }
+
   //  async function runAssessWithProgress(
   //  jobId: number,
   //  zip?: string | null,
@@ -3095,6 +3190,7 @@ export default function HomeownerDashboard({
         preferredDate: path === "experts" ? preferredDate || undefined : undefined,
         preferredTimeSlot: path === "experts" ? preferredTimeSlot : undefined,
         mediaDataUrl,
+        mediaDataUrls: additionalPhotos,
         mediaType,
         contactName: user.name,
         contactPhone: user.phone || "",
@@ -3363,6 +3459,10 @@ export default function HomeownerDashboard({
   async function sendDiyChatMessage(forcedText?: string) {
     const text = (forcedText ?? diyChatInput).trim();
     if (!text || !activeJob) return;
+    if (requireSafetyConfirmation(() => void sendDiyChatMessage(text))) {
+      setDiyChatInput(text);
+      return;
+    }
     if (!diySafetyAccepted) {
       setDiyChatInput(text);
       await openDiySafetyModal("chat", text);
@@ -3923,6 +4023,18 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
               }}
             />
 
+            <SafetyConcernModal
+                open={safetyConcernOpen}
+                safety={activeJob?.aiAssessment?.diy_safety}
+                stepCount={activeJob?.aiAssessment?.withheld_step_count}
+                busy={safetyConcernBusy}
+                onContinue={() => void answerSafetyConcern("continue")}
+                onHireProfessional={() => void answerSafetyConcern("hire_professional")}
+                onClose={() => {
+                  setSafetyConcernOpen(false);
+                  afterSafetyConfirmRef.current = null;
+                }}
+              />
             {diyConsentOpen ? (
               <DiySafetyStartModal
                 open={diyConsentOpen}
@@ -4019,9 +4131,16 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                     onSubmitAi={() => requestAiAssessment()}
                     onHirePro={() => void submitIssue("experts")}
                     preferHire={assessmentMode === "expert"}
+                    additionalPhotos={additionalPhotos}
+                    onAddPhotos={addAdditionalPhotos}
+                    onRemovePhoto={(index) => setAdditionalPhotos((current) => current.filter((_, i) => i !== index))}
+                    maxPhotos={MAX_CASE_PHOTOS}
                     onClearMedia={() => {
-                      setMediaDataUrl(null);
-                      setMediaType(null);
+                      // The next photo becomes the cover.
+                      const [next, ...rest] = additionalPhotos;
+                      setMediaDataUrl(next || null);
+                      setMediaType(next ? "image" : null);
+                      setAdditionalPhotos(rest);
                     }}
                     draftSavedAt={intakeDraftSavedAt}
                   />
@@ -4427,21 +4546,55 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                               </button>
                             </div>
 
-                            {assessmentStringList(activeJob.aiAssessment?.questions_needed).length > 0 && (
+                            {(assessmentStringList(activeJob.aiAssessment?.questions_needed).length > 0 ||
+                              activeJob.aiAssessment?.assessment_stage === "needs_more_info") && (
                               <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100 flex gap-3 shadow-sm">
                                 <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
                                 <div className="text-sm space-y-1.5 w-full">
-                                  <p className="font-semibold text-amber-900 dark:text-amber-200">Clarification Needed to Refine Estimate</p>
-                                  <p className="text-xs opacity-90 leading-relaxed">
-                                    Our AI detected potential uncertainty or mismatch in the details provided (e.g. description and photo trade categories mismatch, or extremely vague summary). Please review the following questions:
-                                  </p>
-                                  <ul className="list-disc pl-5 text-xs space-y-1 text-amber-800 dark:text-amber-300 font-medium">
-                                    {assessmentStringList(activeJob.aiAssessment?.questions_needed).map((q, idx) => (
-                                      <li key={idx}>{q}</li>
-                                    ))}
-                                  </ul>
+                                  {activeJob.aiAssessment?.assessment_stage === "needs_more_info" ? (
+                                    <>
+                                      <p className="font-semibold text-amber-900 dark:text-amber-200">
+                                        {activeJob.aiAssessment?.evidence_check?.image_count ? "Fixera needs clearer photos" : "Fixera needs photos"} before giving a repair plan
+                                      </p>
+                                      <p className="text-xs opacity-90 leading-relaxed">
+                                        {activeJob.aiAssessment?.evidence_check?.message ||
+                                          "Fixera cannot see enough to give a safe repair plan yet. Add clearer photos, or hire a professional."}
+                                      </p>
+                                      {assessmentStringList(activeJob.aiAssessment?.evidence_check?.photo_issue_text).length > 0 ? (
+                                        <ul className="list-disc pl-5 text-xs space-y-1 text-amber-800 dark:text-amber-300">
+                                          {assessmentStringList(activeJob.aiAssessment?.evidence_check?.photo_issue_text).map((issue, idx) => (
+                                            <li key={idx}>{issue}</li>
+                                          ))}
+                                        </ul>
+                                      ) : null}
+                                      {assessmentStringList(activeJob.aiAssessment?.evidence_check?.photo_requests).length > 0 ? (
+                                        <>
+                                          <p className="pt-1 text-xs font-semibold">Please photograph (up to {MAX_CASE_PHOTOS} photos):</p>
+                                          <ul className="list-disc pl-5 text-xs space-y-1 text-amber-800 dark:text-amber-300 font-medium">
+                                            {assessmentStringList(activeJob.aiAssessment?.evidence_check?.photo_requests).map((request, idx) => (
+                                              <li key={idx}>{request}</li>
+                                            ))}
+                                          </ul>
+                                        </>
+                                      ) : null}
+                                    </>
+                                  ) : (
+                                    <>
+                                      <p className="font-semibold text-amber-900 dark:text-amber-200">Clarification Needed to Refine Estimate</p>
+                                      <p className="text-xs opacity-90 leading-relaxed">
+                                        Our AI detected potential uncertainty or mismatch in the details provided (e.g. description and photo trade categories mismatch, or extremely vague summary). Please review the following questions:
+                                      </p>
+                                    </>
+                                  )}
+                                  {assessmentStringList(activeJob.aiAssessment?.questions_needed).length > 0 ? (
+                                    <ul className="list-disc pl-5 text-xs space-y-1 text-amber-800 dark:text-amber-300 font-medium">
+                                      {assessmentStringList(activeJob.aiAssessment?.questions_needed).map((q, idx) => (
+                                        <li key={idx}>{q}</li>
+                                      ))}
+                                    </ul>
+                                  ) : null}
                                   <label className="grid gap-1.5 pt-2 text-xs font-semibold text-amber-950 dark:text-amber-100">
-                                    Your answer
+                                    Your answer (optional)
                                     <textarea
                                       value={assessmentFollowUp}
                                       onChange={(event) => setAssessmentFollowUp(event.target.value)}
@@ -4452,29 +4605,54 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                     />
                                   </label>
                                   <div className="grid grid-cols-2 gap-2 pt-2">
-                                    <button type="button" onClick={() => followUpCameraRef.current?.click()} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold dark:border-amber-800 dark:bg-background">
+                                    <button type="button" disabled={assessmentFollowUpPhotos.length >= MAX_CASE_PHOTOS} onClick={() => followUpCameraRef.current?.click()} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold disabled:opacity-50 dark:border-amber-800 dark:bg-background">
                                       <Camera className="h-4 w-4" /> Take Photo
                                     </button>
-                                    <button type="button" onClick={() => followUpPhotoRef.current?.click()} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold dark:border-amber-800 dark:bg-background">
-                                      <ImagePlus className="h-4 w-4" /> Upload Photo
+                                    <button type="button" disabled={assessmentFollowUpPhotos.length >= MAX_CASE_PHOTOS} onClick={() => followUpPhotoRef.current?.click()} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold disabled:opacity-50 dark:border-amber-800 dark:bg-background">
+                                      <ImagePlus className="h-4 w-4" /> Upload Photos
                                     </button>
                                   </div>
-                                  <input ref={followUpCameraRef} type="file" accept="image/*" capture="environment" aria-label="Take a photo for Fixera" className="sr-only" onChange={(event) => { void prepareAssessmentFollowUpPhoto(event.target.files?.[0] || null); event.currentTarget.value = ""; }} />
-                                  <input ref={followUpPhotoRef} type="file" accept="image/jpeg,image/png,image/webp" aria-label="Choose a photo for Fixera" className="sr-only" onChange={(event) => { void prepareAssessmentFollowUpPhoto(event.target.files?.[0] || null); event.currentTarget.value = ""; }} />
-                                  {assessmentFollowUpPhoto ? (
-                                    <div className="flex items-center gap-3 rounded-lg border border-amber-300 bg-white p-2 dark:border-amber-800 dark:bg-background">
-                                      <img src={assessmentFollowUpPhoto} alt="Photo for Fixera clarification" className="h-16 w-16 rounded object-cover" />
-                                      <div className="min-w-0 flex-1 text-xs font-semibold">
-                                        <p>{assessmentFollowUpPhotoConfirmed ? "Photo confirmed" : "Photo selected"}</p>
-                                        {!assessmentFollowUpPhotoConfirmed ? <button type="button" onClick={() => setAssessmentFollowUpPhotoConfirmed(true)} className="mt-1 text-primary underline">Use this photo</button> : null}
+                                  <input ref={followUpCameraRef} type="file" accept="image/*" capture="environment" aria-label="Take a photo for Fixera" className="sr-only" onChange={(event) => { void prepareAssessmentFollowUpPhotos(Array.from(event.target.files || []).slice(0, 1)); event.currentTarget.value = ""; }} />
+                                  <input ref={followUpPhotoRef} type="file" accept="image/jpeg,image/png,image/webp" multiple aria-label="Choose photos for Fixera" className="sr-only" onChange={(event) => { void prepareAssessmentFollowUpPhotos(Array.from(event.target.files || [])); event.currentTarget.value = ""; }} />
+                                  {assessmentFollowUpPhotos.length ? (
+                                    <div className="rounded-lg border border-amber-300 bg-white p-2 dark:border-amber-800 dark:bg-background">
+                                      <div className="grid grid-cols-5 gap-2">
+                                        {assessmentFollowUpPhotos.map((url, index) => (
+                                          <div key={`${index}-${url.length}`} className="relative">
+                                            <img src={url} alt={`Photo ${index + 1} for Fixera`} className="h-16 w-full rounded object-cover" />
+                                            <button
+                                              type="button"
+                                              onClick={() => { setAssessmentFollowUpPhotos((current) => current.filter((_, i) => i !== index)); setAssessmentFollowUpPhotoConfirmed(false); }}
+                                              aria-label={`Remove photo ${index + 1}`}
+                                              className="absolute right-0.5 top-0.5 rounded-full bg-black/60 p-0.5 text-white"
+                                            >
+                                              <X className="h-3 w-3" />
+                                            </button>
+                                          </div>
+                                        ))}
                                       </div>
-                                      <button type="button" onClick={() => { setAssessmentFollowUpPhoto(null); setAssessmentFollowUpPhotoConfirmed(false); }} aria-label="Remove clarification photo" className="rounded p-2"><X className="h-4 w-4" /></button>
+                                      <div className="mt-2 flex items-center justify-between text-xs font-semibold">
+                                        <span>{assessmentFollowUpPhotos.length} of {MAX_CASE_PHOTOS} photos {assessmentFollowUpPhotoConfirmed ? "confirmed" : "selected"}</span>
+                                        {!assessmentFollowUpPhotoConfirmed ? <button type="button" onClick={() => setAssessmentFollowUpPhotoConfirmed(true)} className="text-primary underline">Use these photos</button> : null}
+                                      </div>
                                     </div>
                                   ) : null}
-                                  <button type="button" disabled={diyChatBusy} onClick={() => void submitAssessmentFollowUp()} className="mt-2 inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#FF4D1C] px-4 text-sm font-semibold text-white disabled:opacity-60">
-                                    {diyChatBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                                    Add details and reassess
-                                  </button>
+                                  <div className="flex flex-wrap gap-2 pt-2">
+                                    <button type="button" disabled={diyChatBusy} onClick={() => void submitAssessmentFollowUp()} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#FF4D1C] px-4 text-sm font-semibold text-white disabled:opacity-60">
+                                      {diyChatBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                                      {activeJob.aiAssessment?.assessment_stage === "needs_more_info" ? "Send photos and reassess" : "Add details and reassess"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setAssessmentMode("expert");
+                                        setSelectedJobId(activeJob.id);
+                                      }}
+                                      className="inline-flex min-h-10 items-center justify-center rounded-lg border border-amber-300 bg-white px-4 text-sm font-semibold dark:border-amber-800 dark:bg-background"
+                                    >
+                                      Hire a Professional instead
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
                             )}
@@ -4634,7 +4812,11 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                       activeJob.aiAssessment?.diy_risk_reason_codes ||
                                       []) as string[];
                                     const emergencyCodes = new Set(["GAS", "FIRE", "CO", "LIVE_ELECTRICAL", "FLOOD_ELECTRICAL", "STRUCTURAL", "EMERGENCY"]);
-                                    const showEmergency = risk === "red" && reasonCodes.some((c) => emergencyCodes.has(String(c)));
+                                    const safety = activeJob.aiAssessment?.diy_safety;
+                                    const showEmergency = risk === "red" && (safety
+                                      ? safety.decision === "emergency"
+                                      : reasonCodes.some((c) => emergencyCodes.has(String(c))));
+                                    const professionalOnly = risk === "red" && !showEmergency;
                                     return (
                                       <>
                                         {showEmergency ? <DiyEmergencyBanner /> : null}
@@ -4654,10 +4836,17 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                             <div className="flex gap-3">
                                               <ShieldAlert className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
                                               <div className="text-sm">
-                                                <p className="font-semibold">Potential Safety Risk Detected</p>
+                                                <p className="font-semibold">{professionalOnly ? "Professional Repair Needed" : "Potential Safety Risk Detected"}</p>
                                                 <p className="mt-1 text-xs leading-relaxed opacity-90">
-                                                  Based on the information provided, this situation may involve a significant safety risk. Do not attempt the repair yourself. Follow the immediate safety guidance below and request professional assistance.
+                                                  {professionalOnly
+                                                    ? "Fixera assessed the actual risks of this repair. The repair itself should be done by a professional; the safe actions below are fine for you to take now."
+                                                    : "Based on the information provided, this situation may involve a significant safety risk. Do not attempt the repair yourself. Follow the immediate safety guidance below and request professional assistance."}
                                                 </p>
+                                                {safety?.reasons?.length ? (
+                                                  <ul className="mt-2 list-disc pl-5 text-xs space-y-1">
+                                                    {safety.reasons.map((reason) => <li key={reason}>{reason}</li>)}
+                                                  </ul>
+                                                ) : null}
                                               </div>
                                             </div>
                                             {(activeJob.aiAssessment?.immediate_safety_steps || []).length > 0 ? (
@@ -4680,10 +4869,25 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                           <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-amber-950 dark:text-amber-100 flex gap-3">
                                             <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
                                             <div className="text-sm">
-                                              <p className="font-semibold">Use Caution</p>
+                                              <p className="font-semibold">{safety?.requires_confirmation ? "Safety Concern: Limited DIY" : "Use Caution"}</p>
                                               <p className="mt-1 opacity-90 text-xs leading-relaxed">
-                                                We can help with limited, low-risk checks, but this issue may require professional service. Avoid opening, disassembling, climbing, handling hazardous materials, or performing work outside your experience.
+                                                {safety?.summary ||
+                                                  "We can help with limited, low-risk checks, but this issue may require professional service. Avoid opening, disassembling, climbing, handling hazardous materials, or performing work outside your experience."}
                                               </p>
+                                              {safety?.reasons?.length ? (
+                                                <ul className="mt-2 list-disc pl-5 text-xs space-y-1">
+                                                  {safety.reasons.map((reason) => <li key={reason}>{reason}</li>)}
+                                                </ul>
+                                              ) : null}
+                                              {safetyConfirmationPending(activeJob) ? (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => setSafetyConcernOpen(true)}
+                                                  className="mt-3 mr-2 inline-flex items-center rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white"
+                                                >
+                                                  Review safety notice{activeJob.aiAssessment?.withheld_step_count ? ` to see ${activeJob.aiAssessment.withheld_step_count} DIY steps` : ""}
+                                                </button>
+                                              ) : null}
                                               <button
                                                 type="button"
                                                 onClick={() => void stopDiyAndGetProfessional()}
@@ -4702,7 +4906,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                     onGetProfessional={() => void stopDiyAndGetProfessional()}
                                   />
                                   {/* DIY Caution Banner if not safe */}
-                                  {!activeJob.aiAssessment?.safe_diy_allowed && getHomeownerDiyRisk(activeJob) !== "red" && (
+                                  {!activeJob.aiAssessment?.safe_diy_allowed && getHomeownerDiyRisk(activeJob) !== "red" && activeJob.aiAssessment?.assessment_stage !== "needs_more_info" && (
                                     <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-4 text-red-950 dark:text-red-100 flex gap-3">
                                       <ShieldAlert className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
                                       <div className="text-sm">
@@ -4737,6 +4941,14 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                                       </ul>
                                     </div>
                                   </div>
+
+                                  <DiySafetyRationaleCard safety={activeJob.aiAssessment?.diy_safety} />
+                                  {getHomeownerDiyRisk(activeJob) !== "red" && activeJob.aiAssessment?.assessment_stage !== "needs_more_info" ? (
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                      <DiyPartsCostCard estimate={activeJob.aiAssessment?.diy_parts_cost_estimate} />
+                                      <FollowUpMaintenanceCard items={activeJob.aiAssessment?.follow_up_maintenance} />
+                                    </div>
+                                  ) : null}
 
                                   <HomeownerDiyExperience
                                     userName={user.name}

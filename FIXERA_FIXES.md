@@ -87,13 +87,74 @@ The original providers stay behind it as the fallback, unless `FIXERA_ENGINE_FAL
 
 `/api/fixera/health` reports `probed: false`, because it does not call a model.
 
+## 8. Workflow changes to match the flowcharts
+
+### 8.1 DIY safety is based on actual risk, not the category
+`api/diy-safety.js` → `evaluateDiySafety()` replaces the old rule that made every HVAC, electrical and roofing case red.
+- **Active hazards** stop DIY: a gas smell, fire or smoke, a CO alarm, sparking, water on live electrical, a sagging ceiling, a sewage backup, or an emergency urgency. Negated mentions ("no gas smell") do not count. The model's own stop conditions are warnings, not observations, so they are no longer scanned.
+- **Risk factors** set the decision. Each has a severity (low/medium/high), from deterministic patterns plus the model's `risk_factors`; the model can raise a severity but never lower it. Factors: mains electrical, gas, sealed cooling system, working at height, structure, water near electrical, open flame, pressurized hot water, asbestos/lead/mold, chemicals, sewage.
+- **Guardrails**: every DIY step (and every DIY chat reply) is checked against instructions Fixera never gives a homeowner, whatever the category. Examples: opening the electrical panel, gas fitting work, refrigerant or capacitor work, walking on the roof, cutting framing, torch work, disturbing asbestos, bypassing safety devices. Matching steps are removed and counted. A warning that mentions them ("do not open the panel") is kept.
+- **Decisions** (`assessment.diy_safety.decision`), each with its reasons, factors, permitted actions and prohibited actions:
+
+| Decision | Level | Meaning |
+| --- | --- | --- |
+| `emergency` | red | Active hazard. Safety steps only. |
+| `professional_only` | red | A high-risk factor, or no step left within the guardrails. Only safe actions are shown. |
+| `diy_with_guardrails` | yellow | A moderate risk or removed steps. Limited DIY after the homeowner confirms (8.3). |
+| `diy_with_care` | yellow | Moderate difficulty only. No popup. |
+| `diy_ok` | green | Low risk. |
+
+Examples now handled on their merits: a tripped GFCI, a clogged AC filter or condensate line, and containing a roof leak from inside are guarded DIY. A breaker that keeps tripping in the main panel, or a two-story roof, is professional only.
+
+### 8.2 Unclear photos: ask for clearer photos first
+The model now reports `photo_assessment` (usable photo count, issues, specific photo requests). When the photos are unusable or insufficient, confidence is below 0.4, or the category conflicts, the result is `assessment_stage: "needs_more_info"`:
+- no DIY steps and no parts cost
+- **not** a red safety block
+- the result screen lists what is wrong with the photos and what to photograph (up to 5), with **Send photos and reassess** and **Hire a Professional instead**.
+
+### 8.3 Safety-concern popup
+For `diy_with_guardrails` the DIY steps are withheld from the homeowner until they answer a popup (`src/app/diy/SafetyConcernModal.tsx`). The popup shows why, what they can do safely, and what Fixera will not guide.
+- **Continue** (needs the "I understand" box) → `POST /api/managed/jobs/:id/safety-confirmation {decision:"continue", acknowledged:true}`. The decision is stored on the case and audited in `diy_safety_events`.
+- **Hire a Professional** records the choice and opens the hire flow.
+- **Server-enforced, not just UI:**
+  - the job serializer and the assessment/reassess responses withhold steps
+  - DIY step events, DIY chat and `DIY_START` consent return `409 SAFETY_CONFIRMATION_REQUIRED` until confirmed
+- **Confirming never changes the guidance.** The steps were already filtered by the guardrails, and they are served unchanged. A new assessment with a different finding needs a new confirmation.
+
+### 8.4 Up to 5 photos, including the first request
+- **Intake form:** **Upload Photos** accepts several files, with thumbnails, remove buttons and an "N of 5" counter.
+- **Server:** `POST /api/managed/jobs` and `/api/public/jobs` accept `mediaDataUrls` (plus the existing `mediaDataUrl` cover), and store each photo as case media. More than 5 returns `400 TOO_MANY_PHOTOS`.
+- **AI:** the assessment worker, `/api/fixera/assessment` and `/api/fixera/reassess` send up to 5 photos, labelled Photo 1..N.
+- **Follow-up:** the reassess panel accepts up to 5 photos at a time.
+
+### 8.5 Approximate DIY parts cost
+- **Model output:** each part in `materials_needed` now carries a rough per-part price range and a quantity. Labor and service prices are still not allowed.
+- **Server:** prices are clamped (at most $2,000 per part) and totalled into `diy_parts_cost_estimate` (required parts; optional parts only when none are required).
+- **Result screen:** a "Approximate DIY parts cost" card shows the range with **"Rough estimate — not a quote"** and the disclaimer: varies with the exact issue, the parts and materials chosen, brand and location; labor, tools, tax and shipping are not included.
+- **When it is hidden:** no cost is shown for red or needs-more-info results.
+
+### 8.6 Maintenance reminders tied to the repair
+- **Model output:** `follow_up_maintenance` (task, interval, reason) for the specific issue.
+- **When the repair is finished** (homeowner marks the DIY repair fixed, or a professional completes the job), `api/fixera/maintenance-reminders.js` adds to the property's maintenance calendar:
+  - a check that the repair is holding (14 days after DIY, 30 after a professional)
+  - each follow-up task, with the issue, the repair, the reason and the recurrence
+- **Notifications:** `processDueServiceReminders` (the existing poll, admin route and Netlify function) now also sends one in-app notification per item due within 3 days.
+- **Recurrence:** completing a recurring item schedules the next one.
+- **Saving the passport** keeps these fields (`PUT /api/properties/:id/health` and `/maintenance`).
+- **Where the homeowner sees it:**
+  - the result screen previews the reminders
+  - the passport calendar shows the reason and the related repair
+
+### Prompt version
+`FIXERA_PROMPT_VERSION` is now `fixera-repair-v4`.
+
 ## Tests
 
 ```bash
-node --test $(find api -name "*.test.js")    # 24 pass, 12 database tests skip
+node --test $(find api -name "*.test.js")    # 34 pass, 20 database tests skip
 # With a real PostgreSQL (or a Neon branch) for the route/pricing tests:
 FIXERA_TEST_DATABASE_URL=postgresql://... DB_SSL_REJECT_UNAUTHORIZED=false \
-  node --test --test-concurrency=1 $(find api -name "*.test.js")   # 36 pass
+  node --test --test-concurrency=1 $(find api -name "*.test.js")   # 54 pass
 ```
 
 **New test files:**
@@ -102,12 +163,16 @@ FIXERA_TEST_DATABASE_URL=postgresql://... DB_SSL_REJECT_UNAUTHORIZED=false \
 - `api/fixa/providers/fixera-engine.test.js`
 - `api/fixera-routes.test.js`
 - `api/hire-pricing.test.js`
+- `api/fixera/workflow.test.js`: safety engine, guardrails, evidence check, parts cost, confirmation, reminders, photo limits
+- `api/fixera-workflow-routes.test.js`: popup gate, DIY outcome → reminders, passport save, notifications, 5-photo upload
 
 The in-memory `pg-mem` fallback cannot run the full schema (it lacks `trim()` and other functions). That's why the route tests need a real PostgreSQL.
 
 ## Not changed (noted for later)
 
-- Photo assessment is single-photo in this codebase (`imageDataUrl`).
+- Saved pending (unpaid) requests in `GET /api/pending-service-requests/my` still return the raw assessment. DIY runs on managed jobs, where steps are withheld until confirmed.
+- Unsaved intake drafts keep only the first photo.
+- The safety patterns and guardrails are deterministic English-language rules. Review them with your safety or legal adviser before relying on them.
 - `logs/fixbridge-jobs-debug.json` is written into the repository at runtime. Consider adding it to `.gitignore`.
 - Assessment jobs still use in-process scheduling (`setImmediate`) on Railway, as before.
-- Real AI answer quality has not been evaluated. No provider keys were available.
+- Real AI answer quality has not been evaluated, including the new photo-quality and part-price fields. No provider keys were available.

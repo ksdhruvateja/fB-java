@@ -60,7 +60,20 @@ export type PropertyHealthProfile = {
   beds?: number | null;
   baths?: number | null;
   sqft?: number | null;
-  maintenance: { label: string; dueDate: string; system?: PropertySystem }[];
+  maintenance: {
+    label: string;
+    dueDate: string;
+    system?: PropertySystem;
+    // Set on reminders Fixera creates from a repair.
+    id?: string;
+    source?: string;
+    reason?: string;
+    issue?: string;
+    repair?: string;
+    relatedJobId?: number;
+    recurrenceDays?: number | null;
+    completed?: boolean;
+  }[];
   previousServices?: PreviousServiceRecord[];
   aiSuggestions?: AiServiceSuggestion[];
   onboardingComplete?: boolean;
@@ -240,6 +253,8 @@ export function normalizeHealthProfile(raw?: Partial<PropertyHealthProfile> | nu
       ? raw.maintenance
           .filter((m) => m && String(m.label || "").trim())
           .map((m) => ({
+            // Spread first so Fixera reminder fields (id, reason, issue, repair, recurrence) survive a save.
+            ...m,
             label: String(m.label).trim(),
             dueDate: String(m.dueDate || ""),
             system: m.system as PropertySystem | undefined,

@@ -372,8 +372,17 @@ export async function processDueServiceReminders(pool, options = {}) {
     if (r.email) sentEmail += 1;
   }
 
-  console.log('[service-reminder] processor finished', { processed, sentInApp, sentEmail, skipped, evaluated });
-  return { processed, sentInApp, sentEmail, skipped, evaluated, reason: null };
+  // Maintenance reminders created from Fixera repairs (issue, repair and follow-up maintenance).
+  let maintenanceReminders = 0;
+  try {
+    const { processDueMaintenanceReminders } = await import('./fixera/maintenance-reminders.js');
+    maintenanceReminders = (await processDueMaintenanceReminders(pool, { asOf })).sent;
+  } catch (e) {
+    console.warn('[service-reminder] maintenance reminders failed', e?.message || e);
+  }
+
+  console.log('[service-reminder] processor finished', { processed, sentInApp, sentEmail, skipped, evaluated, maintenanceReminders });
+  return { processed, sentInApp, sentEmail, skipped, evaluated, maintenanceReminders, reason: null };
 }
 
 export function verifyReminderCronAuth(req) {

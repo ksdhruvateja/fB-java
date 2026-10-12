@@ -65,3 +65,69 @@ export async function storeFixeraCaseMedia(pool, {
   );
   return rows[0] || null;
 }
+/** Photos per repair case that Fixera reads and the homeowner can attach at once. */
+export const MAX_CASE_PHOTOS = 5;
+const MAX_PHOTO_CHARS = 6_000_000;
+
+/**
+ * Reads the photos a request attaches: `mediaDataUrls` (up to MAX_CASE_PHOTOS) plus the legacy
+ * single `mediaDataUrl`. The first entry stays the case cover (`media_data_url`).
+ * Throws a 400-style error for an invalid list.
+ */
+export function readCasePhotoList(body = {}, { arrayKey = 'mediaDataUrls', singleKey = 'mediaDataUrl' } = {}) {
+  const list = [];
+  const single = body?.[singleKey];
+  if (typeof single === 'string' && single) list.push(single);
+  const extra = body?.[arrayKey];
+  if (extra != null && !Array.isArray(extra)) {
+    throw Object.assign(new Error('Photos must be sent as a list.'), { code: 'INVALID_PHOTOS' });
+  }
+  for (const item of extra || []) {
+    if (typeof item !== 'string' || !item) continue;
+    if (!list.includes(item)) list.push(item);
+  }
+  if (list.length > MAX_CASE_PHOTOS) {
+    throw Object.assign(new Error(`You can attach up to ${MAX_CASE_PHOTOS} photos.`), { code: 'TOO_MANY_PHOTOS' });
+  }
+  list.forEach((url, index) => {
+    // The cover may be a video (existing behaviour); additional items must be photos.
+    const ok = index === 0 && url === single ? /^data:(image|video)\//i.test(url) : /^data:image\/(jpeg|jpg|png|webp)/i.test(url);
+    if (!ok || url.length > (index === 0 && url === single ? 12_000_000 : MAX_PHOTO_CHARS)) {
+      throw Object.assign(new Error('Choose JPEG, PNG or WEBP photos under 6 MB each.'), { code: 'INVALID_PHOTOS' });
+    }
+  });
+  return list;
+}
+
+/** Stores each photo as case media. Returns the stored rows. */
+export async function storeFixeraCasePhotos(pool, { dataUrls = [], ...rest }) {
+  const stored = [];
+  for (const dataUrl of dataUrls.slice(0, MAX_CASE_PHOTOS)) {
+    stored.push(await storeFixeraCaseMedia(pool, { ...rest, dataUrl }));
+  }
+  return stored.filter(Boolean);
+}
+
+/**
+ * The most recent photos attached to a case, oldest first, for the AI (images only).
+ * Falls back to the cover image when the case has no media rows (older cases).
+ */
+export async function listFixeraCaseImages(pool, { caseType, caseId, coverDataUrl = null, limit = MAX_CASE_PHOTOS }) {
+  const column = caseType === 'managed_job' ? 'job_id' : 'pending_service_request_id';
+  let urls = [];
+  try {
+    const { rows } = await pool.query(
+      `SELECT data_url FROM media_objects
+        WHERE kind='fixera_repair_case' AND ${column}=$1 AND content_type LIKE 'image/%' AND data_url IS NOT NULL
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2`,
+      [caseId, Math.min(Math.max(1, limit), MAX_CASE_PHOTOS)]
+    );
+    urls = rows.map((r) => r.data_url).reverse();
+  } catch (err) {
+    console.warn('[fixera] case photos unavailable', err?.code || err?.message);
+  }
+  if (!urls.length && typeof coverDataUrl === 'string' && coverDataUrl.startsWith('data:image/')) urls = [coverDataUrl];
+  return urls;
+}
+

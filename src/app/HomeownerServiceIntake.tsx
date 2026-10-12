@@ -147,6 +147,11 @@ type Props = {
   preferHire?: boolean;
   onClearMedia?: () => void;
   draftSavedAt?: string | null;
+  /** Photos after the first one (the first is mediaDataUrl). */
+  additionalPhotos?: string[];
+  onAddPhotos?: (files: File[]) => void | Promise<void>;
+  onRemovePhoto?: (index: number) => void;
+  maxPhotos?: number;
 };
 
 function startVoiceInput(
@@ -273,10 +278,18 @@ export default function HomeownerServiceIntake(props: Props) {
     preferHire,
     onClearMedia,
     draftSavedAt,
+    additionalPhotos = [],
+    onAddPhotos,
+    onRemovePhoto,
+    maxPhotos = 1,
   } = props;
+  const photoCount = (mediaDataUrl ? 1 : 0) + additionalPhotos.length;
+  const canAddPhotos = Boolean(onAddPhotos) && mediaType !== "video" && photoCount < maxPhotos;
+  const photoLimitReached = photoCount >= maxPhotos;
 
   const isMobile = useIsMobile();
   const cameraRef = useRef<HTMLInputElement | null>(null);
+  const replaceRef = useRef<HTMLInputElement | null>(null);
   const [uploadState, setUploadState] = useState<"idle" | "adding" | "added">("idle");
   const [previewOpen, setPreviewOpen] = useState(false);
   const [photoConfirmed, setPhotoConfirmed] = useState(false);
@@ -296,6 +309,35 @@ export default function HomeownerServiceIntake(props: Props) {
     setUploadState("added");
     setPhotoConfirmed(false);
   }, [mediaDataUrl]);
+
+  async function addMediaFiles(files: File[]) {
+    if (!files.length) return;
+    if (!mediaDataUrl || !onAddPhotos) {
+      await addMedia(files[0]);
+      const rest = files.slice(1);
+      if (rest.length && onAddPhotos) {
+        try {
+          await onAddPhotos(rest);
+        } catch (e) {
+          setError(e instanceof Error ? e.message : "Some photos could not be added.");
+        }
+      }
+      return;
+    }
+    if (photoLimitReached) {
+      setError(`You can add up to ${maxPhotos} photos.`);
+      return;
+    }
+    setError(null);
+    setUploadState("adding");
+    try {
+      await onAddPhotos(files);
+      setUploadState("added");
+    } catch (e) {
+      setUploadState("added");
+      setError(e instanceof Error ? e.message : "This photo could not be prepared. Choose a supported JPG, PNG, or WEBP and try again.");
+    }
+  }
 
   async function addMedia(file: File | null) {
     if (!file) return;
@@ -435,21 +477,26 @@ export default function HomeownerServiceIntake(props: Props) {
             {voiceListening ? "Listening…" : "Speak"}
           </button>
           <div className="space-y-2">
-            <p className="text-sm font-semibold">Add a photo</p>
-            <p className="text-sm text-muted-foreground">Help us understand what&apos;s happening.</p>
+            <p className="text-sm font-semibold">{maxPhotos > 1 ? `Add photos (up to ${maxPhotos})` : "Add a photo"}</p>
+            <p className="text-sm text-muted-foreground">
+              {maxPhotos > 1
+                ? "A close-up, a wider shot and any model label help Fixera see what's happening."
+                : "Help us understand what's happening."}
+            </p>
             <div className="grid gap-2 sm:grid-cols-2">
-              <button type="button" title="Take Photo" onClick={() => cameraRef.current?.click()} className="min-h-16 rounded-xl border border-dashed border-primary/40 bg-primary/5 px-3 py-3 text-sm font-semibold">
+              <button type="button" title="Take Photo" disabled={photoLimitReached} onClick={() => cameraRef.current?.click()} className="min-h-16 rounded-xl border border-dashed border-primary/40 bg-primary/5 px-3 py-3 text-sm font-semibold disabled:opacity-50">
                 <Camera className="mx-auto mb-1 h-5 w-5 text-primary" />
                 Take Photo
               </button>
-              <button type="button" title="Upload Photo" onClick={() => fileRef.current?.click()} className="min-h-16 rounded-xl border border-dashed border-border px-3 py-3 text-sm font-semibold">
+              <button type="button" title="Upload Photo" disabled={photoLimitReached} onClick={() => fileRef.current?.click()} className="min-h-16 rounded-xl border border-dashed border-border px-3 py-3 text-sm font-semibold disabled:opacity-50">
                 <ImagePlus className="mx-auto mb-1 h-5 w-5 text-primary" />
-                Upload Photo
+                {maxPhotos > 1 ? "Upload Photos" : "Upload Photo"}
               </button>
             </div>
           </div>
-          <input ref={cameraRef} type="file" accept="image/*" capture="environment" aria-label="Take a photo with the camera" className="sr-only" onChange={(e) => { void addMedia(e.target.files?.[0] || null); e.currentTarget.value = ""; }} />
-          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" aria-label="Choose a photo from this device" className="sr-only" onChange={(e) => { void addMedia(e.target.files?.[0] || null); e.currentTarget.value = ""; }} />
+          <input ref={cameraRef} type="file" accept="image/*" capture="environment" aria-label="Take a photo with the camera" className="sr-only" onChange={(e) => { void addMediaFiles(Array.from(e.target.files || []).slice(0, 1)); e.currentTarget.value = ""; }} />
+          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" multiple={maxPhotos > 1} aria-label="Choose photos from this device" className="sr-only" onChange={(e) => { void addMediaFiles(Array.from(e.target.files || [])); e.currentTarget.value = ""; }} />
+          <input ref={replaceRef} type="file" accept="image/jpeg,image/png,image/webp" aria-label="Replace the first photo" className="sr-only" onChange={(e) => { void addMedia(e.target.files?.[0] || null); e.currentTarget.value = ""; }} />
           {uploadState === "adding" ? <p className="text-sm text-muted-foreground">Adding photo…</p> : null}
           {mediaDataUrl ? (
             <div className="rounded-xl border border-border bg-muted/20 p-3 motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95">
@@ -459,7 +506,7 @@ export default function HomeownerServiceIntake(props: Props) {
                   <button type="button" onClick={() => setPreviewOpen(true)} className="text-xs font-semibold text-primary">
                     Preview and confirm
                   </button>
-                  <button type="button" onClick={() => fileRef.current?.click()} className="text-xs font-semibold">
+                  <button type="button" onClick={() => replaceRef.current?.click()} className="text-xs font-semibold">
                     Replace
                   </button>
                   {onClearMedia ? (
@@ -476,6 +523,35 @@ export default function HomeownerServiceIntake(props: Props) {
                   <span className="flex min-h-24 items-center justify-center rounded-xl border text-sm font-semibold">Video attached</span>
                 ) : null}
               </button>
+              {additionalPhotos.length ? (
+                <div className="mt-2 grid grid-cols-4 gap-2">
+                  {additionalPhotos.map((url, index) => (
+                    <div key={`${index}-${url.length}`} className="relative">
+                      <img src={url} alt={`Issue photo ${index + 2}`} className="h-16 w-full rounded-lg border object-cover" />
+                      {onRemovePhoto ? (
+                        <button
+                          type="button"
+                          aria-label={`Remove photo ${index + 2}`}
+                          onClick={() => onRemovePhoto(index)}
+                          className="absolute right-1 top-1 rounded-full bg-black/60 p-0.5 text-white"
+                        >
+                          <X size={12} />
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {maxPhotos > 1 ? (
+                <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                  <span>{photoCount} of {maxPhotos} photos</span>
+                  {canAddPhotos ? (
+                    <button type="button" onClick={() => fileRef.current?.click()} className="font-semibold text-primary">
+                      Add another photo
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : null}
           {previewOpen && mediaDataUrl ? (

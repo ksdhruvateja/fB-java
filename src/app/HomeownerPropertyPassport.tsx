@@ -914,6 +914,13 @@ export default function HomeownerPropertyPassport({
                 <p className="text-xs font-semibold uppercase text-muted-foreground">{m.dueDate || "Upcoming"}</p>
                 <p className="font-semibold">{m.label}</p>
                 {m.system ? <p className="text-xs text-muted-foreground">{m.system}</p> : null}
+                {m.reason ? <p className="mt-1 text-xs text-muted-foreground">{m.reason}</p> : null}
+                {m.issue ? (
+                  <p className="text-xs text-muted-foreground">
+                    Related repair: {m.issue}
+                    {m.recurrenceDays ? ` · repeats every ${m.recurrenceDays} days` : ""}
+                  </p>
+                ) : null}
               </div>
             ))
           )}

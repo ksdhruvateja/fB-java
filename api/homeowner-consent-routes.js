@@ -130,11 +130,19 @@ export function registerHomeownerConsentRoutes(app, { pool, requireAuth, require
       if (actionKey === 'DIY_START') {
         if (jobId != null && Number.isFinite(jobId)) {
           const { rows: jobs } = await pool.query(
-            `SELECT diy_risk_level, ai_assessment, description FROM managed_jobs WHERE id=$1`,
+            `SELECT diy_risk_level, ai_assessment, description, completion_report FROM managed_jobs WHERE id=$1`,
             [jobId]
           );
           const job = jobs[0];
           if (job) {
+            const { diyGuidanceUnlocked, SAFETY_CONFIRMATION_REQUIRED } = await import('./fixera/safety-confirmation.js');
+            if (!diyGuidanceUnlocked(job.ai_assessment, job.completion_report)) {
+              return res.status(409).json({
+                ok: false,
+                code: SAFETY_CONFIRMATION_REQUIRED,
+                message: 'A safety concern was found. Review it and confirm before starting DIY.',
+              });
+            }
             const { classifyDiyRiskLevel } = await import('./diy-safety.js');
             const assessment =
               typeof job.ai_assessment === 'string' ? JSON.parse(job.ai_assessment) : job.ai_assessment;

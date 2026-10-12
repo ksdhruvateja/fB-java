@@ -576,13 +576,10 @@ export function registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin
           return {};
         }
       })();
-      const sanitized = items.slice(0, 100).map((m) => ({
-        label: String(m.label || '').slice(0, 120),
-        dueDate: m.dueDate ? String(m.dueDate).slice(0, 20) : '',
-        system: m.system ? String(m.system).slice(0, 40) : undefined,
-        completed: Boolean(m.completed),
-        skipped: Boolean(m.skipped),
-      }));
+      // Keeps the repair link (issue, reason, recurrence) of Fixera items and schedules the next
+      // occurrence when a recurring item is completed.
+      const { sanitizeMaintenanceUpdate } = await import('./fixera/maintenance-reminders.js');
+      const sanitized = sanitizeMaintenanceUpdate(health.maintenance, items);
       health.maintenance = sanitized;
       await pool.query(`UPDATE properties SET health_profile=$1 WHERE id=$2`, [
         JSON.stringify(health),

@@ -31,8 +31,8 @@ import { createFixeraEngineProvider, ENGINE_PROVIDER_ID } from './fixa/providers
 import { evaluateRepairAssessment } from './fixa/evaluator/responseEvaluator.js';
 
 import {
-  classifyDiyRiskLevel,
-  stripDangerousGuidanceFromAssessment,
+  evaluateDiySafety,
+  enforceGuardrailsOnText,
   guidancePolicyForRisk,
 } from './diy-safety.js';
 
@@ -51,7 +51,10 @@ const AI_MAX_IMAGE_CHARS = Number(
 const HOMEOWNER_AI_ERROR =
   "We couldn't complete the assessment right now. Please try again.";
 
-export const FIXERA_PROMPT_VERSION = 'fixera-repair-v3';
+export const FIXERA_PROMPT_VERSION = 'fixera-repair-v4';
+
+/** Photos sent to the model per assessment (first upload or follow-up). */
+export const FIXERA_MAX_PHOTOS = 5;
 
 const CHAT_AI_ERROR =
   "We couldn't complete that reply right now. Please try again.";
@@ -201,16 +204,17 @@ function prepareImageForAi(imageDataUrl) {
 export const STRUCTURED_PROMPT = `
 You are an experienced home-repair technician guiding a homeowner remotely.
 
-Inspect any attached photo carefully.
+Inspect every attached photo carefully (up to 5, labelled Photo 1..N).
 
-If a photo is attached, the photo must meaningfully affect
-the assessment. Do not treat it as decoration.
+If photos are attached, they must meaningfully affect
+the assessment. Do not treat them as decoration.
 
 Return ONLY valid JSON.
 
 Do NOT return markdown.
 
-Do NOT return prices or dollar amounts.
+Do NOT return labor prices, service prices or totals.
+The only dollar amounts allowed are rough per-part price ranges in materials_needed.
 
 Use this exact schema:
 
@@ -222,6 +226,9 @@ Use this exact schema:
   "recommended_trade": "licensed_plumber|electrician|hvac_tech|painter|roofer|flooring_tech|carpenter|handyman",
   "professional_required": true,
   "safe_diy_allowed": false,
+  "diy_safety_rationale": "one sentence: why DIY is or is not reasonable here, naming the actual risk",
+  "risk_factors": [{"code":"mains_electrical|gas|refrigerant_sealed_system|working_at_height|structural|water_near_electrical|open_flame|pressurized_hot_water|hazardous_material|chemical|sanitation|other","severity":"low|medium|high|critical","evidence":"what in the photos or description shows this"}],
+  "photo_assessment": {"photos_received": 0, "usable_photo_count": 0, "evidence_sufficient": true, "issues": ["blurry|too_dark|too_far|wrong_area|obstructed|label_unreadable|no_photo"], "photo_requests": ["specific photo that would settle the diagnosis"]},
   "immediate_safety_steps": [],
   "visual_findings": [],
   "observed_evidence": [],
@@ -237,7 +244,7 @@ Use this exact schema:
   "questions_needed": [],
   "diy_difficulty": "easy|moderate|hard|blocked",
   "tools_required": [{"name":"","required":true,"reason":""}],
-  "materials_needed": [{"name":"","required":true,"reason":"","exact_part_confirmed":false,"information_needed":[]}],
+  "materials_needed": [{"name":"","required":true,"reason":"","exact_part_confirmed":false,"information_needed":[],"quantity":1,"estimated_cost_low_usd":0,"estimated_cost_high_usd":0}],
   "preparation_steps": [],
   "diy_guide_steps": [
     {
@@ -261,12 +268,16 @@ Use this exact schema:
   "completion_checks": [],
   "diy_steps": [],
   "stop_conditions": [],
+  "follow_up_maintenance": [{"task":"","interval_days":90,"system":"hvac|water_heater|roof|plumbing|electrical|appliance|exterior|other","reason":"why this prevents the same issue"}],
   "disclaimer": "AI-assisted assessment, not a professional diagnosis."
 }
 
 Rules:
 
-1. Never invent prices.
+1. Never invent labor or service prices. For each part in materials_needed, give
+   estimated_cost_low_usd and estimated_cost_high_usd: a rough typical US retail range
+   per unit for a common, generic version of that part (not a brand). Use 0 for both
+   when you cannot estimate it.
 
 2. Never invent damage, brands, wiring, leaks,
    measurements, materials, or causes.
@@ -300,20 +311,34 @@ Rules:
 9. Use the shutoff, isolation, or power-off step first
    when appropriate.
 
-10. Set safe_diy_allowed=false for:
-   - gas
-   - major electrical work
-   - flooding
-   - sewage
-   - fire
-   - smoke
-   - carbon monoxide
-   - structural damage
-   - dangerous roof work
-   - asbestos
-   - lead hazards
-   - hazardous materials
-   - low confidence situations
+10. Judge DIY on the actual risk, not the category. HVAC, electrical
+   and roofing problems are not automatically professional-only: a
+   tripped GFCI, a clogged AC filter or condensate line, or containing
+   a roof leak from inside can be reasonable DIY. List every real risk
+   in risk_factors with an honest severity:
+   - critical = an active hazard now (gas smell, fire, smoke, CO alarm,
+     sparking, water on live electrical, sagging ceiling, sewage backup)
+   - high = only a professional should do the repair itself
+   - medium = DIY is possible only within strict safety limits
+   - low = ordinary care
+   Set safe_diy_allowed=false only when no part of the repair is
+   reasonable for a homeowner. Never include steps for: working inside
+   an electrical panel or on energized circuits, gas pipe or fitting
+   work, refrigerant or capacitor work, walking on a roof, cutting
+   structural framing, torch work, disturbing suspected asbestos or
+   lead paint, or bypassing any safety device. FixBridge removes such
+   steps.
+
+10b. Photo evidence: fill photo_assessment honestly. If the photos are
+   blurry, dark, too far away, show the wrong area, or are missing when
+   the diagnosis depends on seeing something, set
+   evidence_sufficient=false, keep diy steps empty, and list up to 5
+   specific photo_requests (what to photograph, from where, with what
+   lighting). Do not guess a repair from unclear photos.
+
+10c. follow_up_maintenance: up to 4 recurring tasks that prevent this
+   specific issue from returning (for example "replace HVAC filter",
+   every 90 days). Leave empty when none apply.
 
 11. For dangerous conditions:
    professional_required=true.
@@ -387,8 +412,89 @@ function normalizeResources(value) {
       reason: asString(item.reason),
       ...(item.exact_part_confirmed != null ? { exact_part_confirmed: item.exact_part_confirmed === true } : {}),
       ...(Array.isArray(item.information_needed) ? { information_needed: asStringArray(item.information_needed) } : {}),
+      ...partCostFields(item),
     };
   }).filter(Boolean);
+}
+
+const PART_COST_MAX_USD = 2000;
+
+/** Rough per-part price range from the model, clamped. Omitted when the model gave none. */
+function partCostFields(item) {
+  const low = Number(item.estimated_cost_low_usd ?? item.cost_low ?? item.estimatedCostLow);
+  const high = Number(item.estimated_cost_high_usd ?? item.cost_high ?? item.estimatedCostHigh);
+  if (!Number.isFinite(low) || !Number.isFinite(high) || high <= 0) return {};
+  const lo = Math.max(0, Math.min(low, high, PART_COST_MAX_USD));
+  const hi = Math.max(lo, Math.min(Math.max(low, high), PART_COST_MAX_USD));
+  const qty = Math.round(Number(item.quantity));
+  return {
+    quantity: Number.isFinite(qty) && qty >= 1 ? Math.min(qty, 20) : 1,
+    estimated_cost_low_usd: Math.round(lo * 100) / 100,
+    estimated_cost_high_usd: Math.round(hi * 100) / 100,
+  };
+}
+
+export const DIY_PARTS_COST_DISCLAIMER =
+  'Rough estimate of parts only, based on typical retail prices. Actual cost varies with the exact issue, the parts and materials you choose, brand, and your location. Labor, tools you may need to buy, taxes and shipping are not included.';
+
+/** Totals the per-part ranges of the parts that survived the safety rules. */
+export function computeDiyPartsCostEstimate(materials) {
+  const items = (Array.isArray(materials) ? materials : [])
+    .filter((m) => m && Number.isFinite(m.estimated_cost_high_usd) && m.estimated_cost_high_usd > 0)
+    .map((m) => ({
+      name: m.name,
+      quantity: m.quantity || 1,
+      required: m.required !== false,
+      low: Math.round(m.estimated_cost_low_usd * (m.quantity || 1)),
+      high: Math.round(m.estimated_cost_high_usd * (m.quantity || 1)),
+    }));
+  if (!items.length) return null;
+  const required = items.filter((i) => i.required);
+  const counted = required.length ? required : items;
+  const low = counted.reduce((sum, i) => sum + i.low, 0);
+  const high = counted.reduce((sum, i) => sum + i.high, 0);
+  const unpriced = (Array.isArray(materials) ? materials : []).filter((m) => m && !(m.estimated_cost_high_usd > 0)).map((m) => m.name);
+  return {
+    currency: 'USD',
+    low,
+    high: Math.max(low, high),
+    items,
+    unpriced_items: unpriced.slice(0, 10),
+    includes_optional: !required.length,
+    basis: 'rough_ai_estimate',
+    disclaimer: DIY_PARTS_COST_DISCLAIMER,
+  };
+}
+
+function normalizePhotoAssessment(value) {
+  if (!value || typeof value !== 'object') return null;
+  const n = (v) => (Number.isFinite(Number(v)) ? Math.max(0, Math.min(FIXERA_MAX_PHOTOS, Math.round(Number(v)))) : null);
+  return {
+    photos_received: n(value.photos_received),
+    usable_photo_count: n(value.usable_photo_count),
+    evidence_sufficient: typeof value.evidence_sufficient === 'boolean' ? value.evidence_sufficient : null,
+    issues: asStringArray(value.issues).map((i) => i.slice(0, 60)).slice(0, 8),
+    photo_requests: asStringArray(value.photo_requests).map((i) => i.slice(0, 240)).slice(0, FIXERA_MAX_PHOTOS),
+  };
+}
+
+function normalizeFollowUpMaintenance(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const task = asString(item.task || item.label).slice(0, 120);
+      const days = Math.round(Number(item.interval_days));
+      if (!task || !Number.isFinite(days)) return null;
+      return {
+        task,
+        interval_days: Math.max(7, Math.min(days, 3650)),
+        system: asString(item.system, 'other').toLowerCase().replace(/[^a-z_]/g, '').slice(0, 30) || 'other',
+        reason: asString(item.reason).slice(0, 240),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 4);
 }
 
 function extractMessageText(message) {
@@ -709,9 +815,13 @@ function userPromptText({
   category,
   description,
   imageDataUrl,
+  imageDataUrls,
   mode = 'summary',
   locationContext,
 }) {
+  const photoCount = Array.isArray(imageDataUrls) && imageDataUrls.length
+    ? imageDataUrls.length
+    : imageDataUrl ? 1 : 0;
   const prompt =
     mode === 'detail'
       ? DETAIL_PROMPT
@@ -728,8 +838,8 @@ Use relevant equipment and prior service information only for this authorized pr
 Respect source labels such as USER_REPORTED, TECHNICIAN_REPORTED, and CUSTOMER_CONFIRMED.
 Do not treat an AI inference or an unconfirmed service report as a verified fact.
 The current description and image take priority over a prior diagnosis; explain conflicts as uncertain.
-Use market information only for complexity and urgency.
-Do NOT output dollar amounts.
+Use market information only for complexity, urgency and rough part price ranges.
+Do NOT output labor or service prices.
 `
       : '';
 
@@ -741,10 +851,10 @@ ${category || 'others'}
 Homeowner description:
 ${description || 'No description provided'}
 
-Photo attached:
-${imageDataUrl
-      ? 'YES — analyze the image carefully'
-      : 'NO — use description only'
+Photos attached:
+${photoCount
+      ? `${photoCount} — analyze each photo carefully and report photo quality in photo_assessment`
+      : 'NONE — use the description only; request photos in photo_assessment if the diagnosis depends on them'
     }
 ${locationBlock}`.trim();
 }
@@ -753,9 +863,71 @@ ${locationBlock}`.trim();
 /* DIY safety                                                                 */
 /* -------------------------------------------------------------------------- */
 
+const DEFAULT_IMMEDIATE_SAFETY_STEPS = [
+  'Do not use switches or open flame if gas is suspected.',
+  'Leave the area if a leak, fire, or immediate danger is present.',
+  'Shut off utilities only if you can do so safely.',
+  'Contact emergency services or the appropriate utility when appropriate.',
+  'Request a licensed professional through FixBridge instead of attempting the repair yourself.',
+];
+
+const PHOTO_ISSUE_TEXT = {
+  blurry: 'Some photos are blurry.',
+  too_dark: 'Some photos are too dark.',
+  too_far: 'The problem area is too far away to see detail.',
+  wrong_area: 'The photos do not show the problem area.',
+  obstructed: 'The problem area is blocked from view.',
+  label_unreadable: 'The model/serial label cannot be read.',
+  no_photo: 'No photo was provided.',
+};
+
+/**
+ * Decides whether the photos and description are enough for a repair plan. When they are not,
+ * Fixera asks for clearer photos (up to FIXERA_MAX_PHOTOS) before giving DIY guidance, and
+ * Hire a Professional stays available.
+ */
+export function evaluateAssessmentEvidence(assessment, { imageCount = 0 } = {}) {
+  const pa = assessment?.photo_assessment || null;
+  const confidence = typeof assessment?.confidence === 'number' ? assessment.confidence : 0.5;
+  const reasons = [];
+  if (imageCount > 0 && pa && pa.usable_photo_count === 0) reasons.push('photos_unusable');
+  if (pa && pa.evidence_sufficient === false) reasons.push('more_evidence_needed');
+  if (confidence < 0.4) reasons.push('low_confidence');
+  if (assessment?.category_conflict === true) reasons.push('category_conflict');
+  const issues = (pa?.issues || []).filter((i) => i !== 'no_photo' || imageCount === 0);
+  let requests = pa?.photo_requests?.length ? pa.photo_requests : [];
+  if (reasons.length && !requests.length) {
+    requests = imageCount
+      ? ['A clear, well-lit close-up of the problem area', 'A wider photo showing where it is in the room', 'The model/serial label of the equipment, if there is one']
+      : ['A clear, well-lit close-up of the problem area', 'A wider photo showing where it is in the room'];
+  }
+  return {
+    sufficient: reasons.length === 0,
+    reasons,
+    image_count: imageCount,
+    usable_photo_count: pa?.usable_photo_count ?? null,
+    photo_issues: issues,
+    photo_issue_text: issues.map((i) => PHOTO_ISSUE_TEXT[i] || i),
+    photo_requests: requests.slice(0, FIXERA_MAX_PHOTOS),
+    max_photos: FIXERA_MAX_PHOTOS,
+    message: reasons.length
+      ? reasons.length === 1 && reasons[0] === 'category_conflict'
+        ? 'Fixera needs you to confirm what kind of problem this is before it gives a repair plan. You can also add clearer photos, or hire a professional.'
+        : imageCount
+        ? 'Fixera cannot see enough in these photos to give a safe repair plan. Please upload clearer photos, or hire a professional.'
+        : 'Fixera needs photos of the problem to give a safe repair plan. Please upload photos, or hire a professional.'
+      : null,
+  };
+}
+
+/**
+ * Deterministic safety and evidence rules applied to every structured assessment. The risk
+ * decision comes from evaluateDiySafety (actual risk factors and guardrails, not the category).
+ */
 export function applyDiySafetyRules(
   assessment,
-  description = ''
+  description = '',
+  { imageCount = 0 } = {}
 ) {
   if (
     !assessment ||
@@ -764,122 +936,51 @@ export function applyDiySafetyRules(
     return assessment;
   }
 
-  const text =
-    `${assessment.summary || ''} ` +
-    `${description || ''} ` +
-    `${asStringArray(
-      assessment.visual_findings
-    ).join(' ')}`;
+  // A category conflict is an evidence gap, not a safety finding: the conflict check blocks
+  // DIY for that reason, so the safety evaluation must not read it as "professional only".
+  const evaluated = evaluateDiySafety(
+    assessment.category_conflict === true
+      ? { ...assessment, safe_diy_allowed: true, diy_difficulty: assessment.diy_difficulty === 'blocked' ? undefined : assessment.diy_difficulty }
+      : assessment,
+    { description }
+  );
+  const evidence = evaluateAssessmentEvidence(assessment, { imageCount });
 
-  const classified =
-    classifyDiyRiskLevel(
-      text,
-      assessment
-    );
-
-  const level =
-    classified?.level ||
-    'green';
-
-  if (level === 'red') {
-    const next = {
-      ...assessment,
-
-      diy_risk_level:
-        'red',
-
-      diy_risk_reasons:
-        classified?.reasons || [],
-
-      diy_risk_reason_codes:
-        classified?.reasonCodes || [],
-
-      safe_diy_allowed:
-        false,
-
-      professional_required:
-        true,
-
-      diy_difficulty:
-        'blocked',
-
-      diy_steps:
-        [],
-
-      diy_guide_steps:
-        [],
-
-      tools_required:
-        [],
-
-      materials_needed:
-        [],
-
-      immediate_safety_steps:
-        assessment
-          .immediate_safety_steps
-          ?.length
-          ? assessment.immediate_safety_steps
-          : [
-            'Do not use switches or open flame if gas is suspected.',
-            'Leave the area if a leak, fire, or immediate danger is present.',
-            'Shut off utilities only if you can do so safely.',
-            'Contact emergency services or the appropriate utility when appropriate.',
-            'Request a licensed professional through FixBridge instead of attempting the repair yourself.',
-          ],
+  if (evaluated.diy_risk_level === 'red') {
+    return {
+      ...evaluated,
+      assessment_stage: 'complete',
+      evidence_check: { ...evidence, sufficient: true, reasons: [], message: null },
+      diy_parts_cost_estimate: null,
+      immediate_safety_steps: evaluated.immediate_safety_steps?.length
+        ? evaluated.immediate_safety_steps
+        : evaluated.diy_safety?.decision === 'emergency'
+          ? DEFAULT_IMMEDIATE_SAFETY_STEPS
+          : [...(evaluated.diy_safety?.allowed_actions || []), 'Request a professional through FixBridge for the repair itself.'].slice(0, 6),
     };
-
-    return stripDangerousGuidanceFromAssessment(
-      next,
-      'red'
-    );
   }
 
-  if (level === 'yellow') {
+  if (!evidence.sufficient) {
+    // Not a safety block: Fixera needs better evidence before it gives a repair plan.
     return {
-      ...assessment,
-
-      diy_risk_level:
-        'yellow',
-
-      diy_risk_reasons:
-        classified?.reasons || [],
-
-      diy_risk_reason_codes:
-        classified?.reasonCodes || [],
-
-      safe_diy_allowed:
-        true,
-
-      professional_required:
-        assessment.professional_required !==
-        false,
-
-      diy_difficulty:
-        assessment.diy_difficulty ||
-        'moderate',
+      ...evaluated,
+      assessment_stage: 'needs_more_info',
+      evidence_check: evidence,
+      safe_diy_allowed: false,
+      diy_steps: [],
+      diy_guide_steps: [],
+      // Parts stay listed (with the information needed to identify them); no cost until confirmed.
+      diy_parts_cost_estimate: null,
+      questions_needed: [...new Set([...(evaluated.questions_needed || [])])],
+      diy_safety: { ...evaluated.diy_safety, pending_evidence: true, requires_confirmation: false },
     };
   }
 
   return {
-    ...assessment,
-
-    diy_risk_level:
-      'green',
-
-    diy_risk_reasons:
-      [],
-
-    diy_risk_reason_codes:
-      [],
-
-    safe_diy_allowed:
-      assessment.safe_diy_allowed !==
-      false,
-
-    diy_difficulty:
-      assessment.diy_difficulty ||
-      'easy',
+    ...evaluated,
+    assessment_stage: 'complete',
+    evidence_check: evidence,
+    diy_parts_cost_estimate: computeDiyPartsCostEstimate(evaluated.materials_needed),
   };
 }
 
@@ -1142,6 +1243,18 @@ export function parseStructuredAssessment(
         'boolean'
         ? parsed.safe_diy_allowed
         : false,
+
+    diy_safety_rationale:
+      asString(parsed.diy_safety_rationale).slice(0, 300),
+
+    risk_factors:
+      Array.isArray(parsed.risk_factors) ? parsed.risk_factors.slice(0, 12) : [],
+
+    photo_assessment:
+      normalizePhotoAssessment(parsed.photo_assessment),
+
+    follow_up_maintenance:
+      normalizeFollowUpMaintenance(parsed.follow_up_maintenance),
 
     immediate_safety_steps:
       asStringArray(
@@ -1816,23 +1929,25 @@ async function analyzeWithProvider(
     },
   ];
 
-  if (
-    typeof input.imageDataUrl ===
-    'string' &&
-    input.imageDataUrl.startsWith(
-      'data:'
-    )
-  ) {
+  const images = (Array.isArray(input.imageDataUrls) && input.imageDataUrls.length
+    ? input.imageDataUrls
+    : [input.imageDataUrl])
+    .filter((url) => typeof url === 'string' && url.startsWith('data:'))
+    .slice(0, FIXERA_MAX_PHOTOS);
+
+  images.forEach((url, index) => {
+    if (images.length > 1) {
+      content.push({ type: 'text', text: `Photo ${index + 1} of ${images.length}:` });
+    }
     content.push({
       type:
         'image_url',
 
       image_url: {
-        url:
-          input.imageDataUrl,
+        url,
       },
     });
-  }
+  });
 
   const messages = [
     {
@@ -2320,24 +2435,29 @@ export async function analyzeRepair(
     };
   }
 
-  const prepared =
-    prepareImageForAi(
-      input.imageDataUrl
-    );
+  const sourceImages = [
+    ...(Array.isArray(input.imageDataUrls) ? input.imageDataUrls : []),
+    input.imageDataUrl,
+  ].filter((url, index, all) => typeof url === 'string' && url && all.indexOf(url) === index)
+    .slice(0, FIXERA_MAX_PHOTOS);
+  const preparedImages = sourceImages.map((url) => prepareImageForAi(url));
+  const sentImages = preparedImages.map((p) => p.imageDataUrl).filter(Boolean);
+  const droppedReasons = preparedImages.filter((p) => !p.imageDataUrl).map((p) => p.reason || 'it was unavailable');
 
   const payload = {
     ...input,
 
     imageDataUrl:
-      prepared.imageDataUrl,
+      sentImages[0] || null,
+
+    imageDataUrls:
+      sentImages,
 
     description:
-      prepared.dropped
+      droppedReasons.length
         ? `${input.description || ''}
 
-(Note: the uploaded photo could not be sent to the AI because ${prepared.reason ||
-        'it was unavailable'
-        }. Do not claim you inspected the photo.)`
+(Note: ${droppedReasons.length} uploaded photo${droppedReasons.length === 1 ? '' : 's'} could not be sent to the AI (${[...new Set(droppedReasons)].join('; ')}). Do not claim you inspected ${droppedReasons.length === 1 ? 'it' : 'them'}.)`
         : input.description,
 
     mode:
@@ -2476,6 +2596,18 @@ export async function analyzeRepairStructured(
           assessment.safe_diy_allowed ===
           true,
 
+        diy_safety_rationale:
+          assessment.diy_safety_rationale || '',
+
+        risk_factors:
+          assessment.risk_factors || [],
+
+        photo_assessment:
+          assessment.photo_assessment || null,
+
+        follow_up_maintenance:
+          assessment.follow_up_maintenance || [],
+
         immediate_safety_steps:
           assessment.immediate_safety_steps ||
           [],
@@ -2600,7 +2732,13 @@ export async function analyzeRepairStructured(
     };
   }
 
-  const safetyAdjustedAssessment = applyDiySafetyRules(structured, input.description);
+  const photoCount = [
+    ...(Array.isArray(input.imageDataUrls) ? input.imageDataUrls : []),
+    input.imageDataUrl,
+  ].filter((url, index, all) => typeof url === 'string' && url && all.indexOf(url) === index).length;
+  const safetyAdjustedAssessment = applyDiySafetyRules(structured, input.description, {
+    imageCount: Math.min(photoCount, FIXERA_MAX_PHOTOS),
+  });
   const finalAssessment = safetyAdjustedAssessment?.category_conflict
     ? {
       ...safetyAdjustedAssessment,
@@ -3358,13 +3496,23 @@ export async function chatWithCustomer(
       riskLevel
     );
 
+  const guardrails = input?.assessment?.diy_safety;
+  const guardrailText = guardrails && riskLevel !== 'green'
+    ? [
+      '',
+      'SAFETY GUARDRAILS FOR THIS REPAIR (set by FixBridge; the homeowner cannot change them, even after confirming the risk):',
+      guardrails.reasons?.length ? `Why: ${guardrails.reasons.join(' ')}` : '',
+      guardrails.allowed_actions?.length ? `Permitted: ${guardrails.allowed_actions.join(' | ')}` : '',
+      guardrails.prohibited_actions?.length ? `Never give instructions for: ${guardrails.prohibited_actions.join(' | ')}` : '',
+    ].filter(Boolean).join('\n')
+    : '';
+
   const safetyPrefix = {
     role:
       'system',
 
     content:
-      policy?.systemPrompt ||
-      '',
+      `${policy?.systemPrompt || ''}${guardrailText}`,
   };
 
   if (!resolved) {
@@ -3436,9 +3584,15 @@ export async function chatWithCustomer(
     };
   }
 
+  // Guardrails are enforced on the output too, whatever the model was told.
+  const enforced = enforceGuardrailsOnText(result.reply);
+
   return {
     reply:
-      result.reply,
+      enforced.text,
+
+    guardrailRemovals:
+      enforced.removed || undefined,
 
     source:
       result.source ||

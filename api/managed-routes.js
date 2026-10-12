@@ -17,6 +17,15 @@ import {
 import { assertEmployeeAssignable } from './contractor-employees.js';
 import { HOMECARE_PLAN_REQUIRED, requireFixeraAiAccess, userHasFixeraAiAccess } from './fixera/entitlement.js';
 import {
+  SAFETY_CONFIRMATION_REQUIRED,
+  buildSafetyConfirmationRecord,
+  diyGuidanceUnlocked,
+  needsSafetyConfirmation,
+  withholdUnconfirmedGuidance,
+} from './fixera/safety-confirmation.js';
+import { recordDiySafetyEvent } from './diy-safety-events.js';
+import { sanitizeMaintenanceUpdate, scheduleFollowUpMaintenance } from './fixera/maintenance-reminders.js';
+import {
   buildProfessionalDispatchBreakdown,
   validateProfessionalDispatchPricingConfig,
   buildProfessionalRequestBetaSnapshot,
@@ -43,7 +52,7 @@ import {
   resolveFeatureEntitlement,
 } from './homecare-config.js';
 import { buildPropertyAIContext } from './property-ai-context.js';
-import { storeFixeraCaseMedia } from './fixera/case-media.js';
+import { storeFixeraCasePhotos, readCasePhotoList, listFixeraCaseImages } from './fixera/case-media.js';
 import { recordFixeraInteraction, persistFixeraInteraction } from './fixera/experience/store.js';
 import { retrieveGlobalKnowledge } from './fixa/knowledge/knowledgeWriter.js';
 import { appendAssessmentRevision } from './fixera/assessment-history.js';
@@ -573,8 +582,13 @@ function serializeJob(row, viewer) {
           diy_guide_steps: [],
           tools_required: [],
           materials_needed: [],
+          diy_parts_cost_estimate: null,
           safe_diy_allowed: false,
         };
+      }
+      if (role === 'homeowner' || (isOwner && role !== 'admin')) {
+        // Steps stay withheld until the homeowner confirms a detected safety concern.
+        return withholdUnconfirmedGuidance(a, row.completion_report);
       }
       return a;
     })(),
@@ -1155,10 +1169,17 @@ async function runManagedJobAssessment(pool, job, viewer) {
     jobId: recordId,
   });
 
+  const caseImages = await listFixeraCaseImages(pool, {
+    caseType: isPending ? 'pending_service_request' : 'managed_job',
+    caseId: recordId,
+    coverDataUrl: job.media_data_url,
+  });
+
   const result = await assessRepair({
     category: job.category,
     description: job.description,
-    imageDataUrl: job.media_data_url,
+    imageDataUrl: caseImages[0] || job.media_data_url,
+    imageDataUrls: caseImages,
     task: 'repair_assessment',
     jobId: recordId,
     homeownerId: job.homeowner_user_id,
@@ -2636,6 +2657,17 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     ]);
 
     try {
+      await scheduleFollowUpMaintenance(pool, {
+        job,
+        repairSummary: report?.summary || null,
+        completedAt,
+        source: 'PROFESSIONAL',
+      });
+    } catch (maintenanceError) {
+      console.warn('[completion] follow-up maintenance not scheduled', maintenanceError?.message);
+    }
+
+    try {
       const memorySource = report?.completedBy?.role === 'admin' ? 'admin' : 'contractor';
       await createMemorySuggestionFromJobCompletion(pool, job, report, systemKey, { memorySource });
     } catch (_e) {
@@ -3280,6 +3312,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (!owned[0] && req.authUser.role !== 'admin') {
         return res.status(404).json({ ok: false, message: 'Property not found.' });
       }
+      if (Array.isArray(healthProfile.maintenance)) {
+        // Keep the repair link and reminder state of Fixera maintenance items.
+        const { rows: current } = await pool.query(`SELECT health_profile FROM properties WHERE id=$1`, [propertyId]);
+        const previous = parseJson(current[0]?.health_profile)?.maintenance;
+        healthProfile.maintenance = sanitizeMaintenanceUpdate(previous, healthProfile.maintenance);
+      }
       const { rows } = await pool.query(
         `UPDATE properties SET
            health_profile=$1,
@@ -3398,6 +3436,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
   app.post('/api/public/jobs', async (req, res) => {
     try {
       const b = req.body || {};
+      let casePhotos;
+      try {
+        casePhotos = readCasePhotoList(b);
+      } catch (photoError) {
+        return res.status(400).json({ ok: false, code: photoError.code || 'INVALID_PHOTOS', message: photoError.message });
+      }
       const email = typeof b.email === 'string' ? b.email.trim() : '';
       const name = typeof b.contactName === 'string' ? b.contactName.trim() : '';
       const phone = typeof b.contactPhone === 'string' ? b.contactPhone.trim() : '';
@@ -3543,14 +3587,14 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const bookingId = formatBookingId(job.id, job.created_at);
       await pool.query(`UPDATE managed_jobs SET booking_id=$1 WHERE id=$2`, [bookingId, job.id]);
       job.booking_id = bookingId;
-      if (b.mediaDataUrl) {
+      if (casePhotos.length) {
         try {
-          await storeFixeraCaseMedia(pool, {
+          await storeFixeraCasePhotos(pool, {
             userId: user.id,
             caseType: 'managed_job',
             caseId: job.id,
             propertyId,
-            dataUrl: b.mediaDataUrl,
+            dataUrls: casePhotos,
           });
         } catch (mediaError) {
           console.error('[public guest media] case image is present on the job but media indexing failed', mediaError?.message || mediaError);
@@ -3655,6 +3699,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
 
       const b = req.body || {};
+      let casePhotos;
+      try {
+        casePhotos = readCasePhotoList(b);
+      } catch (photoError) {
+        return res.status(400).json({ ok: false, code: photoError.code || 'INVALID_PHOTOS', message: photoError.message });
+      }
 
       if (!b.description && !b.title) {
         return res.status(400).json({
@@ -4026,14 +4076,15 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         }
         let mediaObject = null;
         try {
-          mediaObject = await storeFixeraCaseMedia(pool, {
+          const storedPhotos = await storeFixeraCasePhotos(pool, {
             userId: req.authUser.id,
             caseType: 'pending_service_request',
             caseId: pending.id,
             propertyId: selectedProperty?.id || null,
             equipmentKey,
-            dataUrl: b.mediaDataUrl,
+            dataUrls: casePhotos,
           });
+          mediaObject = storedPhotos[0] || null;
         } catch (mediaError) {
           await pool.query(
             `DELETE FROM pending_service_requests WHERE id=$1 AND homeowner_user_id=$2`,
@@ -4177,14 +4228,15 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
       let mediaObject = null;
       try {
-        mediaObject = await storeFixeraCaseMedia(pool, {
+        const storedPhotos = await storeFixeraCasePhotos(pool, {
           userId: req.authUser.id,
           caseType: 'managed_job',
           caseId: job.id,
           propertyId: selectedProperty?.id || null,
           equipmentKey,
-          dataUrl: b.mediaDataUrl,
+          dataUrls: casePhotos,
         });
+        mediaObject = storedPhotos[0] || null;
       } catch (mediaError) {
         await pool.query(
           `DELETE FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2`,
@@ -4298,6 +4350,79 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
+  // Safety-concern popup: the homeowner either continues (with guardrail-limited guidance only)
+  // or chooses a professional. The decision is stored on the case and audited.
+  app.post('/api/managed/jobs/:id/safety-confirmation', requireAuth, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      if (!Number.isInteger(jobId) || jobId <= 0) {
+        return res.status(400).json({ ok: false, code: 'INVALID_JOB_ID', message: 'A valid repair case is required.' });
+      }
+      const { rows } = await pool.query(
+        `SELECT * FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2`,
+        [jobId, req.authUser.id]
+      );
+      const job = rows[0];
+      if (!job) return res.status(404).json({ ok: false, code: 'JOB_NOT_FOUND', message: 'Repair case not found.' });
+      const decision = String(req.body?.decision || '').trim().toLowerCase();
+      if (decision !== 'continue' && decision !== 'hire_professional') {
+        return res.status(400).json({ ok: false, code: 'INVALID_DECISION', message: 'Choose to continue or to hire a professional.' });
+      }
+      if (decision === 'continue' && !(await requireFixeraAiAccess(pool, req, res, { ownerUserId: job.homeowner_user_id }))) return;
+      const assessment = parseJsonSafe(job.ai_assessment, null);
+      if (!needsSafetyConfirmation(assessment)) {
+        return res.status(409).json({
+          ok: false,
+          code: 'SAFETY_CONFIRMATION_NOT_APPLICABLE',
+          message: 'This case has no safety concern to confirm, or DIY is not available for it.',
+        });
+      }
+      if (decision === 'continue' && req.body?.acknowledged !== true) {
+        return res.status(400).json({
+          ok: false,
+          code: 'ACKNOWLEDGEMENT_REQUIRED',
+          message: 'Confirm that you understand the safety concern before continuing.',
+        });
+      }
+      const record = buildSafetyConfirmationRecord(assessment, { decision, acknowledged: req.body?.acknowledged });
+      const report = parseJsonSafe(job.completion_report, {}) || {};
+      const fixeraDiy = report.fixeraDiy && typeof report.fixeraDiy === 'object' ? report.fixeraDiy : {};
+      const history = Array.isArray(fixeraDiy.safetyConfirmationHistory) ? fixeraDiy.safetyConfirmationHistory : [];
+      const nextReport = {
+        ...report,
+        fixeraDiy: {
+          ...fixeraDiy,
+          safetyConfirmation: record,
+          safetyConfirmationHistory: [...history, record].slice(-10),
+          ...(decision === 'hire_professional' ? { status: 'PROFESSIONAL_REQUESTED', outcome: 'PROFESSIONAL_REQUESTED' } : {}),
+          updatedAt: new Date().toISOString(),
+        },
+      };
+      const { rows: updated } = await pool.query(
+        `UPDATE managed_jobs SET completion_report=$1::jsonb, updated_at=NOW()
+          WHERE id=$2 AND homeowner_user_id=$3 RETURNING *`,
+        [JSON.stringify(nextReport), jobId, req.authUser.id]
+      );
+      try {
+        await recordDiySafetyEvent(pool, {
+          userId: req.authUser.id,
+          jobId,
+          eventType: decision === 'continue' ? 'safety_concern_confirmed' : 'safety_concern_hire_professional',
+          riskLevel: job.diy_risk_level || null,
+          riskReasonCodes: record.reasonCodes,
+          metadata: { confirmationKey: record.key },
+          req,
+        });
+      } catch (auditError) {
+        console.warn('[safety-confirmation] audit event failed', auditError?.message);
+      }
+      return res.json({ ok: true, decision, job: serializeJob(updated[0], req.authUser) });
+    } catch (e) {
+      console.error('[safety-confirmation] failed', { jobId: req.params.id, error: e?.message || String(e) });
+      return res.status(500).json({ ok: false, code: 'SAFETY_CONFIRMATION_FAILED', message: 'Could not save your choice.' });
+    }
+  });
+
   app.post('/api/managed/jobs/:id/fixera-diy', requireAuth, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
@@ -4324,6 +4449,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
       const assessment = parseJsonSafe(job.ai_assessment, {}) || {};
       const diySteps = Array.isArray(assessment.diy_steps) ? assessment.diy_steps : [];
+      if (event.startsWith('step_') && !diyGuidanceUnlocked(assessment, job.completion_report)) {
+        return res.status(409).json({
+          ok: false,
+          code: SAFETY_CONFIRMATION_REQUIRED,
+          message: 'A safety concern was found. Review it and confirm before starting the DIY steps.',
+        });
+      }
       if (event.startsWith('step_') && stepIndex >= diySteps.length) {
         return res.status(400).json({ ok: false, code: 'STEP_NOT_IN_ASSESSMENT', message: 'That repair step is not part of this assessment.' });
       }
@@ -4436,6 +4568,17 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           `UPDATE properties SET health_profile=$1::jsonb WHERE id=$2 AND owner_user_id=$3`,
           [JSON.stringify({ ...health, previousServices: updatedServices }), job.property_id, propertyAccess.owner_user_id]
         );
+        try {
+          await scheduleFollowUpMaintenance(pool, {
+            job,
+            assessment,
+            repairSummary: actualAction || 'Homeowner completed the guided repair steps.',
+            completedAt: new Date().toISOString(),
+            source: 'HOMEOWNER_DIY',
+          });
+        } catch (maintenanceError) {
+          console.warn('[fixera-diy] follow-up maintenance not scheduled', maintenanceError?.message);
+        }
       }
 
       return res.json({ ok: true, jobId, propertyId: job.property_id || null, event, outcome, completedStepIndexes });

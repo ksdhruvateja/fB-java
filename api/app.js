@@ -1,5 +1,5 @@
 import { listKnowledgeEntries, retrieveGlobalKnowledge, writeKnowledgeEntry } from './fixa/knowledge/knowledgeWriter.js';
-import { storeFixeraCaseMedia } from './fixera/case-media.js';
+import { storeFixeraCasePhotos, readCasePhotoList, listFixeraCaseImages, MAX_CASE_PHOTOS } from './fixera/case-media.js';
 import { appendAssessmentRevision } from './fixera/assessment-history.js';
 import express from 'express';
 import cors from 'cors';
@@ -3237,7 +3237,18 @@ async function handleFixaAssessment(req, res) {
 
     const desc = clampString(body.description || authorizedCase?.description, 4000);
     const cat = clampString(body.category || authorizedCase?.category, 80);
-    const imageDataUrl = body.imageDataUrl || authorizedCase?.media_data_url || null;
+    let requestImages;
+    try {
+      requestImages = readCasePhotoList(body, { arrayKey: 'imageDataUrls', singleKey: 'imageDataUrl' });
+    } catch (photoError) {
+      return res.status(400).json({ ok: false, code: photoError.code || 'INVALID_PHOTOS', message: photoError.message });
+    }
+    const caseImages = requestImages.length
+      ? requestImages
+      : authorizedCase
+        ? await listFixeraCaseImages(pool, { caseType, caseId: authorizedCase.id, coverDataUrl: authorizedCase.media_data_url })
+        : [];
+    const imageDataUrl = caseImages[0] || null;
     const hasImage = typeof imageDataUrl === 'string' && imageDataUrl.startsWith('data:');
     if (hasImage && imageDataUrl.length > 6_000_000) {
       return res.status(400).json({ ok: false, message: 'Image is too large.' });
@@ -3253,6 +3264,7 @@ async function handleFixaAssessment(req, res) {
       category: cat,
       description: desc || 'No written description provided. Analyze the attached photo and infer the repair issue.',
       imageDataUrl: hasImage ? imageDataUrl : null,
+      imageDataUrls: caseImages.filter((url) => typeof url === 'string' && url.startsWith('data:image/')),
       task: 'repair_assessment',
       jobId: authorizedCase?.id || null,
       homeownerId: req.authUser.id,
@@ -3331,26 +3343,28 @@ async function handleFixaAssessment(req, res) {
         );
       }
     }
+    // Homeowner view of a case: DIY steps stay withheld until a detected safety concern is confirmed.
+    const shown = a && authorizedCase ? await homeownerAssessmentView(caseType, authorizedCase.id, a) : a;
     return res.json({
-      assessment: a
+      assessment: shown
         ? {
-          overview: a.summary,
-          imageObservations: a.visual_findings,
-          diagnosis: a.summary,
+          overview: shown.summary,
+          imageObservations: shown.visual_findings,
+          diagnosis: shown.summary,
           likelyRootCause: '',
           professionalSteps: [],
-          partsNeeded: a.materials_needed || [],
+          partsNeeded: shown.materials_needed || [],
           workScope: [],
-          toolsRequired: a.tools_required || [],
-          diySteps: a.diy_steps || [],
+          toolsRequired: shown.tools_required || [],
+          diySteps: shown.diy_steps || [],
           diyGuideImages: [],
-          suggestions: a.immediate_safety_steps || [],
+          suggestions: shown.immediate_safety_steps || [],
           estimatedCost: '',
-          estimatedDuration: `${a.estimated_labor_hours_min}-${a.estimated_labor_hours_max} hours`,
-          urgency: a.urgency,
-          safetyNotes: (a.immediate_safety_steps || []).join(' '),
-          professionalRecommended: a.professional_required,
-          ...a,
+          estimatedDuration: `${shown.estimated_labor_hours_min}-${shown.estimated_labor_hours_max} hours`,
+          urgency: shown.urgency,
+          safetyNotes: (shown.immediate_safety_steps || []).join(' '),
+          professionalRecommended: shown.professional_required,
+          ...shown,
         }
         : null,
       source: structured.source || 'fixera',
@@ -3417,23 +3431,31 @@ async function handleFixeraReassess(req, res) {
     }
 
     let imageDataUrl = authorizedCase.media_data_url || null;
-    if (req.body?.imageDataUrl != null) {
-      if (typeof req.body.imageDataUrl !== 'string' || !req.body.imageDataUrl.startsWith('data:image/') || req.body.imageDataUrl.length > 6_000_000) {
-        return res.status(400).json({ ok: false, code: 'INVALID_REASSESSMENT_IMAGE', message: 'Choose a supported photo under 6 MB.' });
-      }
+    let newImages = [];
+    try {
+      newImages = readCasePhotoList(req.body || {}, { arrayKey: 'imageDataUrls', singleKey: 'imageDataUrl' });
+      if (newImages.some((url) => !url.startsWith('data:image/') || url.length > 6_000_000)) throw new Error('bad');
+    } catch (photoError) {
+      return res.status(400).json({
+        ok: false,
+        code: photoError.code === 'TOO_MANY_PHOTOS' ? 'TOO_MANY_PHOTOS' : 'INVALID_REASSESSMENT_IMAGE',
+        message: photoError.code === 'TOO_MANY_PHOTOS' ? photoError.message : `Choose up to ${MAX_CASE_PHOTOS} supported photos under 6 MB each.`,
+      });
+    }
+    if (newImages.length) {
       try {
-        await storeFixeraCaseMedia(pool, {
+        await storeFixeraCasePhotos(pool, {
           userId: req.authUser.id,
           caseType,
           caseId,
           propertyId: authorizedCase.property_id,
           equipmentKey: authorizedCase.equipment_key || null,
-          dataUrl: req.body.imageDataUrl,
+          dataUrls: newImages,
         });
       } catch (mediaError) {
         return res.status(400).json({ ok: false, code: 'REASSESSMENT_IMAGE_SAVE_FAILED', message: mediaError?.message || 'The new photo could not be attached to this case.' });
       }
-      imageDataUrl = req.body.imageDataUrl;
+      imageDataUrl = newImages[0];
       await pool.query(
         caseType === 'managed_job'
           ? `UPDATE managed_jobs SET media_data_url=$1, media_type='image', updated_at=NOW() WHERE id=$2 AND homeowner_user_id=$3`
@@ -3462,6 +3484,11 @@ async function handleFixeraReassess(req, res) {
       observation,
       currentStep: req.body?.currentStep ?? null,
       imageDataUrl,
+      // The new photos first, then the case's earlier photos, at most MAX_CASE_PHOTOS in total.
+      imageDataUrls: [
+        ...newImages,
+        ...(await listFixeraCaseImages(pool, { caseType, caseId, coverDataUrl: authorizedCase.media_data_url })),
+      ].filter((url, i, all) => all.indexOf(url) === i).slice(0, MAX_CASE_PHOTOS),
       propertyId: propertyContext?.propertyId || null,
       property: propertyContext?.memory || null,
       jobId: caseId,
@@ -3477,7 +3504,7 @@ async function handleFixeraReassess(req, res) {
         title: authorizedCase.title,
         description: authorizedCase.description,
         aiAssessment: authorizedCase.ai_assessment,
-        mediaType: req.body?.imageDataUrl ? 'image' : authorizedCase.media_type,
+        mediaType: newImages.length ? 'image' : authorizedCase.media_type,
       },
       locationContext: [
         propertyContext?.text || '',
@@ -3525,7 +3552,7 @@ async function handleFixeraReassess(req, res) {
     }
     return res.json({
       ok: Boolean(result.assessment),
-      assessment: result.assessment,
+      assessment: result.assessment ? await homeownerAssessmentView(caseType, caseId, result.assessment) : result.assessment,
       assistant: 'Fixera',
       error: result.assessment ? undefined : result.error,
     });
@@ -3537,6 +3564,16 @@ async function handleFixeraReassess(req, res) {
       error: "We couldn't complete the assessment right now. Please try again.",
     });
   }
+}
+
+async function homeownerAssessmentView(caseType, caseId, assessment) {
+  const { withholdUnconfirmedGuidance } = await import('./fixera/safety-confirmation.js');
+  let report = null;
+  if (caseType === 'managed_job') {
+    const { rows } = await pool.query(`SELECT completion_report FROM managed_jobs WHERE id=$1`, [caseId]);
+    report = rows[0]?.completion_report || null;
+  }
+  return withholdUnconfirmedGuidance(assessment, report);
 }
 
 app.post('/api/fixera/reassess', requireAuth, aiLimiter, handleFixeraReassess);
@@ -3661,7 +3698,7 @@ async function handleFixaChat(req, res) {
     if (jobId != null && req.authUser.role === 'homeowner') {
       jobIdNum = Number(jobId);
       const { rows } = await pool.query(
-        `SELECT ai_assessment, diy_risk_level, description, homeowner_user_id FROM managed_jobs WHERE id=$1`,
+        `SELECT ai_assessment, diy_risk_level, description, homeowner_user_id, completion_report FROM managed_jobs WHERE id=$1`,
         [jobIdNum]
       );
       const job = rows[0];
@@ -3673,6 +3710,14 @@ async function handleFixaChat(req, res) {
       if (!ackOk) return;
 
       assessment = typeof job.ai_assessment === 'string' ? JSON.parse(job.ai_assessment) : job.ai_assessment;
+      const { diyGuidanceUnlocked, SAFETY_CONFIRMATION_REQUIRED } = await import('./fixera/safety-confirmation.js');
+      if (!diyGuidanceUnlocked(assessment, job.completion_report)) {
+        return res.status(409).json({
+          ok: false,
+          code: SAFETY_CONFIRMATION_REQUIRED,
+          message: 'A safety concern was found. Review it and confirm before getting DIY help for this repair.',
+        });
+      }
       const lastUser = normalized.filter((m) => m.role === 'user').pop()?.content || '';
       const {
         classifyDiyRiskLevel,

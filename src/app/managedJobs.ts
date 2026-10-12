@@ -115,6 +115,57 @@ export type StructuredAssessment = {
   }>;
   stop_conditions?: string[];
   disclaimer?: string;
+  /** Risk-based DIY safety result: decision, reasons, risk factors and guardrails. */
+  diy_safety?: DiySafetyResult;
+  /** "needs_more_info" when Fixera needs clearer photos or details before a repair plan. */
+  assessment_stage?: "complete" | "needs_more_info";
+  evidence_check?: EvidenceCheck;
+  diy_parts_cost_estimate?: DiyPartsCostEstimate | null;
+  follow_up_maintenance?: Array<{ task: string; interval_days: number; system?: string; reason?: string }>;
+  safety_confirmation?: { required: boolean; confirmed: boolean; declined?: boolean; confirmed_at?: string | null };
+  diy_steps_withheld?: boolean;
+  withheld_step_count?: number;
+};
+
+/** Photos per repair case (first upload and follow-up). */
+export const MAX_CASE_PHOTOS = 5;
+
+export type DiySafetyResult = {
+  version: number;
+  decision: "emergency" | "professional_only" | "diy_with_guardrails" | "diy_with_care" | "diy_ok";
+  level: "red" | "yellow" | "green";
+  requires_confirmation: boolean;
+  reasons: string[];
+  reason_codes: string[];
+  hazards?: string[];
+  factors: Array<{ code: string; label: string; severity: "low" | "medium" | "high" | "critical"; evidence?: string; source?: string }>;
+  allowed_actions: string[];
+  prohibited_actions: string[];
+  removed_steps_count: number;
+  summary?: string;
+  pending_evidence?: boolean;
+};
+
+export type EvidenceCheck = {
+  sufficient: boolean;
+  reasons: string[];
+  image_count: number;
+  photo_issues?: string[];
+  photo_issue_text?: string[];
+  photo_requests: string[];
+  max_photos: number;
+  message: string | null;
+};
+
+export type DiyPartsCostEstimate = {
+  currency: "USD";
+  low: number;
+  high: number;
+  items: Array<{ name: string; quantity: number; required: boolean; low: number; high: number }>;
+  unpriced_items?: string[];
+  includes_optional?: boolean;
+  basis: "rough_ai_estimate";
+  disclaimer: string;
 };
 
 export type AssessmentResource = {
@@ -123,6 +174,9 @@ export type AssessmentResource = {
   reason: string;
   exact_part_confirmed?: boolean;
   information_needed?: string[];
+  quantity?: number;
+  estimated_cost_low_usd?: number;
+  estimated_cost_high_usd?: number;
 };
 
 export type ManagedJob = {
@@ -730,6 +784,17 @@ export async function getPendingServiceRequestAssessmentStatus(
 }
 
 export type FixeraDiyEvent = "step_completed" | "step_failed" | "step_different" | "fixed" | "still_broken" | "professional_requested";
+
+/** Safety-concern popup: continue with guardrail-limited DIY guidance, or hire a professional. */
+export async function confirmSafetyConcern(jobId: number, decision: "continue" | "hire_professional") {
+  return api<{ ok: boolean; decision?: string; job?: ManagedJob; code?: string; message?: string }>(
+    `/api/managed/jobs/${jobId}/safety-confirmation`,
+    {
+      method: "POST",
+      body: JSON.stringify({ decision, acknowledged: decision === "continue" }),
+    }
+  );
+}
 
 export async function recordFixeraDiyEvent(
   jobId: number,
