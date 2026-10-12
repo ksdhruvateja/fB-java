@@ -3837,12 +3837,17 @@ app.post('/api/fixa/feedback', requireAuth, handleFixeraFeedback);
 app.get('/api/health', async (_req, res) => {
   const production = isDeployedProduction();
   let dbOk = true;
+  const databaseEvidence = [];
   if (!useInMemoryDb) {
     try {
-      await pool.query('SELECT 1');
+      const { rows } = await pool.query(`SELECT current_setting('neon.timeline_id', true) AS neon_timeline`);
+      if (rows[0]?.neon_timeline) databaseEvidence.push('server_exposes_neon_settings');
     } catch {
       dbOk = false;
     }
+    try {
+      if (/\.neon\.tech$/i.test(new URL(process.env.NEON_DATABASE_URL).hostname)) databaseEvidence.push('hostname_neon_tech');
+    } catch { /* unparsable URL: no evidence */ }
   }
   let reminders = null;
   try {
@@ -3856,7 +3861,11 @@ app.get('/api/health', async (_req, res) => {
     version: process.env.npm_package_version || '0.0.2',
     build: process.env.COMMIT_REF || process.env.DEPLOY_ID || process.env.FIXBRIDGE_HOSTING || null,
     env: production ? 'production' : 'development',
+    // `database` keeps its historical values for existing smoke checks. It is a configuration
+    // label; `databaseVendorEvidence` lists what was actually observed.
     database: useInMemoryDb ? 'memory' : dbOk ? 'neon' : 'neon_unreachable',
+    databaseVendorEvidence: databaseEvidence,
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.COMMIT_REF || null,
     stripeConfigured: stripeConfigured(),
     gmail: mailStatus(),
     paymentsSimulateAllowed: !production && !stripeConfigured(),

@@ -26,6 +26,7 @@ import {
 
 import { openaiProvider } from './fixa/providers/openai.js';
 import { geminiProvider } from './fixa/providers/gemini.js';
+import { createFixeraEngineProvider, ENGINE_PROVIDER_ID } from './fixa/providers/fixera-engine.js';
 
 import { evaluateRepairAssessment } from './fixa/evaluator/responseEvaluator.js';
 
@@ -598,6 +599,18 @@ export function resolveAiProvider() {
       fallback: chain,
     };
   }
+  // Fixera Engine (server-to-server). Opt-in with FIXERA_AI_PROVIDER=fixera-engine plus
+  // FIXERA_ENGINE_URL/FIXERA_ENGINE_SECRET. The providers above stay behind it as the
+  // rollback path unless FIXERA_ENGINE_FALLBACK=none. Unset FIXERA_AI_PROVIDER to roll back.
+  if (preferred === ENGINE_PROVIDER_ID) {
+    const engine = createFixeraEngineProvider();
+    if (engine.isConfigured()) {
+      const keepOriginals = String(process.env.FIXERA_ENGINE_FALLBACK || 'original').trim().toLowerCase() !== 'none';
+      return { provider: ENGINE_PROVIDER_ID, adapter: engine, model: engine.model, fallback: keepOriginals ? chain : null };
+    }
+    console.warn('[ai] FIXERA_AI_PROVIDER=fixera-engine but FIXERA_ENGINE_URL / FIXERA_ENGINE_SECRET are not set; using the other providers.');
+  }
+
   if (chain) return chain;
 
   console.error(

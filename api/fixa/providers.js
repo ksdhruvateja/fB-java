@@ -7,6 +7,7 @@ const PROVIDERS = [
   { id: 'anthropic', name: 'Anthropic', envModel: 'ANTHROPIC_MODEL', supportsVideo: false },
   { id: 'openai', name: 'OpenAI', envModel: 'OPENAI_MODEL', supportsVideo: false },
   { id: 'gemini', name: 'Gemini', envModel: 'GEMINI_MODEL', supportsVideo: false },
+  { id: 'fixera-engine', name: 'Fixera Engine', envModel: null, supportsVideo: false, note: 'Server-to-server engine; routes to Gemini, OpenRouter, Anthropic or OpenAI.' },
   { id: 'explabs', name: 'Experiential Labs', envModel: null, supportsVideo: false },
   {
     id: 'fixera-local',
@@ -39,7 +40,7 @@ export function listFixaProviders() {
       status,
       defaultModel,
       models: defaultModel ? [defaultModel] : [],
-      supportsVision: ['openrouter', 'anthropic', 'openai', 'gemini'].includes(provider.id),
+      supportsVision: ['openrouter', 'anthropic', 'openai', 'gemini', 'fixera-engine'].includes(provider.id),
       supportsVideo: provider.supportsVideo,
       supportsStructuredOutput: true,
       keyHint: null,

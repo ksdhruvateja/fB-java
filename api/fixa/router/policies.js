@@ -1,15 +1,21 @@
-/** Default routing. All tasks use the connected Experiential Labs provider. No fallback. */
+/**
+ * Task routing policy. Providers and models are resolved at runtime by api/ai.js
+ * (resolveAiProvider: FIXERA_AI_PROVIDER / AI_PRIMARY_PROVIDER, then configured fallbacks),
+ * so the policy only records which tasks use a model at all.
+ */
+
+const RUNTIME = { primary: null, model: null, fallback: null, resolvedAtRuntime: true };
 
 export const DEFAULT_POLICY = {
   id: 'default',
-  mode: 'default',
+  mode: 'runtime',
   tasks: {
-    repair_assessment: { primary: 'explabs', model: 'gpt-6-astra', fallback: null },
-    diy_guidance: { primary: 'explabs', model: 'gpt-6-astra', fallback: null },
-    reassessment: { primary: 'explabs', model: 'gpt-6-astra', fallback: null },
-    customer_support: { primary: 'explabs', model: 'gpt-6-astra', fallback: null },
-    document_extract: { primary: 'explabs', model: 'gpt-6-astra', fallback: null },
-    professional_handoff: { primary: null, model: null, fallback: null },
+    repair_assessment: RUNTIME,
+    diy_guidance: RUNTIME,
+    reassessment: RUNTIME,
+    customer_support: RUNTIME,
+    document_extract: RUNTIME,
+    professional_handoff: { primary: null, model: null, fallback: null, resolvedAtRuntime: false },
   },
 };
 
