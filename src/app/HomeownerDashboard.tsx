@@ -1547,6 +1547,12 @@ export default function HomeownerDashboard({
       }
 
       const assessed = await assessPendingServiceRequest(id);
+      if (!assessed.ok && assessed.code === "HOMECARE_PLAN_REQUIRED") {
+        // Fixera AI is a HomeCare Pro feature: continue with professional booking instead.
+        await openPendingHireRequest(id, request);
+        setError(assessed.message || "Fixera AI assessment is included with HomeCare Pro. You can still hire a professional for this request.");
+        return;
+      }
       if (!assessed.ok || !assessed.pendingServiceRequest) {
         setPendingServiceRequestId(id);
         setPendingAssessment(null);

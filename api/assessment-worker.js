@@ -149,4 +149,6 @@ export const ASSESSMENT_ERROR_MESSAGES = {
   AI_TIMEOUT: "The assessment took too long. Try a smaller photo or continue your request.",
   WORKER_UNAVAILABLE:
     "We're preparing your assessment. Please wait a moment and try again.",
+  HOMECARE_PLAN_REQUIRED:
+    'Fixera AI assessment is included with HomeCare Pro. You can still hire a professional for this request.',
 };

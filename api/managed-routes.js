@@ -15,6 +15,7 @@ import {
   applyVisitFeeCredit,
 } from './pricing.js';
 import { assertEmployeeAssignable } from './contractor-employees.js';
+import { HOMECARE_PLAN_REQUIRED, requireFixeraAiAccess, userHasFixeraAiAccess } from './fixera/entitlement.js';
 import {
   buildProfessionalDispatchBreakdown,
   buildProfessionalRequestBetaSnapshot,
@@ -1549,6 +1550,15 @@ export async function processManagedJobAssessmentTask(
         ok: false,
         code: 'NOT_ALLOWED',
       };
+    }
+
+    // Backstop for every scheduling path: Fixera AI only runs for HomeCare Pro members.
+    if (!(await userHasFixeraAiAccess(pool, record.homeowner_user_id))) {
+      await pool.query(
+        `UPDATE ${table} SET assessment_status='failed', assessment_error_code=$2, assessment_completed_at=NOW() WHERE id=$1`,
+        [recordId, HOMECARE_PLAN_REQUIRED]
+      );
+      return { ok: false, code: HOMECARE_PLAN_REQUIRED };
     }
 
     /*
@@ -3524,7 +3534,15 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         }
       }
 
-      // 4. Queue structured AI assessment (async — avoids Netlify inactivity timeout)
+      // 4. Fixera AI is a HomeCare Pro feature. Guests (and anyone without the plan) skip AI;
+      // the request goes straight to professional booking. The 'failed' status with this
+      // code is what the hire wizard already treats as "continue without an assessment".
+      if (!(await userHasFixeraAiAccess(pool, user.id))) {
+        await pool.query(
+          `UPDATE managed_jobs SET assessment_status='failed', assessment_error_code=$2, assessment_completed_at=NOW() WHERE id=$1`,
+          [job.id, HOMECARE_PLAN_REQUIRED]
+        );
+      } else {
       await pool.query(
         `UPDATE managed_jobs SET assessment_status='processing', assessment_started_at=NOW(), assessment_attempts=1 WHERE id=$1`,
         [job.id]
@@ -3539,6 +3557,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           `UPDATE managed_jobs SET assessment_status='failed', assessment_error_code='WORKER_UNAVAILABLE', assessment_completed_at=NOW() WHERE id=$1`,
           [job.id]
         );
+      }
       }
 
       const partnerCode = (b.partnerCode || '').trim();
@@ -4275,6 +4294,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (!allowedEvents.has(event)) {
         return res.status(400).json({ ok: false, code: 'INVALID_DIY_EVENT', message: 'Unsupported repair outcome event.' });
       }
+      if (event !== 'professional_requested' && !(await requireFixeraAiAccess(pool, req, res, { ownerUserId: job.homeowner_user_id }))) return;
       const stepIndex = req.body?.stepIndex == null ? null : Number(req.body.stepIndex);
       if (event.startsWith('step_') && (!Number.isInteger(stepIndex) || stepIndex < 0 || stepIndex > 40)) {
         return res.status(400).json({ ok: false, code: 'INVALID_STEP_INDEX', message: 'A valid repair step is required.' });
@@ -4412,6 +4432,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       if (Number(job.homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin') {
         return res.status(403).json({ ok: false, message: 'Not allowed.' });
       }
+      if (!(await requireFixeraAiAccess(pool, req, res, { ownerUserId: job.homeowner_user_id }))) return;
 
       const currentStatus = resolveAssessmentStatus(job);
       if (currentStatus === 'ready' && !force) {
@@ -4740,6 +4761,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           message: 'Not allowed.',
         });
       }
+      if (!(await requireFixeraAiAccess(pool, req, res, { ownerUserId: pending.homeowner_user_id }))) return;
 
       const currentStatus =
         resolveAssessmentStatus(pending);

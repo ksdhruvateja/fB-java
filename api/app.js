@@ -28,6 +28,7 @@ import {
   getSubscriptionPlanByCode,
 } from './subscription-plans.js';
 import { registerManagedRoutes, processManagedJobAssessmentTask, convertPendingServiceRequest } from './managed-routes.js';
+import { requireFixeraAiAccess } from './fixera/entitlement.js';
 import { registerAssessmentProcessor } from './assessment-worker.js';
 import { registerHomeCareProRoutes } from './homecare-pro-routes.js';
 import { registerHomeCareAdminRoutes, initHomeCareSettingsSchema } from './homecare-admin-routes.js';
@@ -3142,6 +3143,7 @@ app.get('/api/admin/fixera/training/export', requireAuth, requireAdmin, requireP
 
 async function handleFixaAssessment(req, res) {
   try {
+    if (!(await requireFixeraAiAccess(pool, req, res))) return;
     const invocationId = String(req.body?.assessmentInvocationId || req.body?.invocationId || '').trim();
     if (!invocationId) {
       return res.status(400).json({
@@ -3380,6 +3382,7 @@ app.post('/api/fixa/assessment', requireAuth, aiLimiter, handleFixaAssessment);
 
 async function handleFixeraReassess(req, res) {
   try {
+    if (!(await requireFixeraAiAccess(pool, req, res))) return;
     const observation = clampString(req.body?.observation, 2000);
     if (!observation) {
       return res.status(400).json({ ok: false, message: 'A new observation is required.' });
@@ -3635,6 +3638,7 @@ registerServiceAreaRoutes(app);
 
 async function handleFixaChat(req, res) {
   try {
+    if (!(await requireFixeraAiAccess(pool, req, res))) return;
     const { messages, jobId } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ ok: false, message: 'messages array is required.' });
