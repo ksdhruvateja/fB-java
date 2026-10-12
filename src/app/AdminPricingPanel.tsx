@@ -891,6 +891,26 @@ export default function AdminPricingPanel({
                         />
                         Enabled
                       </label>
+                      {!line.timing_adjustable ? (
+                        <button
+                          type="button"
+                          className="rounded-lg border border-border px-2 py-1 text-xs text-red-600 hover:bg-red-500/10"
+                          onClick={() => {
+                            const lines = (
+                              (pricingRules.professional_dispatch_pricing as { lines?: typeof line[] })?.lines || []
+                            ).filter((_, i) => i !== idx);
+                            setPricingRules({
+                              ...pricingRules,
+                              professional_dispatch_pricing: {
+                                ...(pricingRules.professional_dispatch_pricing as object),
+                                lines,
+                              },
+                            });
+                          }}
+                        >
+                          Remove
+                        </button>
+                      ) : null}
                     </div>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <NumField
@@ -920,6 +940,25 @@ export default function AdminPricingPanel({
                     </div>
                   </div>
                 ))}
+                <DispatchFeeLineAdder
+                  lines={
+                    ((pricingRules.professional_dispatch_pricing as {
+                      lines?: Array<{ key: string; label: string; amount_cents: number; enabled: boolean; line_type: string }>;
+                    })?.lines || [])
+                  }
+                  onAdd={(newLine) =>
+                    setPricingRules({
+                      ...pricingRules,
+                      professional_dispatch_pricing: {
+                        ...(pricingRules.professional_dispatch_pricing as object),
+                        lines: [
+                          ...(((pricingRules.professional_dispatch_pricing as { lines?: unknown[] })?.lines) || []),
+                          newLine,
+                        ],
+                      },
+                    })
+                  }
+                />
               </div>
               <div className="rounded-2xl border border-border/70 bg-card p-5 shadow-sm">
                 <h2 className="font-semibold">Dispatch / assessment fees</h2>
@@ -1315,5 +1354,83 @@ export default function AdminPricingPanel({
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * Adds a homeowner-facing Hire-a-Pro fee line (e.g. Platform fee, Admin fee, Care fee) or a
+ * discount. Saved with the rest of the pricing rules; applies to every homeowner's checkout.
+ */
+function DispatchFeeLineAdder({
+  lines,
+  onAdd,
+}: {
+  lines: Array<{ key: string; label: string; amount_cents: number; enabled: boolean; line_type: string }>;
+  onAdd: (line: { key: string; label: string; amount_cents: number; enabled: boolean; line_type: "charge" | "discount" }) => void;
+}) {
+  const [label, setLabel] = useState("");
+  const [amount, setAmount] = useState("");
+  const [lineType, setLineType] = useState<"charge" | "discount">("charge");
+  const totalCents = lines
+    .filter((l) => l.enabled !== false)
+    .reduce((sum, l) => sum + (l.line_type === "discount" ? -1 : 1) * Number(l.amount_cents || 0), 0);
+  const amountNumber = Number(amount);
+  const canAdd = label.trim().length > 0 && label.trim().length <= 80 && Number.isFinite(amountNumber) && amountNumber >= 0 && lines.length < 15;
+
+  function add() {
+    if (!canAdd) return;
+    const base = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "fee";
+    let key = base;
+    let n = 2;
+    while (lines.some((l) => l.key === key)) key = `${base}_${n++}`;
+    onAdd({ key, label: label.trim(), amount_cents: Math.round(amountNumber * 100), enabled: true, line_type: lineType });
+    setLabel("");
+    setAmount("");
+    setLineType("charge");
+  }
+
+  return (
+    <div className="space-y-3 rounded-xl border border-dashed border-border p-3">
+      <p className="text-sm font-medium">Add a fee or discount line</p>
+      <div className="grid gap-2 sm:grid-cols-[1fr_8rem_8rem_auto]">
+        <input
+          className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+          placeholder="Name shown to homeowners, e.g. Platform fee"
+          value={label}
+          maxLength={80}
+          onChange={(e) => setLabel(e.target.value)}
+        />
+        <input
+          className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+          placeholder="Amount $"
+          inputMode="decimal"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+        />
+        <select
+          className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+          value={lineType}
+          onChange={(e) => setLineType(e.target.value === "discount" ? "discount" : "charge")}
+        >
+          <option value="charge">Charge</option>
+          <option value="discount">Discount</option>
+        </select>
+        <button
+          type="button"
+          disabled={!canAdd}
+          onClick={add}
+          className="rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+        >
+          Add line
+        </button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Current Hire-a-Pro total for every homeowner (before coupons):{" "}
+        <span className={totalCents > 0 ? "font-semibold text-foreground" : "font-semibold text-red-600"}>
+          {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(totalCents / 100)}
+        </span>
+        . Save pricing to apply. Total must stay above $0.
+      </p>
+    </div>
   );
 }

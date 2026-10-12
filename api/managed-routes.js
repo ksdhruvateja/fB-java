@@ -18,6 +18,7 @@ import { assertEmployeeAssignable } from './contractor-employees.js';
 import { HOMECARE_PLAN_REQUIRED, requireFixeraAiAccess, userHasFixeraAiAccess } from './fixera/entitlement.js';
 import {
   buildProfessionalDispatchBreakdown,
+  validateProfessionalDispatchPricingConfig,
   buildProfessionalRequestBetaSnapshot,
   saveProfessionalDispatchSnapshot,
 } from './professional-dispatch-pricing.js';
@@ -2310,6 +2311,28 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         JSON.stringify(prevRules?.professional_dispatch_pricing || {}) !==
         JSON.stringify(rules?.professional_dispatch_pricing || {});
       if (pricingChanged) {
+        // Every homeowner's Hire-a-Pro checkout is priced from these lines; reject anything
+        // that would break checkout before it is saved.
+        const lines = rules?.professional_dispatch_pricing?.lines || [];
+        if (lines.length > 15) {
+          return res.status(400).json({ ok: false, code: 'PRICING_INVALID_CONFIGURATION', message: 'Use at most 15 fee lines.' });
+        }
+        for (const line of lines) {
+          if (!String(line?.label || '').trim() || String(line.label).length > 80) {
+            return res.status(400).json({ ok: false, code: 'PRICING_INVALID_CONFIGURATION', message: 'Each fee line needs a name of up to 80 characters.' });
+          }
+          const cents = Number(line?.amount_cents);
+          if (!Number.isFinite(cents) || cents < 0 || cents > 1_000_000) {
+            return res.status(400).json({ ok: false, code: 'PRICING_INVALID_CONFIGURATION', message: `"${line.label}" must be between $0 and $10,000.` });
+          }
+        }
+        const checked = validateProfessionalDispatchPricingConfig(lines);
+        if (!checked.ok) {
+          return res.status(400).json({ ok: false, code: checked.code || 'PRICING_INVALID_CONFIGURATION', message: checked.message });
+        }
+        if ((checked.preview?.pricingLineSumCents ?? 0) <= 0) {
+          return res.status(400).json({ ok: false, code: 'PRICING_INVALID_CONFIGURATION', message: 'Discounts cannot make the Hire-a-Pro total $0 or less.' });
+        }
         const bumped = Number(prevVersion || 0) + 1;
         rules.professional_dispatch_pricing = {
           ...(rules.professional_dispatch_pricing || {}),
@@ -4607,6 +4630,53 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
     }
   });
 
+  /**
+   * Hire-a-Pro price for a pending request. Uses the same admin-managed
+   * "Professional dispatch pricing" lines as managed jobs, so fee changes made in the
+   * admin panel apply to every homeowner. Server-authoritative; the browser only displays it.
+   */
+  async function quotePendingProfessionalPricing(pending, serviceTiming) {
+    const rules = await loadPricingRules(pool);
+    const breakdown = buildProfessionalDispatchBreakdown(
+      { ...pending, service_timing: serviceTiming || pending.service_timing || 'weekday' },
+      rules,
+      null
+    );
+    if (!breakdown || breakdown.ok === false || !Number.isInteger(breakdown.authorizedNowCents) || breakdown.authorizedNowCents <= 0) {
+      const err = new Error(breakdown?.message || 'Professional pricing is not configured correctly.');
+      err.status = 503;
+      err.code = breakdown?.code || 'PRICING_INVALID_CONFIGURATION';
+      throw err;
+    }
+    return breakdown;
+  }
+
+  app.get('/api/pending-service-requests/:id/professional-pricing', requireAuth, async (req, res) => {
+    try {
+      const pendingId = Number(req.params.id);
+      if (!Number.isInteger(pendingId) || pendingId <= 0) {
+        return res.status(400).json({ ok: false, message: 'Invalid pending service request.' });
+      }
+      const { rows } = await pool.query(`SELECT * FROM pending_service_requests WHERE id=$1`, [pendingId]);
+      const pending = rows[0];
+      if (!pending || (Number(pending.homeowner_user_id) !== Number(req.authUser.id) && req.authUser.role !== 'admin')) {
+        return res.status(404).json({ ok: false, message: 'Pending service request not found.' });
+      }
+      const breakdown = await quotePendingProfessionalPricing(pending, req.query?.serviceTiming ? String(req.query.serviceTiming).slice(0, 40) : null);
+      return res.json({
+        ok: true,
+        lines: breakdown.lines,
+        authorizedNowCents: breakdown.authorizedNowCents,
+        authorizedNow: breakdown.authorizedNowCents / 100,
+        pricingVersion: breakdown.pricingVersion ?? null,
+        repairWorkNote: breakdown.repairWorkNote || null,
+      });
+    } catch (e) {
+      console.error('pending professional pricing:', e);
+      return res.status(e.status || 500).json({ ok: false, code: e.code, message: e.status ? e.message : 'Could not load pricing.' });
+    }
+  });
+
   app.post('/api/pending-service-requests/:id/professional-checkout', requireAuth, async (req, res) => {
     try {
       await purgeExpiredPendingServiceRequests(pool);
@@ -4642,7 +4712,24 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const propertyPurpose = String(req.body?.propertyPurpose || pending.property_purpose || 'current_homeowner').slice(0, 80);
       const transactionStage = String(req.body?.transactionStage || pending.transaction_stage || 'ongoing_maintenance').slice(0, 80);
       const contactPhone = req.body?.contactPhone != null ? String(req.body.contactPhone).slice(0, 40) : pending.contact_phone;
-      const amountCents = 12500;
+      let pricing;
+      try {
+        pricing = await quotePendingProfessionalPricing(pending, serviceTiming);
+      } catch (priceErr) {
+        return res.status(priceErr.status || 503).json({ ok: false, code: priceErr.code, message: priceErr.message });
+      }
+      const amountCents = pricing.authorizedNowCents;
+      // If the homeowner confirmed a total on screen, refuse to charge a different one
+      // (e.g. an admin changed fees while they were checking out).
+      if (req.body?.expectedAmountCents != null && Number(req.body.expectedAmountCents) !== amountCents) {
+        return res.status(409).json({
+          ok: false,
+          code: 'PRICING_CHANGED',
+          message: 'The price for this request was updated. Please review the new total before paying.',
+          authorizedNowCents: amountCents,
+          lines: pricing.lines,
+        });
+      }
 
       await pool.query(
         `UPDATE pending_service_requests SET
@@ -4719,11 +4806,13 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           JSON.stringify({
             pendingServiceRequestId: pendingId,
             source: 'pending_service_request_checkout',
+            pricingLines: pricing.lines,
+            pricingVersion: pricing.pricingVersion ?? null,
           }),
         ]
       );
 
-      return res.json({ ok: true, url: checkout.url, amount: 125, amountCents, pendingServiceRequestId: pendingId });
+      return res.json({ ok: true, url: checkout.url, amount: amountCents / 100, amountCents, lines: pricing.lines, pendingServiceRequestId: pendingId });
     } catch (e) {
       console.error('pending professional checkout:', e);
       return res.status(500).json({ ok: false, message: 'Could not start professional payment.' });
@@ -11207,8 +11296,15 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           if (!Number.isFinite(pendingId) || pendingId <= 0) {
             return res.status(400).json({ ok: false, message: 'Invalid pending service request payment metadata.' });
           }
-          const amountCents = session.amount_total != null ? Number(session.amount_total) : 12500;
-          if (amountCents !== 12500) {
+          // Expected amount = what our server quoted when it created this checkout session
+          // (session metadata is set server-side; the pending row stores the same quote).
+          const { rows: quotedRows } = await pool.query(
+            `SELECT paid_amount_cents FROM pending_service_requests WHERE id=$1`,
+            [pendingId]
+          );
+          const expectedCents = Number(session.metadata?.amountCents ?? quotedRows[0]?.paid_amount_cents);
+          const amountCents = session.amount_total != null ? Number(session.amount_total) : expectedCents;
+          if (!Number.isInteger(expectedCents) || expectedCents <= 0 || amountCents !== expectedCents) {
             return res.status(400).json({ ok: false, message: 'Pending professional payment amount mismatch.' });
           }
           const pendingPaymentUpdate = await pool.query(

@@ -2433,6 +2433,8 @@ export async function startPendingProfessionalCheckout(
     contactPhone?: string;
     acknowledged?: boolean;
     consents?: Record<string, boolean>;
+    /** Total the homeowner confirmed on screen; the server refuses to charge a different one. */
+    expectedAmountCents?: number;
   }
 ) {
   return api<{
@@ -2440,6 +2442,8 @@ export async function startPendingProfessionalCheckout(
     url?: string;
     amount?: number;
     amountCents?: number;
+    authorizedNowCents?: number;
+    lines?: ProfessionalPricingLine[];
     pendingServiceRequest?: PendingProfessionalRequest;
     message?: string;
     code?: string;
@@ -2447,4 +2451,24 @@ export async function startPendingProfessionalCheckout(
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+export type ProfessionalPricingLine = {
+  key: string;
+  label: string;
+  amount_cents: number;
+  line_type?: "charge" | "discount";
+};
+
+/** Admin-managed Hire-a-Pro fee lines and total for a pending request (server-authoritative). */
+export async function fetchPendingProfessionalPricing(pendingServiceRequestId: number, serviceTiming?: string) {
+  const qs = serviceTiming ? `?serviceTiming=${encodeURIComponent(serviceTiming)}` : "";
+  return api<{
+    ok: boolean;
+    lines?: ProfessionalPricingLine[];
+    authorizedNowCents?: number;
+    authorizedNow?: number;
+    message?: string;
+    code?: string;
+  }>(`/api/pending-service-requests/${pendingServiceRequestId}/professional-pricing${qs}`);
 }

@@ -29,8 +29,8 @@ before(async () => {
   await mod.initDb();
   const mkUser = async (role, email) => (await pool.query(
     `INSERT INTO users (role, name, email, password) VALUES ($1, $2, $3, 'x') RETURNING id, role, email`, [role, email, email])).rows[0];
-  ids.alice = await mkUser('homeowner', 'alice@example.com');
-  ids.bob = await mkUser('homeowner', 'bob@example.com');
+  ids.alice = await mkUser('homeowner', `routes-alice-${Date.now()}@example.com`);
+  ids.bob = await mkUser('homeowner', `routes-bob-${Date.now()}@example.com`);
   // Alice is a HomeCare Pro member; Bob is not.
   await pool.query(
     `INSERT INTO subscriptions (user_id, plan_code, plan_family, status, current_period_end)

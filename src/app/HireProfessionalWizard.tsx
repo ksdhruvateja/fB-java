@@ -19,7 +19,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { ManagedJob, PendingProfessionalRequest } from "./managedJobs";
-import { payDispatchFee, prepareCheckout, requestProfessionalDispatch, retailRangeLabel, fetchDispatchPricing, formatMoney, type CheckoutBreakdown, startPendingProfessionalCheckout, getPendingProfessionalRequest } from "./managedJobs";
+import { payDispatchFee, prepareCheckout, requestProfessionalDispatch, retailRangeLabel, fetchDispatchPricing, formatMoney, type CheckoutBreakdown, startPendingProfessionalCheckout, getPendingProfessionalRequest, fetchPendingProfessionalPricing, formatCents, type ProfessionalPricingLine } from "./managedJobs";
 import DispatchCouponField, { type DispatchCouponPreview } from "./DispatchCouponField";
 import ProfessionalServiceRequestBetaCard from "./ProfessionalServiceRequestBetaCard";
 import { consentsFromState, allChecked } from "./ConsentCheckbox";
@@ -822,7 +822,34 @@ function PendingHireProfessionalWizard({
   const [convertedJob, setConvertedJob] = useState<ManagedJob | null>(null);
   const [consent, setConsent] = useState(false);
   const [paymentMessage, setPaymentMessage] = useState<string | null>(null);
-  const amount = 125;
+  // Fees come from the admin "Professional dispatch pricing" settings (same for every homeowner).
+  const [pricing, setPricing] = useState<{ lines: ProfessionalPricingLine[]; totalCents: number } | null>(null);
+  const [pricingError, setPricingError] = useState<string | null>(null);
+  const amount = pricing ? pricing.totalCents / 100 : null;
+
+  useEffect(() => {
+    let cancelled = false;
+    setPricingError(null);
+    fetchPendingProfessionalPricing(pendingServiceRequest.id, serviceTiming)
+      .then((r) => {
+        if (cancelled) return;
+        if (r.ok && typeof r.authorizedNowCents === "number") {
+          setPricing({ lines: r.lines || [], totalCents: r.authorizedNowCents });
+        } else {
+          setPricing(null);
+          setPricingError(r.message || "Pricing is unavailable right now. Please try again shortly.");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPricing(null);
+          setPricingError("Pricing is unavailable right now. Please try again shortly.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingServiceRequest.id, serviceTiming]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -897,10 +924,15 @@ function PendingHireProfessionalWizard({
       onError("Please acknowledge the professional-service payment terms before continuing.");
       return;
     }
+    if (!pricing) {
+      onError(pricingError || "Pricing is still loading. Please wait a moment.");
+      return;
+    }
     setBusy(true);
     onError(null);
     try {
       const result = await startPendingProfessionalCheckout(pendingServiceRequest.id, {
+        expectedAmountCents: pricing.totalCents,
         serviceTiming,
         preferredDate: preferredDate || undefined,
         preferredTimeSlot,
@@ -910,6 +942,13 @@ function PendingHireProfessionalWizard({
         acknowledged: true,
         consents: { PROFESSIONAL_REQUEST_ACK: true },
       });
+      if (result.code === "PRICING_CHANGED" && typeof result.authorizedNowCents === "number") {
+        // Fees were updated by an admin while this screen was open: show the new total, do not charge.
+        setPricing({ lines: result.lines || [], totalCents: result.authorizedNowCents });
+        setStep("checkout");
+        onError(result.message || "The price for this request was updated. Please review the new total.");
+        return;
+      }
       if (!result.ok || !result.url) {
         onError(result.message || "Could not start secure payment.");
         return;
@@ -933,7 +972,7 @@ function PendingHireProfessionalWizard({
             <CheckCircle className="h-7 w-7" />
           </div>
           <h3 className="mt-4 text-xl font-bold">Payment Successful</h3>
-          <p className="mt-2 text-sm text-muted-foreground">Your $125 payment was received successfully.</p>
+          <p className="mt-2 text-sm text-muted-foreground">Your payment was received successfully.</p>
           <p className="mt-1 text-sm text-muted-foreground">Your professional service request has been submitted to FixBridge.</p>
           <button
             type="button"
@@ -1076,18 +1115,29 @@ function PendingHireProfessionalWizard({
         <div className="space-y-5">
           <div className="rounded-xl border border-[#FF4D1C]/25 bg-background p-5">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Professional service payment</p>
-            <div className="mt-3 flex items-end justify-between gap-4"><span className="text-sm text-muted-foreground">Professional request</span><span className="text-3xl font-black">{formatMoney(amount)}</span></div>
+            <div className="mt-3 flex items-end justify-between gap-4"><span className="text-sm text-muted-foreground">Professional request</span><span className="text-3xl font-black">{pricing ? formatCents(pricing.totalCents) : "—"}</span></div>
+            {pricing && pricing.lines.length > 0 ? (
+              <ul className="mt-3 space-y-1 text-sm">
+                {pricing.lines.map((line) => (
+                  <li key={line.key} className="flex justify-between gap-4">
+                    <span className="text-muted-foreground">{line.label}</span>
+                    <span className={line.amount_cents < 0 ? "text-emerald-600" : ""}>{formatCents(line.amount_cents)}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {pricingError ? <p className="mt-2 text-sm text-red-600">{pricingError}</p> : null}
             <p className="mt-3 text-xs leading-relaxed text-muted-foreground">This is the required professional-service payment for this pending request. After successful Stripe payment, FixBridge converts the request into a managed job.</p>
           </div>
-          <label className="flex items-start gap-3 rounded-xl border border-border p-4 text-sm"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-1" /><span>I understand that the {formatMoney(amount)} professional-service payment is required to submit this request.</span></label>
+          <label className="flex items-start gap-3 rounded-xl border border-border p-4 text-sm"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-1" /><span>I understand that the {pricing ? formatCents(pricing.totalCents) : "professional-service"} payment is required to submit this request.</span></label>
           <div className="flex gap-2"><button type="button" onClick={() => setStep("info")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 font-semibold"><ArrowLeft className="h-4 w-4" /> Back</button><button type="button" disabled={busy || !consent} onClick={() => setStep("review")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Review <ArrowRight className="h-4 w-4" /></button></div>
         </div>
       ) : null}
 
       {step === "review" ? (
         <div className="space-y-5">
-          <div className="rounded-xl border border-border bg-background p-4 text-sm"><p className="font-semibold">Ready to pay</p><dl className="mt-3 grid gap-2 sm:grid-cols-2"><div><dt className="text-xs text-muted-foreground">Timing</dt><dd>{SERVICE_TIMING_OPTIONS.find((o) => o.value === serviceTiming)?.label}</dd></div><div><dt className="text-xs text-muted-foreground">Arrival</dt><dd>{TIME_WINDOW_OPTIONS.find((o) => o.value === preferredTimeSlot)?.label}</dd></div><div><dt className="text-xs text-muted-foreground">Date</dt><dd>{formatDisplayDate(preferredDate) || "Flexible"}</dd></div><div><dt className="text-xs text-muted-foreground">Amount</dt><dd className="font-bold">{formatMoney(amount)}</dd></div></dl></div>
-          <div className="flex gap-2"><button type="button" onClick={() => setStep("checkout")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 font-semibold"><ArrowLeft className="h-4 w-4" /> Back</button><button type="button" disabled={busy || !consent} onClick={() => void saveAndCheckout()} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white disabled:opacity-60">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <DollarSign className="h-4 w-4" />} Pay {formatMoney(amount)}</button></div>
+          <div className="rounded-xl border border-border bg-background p-4 text-sm"><p className="font-semibold">Ready to pay</p><dl className="mt-3 grid gap-2 sm:grid-cols-2"><div><dt className="text-xs text-muted-foreground">Timing</dt><dd>{SERVICE_TIMING_OPTIONS.find((o) => o.value === serviceTiming)?.label}</dd></div><div><dt className="text-xs text-muted-foreground">Arrival</dt><dd>{TIME_WINDOW_OPTIONS.find((o) => o.value === preferredTimeSlot)?.label}</dd></div><div><dt className="text-xs text-muted-foreground">Date</dt><dd>{formatDisplayDate(preferredDate) || "Flexible"}</dd></div><div><dt className="text-xs text-muted-foreground">Amount</dt><dd className="font-bold">{pricing ? formatCents(pricing.totalCents) : "—"}</dd></div></dl></div>
+          <div className="flex gap-2"><button type="button" onClick={() => setStep("checkout")} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 font-semibold"><ArrowLeft className="h-4 w-4" /> Back</button><button type="button" disabled={busy || !consent || !pricing} onClick={() => void saveAndCheckout()} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#FF4D1C] px-4 py-3 font-semibold text-white disabled:opacity-60">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <DollarSign className="h-4 w-4" />} Pay {pricing ? formatCents(pricing.totalCents) : ""}</button></div>
         </div>
       ) : null}
     </div>

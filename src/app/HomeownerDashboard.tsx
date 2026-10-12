@@ -5671,7 +5671,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                   <CheckCircle className="h-8 w-8" />
                 </div>
                 <h2 className="mt-4 text-xl font-bold">Payment Successful</h2>
-                <p className="mt-2 text-sm text-muted-foreground">Your $125 payment was received successfully.</p>
+                <p className="mt-2 text-sm text-muted-foreground">Your payment was received successfully.</p>
                 <p className="mt-1 text-sm text-muted-foreground">Your professional service request has been submitted to FixBridge.</p>
                 <button
                   type="button"
