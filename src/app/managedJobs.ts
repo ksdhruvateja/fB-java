@@ -613,6 +613,8 @@ async function apiRequest<T>(path: string, init?: RequestInit & { timeoutMs?: nu
   }
 }
 
+const ASSESSMENT_POLL_ATTEMPTS = 70;
+
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -878,7 +880,8 @@ export async function assessManagedJob(
   if (started.status === 'ready' && started.job) {
     return { ok: true as const, job: started.job, pricing: undefined, warning: null };
   }
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  // Wait long enough for a slow primary AI attempt plus the fallback provider (about 3.5 minutes).
+  for (let attempt = 0; attempt < ASSESSMENT_POLL_ATTEMPTS; attempt += 1) {
     await sleep(3000);
     const status = await getManagedJobAssessmentStatus(jobId);
     if (!status.ok) continue;
@@ -1008,7 +1011,7 @@ export async function assessPendingServiceRequest(
     };
   }
 
-  const maxAttempts = 50;
+  const maxAttempts = ASSESSMENT_POLL_ATTEMPTS;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     await sleep(3000);
 

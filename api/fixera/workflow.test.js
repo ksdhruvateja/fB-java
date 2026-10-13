@@ -169,3 +169,25 @@ test('up to five photos per case', () => {
   assert.throws(() => readCasePhotoList({ mediaDataUrls: [1, 2, 3, 4, 5, 6].map(img) }), /up to 5/);
   assert.throws(() => readCasePhotoList({ mediaDataUrls: ['data:text/html;base64,AAAA'] }), /JPEG, PNG or WEBP/);
 });
+
+test('a faucet hot line is not treated as a water heater; a real heater still is', () => {
+  const faucet = evaluateDiySafety(base({
+    summary: 'Water pools around the base of a single-handle kitchen faucet.',
+    risk_factors: [{ code: 'hot_water', severity: 'medium', evidence: 'Hot supply line under pressure; minor scalding risk if shutoffs are open.' }],
+    diy_steps: ['Close both shutoff valves under the sink.'],
+  }));
+  const faucetCodes = faucet.diy_safety.factors.map((f) => f.code);
+  assert.ok(!faucetCodes.includes('pressurized_hot_water'));
+  assert.ok(!faucet.diy_safety.allowed_actions?.some((a) => /vacation mode/i.test(a)));
+  // The concern itself is kept and still needs confirmation.
+  assert.ok(faucetCodes.includes('hot_water'));
+  assert.equal(faucet.diy_safety.requires_confirmation, true);
+
+  const scaldAtFaucet = evaluateDiySafety(base({ summary: 'Faucet hot side may scald; cartridge seal is worn.' }));
+  assert.ok(!scaldAtFaucet.diy_safety.factors.some((f) => f.code === 'pressurized_hot_water'));
+
+  const heater = evaluateDiySafety(base({ summary: 'Water heater relief valve is dripping; scalding water on the floor.' }));
+  assert.ok(heater.diy_safety.factors.some((f) => f.code === 'pressurized_hot_water' && f.severity === 'medium'));
+  const heaterAlias = evaluateDiySafety(base({ summary: 'Tank is old.', risk_factors: [{ code: 'water_heater', severity: 'medium', evidence: 'Tank heater' }] }));
+  assert.ok(heaterAlias.diy_safety.factors.some((f) => f.code === 'pressurized_hot_water'));
+});

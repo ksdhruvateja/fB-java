@@ -182,7 +182,9 @@ export const RISK_FACTORS = {
     label: 'Pressurized hot water (water heater, boiler)',
     detect: [
       [/\b(water\s+heater|hot\s+water\s+tank|expansion\s+tank)\b/i, 'low'],
-      [/\b(t\s*&\s*p|temperature\s+(and|&)\s+pressure|relief\s+valve|tpr\s+valve|boiler|scald\w*)\b/i, 'medium'],
+      [/\b(t\s*&\s*p|temperature\s+(and|&)\s+pressure|relief\s+valve|tpr\s+valve|boiler)\b/i, 'medium'],
+      // Scalding alone also describes a faucet's hot line; it is a heater hazard only next to one.
+      [/\b(water\s+heater|hot\s+water\s+tank)\b[^.]{0,80}\bscald\w*|\bscald\w*[^.]{0,80}\b(water\s+heater|hot\s+water\s+tank)\b/i, 'medium'],
     ],
     professionalOnlyAt: 'high',
     allowed: [
@@ -314,8 +316,10 @@ const AI_FACTOR_ALIASES = {
   water_electrical: 'water_near_electrical',
   combustion: 'open_flame',
   torch: 'open_flame',
-  hot_water: 'pressurized_hot_water',
-  pressure: 'pressurized_hot_water',
+  // A hot supply line or line pressure is not a water heater; those stay generic factors so the
+  // heater-specific guardrails are not shown for faucet or pipe work.
+  water_heater: 'pressurized_hot_water',
+  boiler: 'pressurized_hot_water',
   asbestos: 'hazardous_material',
   lead: 'hazardous_material',
   mold: 'hazardous_material',

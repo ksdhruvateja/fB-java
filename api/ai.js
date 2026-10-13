@@ -45,9 +45,9 @@ const AI_FETCH_TIMEOUT_MS = Number(
 );
 
 // Repair assessments carry property history, past cases and photos, and run in the background
-// queue, so they get a longer deadline than chat. The homeowner's screen waits about 2.5 minutes.
+// queue, so they get a longer deadline than chat. The homeowner's screen waits about 3.5 minutes.
 const AI_ASSESSMENT_TIMEOUT_MS = Number(
-  process.env.FIXERA_ASSESSMENT_TIMEOUT_MS || 70000
+  process.env.FIXERA_ASSESSMENT_TIMEOUT_MS || 90000
 );
 
 const AI_MAX_IMAGE_CHARS = Number(
