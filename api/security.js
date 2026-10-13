@@ -75,9 +75,10 @@ export function securityHeaders(_req, res, next) {
         "media-src 'self' data: blob: https:",
         "font-src 'self' data: https:",
         "style-src 'self' 'unsafe-inline' https: https://accounts.google.com/gsi/style",
-        "script-src 'self' 'unsafe-inline' https://js.stripe.com https://cdn.jsdelivr.net https://accounts.google.com/gsi/client",
+        // The LeadConnector chat widget loads its script and chat frame from leadconnectorhq.com.
+        "script-src 'self' 'unsafe-inline' https://js.stripe.com https://cdn.jsdelivr.net https://accounts.google.com/gsi/client https://*.leadconnectorhq.com",
         "connect-src 'self' https://api.stripe.com https://*.stripe.com https://*.neon.tech https: https://accounts.google.com/gsi/",
-        "frame-src 'self' https://js.stripe.com https://hooks.stripe.com https://accounts.google.com/gsi/",
+        "frame-src 'self' https://js.stripe.com https://hooks.stripe.com https://accounts.google.com/gsi/ https://*.leadconnectorhq.com",
       ].join('; ')
     );
   }

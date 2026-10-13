@@ -440,7 +440,8 @@ async function ensureDemoUsers() {
   }
 }
 
-const SCHEMA_READY_VERSION = 20261001;
+// Raise this whenever schema setup changes, or databases set up earlier skip the new columns and tables.
+const SCHEMA_READY_VERSION = 20261013;
 
 async function readSchemaReadyVersion() {
   try {
