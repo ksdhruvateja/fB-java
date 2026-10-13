@@ -29,3 +29,32 @@ test('Gemini honours the per-call deadline instead of its default', async () => 
     if (previous.timeout === undefined) delete process.env.GEMINI_TIMEOUT_MS; else process.env.GEMINI_TIMEOUT_MS = previous.timeout;
   }
 });
+
+test('Gemini gets room to reason before answering, and a cut-off answer is reported as such', async () => {
+  const previous = { key: process.env.GEMINI_API_KEY, fetch: globalThis.fetch };
+  process.env.GEMINI_API_KEY = 'test-gemini-key';
+  const { analyze } = await import(`./gemini.js?budget=${Date.now()}`);
+  const bodies = [];
+  let finishReason = 'MAX_TOKENS';
+  globalThis.fetch = async (_url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return new Response(JSON.stringify({
+      candidates: [{ finishReason, content: { parts: [{ text: 'reasoning', thought: true }, { text: '{"summary":"cut' }] } }],
+    }), { status: 200 });
+  };
+  try {
+    const cut = await analyze({ messages: [{ role: 'user', content: 'assess' }], maxTokens: 5000, json: true });
+    assert.equal(cut.ok, false);
+    assert.equal(cut.code, 'provider_max_tokens');
+    assert.ok(bodies[0].generationConfig.maxOutputTokens >= 16384);
+
+    finishReason = 'STOP';
+    const done = await analyze({ messages: [{ role: 'user', content: 'assess' }], maxTokens: 5000, json: true });
+    assert.equal(done.ok, true);
+    // The model's reasoning is not part of the answer.
+    assert.equal(done.text, '{"summary":"cut');
+  } finally {
+    globalThis.fetch = previous.fetch;
+    if (previous.key === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = previous.key;
+  }
+});

@@ -4,6 +4,9 @@ const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models
 const GEMINI_API_KEY = String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_CLOUD_API_KEY || '').trim();
 const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim();
 const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS || process.env.AI_FETCH_TIMEOUT_MS || 30000);
+// On Gemini thinking models the output limit also covers the model's reasoning, so a caller's
+// answer-sized limit can cut the JSON off before it is finished. Never send less than this.
+const GEMINI_MIN_OUTPUT_TOKENS = Number(process.env.GEMINI_MIN_OUTPUT_TOKENS || 16384);
 
 function isConfigured() {
   return Boolean(GEMINI_API_KEY && GEMINI_API_KEY !== 'YOUR_GEMINI_API_KEY');
@@ -60,7 +63,7 @@ async function createCompletion({ messages = [], temperature = 0.2, maxTokens = 
       contents,
       generationConfig: {
         temperature,
-        maxOutputTokens: maxTokens,
+        maxOutputTokens: Math.max(Number(maxTokens) || 0, GEMINI_MIN_OUTPUT_TOKENS),
         ...(responseFormat?.type === 'json_object' ? { responseMimeType: 'application/json' } : {}),
       },
       ...(systemText ? { systemInstruction: { parts: [{ text: systemText }] } } : {}),
@@ -78,7 +81,10 @@ async function createCompletion({ messages = [], temperature = 0.2, maxTokens = 
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(`PROVIDER_HTTP_${response.status}`);
-    const text = (payload?.candidates?.[0]?.content?.parts || []).map((part) => part?.text || '').filter(Boolean).join('\n');
+    const candidate = payload?.candidates?.[0];
+    // A cut-off answer is unusable JSON; report it as such instead of passing partial text on.
+    if (candidate?.finishReason === 'MAX_TOKENS') throw new Error('MAX_TOKENS');
+    const text = (candidate?.content?.parts || []).map((part) => (part?.thought ? '' : part?.text || '')).filter(Boolean).join('\n');
     if (!text.trim()) throw new Error('EMPTY_RESPONSE_BODY');
     return {
       ok: true,
@@ -98,7 +104,10 @@ async function createCompletion({ messages = [], temperature = 0.2, maxTokens = 
       ok: false,
       provider: 'gemini',
       model: GEMINI_MODEL,
-      code: isTimeout ? 'provider_timeout' : error?.message === 'PROVIDER_NOT_CONFIGURED' ? 'provider_not_configured' : error?.message?.startsWith('PROVIDER_HTTP_') ? error.message.toLowerCase() : 'provider_exception',
+      code: isTimeout ? 'provider_timeout'
+        : error?.message === 'PROVIDER_NOT_CONFIGURED' ? 'provider_not_configured'
+          : error?.message === 'MAX_TOKENS' ? 'provider_max_tokens'
+            : error?.message?.startsWith('PROVIDER_HTTP_') ? error.message.toLowerCase() : 'provider_exception',
       requestId,
       latencyMs: Date.now() - startedAt,
     };
