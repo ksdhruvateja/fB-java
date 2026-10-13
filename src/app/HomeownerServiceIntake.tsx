@@ -725,7 +725,11 @@ export default function HomeownerServiceIntake(props: Props) {
       )}
 
       {isMobile && safeIntakePhase !== "details" ? (
-        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/95 px-4 py-3 backdrop-blur supports-[padding:max(0px)]:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+        // Sits above the dashboard's bottom navigation (and its raised "+" button), which would
+        // otherwise cover it. The spacer keeps the end of the form scrollable above both bars.
+        <>
+        <div aria-hidden className="h-24" />
+        <div className="fixed inset-x-0 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] z-40 border-y border-border bg-background/95 px-4 py-2.5 backdrop-blur lg:bottom-0">
           <button
             type="button"
             disabled={busy}
@@ -738,6 +742,7 @@ export default function HomeownerServiceIntake(props: Props) {
             Continue <ArrowRight size={16} />
           </button>
         </div>
+        </>
       ) : null}
     </div>
   );

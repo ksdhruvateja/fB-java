@@ -30,9 +30,10 @@ export const LAUNCH_SUBSCRIPTION_PLANS = [
     unlocksDiy: true,
     trialDays: 0,
     ctaLabel: 'Included',
+    // Fixera AI (assessment and DIY guidance) is a HomeCare Pro feature; see api/fixera/entitlement.js.
     features: [
-      { label: 'AI assessment', included: true },
-      { label: 'Safe DIY guidance', included: true },
+      { label: 'AI assessment', included: false },
+      { label: 'Safe DIY guidance', included: false },
       { label: 'Service requests', included: true },
       { label: 'Quotes & approvals', included: true },
       { label: 'Payments', included: true },
