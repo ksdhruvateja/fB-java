@@ -3564,6 +3564,8 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
       if (result.reply) {
         setDiyChatMessages([...updatedMessages, { role: "assistant", content: result.reply }]);
       } else if (result.code === "DIY_SAFETY_ACKNOWLEDGMENT_REQUIRED") {
+        // The question is sent again once the notice is accepted; don't show it twice.
+        setDiyChatMessages(diyChatMessages);
         setDiySafetyAccepted(false);
         await openDiySafetyModal("chat", text);
       } else {
