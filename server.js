@@ -1,6 +1,7 @@
 // Replit dev server — runs the Express API on port 3001
 import { randomUUID } from 'crypto'; // Imported to generate unique structural request tracking IDs
 import express from 'express';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import app, { initDb, pool } from './api/app.js';
@@ -8,6 +9,7 @@ import { processDueServiceReminders } from './api/service-reminders.js';
 import { processComplianceExpirationAlerts } from './api/contractor-compliance-alerts.js';
 import { ensureAssessmentQueueSchema, startAssessmentQueueWorker } from './api/assessment-queue.js';
 import { attachAssessmentQueue, getAssessmentProcessor } from './api/assessment-worker.js';
+import { buildSitemapXml, renderPublicPageHtml } from './api/public-page-html.js';
 
 const PORT = process.env.PORT || process.env.API_PORT || 3001;
 const distDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'dist');
@@ -19,11 +21,24 @@ app.use((req, res, next) => {
 });
 
 if (process.env.PORT) {
-  app.use(express.static(distDir));
-  app.get(/^(?!\/api(?:\/|$)).*/, (_req, res, next) => {
-    res.sendFile(path.join(distDir, 'index.html'), (err) => {
-      if (err) next(err);
-    });
+  const siteUrlFor = (req) => (process.env.APP_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+  let indexHtml = null;
+  const readIndex = () => {
+    if (indexHtml == null) indexHtml = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8');
+    return indexHtml;
+  };
+
+  app.get('/sitemap.xml', (req, res) => {
+    res.type('application/xml').set('Cache-Control', 'public, max-age=3600').send(buildSitemapXml(siteUrlFor(req)));
+  });
+  app.use(express.static(distDir, { index: false }));
+  app.get(/^(?!\/api(?:\/|$)).*/, (req, res, next) => {
+    try {
+      // Public content pages (/blog, /contact, ...) get their own title and description.
+      res.type('html').send(renderPublicPageHtml(readIndex(), req.path, siteUrlFor(req)));
+    } catch (err) {
+      next(err);
+    }
   });
 }
 

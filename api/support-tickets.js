@@ -590,6 +590,80 @@ async function createSupportTicket(pool, authUser, payload) {
   return { ticket, deliveries, context };
 }
 
+/** Inquiry categories on the public Contact page. */
+export const CONTACT_INQUIRY_CATEGORIES = [
+  'General Support',
+  'Homeowner Assistance',
+  'Contractor Partnerships',
+  'Business Inquiries',
+  'Press & Media',
+];
+
+const CONTACT_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Validates a Contact page submission. Returns { ok, value } or { ok: false, errors } with a
+ * message per field so the form can show them next to the right input.
+ */
+export function validateContactInquiry(body = {}) {
+  const value = {
+    name: clampString(body.name, 120),
+    email: clampString(body.email, 200).toLowerCase(),
+    phone: clampString(body.phone, 40),
+    category: clampString(body.category, 80),
+    subject: clampString(body.subject, 200),
+    message: clampString(body.message, 5000),
+  };
+  const errors = {};
+  if (!value.name) errors.name = 'Enter your name.';
+  if (!CONTACT_EMAIL_RE.test(value.email)) errors.email = 'Enter a valid email address.';
+  if (value.phone && !/^[0-9+().\-\s]{7,40}$/.test(value.phone)) errors.phone = 'Enter a valid phone number or leave it blank.';
+  if (!CONTACT_INQUIRY_CATEGORIES.includes(value.category)) errors.category = 'Choose an inquiry type.';
+  if (value.subject.length < 3) errors.subject = 'Enter a short subject.';
+  if (value.message.length < 10) errors.message = 'Tell us a little more (at least 10 characters).';
+  return Object.keys(errors).length ? { ok: false, errors } : { ok: true, value };
+}
+
+/**
+ * Turns a Contact page inquiry into a support ticket, so it lands in the admin Support Tickets
+ * queue with the same numbering, activity log and admin notifications as other tickets.
+ * `authUser` is set when the sender is signed in; visitors are stored with user_id 0.
+ */
+export async function createContactInquiry(pool, inquiry, authUser = null) {
+  const ticketNumber = await nextTicketNumber(pool);
+  const userId = authUser?.id ? Number(authUser.id) : 0;
+  const userRole = authUser?.role || 'visitor';
+  const context = { source: 'contact_page', signedIn: Boolean(authUser?.id) };
+  const { rows } = await pool.query(
+    `INSERT INTO support_tickets
+      (ticket_number, user_id, user_role, user_name, user_email, user_phone, channel, subject, message,
+       category, priority, context, status)
+     VALUES ($1,$2,$3,$4,$5,$6,'contact',$7,$8,$9,'normal',$10,'open')
+     RETURNING *`,
+    [
+      ticketNumber,
+      userId,
+      userRole,
+      inquiry.name,
+      inquiry.email,
+      inquiry.phone || null,
+      inquiry.subject,
+      inquiry.message,
+      inquiry.category,
+      JSON.stringify(context),
+    ]
+  );
+  const ticketRow = rows[0];
+  await pool.query(
+    `INSERT INTO support_ticket_messages (ticket_id, sender_user_id, sender_role, sender_name, message, is_internal)
+     VALUES ($1,$2,$3,$4,$5,false)`,
+    [ticketRow.id, userId || null, userRole, inquiry.name, inquiry.message]
+  );
+  await logActivity(pool, ticketRow.id, { id: userId || null, role: userRole }, 'created', null, ticketNumber);
+  await notifyAdmins(pool, `Contact inquiry ${ticketNumber}`, `${inquiry.category}: ${inquiry.subject} — ${inquiry.name}`);
+  return rowToTicket(ticketRow);
+}
+
 async function addTicketReply(pool, authUser, ticketNumber, messageText, isInternal = false) {
   const ticketRow = await loadTicketByNumber(pool, ticketNumber);
   if (!ticketRow) {

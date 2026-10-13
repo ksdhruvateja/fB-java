@@ -15,7 +15,7 @@ import { assessRepair, complete, reassessRepair, prepareProfessionalHandoff, get
 import { persistFixeraInteraction, recordFixeraFeedback, recordFixeraInteraction, trainingOverview, exportApprovedTraining, listRecentExperiences } from './fixera/experience/store.js';
 import { getPricingIntelligence } from './fixera/pricing/intelligence.js';
 import { initManagedSchema, ensureReferralCodeColumns } from './schema-managed.js';
-import { initSupportTicketSchema, registerSupportTicketRoutes } from './support-tickets.js';
+import { initSupportTicketSchema, registerSupportTicketRoutes, validateContactInquiry, createContactInquiry, CONTACT_INQUIRY_CATEGORIES } from './support-tickets.js';
 import { initInAppNotificationSchema, registerInAppNotificationRoutes } from './in-app-notifications.js';
 import { initMessagingSchema, registerMessagingRoutes } from './messaging.js';
 import { registerAttachmentAdminRoutes } from './attachment-storage.js';
@@ -3739,6 +3739,49 @@ registerHomeAssistantRoutes(app, { pool, requireAuth });
 registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerContractorEmployeeRoutes(app, { pool, requireAuth, requireAdmin });
 registerSupportTicketRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
+
+// ── Public Contact page ─────────────────────────────────────────────────────────
+const contactLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) =>
+    res.status(429).json({ ok: false, message: 'Too many messages from this connection. Please try again later.' }),
+});
+
+app.get('/api/contact/categories', (_req, res) => res.json({ ok: true, categories: CONTACT_INQUIRY_CATEGORIES }));
+
+/** Contact page inquiries become support tickets in the admin Support queue. Sign-in is optional. */
+app.post('/api/contact', contactLimiter, async (req, res) => {
+  try {
+    const body = req.body || {};
+    // Hidden "website" field: people never fill it, simple bots do. Pretend success, store nothing.
+    if (typeof body.website === 'string' && body.website.trim()) {
+      return res.json({ ok: true, ticketNumber: null });
+    }
+    const checked = validateContactInquiry(body);
+    if (!checked.ok) {
+      return res.status(400).json({ ok: false, code: 'VALIDATION_FAILED', message: 'Please check the highlighted fields.', errors: checked.errors });
+    }
+    let authUser = null;
+    const header = req.headers.authorization;
+    if (header && header.startsWith('Bearer ')) {
+      try {
+        const decoded = jwt.verify(header.slice(7), JWT_SECRET, { algorithms: ['HS256'] });
+        const { rows } = await pool.query('SELECT id, role FROM users WHERE id=$1 AND COALESCE(is_blocked,false)=false', [decoded.id]);
+        if (rows[0]) authUser = { id: rows[0].id, role: rows[0].role };
+      } catch {
+        /* an expired or invalid token just means the inquiry is stored as a visitor's */
+      }
+    }
+    const ticket = await createContactInquiry(pool, checked.value, authUser);
+    return res.json({ ok: true, ticketNumber: ticket.ticketNumber });
+  } catch (e) {
+    console.error('contact inquiry:', e?.message || e);
+    return res.status(500).json({ ok: false, message: 'We could not send your message. Please try again or email us.' });
+  }
+});
 registerHomeownerAdminRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerFinanceRoutes(app, { pool, requireAuth, requireAdmin });
 registerSubscriptionPlanRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });

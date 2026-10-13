@@ -113,6 +113,8 @@ import HomeownerBottomNav from "./HomeownerBottomNav";
 import HomeownerMoreMenu from "./HomeownerMoreMenu";
 import HomeownerInboxPanel from "./HomeownerInboxPanel";
 import NotificationBell from "./NotificationBell";
+import NeedHelpButton from "./NeedHelpButton";
+import HomeCareUpgradePrompt from "./HomeCareUpgradePrompt";
 import { useInAppComms } from "./useInAppComms";
 import { formatBadgeCount, type InAppNotification } from "./notificationsApi";
 import { resolveNotificationTarget, STALE_CONTENT_MESSAGE } from "./navigateFromNotification";
@@ -522,6 +524,7 @@ export default function HomeownerDashboard({
   const [mediaDataUrl, setMediaDataUrl] = useState<string | null>(null);
   // Photos after the first (cover) one. Fixera reads up to MAX_CASE_PHOTOS per request.
   const [additionalPhotos, setAdditionalPhotos] = useState<string[]>([]);
+  const [upgradePromptOpen, setUpgradePromptOpen] = useState(false);
   const [mediaType, setMediaType] = useState<string | null>(null);
   const [assistantHandoffIntent, setAssistantHandoffIntent] = useState<"remote_quote" | "site_visit" | "diy" | null>(null);
   const [propertyPurpose, setPropertyPurpose] = useState("current_homeowner");
@@ -3031,6 +3034,12 @@ export default function HomeownerDashboard({
   }
 
   function requestAiAssessment(run?: () => Promise<void>) {
+    // Without HomeCare Pro, offer the upgrade instead of starting (or creating) anything.
+    // If the plan has not loaded yet, the server still refuses non-members.
+    if (user.homeCareSubscription != null && !hasHomeCarePro) {
+      setUpgradePromptOpen(true);
+      return;
+    }
     const next = run ?? (() => submitIssue("ai"));
     if (hasStoredAiAck()) {
       prepareAiConsent();
@@ -3699,6 +3708,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                 HomeCare
               </button>
             )}
+            <NeedHelpButton variant="icon" className="h-8 w-8 border-0" />
             <NotificationBell
               unreadCount={unreadNotifications}
               onRefreshCounts={refreshComms}
@@ -3734,6 +3744,7 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
               {goProPromoCard}
             </div>
             <div className="space-y-1 border-t border-border p-3">
+              <NeedHelpButton variant="link" label="Need help? Chat with us" className="w-full rounded-md px-3 py-2.5 text-foreground hover:bg-muted [&_svg]:mr-1.5" />
               <button type="button" onClick={onToggleDark} className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm hover:bg-muted">
                 {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
                 {isDark ? "Light mode" : "Dark mode"}
@@ -4075,13 +4086,16 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                       Tell FixBridge what&apos;s going on - we&apos;ll analyze it and help you DIY or hire a pro.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setTab("jobs")}
-                    className="text-sm font-semibold text-primary hover:underline"
-                  >
-                    View my requests
-                  </button>
+                  <div className="flex flex-col items-end gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setTab("jobs")}
+                      className="text-sm font-semibold text-primary hover:underline"
+                    >
+                      View my requests
+                    </button>
+                    <NeedHelpButton variant="link" label="Need help?" className="text-xs" />
+                  </div>
                 </div>
 
                 {assistantHandoffIntent ? (
@@ -5929,6 +5943,22 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
             </div>
           )}
         </AnimatePresence>
+        <HomeCareUpgradePrompt
+          open={upgradePromptOpen}
+          onClose={() => setUpgradePromptOpen(false)}
+          onUpgrade={() => {
+            setUpgradePromptOpen(false);
+            navigateTab("go-pro");
+          }}
+          onHirePro={
+            tab === "report" && step === "intake"
+              ? () => {
+                  setUpgradePromptOpen(false);
+                  void submitIssue("experts");
+                }
+              : undefined
+          }
+        />
       </div>
     </ProFeatureProvider>
   );

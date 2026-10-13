@@ -16,7 +16,7 @@ import ResetPassword from "./ResetPassword";
 import GoProPublicPage from "./GoProPublicPage";
 import SubscriptionSuccessModal from "./SubscriptionSuccessModal";
 import SubscriptionCancelModal from "./SubscriptionCancelModal";
-import { getStoredUser, validateToken, clearSession, loadAllUsers, saveSession, type AuthUser, type UserRole, type ResetRole } from "./auth";
+import { getStoredUser, getStoredToken, validateToken, clearSession, loadAllUsers, saveSession, type AuthUser, type UserRole, type ResetRole } from "./auth";
 import { storePendingReferralCode } from "./referralSession";
 import { brand } from "../config/brand";
 import { PAID_HOME_CARE_PLAN_CODE, isPaidHomeCarePlan } from "./subscriptionCatalog";
@@ -34,12 +34,25 @@ import {
   seedAppHistory,
   roleHomeFrame,
   roleHomePage,
+  isPublicContentPage,
+  publicContentPageForPath,
+  type PublicContentPage,
 } from "./navigation";
 import LegalDocumentPage from "./LegalDocumentPage";
 import MarketingUnsubscribePage from "./MarketingUnsubscribePage";
 import { PUBLIC_FOOTER_LEGAL_LINKS, PUBLIC_CONTRACTOR_LEGAL_LINKS } from "./legalDocuments";
 import { applySiteMeta } from "./siteMeta";
 import LeadConnectorChatWidget, { shouldShowLeadConnectorChat } from "./LeadConnectorChatWidget";
+import NeedHelpButton from "./NeedHelpButton";
+import HowItWorksPage from "./public/HowItWorksPage";
+import FixeraAssessmentPage from "./public/FixeraAssessmentPage";
+import FindContractorPage from "./public/FindContractorPage";
+import BlogPage, { LOCATION_CHANGE_EVENT } from "./public/BlogPage";
+import PressPage from "./public/PressPage";
+import CareersPage from "./public/CareersPage";
+import ContactPage from "./public/ContactPage";
+import type { PublicPageActions } from "./public/publicActions";
+import { PUBLIC_CONTENT_PAGES } from "../shared/publicSiteMeta.js";
 
 function isResetRole(role: string | null): role is ResetRole {
   return role === "homeowner" || role === "contractor" || role === "admin" || role === "partner";
@@ -63,7 +76,8 @@ type Page =
   | "partner"
   | "homeowner-dashboard"
   | "contractor-dashboard"
-  | "admin";
+  | "admin"
+  | PublicContentPage;
 
 const APP_STATE_KEY = "fixbridge-app-state";
 const THEME_KEY = "fixbridge-theme";
@@ -103,7 +117,8 @@ function isValidPage(value: unknown): value is Page {
     value === "partner" ||
     value === "homeowner-dashboard" ||
     value === "contractor-dashboard" ||
-    value === "admin"
+    value === "admin" ||
+    isPublicContentPage(value)
   );
 }
 
@@ -128,12 +143,17 @@ function loadInitialState(): {
       ? (JSON.parse(raw) as { page?: unknown; marketingContext?: unknown })
       : {};
 
-    const rawPage = isValidPage(parsed.page) ? parsed.page : fallback.page;
+    const storedPage = isValidPage(parsed.page) ? parsed.page : fallback.page;
+    const rawPage = isPublicContentPage(storedPage) ? fallback.page : storedPage;
     const marketingContext =
       parsed.marketingContext === "contractors" ? "contractors" : "home";
 
     // Restore session from the secure token cache (no password stored here)
     const currentUser = getStoredUser();
+
+    // A content page's own URL (e.g. /blog, /contact) always opens that page.
+    const pathPage = publicContentPageForPath(window.location.pathname);
+    if (pathPage) return { page: pathPage, marketingContext, currentUser };
 
     // Never restore a dashboard page without a cached user — prevents white screen
     // flash on first load after logout (clearSession removes the user but not the page).
@@ -165,7 +185,7 @@ function Nav({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const overHero =
-    (page === "home" || page === "contractors" || page === "about" || page === "go-pro") &&
+    (page === "home" || page === "contractors" || page === "about" || page === "go-pro" || isPublicContentPage(page)) &&
     !scrolled &&
     !menuOpen;
   const ink = overHero ? "text-white" : "text-foreground";
@@ -240,6 +260,7 @@ function Nav({
         {/* Right actions — flush right within page gutters */}
         <div className="relative z-10 ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
           <div className="hidden md:flex items-center gap-3">
+            <NeedHelpButton variant="link" label="Help" className={muted} />
             <button
               onClick={onToggleDark}
               className={`w-9 h-9 flex items-center justify-center border transition-colors ${border} ${muted}`}
@@ -330,6 +351,9 @@ function Nav({
           >
             About
           </button>
+          <div className="py-2">
+            <NeedHelpButton variant="link" label="Need help? Chat with us" className="py-1" />
+          </div>
           <div className="pt-3 mt-1 border-t border-border flex flex-col gap-2">
             <button
               onClick={() => { onNavigate("homeowner-login"); setMenuOpen(false); }}
@@ -358,9 +382,9 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
       title: "Homeowners",
       links: [
         { label: "Post a Job", page: "homeowner-login" as Page },
-        { label: "How It Works", page: "home" as Page },
-        { label: "Fixera Assessment", page: "home" as Page },
-        { label: "Find a Contractor", page: "home" as Page },
+        { label: "How It Works", page: "how-it-works" as Page },
+        { label: "Fixera Assessment", page: "fixera-assessment" as Page },
+        { label: "Find a Contractor", page: "find-a-contractor" as Page },
         { label: "Pricing", page: "go-pro" as Page },
         { label: "HomeCare Plans", page: "go-pro" as Page },
       ],
@@ -379,10 +403,10 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
       title: "Company",
       links: [
         { label: `About ${brand.productName}`, page: "about" as Page },
-        { label: "Blog", page: "home" as Page },
-        { label: "Press", page: "home" as Page },
-        { label: "Careers", page: "home" as Page },
-        { label: "Contact", page: "home" as Page },
+        { label: "Blog", page: "blog" as Page },
+        { label: "Press", page: "press" as Page },
+        { label: "Careers", page: "careers" as Page },
+        { label: "Contact", page: "contact" as Page },
         { label: "Staff login", page: "admin-login" as Page },
         // { label: "Partner portal", page: "partner" as Page },
       ],
@@ -443,21 +467,27 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
               <ul className="space-y-2 sm:space-y-2.5">
                 {links.map(({ label, page }) => (
                   <li key={label}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onNavigate(page);
-                        if (label === "Contact") {
-                          requestAnimationFrame(() => {
-                            document.querySelector<HTMLElement>("[data-scroll-root]")?.scrollTo({ top: 0, behavior: "smooth" });
-                            window.scrollTo({ top: 0, behavior: "smooth" });
-                          });
-                        }
-                      }}
-                      className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left leading-snug"
-                    >
-                      {label}
-                    </button>
+                    {isPublicContentPage(page) ? (
+                      <a
+                        href={PUBLIC_CONTENT_PAGES[page].path}
+                        onClick={(event) => {
+                          if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+                          event.preventDefault();
+                          onNavigate(page);
+                        }}
+                        className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left leading-snug"
+                      >
+                        {label}
+                      </a>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => onNavigate(page)}
+                        className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left leading-snug"
+                      >
+                        {label}
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -853,7 +883,15 @@ export default function App() {
   };
 
   const navigate = (p: Page, options?: { replace?: boolean; user?: AuthUser | null }) => {
-    if (p === page && !options?.replace) return;
+    if (p === page && !options?.replace) {
+      // Already on this content page but on a sub-path (a blog article): go to the page itself.
+      if (isPublicContentPage(p) && window.location.pathname !== PUBLIC_CONTENT_PAGES[p].path) {
+        window.history.pushState(window.history.state, "", PUBLIC_CONTENT_PAGES[p].path);
+        window.dispatchEvent(new Event(LOCATION_CHANGE_EVENT));
+      }
+      if (scrollRef.current) scrollRef.current.scrollTop = 0;
+      return;
+    }
     if (p === "home" || p === "contractors") {
       setMarketingContext(p);
     }
@@ -881,7 +919,21 @@ export default function App() {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   };
 
-  const isMarketing = page === "home" || page === "contractors" || page === "about" || page === "go-pro";
+  const isMarketing =
+    page === "home" || page === "contractors" || page === "about" || page === "go-pro" || isPublicContentPage(page);
+  const [contactTopic, setContactTopic] = useState<string | null>(null);
+  const publicActions: PublicPageActions = {
+    openPage: (next) => navigate(next),
+    startRequest: () =>
+      currentUser?.role === "homeowner" ? navigate("homeowner-dashboard") : navigate("homeowner-login"),
+    seePlans: () => navigate("go-pro"),
+    joinAsContractor: () => navigate("contractor-login"),
+    openAbout: () => navigate("about"),
+  };
+  const openContact = (topic: string | null) => {
+    setContactTopic(topic);
+    navigate("contact");
+  };
   const isDashboard = page === "homeowner-dashboard" || page === "contractor-dashboard";
 
   // Persist nav state (no user data — that lives in the secure token cache)
@@ -1118,6 +1170,20 @@ export default function App() {
               scrollContainer={scrollRef}
               onGoHomeowner={() => navigate("homeowner-login")}
               onGoContractor={() => navigate("contractor-login")}
+            />
+          )}
+          {page === "how-it-works" && <HowItWorksPage actions={publicActions} />}
+          {page === "fixera-assessment" && <FixeraAssessmentPage actions={publicActions} />}
+          {page === "find-a-contractor" && <FindContractorPage actions={publicActions} />}
+          {page === "blog" && <BlogPage actions={publicActions} />}
+          {page === "press" && <PressPage actions={publicActions} onContactPress={() => openContact("Press & Media")} />}
+          {page === "careers" && <CareersPage actions={publicActions} onContact={() => openContact("General Support")} />}
+          {page === "contact" && (
+            <ContactPage
+              key={contactTopic || "contact"}
+              initialCategory={contactTopic}
+              user={currentUser ? { name: currentUser.name, email: currentUser.email } : null}
+              authToken={currentUser ? getStoredToken() : null}
             />
           )}
 

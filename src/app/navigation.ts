@@ -3,6 +3,7 @@
 import { sanitizeAdminTab } from "./adminNav";
 import { sanitizeContractorTab } from "./contractorNav";
 import { sanitizeDashTab, sanitizeJobsSegment } from "./homeownerNav";
+import { PUBLIC_CONTENT_PAGES } from "../shared/publicSiteMeta.js";
 
 export type AppPage =
   | "home"
@@ -15,7 +16,36 @@ export type AppPage =
   | "partner"
   | "homeowner-dashboard"
   | "contractor-dashboard"
-  | "admin";
+  | "admin"
+  | PublicContentPage;
+
+/** Public content pages that have their own URL path (see src/shared/publicSiteMeta.js). */
+export type PublicContentPage =
+  | "blog"
+  | "press"
+  | "careers"
+  | "contact"
+  | "how-it-works"
+  | "fixera-assessment"
+  | "find-a-contractor";
+
+export const PUBLIC_CONTENT_PAGE_KEYS = Object.keys(PUBLIC_CONTENT_PAGES) as PublicContentPage[];
+
+export function isPublicContentPage(page: unknown): page is PublicContentPage {
+  return typeof page === "string" && (PUBLIC_CONTENT_PAGE_KEYS as string[]).includes(page);
+}
+
+function cleanPath(pathname: string) {
+  return pathname.replace(/\/+$/, "") || "/";
+}
+
+/** The content page a URL path belongs to (`/blog/some-article` belongs to "blog"). */
+export function publicContentPageForPath(pathname: string): PublicContentPage | null {
+  const path = cleanPath(pathname);
+  if (path === "/blog" || path.startsWith("/blog/")) return "blog";
+  const hit = PUBLIC_CONTENT_PAGE_KEYS.find((key) => PUBLIC_CONTENT_PAGES[key].path === path);
+  return hit ?? null;
+}
 
 export type UserRole = "homeowner" | "contractor" | "admin";
 
@@ -315,8 +345,16 @@ export function hasInternalHistory() {
   return currentHistoryDepth() > 1;
 }
 
-function historyUrl() {
-  return window.location.pathname + window.location.search;
+function historyUrl(page?: AppPage) {
+  const current = window.location.pathname;
+  if (page && isPublicContentPage(page)) {
+    // Keep a blog article path while on the blog; otherwise use the page's own path.
+    if (page === "blog" && publicContentPageForPath(current) === "blog") return current;
+    return PUBLIC_CONTENT_PAGES[page].path;
+  }
+  // Leaving a content page returns the URL to the site root.
+  if (publicContentPageForPath(current)) return "/" + window.location.search;
+  return current + window.location.search;
 }
 
 function writeHistory(mode: "push" | "replace", page: AppPage, nav?: NavFrame) {
@@ -332,8 +370,8 @@ function writeHistory(mode: "push" | "replace", page: AppPage, nav?: NavFrame) {
     fixbridgeNav: nav,
     fixbridgeDepth: depth,
   };
-  if (mode === "push") window.history.pushState(state, "", historyUrl());
-  else window.history.replaceState(state, "", historyUrl());
+  if (mode === "push") window.history.pushState(state, "", historyUrl(page));
+  else window.history.replaceState(state, "", historyUrl(page));
 }
 
 /** Tag the landing entry as FixBridge without adding a fake step. External referrer stays behind it. */
@@ -347,7 +385,7 @@ export function seedAppHistory(page: AppPage, nav?: NavFrame) {
   window.history.replaceState(
     { fixbridgePage: page, fixbridgeAuth: true, fixbridgeNav: nav, fixbridgeDepth: 1 },
     "",
-    historyUrl()
+    historyUrl(page)
   );
 }
 

@@ -4,7 +4,8 @@ const _env = import.meta.env as Record<string, string | undefined>;
 export const brand = {
   productName: _env.VITE_BRAND_NAME?.trim() || "FixBridge",
   legalName: _env.VITE_BRAND_LEGAL_NAME?.trim() || "FixBridge",
-  supportEmail: _env.VITE_BRAND_SUPPORT_EMAIL?.trim() || "support@fixbridge.example",
+  // Matches the reply-to address the server sends support mail from.
+  supportEmail: _env.VITE_BRAND_SUPPORT_EMAIL?.trim() || "support@fixbridge.us",
   tagline: _env.VITE_BRAND_TAGLINE?.trim() || "AI-powered property care and service coordination",
   primaryColor: _env.VITE_BRAND_PRIMARY_COLOR?.trim() || "#FF4D1C",
   logoUrl: _env.VITE_BRAND_LOGO_URL?.trim() || "/fixbridge-logo.png",

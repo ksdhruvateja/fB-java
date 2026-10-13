@@ -258,6 +258,14 @@
   .fixera-buffer::after { animation: none; }
 }
 
+/* HighLevel chat: show the vendor element only while its chat panel is open, so the greeting
+   bubble and floating launcher never cover forms, the Continue button or the bottom nav.
+   It is opened from FixBridge's own "Need help?" controls (openHelpChat). */
+chat-widget:not([data-active="true"]),
+html[data-fb-chat="off"] chat-widget {
+  display: none !important;
+}
+
 /* Temporary HighLevel launcher: lift above mobile bottom nav. Do not restyle widget internals. */
 @media (max-width: 1023px) {
   html[data-fb-chat="portal"] iframe[src*="leadconnectorhq.com"],

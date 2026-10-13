@@ -51,6 +51,7 @@ import ContractorPerformancePanel from "./ContractorPerformancePanel";
 import ContractorSupportPanel from "./ContractorSupportPanel";
 import MessagesPanel from "./MessagesPanel";
 import NotificationBell from "./NotificationBell";
+import NeedHelpButton from "./NeedHelpButton";
 import { useInAppComms } from "./useInAppComms";
 import { formatBadgeCount, type InAppNotification } from "./notificationsApi";
 import { resolveNotificationTarget, STALE_CONTENT_MESSAGE } from "./navigateFromNotification";
@@ -643,6 +644,7 @@ export default function ContractorDashboard({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <NeedHelpButton variant="icon" className="h-8 w-8 border-0" />
           <NotificationBell
             unreadCount={unreadNotifications}
             onRefreshCounts={refreshComms}
