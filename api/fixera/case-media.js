@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { isObjectRef, objectStorageEnabled, putDataUrl, resolveMediaDataUrl } from '../object-storage.js';
+import { prepareStoredMedia, referenceForMediaRow, resolveMediaDataUrl } from '../media-store.js';
 
 export async function storeFixeraCaseMedia(pool, {
   userId,
@@ -45,17 +45,14 @@ export async function storeFixeraCaseMedia(pool, {
   }
 
   const storageKey = `fixera/${caseType}/${caseId}/${randomUUID()}`;
-  // With object storage on, the bytes go to the bucket (under this case's own prefix) and the
-  // row keeps only the reference.
-  const stored = objectStorageEnabled()
-    ? await putDataUrl(source, { prefix: `cases/${caseType}/${caseId}` })
-    : source;
+  // Neon (default): bytes stored once as BYTEA in this row. MEDIA_STORAGE=s3: bucket reference.
+  const stored = await prepareStoredMedia(source, { prefix: `cases/${caseType}/${caseId}` });
   const { rows } = await pool.query(
     `INSERT INTO media_objects (
        owner_user_id, job_id, pending_service_request_id, case_type, property_id,
-       equipment_key, kind, storage_key, content_type, byte_size, data_url
-     ) VALUES ($1,$2,$3,$4,$5,$6,'fixera_repair_case',$7,$8,$9,$10)
-     RETURNING id, storage_key, content_type, byte_size, created_at, data_url`,
+       equipment_key, kind, storage_key, content_type, byte_size, data_url, bytes
+     ) VALUES ($1,$2,$3,$4,$5,$6,'fixera_repair_case',$7,$8,$9,$10,$11)
+     RETURNING id, storage_key, content_type, byte_size, created_at, data_url, (bytes IS NOT NULL) AS has_bytes`,
     [
       userId,
       isManagedJob ? caseId : null,
@@ -66,9 +63,11 @@ export async function storeFixeraCaseMedia(pool, {
       storageKey,
       contentType,
       byteSize,
-      stored,
+      stored.data_url,
+      stored.bytes,
     ]
   );
+  if (rows[0]) rows[0].ref = referenceForMediaRow(rows[0]);
   return rows[0] || null;
 }
 /** Photos per repair case that Fixera reads and the homeowner can attach at once. */
@@ -106,9 +105,9 @@ export function readCasePhotoList(body = {}, { arrayKey = 'mediaDataUrls', singl
 }
 
 /**
- * Stores each photo as case media. With object storage on, the case's cover column
- * (media_data_url) is switched to the first photo's reference, so the bytes are not also kept in
- * the database. Returns the stored rows.
+ * Stores each photo as case media. The case's cover column (media_data_url) is switched to the
+ * first photo's reference, so the job row stays small and the photo is stored once.
+ * Returns the stored rows.
  */
 export async function storeFixeraCasePhotos(pool, { dataUrls = [], ...rest }) {
   const stored = [];
@@ -116,9 +115,9 @@ export async function storeFixeraCasePhotos(pool, { dataUrls = [], ...rest }) {
     stored.push(await storeFixeraCaseMedia(pool, { ...rest, dataUrl }));
   }
   const rows = stored.filter(Boolean);
-  if (rows[0] && isObjectRef(rows[0].data_url)) {
+  if (rows[0]?.ref) {
     const table = rest.caseType === 'managed_job' ? 'managed_jobs' : 'pending_service_requests';
-    await pool.query(`UPDATE ${table} SET media_data_url=$1 WHERE id=$2 AND homeowner_user_id=$3`, [rows[0].data_url, rest.caseId, rest.userId]);
+    await pool.query(`UPDATE ${table} SET media_data_url=$1 WHERE id=$2 AND homeowner_user_id=$3`, [rows[0].ref, rest.caseId, rest.userId]);
   }
   return rows;
 }
@@ -132,19 +131,22 @@ export async function listFixeraCaseImages(pool, { caseType, caseId, coverDataUr
   let urls = [];
   try {
     const { rows } = await pool.query(
-      `SELECT data_url FROM media_objects
-        WHERE kind='fixera_repair_case' AND ${column}=$1 AND content_type LIKE 'image/%' AND data_url IS NOT NULL
+      `SELECT content_type, data_url, bytes FROM media_objects
+        WHERE kind='fixera_repair_case' AND ${column}=$1 AND content_type LIKE 'image/%'
+          AND (bytes IS NOT NULL OR data_url IS NOT NULL)
         ORDER BY created_at DESC, id DESC
         LIMIT $2`,
       [caseId, Math.min(Math.max(1, limit), MAX_CASE_PHOTOS)]
     );
-    // Photos in object storage are fetched for the AI (it needs the bytes); unreadable ones are skipped.
-    urls = (await Promise.all(rows.map((r) => resolveMediaDataUrl(r.data_url)))).filter(Boolean).reverse();
+    // The AI needs the bytes: Neon rows carry them; older or bucket rows are read; unreadable ones are skipped.
+    urls = (await Promise.all(rows.map((r) => (r.bytes
+      ? `data:${r.content_type};base64,${Buffer.from(r.bytes).toString('base64')}`
+      : resolveMediaDataUrl(pool, r.data_url))))).filter(Boolean).reverse();
   } catch (err) {
     console.warn('[fixera] case photos unavailable', err?.code || err?.message);
   }
   if (!urls.length && coverDataUrl) {
-    const cover = await resolveMediaDataUrl(coverDataUrl);
+    const cover = await resolveMediaDataUrl(pool, coverDataUrl);
     if (typeof cover === 'string' && cover.startsWith('data:image/')) urls = [cover];
   }
   return urls;

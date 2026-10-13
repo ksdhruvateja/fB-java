@@ -767,7 +767,9 @@ export async function initManagedSchema(pool) {
       ADD COLUMN IF NOT EXISTS pending_service_request_id BIGINT,
       ADD COLUMN IF NOT EXISTS case_type TEXT,
       ADD COLUMN IF NOT EXISTS property_id INT,
-      ADD COLUMN IF NOT EXISTS equipment_key TEXT
+      ADD COLUMN IF NOT EXISTS equipment_key TEXT,
+      -- Case photo bytes in Neon (api/media-store.js); data_url is kept for older rows.
+      ADD COLUMN IF NOT EXISTS bytes BYTEA
   `);
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_media_objects_case

@@ -268,49 +268,39 @@ See **SCALING.md** for the details, measurements and the infrastructure plan.
 - **Photos and shutdown:** `MEDIA_URL_TTL_S`, `MEDIA_SIGNING_SECRET` (optional), `SHUTDOWN_GRACE_MS`
 - **Debugging:** `JOB_DEBUG_LOG`
 
-## 12. Case photos in object storage
+## 12. Case photos in Neon (default), with an optional bucket
 
-`api/object-storage.js` stores case photos in any S3-compatible bucket: Cloudflare R2, AWS S3, or a MinIO-style service.
-- **No new dependency:** requests are signed with AWS Signature V4 using Node's built-in crypto.
-- **Checked against the official AWS SDK:** for the same inputs the signatures are byte-for-byte identical (uploads, downloads, deletes and pre-signed links, on R2-style and AWS-style addresses). The expected values are pinned in `api/object-storage.test.js`.
+### Default: Neon, nothing to configure
+- **Stored once, as bytes:** each case photo is stored once as raw bytes in `media_objects.bytes` (BYTEA). That takes about 25% less space than the base64 text used before.
+- **Job rows hold a reference:** the job and saved-request rows keep only a short reference (`neonmedia:<id>`). About 78 queries read whole job rows (`SELECT *`), and each of them used to pull the job's photo out of Neon too; they no longer do. Creating a job no longer sends the photo back in the response.
+- **Viewing:** browsers load photos through 1-hour signed app links (`/api/media/job/:id`, `/api/media/pending/:id`), which read the bytes from Neon. This covers job lists, job details, saved requests and contractor invitations.
+- **AI:** Fixera still receives the original photos.
+- **Cleanup:** photos are deleted along with expired saved requests and failed job creations, so they are not left behind in Neon.
+- **Older rows** that still hold base64 text keep working everywhere. Move them once:
+  ```bash
+  NEON_DATABASE_URL=... node scripts/migrate-case-photos.mjs --dry-run
+  NEON_DATABASE_URL=... node scripts/migrate-case-photos.mjs
+  ```
+  It is safe to stop and re-run: a row switches to its reference only after its photo is stored. A cover that is also a case photo is stored once.
+- **Storage limits:** Neon plans have storage limits. Check yours against expected photo volume; each photo is up to about 4.5 MB.
 
-**Off by default.** Until you set `MEDIA_STORAGE=s3`, photos stay in the database exactly as before.
-
-### What changes when it is on
-- **Storage:** new case photos (first request, extra photos, reassess photos) are uploaded under `cases/<case type>/<case id>/`, one prefix per case. The database keeps only a reference (`objstore:<key>`). The cover photo is the first case photo, stored once.
-- **Viewing:** browsers never get bucket credentials. Lists and details give a 1-hour app link, which redirects to a 10-minute pre-signed bucket link (`MEDIA_PRESIGN_TTL_S`). This covers job lists, job details, saved (pending) requests and contractor invitations. The bucket must stay **private**.
-- **AI:** Fixera still gets the photo bytes. The server reads them from the bucket for each assessment.
-- **Browser security policy:** it now allows `media-src https:`, so case videos load from the bucket.
-
-### Setup (Cloudflare R2 example)
-1. Create a private bucket, for example `fixbridge-media`, and an R2 API token with Object Read & Write on that bucket only.
-2. On Railway **and** Netlify (functions), set:
-   - `MEDIA_STORAGE=s3`
-   - `S3_BUCKET=fixbridge-media`
-   - `S3_REGION=auto`
-   - `S3_ENDPOINT=https://<account id>.r2.cloudflarestorage.com`
-   - `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`
-
-   For AWS S3, use your region and leave out `S3_ENDPOINT`.
-3. Deploy, then move existing photos once (safe to stop and re-run):
-   ```bash
-   NEON_DATABASE_URL=... MEDIA_STORAGE=s3 S3_BUCKET=... S3_REGION=auto S3_ENDPOINT=... \
-   S3_ACCESS_KEY_ID=... S3_SECRET_ACCESS_KEY=... node scripts/migrate-media-to-object-storage.mjs --dry-run
-   # then the same command without --dry-run
-   ```
-   Each row switches to its reference only after its upload succeeds.
+### Optional: S3-compatible bucket (not needed)
+Set `MEDIA_STORAGE=s3` plus `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` to keep photo bytes in a private bucket (R2, S3 or MinIO-style) instead.
+- **Signing:** requests are signed with AWS Signature V4 using Node's crypto. The signatures are identical to the official AWS SDK, pinned in `api/object-storage.test.js`.
+- **Viewing:** browsers are redirected to 10-minute pre-signed links.
+- **Moving existing photos:** run the same migration script with those settings.
+- **Browser security policy:** it allows `media-src https:`, so case videos can load from a bucket.
 
 ### Not moved
-- **Other files still in the database:** contractor documents, employee photos, chat images, change-order photos and property documents.
-- **Deleting objects:** nothing deletes case photos today, so they are kept. Add a bucket lifecycle rule if you want old photos removed.
+- **Other files:** contractor documents, employee photos, chat images, change-order photos and property documents stay where they were.
 
 ## Tests
 
 ```bash
-node --test $(find api -name "*.test.js")    # 43 pass, 41 database tests skip
+node --test $(find api -name "*.test.js")    # 43 pass, 44 database tests skip
 # With a real PostgreSQL (or a Neon branch) for the route/pricing tests:
 FIXERA_TEST_DATABASE_URL=postgresql://... DB_SSL_REJECT_UNAUTHORIZED=false \
-  node --test --test-concurrency=1 $(find api -name "*.test.js")   # 84 pass
+  node --test --test-concurrency=1 $(find api -name "*.test.js")   # 87 pass
 ```
 
 **New test files:**
@@ -324,6 +314,7 @@ FIXERA_TEST_DATABASE_URL=postgresql://... DB_SSL_REJECT_UNAUTHORIZED=false \
 - `api/fixera/learning-loop.test.js`: de-identification, case record, prompt framing
 - `api/fixera-learning-routes.test.js`: record → outcome → professional correction → chat capture → admin review → reuse → export
 - `api/scale-and-personalization.test.js`: capped cache, fair AI limits, signed photo links, light job list, queue (once, one per user, no head-of-line blocking, crash recovery), per-user profile isolation
+- `api/media-store.test.js`: Neon photo storage (bytes stored once, reference in the job row, AI gets the photo, signed link serves it), migration of older rows, cleanup of expired requests
 - `api/object-storage.test.js`: signatures identical to the AWS SDK, photos stored in the bucket with references in the database, AI receives the bytes, signed-link redirect, migration runs once
 - `scripts/loadtest.mjs`: concurrency load test with a cross-user leak check (staging only)
 - `api/account-and-isolation.test.js`: password and Google sign-in to the same account, subscription restore, no guessable Google password, demo-email rule, one house per context
@@ -336,5 +327,5 @@ The in-memory `pg-mem` fallback cannot run the full schema (it lacks `trim()` an
 - Unsaved intake drafts keep only the first photo.
 - The safety patterns and guardrails are deterministic English-language rules. Review them with your safety or legal adviser before relying on them.
 - `logs/fixbridge-jobs-debug.json` is no longer written unless `JOB_DEBUG_LOG=true` (section 11).
-- Case photos move to object storage once `MEDIA_STORAGE=s3` is set (section 12). Other uploaded files are still in PostgreSQL.
+- Case photos are stored as bytes in Neon, outside the job rows (section 12). Other uploaded files are still stored as before.
 - Real AI answer quality has not been evaluated, including the new photo-quality and part-price fields. No provider keys were available.

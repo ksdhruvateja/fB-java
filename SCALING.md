@@ -8,7 +8,7 @@ This covers what the code now does for scale and isolation, what was measured, a
 | --- | --- |
 | Stateless API | Sessions are signed tokens, so any API instance can serve any user. Add instances behind the load balancer to add capacity. |
 | Shared debug log removed from the request path | Every API request used to rewrite one shared JSON file containing all users' requests and responses. That serialised every request and mixed users' data. It is now off unless `JOB_DEBUG_LOG=true` outside production. |
-| Photos in object storage | With `MEDIA_STORAGE=s3`, case photos are stored in a private S3/R2 bucket. The database keeps only references, and browsers load photos from the bucket through short-lived signed links. |
+| Photos out of the job rows | Case photos are stored once as bytes in Neon (`media_objects.bytes`), and job rows keep only a reference, so reading a job no longer pulls its photo. `MEDIA_STORAGE=s3` optionally moves the bytes to a bucket. |
 | Lighter dashboard | Job lists no longer embed each job's photo, contractor insurance document or staff photo. Photos load through 1-hour signed links (`/api/media/job/:id`). The average dashboard response fell from 117 KB to 2 KB. Lists are capped at 500 jobs per request. |
 | Durable AI queue | On long-running servers (Railway), AI assessments are rows in `fixera_assessment_queue`, claimed with `FOR UPDATE SKIP LOCKED`. Work survives restarts and deploys, runs once, and is shared across every instance. Each instance runs at most `FIXERA_WORKER_CONCURRENCY` (default 4) at a time. Work left by a crashed instance is retried. Netlify keeps its background function. |
 | Fair use | The queue runs one assessment per homeowner at a time while others are waiting, so a heavy user cannot delay everyone else. Instant AI calls (chat, direct assessment, reassess, Home Assistant) are limited to 2 in flight per user and `AI_MAX_INFLIGHT` (default 64) per instance. Beyond that the server answers "busy, retry in a few seconds" (503) instead of slowing every user down. |
@@ -64,7 +64,7 @@ The real limit for simultaneous assessments is the AI providers, not FixBridge.
 ## 5. Toward a billion registered users
 
 These need infrastructure projects; they are not in this patch.
-1. **Photos out of the database: done.** Set `MEDIA_STORAGE=s3` with a private bucket, then run `scripts/migrate-media-to-object-storage.mjs` once for existing photos (see FIXERA_FIXES.md §12). Put a CDN in front of the bucket if photo traffic grows.
+1. **Photo storage.** Photos are in Neon as bytes, outside the job rows (FIXERA_FIXES.md §12). At very large volume, set `MEDIA_STORAGE=s3` to move them to a bucket behind a CDN with `scripts/migrate-case-photos.mjs`; no code change is needed.
 2. **Partition and shard by user.** A single PostgreSQL database will not hold the jobs, notifications, interactions and media of a billion accounts.
    - Partition the big tables by `homeowner_user_id`/`user_id` hash, then shard: Citus, or several Neon projects with a router keyed by user or region.
    - Every query is already scoped by user or property, which keeps sharding straightforward.

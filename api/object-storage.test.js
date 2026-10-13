@@ -131,7 +131,7 @@ t('existing database photos are migrated once, and re-running changes nothing', 
   const job = (await pool.query(`INSERT INTO managed_jobs (homeowner_user_id, category, title, description, status, media_data_url, media_type) VALUES ($1,'plumbing','old','old','draft',$2,'image') RETURNING id`, [u.id, photo])).rows[0].id;
   await pool.query(`INSERT INTO media_objects (owner_user_id, job_id, case_type, kind, storage_key, content_type, byte_size, data_url) VALUES ($1,$2,'managed_job','fixera_repair_case','legacy','image/png',100,$3)`, [u.id, job, photo]);
   const before = bucket.size;
-  const run = () => promisify(execFile)('node', ['scripts/migrate-media-to-object-storage.mjs'], { env: process.env, cwd: new URL('..', import.meta.url).pathname });
+  const run = () => promisify(execFile)('node', ['scripts/migrate-case-photos.mjs'], { env: process.env, cwd: new URL('..', import.meta.url).pathname });
   const out = JSON.parse((await run()).stdout.trim().split('\n').pop());
   assert.equal(out.failed, 0);
   const cover = (await pool.query(`SELECT media_data_url FROM managed_jobs WHERE id=$1`, [job])).rows[0].media_data_url;

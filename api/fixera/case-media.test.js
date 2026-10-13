@@ -26,7 +26,9 @@ test('repair media is stored against the authorized case, property, and equipmen
   assert.match(calls[1].sql, /pending_service_request_id/);
   assert.deepEqual(calls[1].params.slice(0, 6), [7, null, 41, 'pending_service_request', 12, 'refrigerator-main']);
   assert.equal(calls[1].params[7], 'image/jpeg');
-  assert.equal(calls[1].params[9], 'data:image/jpeg;base64,ZmFrZQ==');
+  // Stored in Neon as bytes (media_objects.bytes), not as base64 text.
+  assert.equal(calls[1].params[9], null);
+  assert.equal(Buffer.from(calls[1].params[10]).toString(), 'fake');
 });
 
 test('repair media cannot be attached to another homeowner case or mismatched property', async () => {

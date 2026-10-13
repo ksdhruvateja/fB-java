@@ -24,8 +24,8 @@ import {
   withholdUnconfirmedGuidance,
 } from './fixera/safety-confirmation.js';
 import { recordDiySafetyEvent } from './diy-safety-events.js';
-import { decodeDataUrl, signedMediaUrl, verifyMediaSignature } from './media-signing.js';
-import { isObjectRef, presignedUrlForRef, resolveMediaDataUrl } from './object-storage.js';
+import { signedMediaUrl, verifyMediaSignature } from './media-signing.js';
+import { isMediaRef, readMedia, resolveMediaDataUrl } from './media-store.js';
 import { sanitizeMaintenanceUpdate, scheduleFollowUpMaintenance } from './fixera/maintenance-reminders.js';
 import { getUserProfile, personalizationContext, rebuildUserProfile } from './fixera/user-profile.js';
 import {
@@ -569,7 +569,7 @@ function parseJson(val, fallback = null) {
 
 /** Replaces an object-storage reference with a signed display link (raw rows sent to the browser). */
 function withDisplayMedia(row, kind, idField = 'id') {
-  if (!row || !isObjectRef(row.media_data_url)) return row;
+  if (!row || !isMediaRef(row.media_data_url)) return row;
   return { ...row, media_data_url: signedMediaUrl(kind, Number(row[idField])) };
 }
 
@@ -597,7 +597,7 @@ function serializeJob(row, viewer) {
     title: row.title,
     description: row.description,
     // Lists omit the photo bytes (has_media) and link to a signed URL instead.
-    mediaDataUrl: row.has_media || isObjectRef(row.media_data_url)
+    mediaDataUrl: row.has_media || isMediaRef(row.media_data_url)
       ? signedMediaUrl('job', Number(row.id))
       : row.media_data_url || null,
     mediaType: row.media_type,
@@ -1230,7 +1230,7 @@ async function runManagedJobAssessment(pool, job, viewer) {
   const result = await assessRepair({
     category: job.category,
     description: job.description,
-    imageDataUrl: caseImages[0] || (await resolveMediaDataUrl(job.media_data_url)),
+    imageDataUrl: caseImages[0] || (await resolveMediaDataUrl(pool, job.media_data_url)),
     imageDataUrls: caseImages,
     task: 'repair_assessment',
     jobId: recordId,
@@ -2329,6 +2329,15 @@ async function ensurePendingServiceRequestExpiry(pool) {
   `);
 }
 
+/** Removes a deleted case's photos so they are not left behind in the database. */
+async function deleteCaseMedia(pool, caseType, caseId) {
+  const column = caseType === 'managed_job' ? 'job_id' : 'pending_service_request_id';
+  await pool.query(
+    `DELETE FROM media_objects WHERE kind='fixera_repair_case' AND ${column}=$1`,
+    [caseId]
+  ).catch((e) => console.warn('[media] cleanup failed', e?.message || e));
+}
+
 async function purgeExpiredPendingServiceRequests(pool) {
   const { rows } = await pool.query(`
     DELETE FROM pending_service_requests
@@ -2338,6 +2347,11 @@ async function purgeExpiredPendingServiceRequests(pool) {
     RETURNING id
   `);
   if (rows.length > 0) {
+    // Their photos go too, so expired requests do not leave files behind in the database.
+    await pool.query(
+      `DELETE FROM media_objects WHERE pending_service_request_id = ANY($1::bigint[]) AND job_id IS NULL`,
+      [rows.map((row) => Number(row.id))]
+    ).catch((e) => console.warn('[PENDING SERVICE REQUEST] media cleanup failed:', e?.message || e));
     console.info('[PENDING SERVICE REQUEST] expired requests deleted:', rows.map((row) => row.id));
   }
   return rows.length;
@@ -4140,7 +4154,10 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
             dataUrls: casePhotos,
           });
           mediaObject = storedPhotos[0] || null;
+          // The row now holds a reference; keep the in-memory copy in step so the response stays small.
+          if (storedPhotos[0]?.ref) pending.media_data_url = storedPhotos[0].ref;
         } catch (mediaError) {
+          await deleteCaseMedia(pool, 'pending_service_request', pending.id);
           await pool.query(
             `DELETE FROM pending_service_requests WHERE id=$1 AND homeowner_user_id=$2`,
             [pending.id, req.authUser.id]
@@ -4292,7 +4309,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           dataUrls: casePhotos,
         });
         mediaObject = storedPhotos[0] || null;
+        if (storedPhotos[0]?.ref) job.media_data_url = storedPhotos[0].ref;
       } catch (mediaError) {
+        await deleteCaseMedia(pool, 'managed_job', job.id);
         await pool.query(
           `DELETE FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2`,
           [job.id, req.authUser.id]
@@ -4905,6 +4924,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       const pending = rows[0];
       if (!pending) return res.status(404).json({ ok: false, message: 'Pending service request not found or expired.' });
       if (pending.checkout_expires_at && new Date(pending.checkout_expires_at).getTime() <= Date.now()) {
+        await deleteCaseMedia(pool, 'pending_service_request', pendingId);
         await pool.query(`DELETE FROM pending_service_requests WHERE id=$1`, [pendingId]);
         return res.status(410).json({ ok: false, code: 'PENDING_SERVICE_REQUEST_EXPIRED', message: 'This saved request expired after 36 hours without payment.' });
       }
@@ -5369,12 +5389,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         return res.status(403).json({ ok: false, message: 'This link has expired.' });
       }
       const { rows } = await pool.query(`SELECT media_data_url FROM ${table} WHERE id=$1`, [id]);
-      if (isObjectRef(rows[0]?.media_data_url)) {
-        // Object storage: send the browser straight to a short-lived link to the private bucket.
+      const file = await readMedia(pool, rows[0]?.media_data_url, { allowRedirect: true });
+      if (file?.redirect) {
+        // Bucket storage: send the browser straight to a short-lived link to the private bucket.
         res.set('Cache-Control', 'private, max-age=300');
-        return res.redirect(302, presignedUrlForRef(rows[0].media_data_url));
+        return res.redirect(302, file.redirect);
       }
-      const file = decodeDataUrl(rows[0]?.media_data_url);
       if (!file) return res.status(404).json({ ok: false, message: 'Not found.' });
       res.set('Content-Type', file.contentType);
       res.set('Cache-Control', 'private, max-age=3600');
@@ -6887,7 +6907,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           category: r.category,
           title: r.title,
           description: r.description,
-          mediaDataUrl: isObjectRef(r.media_data_url) ? signedMediaUrl('job', Number(r.job_id)) : r.media_data_url || null,
+          mediaDataUrl: isMediaRef(r.media_data_url) ? signedMediaUrl('job', Number(r.job_id)) : r.media_data_url || null,
           mediaType: r.media_type || null,
           preferredDate: r.preferred_date,
           preferredTimeSlot: r.preferred_time_slot,
