@@ -850,6 +850,9 @@ export async function initManagedSchema(pool) {
   await pool.query(`ALTER TABLE site_reviews ADD COLUMN IF NOT EXISTS rating_cleanliness INT`);
   await pool.query(`ALTER TABLE site_reviews ADD COLUMN IF NOT EXISTS rating_value INT`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_role_preset TEXT`);
+  // FALSE: the account signs in with Google only until the owner sets a password.
+  // NULL: older account; checked on password sign-in.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_login_enabled BOOLEAN`);
   try {
     await pool.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS site_reviews_user_job_uidx

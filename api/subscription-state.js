@@ -11,8 +11,24 @@ import {
 } from './subscription-catalog.js';
 
 /** Designated QA/demo accounts only. Never matches a real customer address. */
+/**
+ * Complimentary QA access. In production only the addresses listed in QA_GUIDED_DIY_EMAILS
+ * qualify. The demo.homeowner.*@example.com pattern alone works outside production only,
+ * because anyone can sign up with such an address and would otherwise get Pro for free.
+ */
 export function isQaGuidedDiyDemoEmail(email) {
-  return /^demo\.homeowner\.[a-z0-9._-]+@example\.com$/i.test(String(email || '').trim());
+  const value = String(email || '').trim().toLowerCase();
+  if (!value) return false;
+  const allowList = String(process.env.QA_GUIDED_DIY_EMAILS || '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  if (allowList.includes(value)) return true;
+  const production =
+    process.env.NODE_ENV === 'production' ||
+    process.env.CONTEXT === 'production' ||
+    process.env.FIXBRIDGE_HOSTING === 'netlify';
+  return !production && /^demo\.homeowner\.[a-z0-9._-]+@example\.com$/i.test(value);
 }
 
 /**

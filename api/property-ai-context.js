@@ -258,6 +258,7 @@ export async function buildPropertyAIContext(pool, propertyId, userId, options =
  * Orchestrated context for the unified Home Assistant.
  */
 export async function buildHomeAssistantContext(pool, { userId, propertyId, jobId, intent, userMessage }) {
+  let verifiedJobId = null;
   const parts = [];
   let risk = { level: 'MODERATE', reason: null };
   if (userMessage) risk = classifyDiyRisk(userMessage);
@@ -341,10 +342,13 @@ export async function buildHomeAssistantContext(pool, { userId, propertyId, jobI
        LEFT JOIN proposals p ON p.job_id = j.id AND p.id = (
          SELECT id FROM proposals WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1
        )
-       WHERE j.id = $1 AND j.homeowner_user_id = $2`,
-      [jobId, userId]
+       WHERE j.id = $1 AND j.homeowner_user_id = $2
+         -- One house per conversation: a job from another of the owner's houses is not mixed in.
+         AND ($3::int IS NULL OR j.property_id IS NULL OR j.property_id = $3::int)`,
+      [jobId, userId, propertyId ? Number(propertyId) : null]
     );
     const job = jobs[0];
+    if (job) verifiedJobId = Number(job.id);
     if (job) {
       jobContext = { hasQuote: job.retail_amount != null || job.proposal_status === 'sent' };
       parts.push('=== CURRENT JOB ===');
@@ -389,6 +393,7 @@ export async function buildHomeAssistantContext(pool, { userId, propertyId, jobI
     contextText: parts.join('\n'),
     systemRules: systemRules.join('\n'),
     riskLevel: risk.level,
+    verifiedJobId,
     suggestedActions: buildSuggestedActions(risk.level, resolvedIntent, {
       userMessage,
       jobContext,

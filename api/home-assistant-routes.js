@@ -96,7 +96,7 @@ export function registerHomeAssistantRoutes(app, { pool, requireAuth }) {
       recordChatForLearning(pool, {
         userId: req.authUser.id,
         userRole: req.authUser.role,
-        jobId: Number.isFinite(Number(jobId)) && jobId != null ? Number(jobId) : null,
+        jobId: ctx.verifiedJobId || null,
         propertyId: propertyId || null,
         task: 'home_assistant',
         userMessage,

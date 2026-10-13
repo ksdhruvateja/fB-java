@@ -254,12 +254,21 @@ function tsQueryTerms(text) {
 }
 
 /**
- * Reviewed (approved or corrected) past cases similar to a new request, as prompt context.
- * With FIXERA_REUSE_CONFIRMED_OUTCOMES=true, cases a homeowner or professional confirmed as fixed
- * are also used before review (off by default).
+ * House isolation: by default nothing from one house is ever placed in another house's prompt.
+ * Collected cases are used only for review and the training export.
+ *
+ * With FIXERA_CROSS_HOME_REUSE=true, reviewed (approved or corrected) cases may be added as
+ * generic reference, using only the category, the diagnosis and the fix as written by the
+ * reviewer or by Fixera. The other homeowner's own words, outcome notes, property, job and
+ * user are never included. FIXERA_REUSE_CONFIRMED_OUTCOMES=true additionally allows cases
+ * confirmed fixed before review.
  */
+export function crossHomeReuseEnabled() {
+  return process.env.FIXERA_CROSS_HOME_REUSE === 'true';
+}
+
 export async function retrieveConfirmedCases(pool, { category = '', query = '', excludeJobId = null, limit = 3 } = {}) {
-  if (!pool) return { items: [], references: [] };
+  if (!pool || !crossHomeReuseEnabled()) return { items: [], references: [] };
   const terms = tsQueryTerms(query);
   if (!terms) return { items: [], references: [] };
   const includeConfirmed = process.env.FIXERA_REUSE_CONFIRMED_OUTCOMES === 'true';
@@ -284,32 +293,28 @@ export async function retrieveConfirmedCases(pool, { category = '', query = '', 
     console.warn('[fixera] confirmed-case lookup failed', e?.message || e);
     return { items: [], references: [] };
   }
+  // Only reviewer- or Fixera-written text: never the other homeowner's words or notes.
   const items = rows.map((r) => {
     const p = r.payload || {};
-    const fix = p.reviewer_correction?.fix
-      || (p.outcomes || []).find((o) => o.outcome === 'DIY_FIXED')?.details?.action
-      || p.professional_correction?.findings
-      || (p.diy_steps || []).slice(0, 3).join(' ');
-    const cause = p.reviewer_correction?.diagnosis || r.corrected_diagnosis || p.professional_correction?.actual_cause || p.diagnosis;
+    const fix = p.reviewer_correction?.fix || (p.diy_steps || []).slice(0, 3).join(' ');
+    const cause = p.reviewer_correction?.diagnosis || r.corrected_diagnosis || p.diagnosis;
     const how = r.quality_status === 'ADMIN_CORRECTED' ? 'reviewed and corrected' : r.quality_status === 'APPROVED' ? 'reviewed' : 'outcome confirmed, not yet reviewed';
     return [
-      `Past ${p.category || r.case_category || 'repair'} case (${how}${r.outcome_type ? `, outcome ${r.outcome_type}` : ''}):`,
-      `problem: ${p.problem || 'n/a'}`,
+      `Reference ${p.category || r.case_category || 'repair'} pattern (${how}):`,
       `confirmed cause: ${cause || 'n/a'}`,
       fix ? `what resolved it: ${fix}` : '',
-      p.safety?.level ? `safety level then: ${p.safety.level}` : '',
     ].filter(Boolean).join(' ');
   });
   return {
     items,
-    references: rows.map((r) => ({ type: 'confirmed_case', id: r.id, status: r.quality_status })),
+    references: rows.map((r) => ({ type: 'reference_pattern', id: r.id, status: r.quality_status })),
   };
 }
 
 export function confirmedCasesContext(result) {
   if (!result?.items?.length) return '';
   return [
-    'Similar past FixBridge cases (other homes, de-identified). Use them only as reference for likely causes and fixes.',
+    'General repair patterns confirmed by FixBridge reviewers. Use them only as reference for likely causes and fixes.',
     'They are not evidence about this home. The current photos and description take priority, and every safety rule still applies.',
     ...result.items.map((item) => `- ${item}`),
   ].join('\n');

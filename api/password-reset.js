@@ -212,7 +212,7 @@ export async function completePasswordReset(pool, { rawToken, role, password }) 
   }
 
   const upd = await pool.query(
-    `UPDATE users SET password=$1 WHERE LOWER(email)=LOWER($2) AND role=$3 RETURNING id`,
+    `UPDATE users SET password=$1, password_login_enabled=TRUE WHERE LOWER(email)=LOWER($2) AND role=$3 RETURNING id`,
     [hashed, row.email, r]
   );
   if (!upd.rows.length) {

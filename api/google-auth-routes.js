@@ -9,7 +9,7 @@ import { recordSignupMarketingConsents } from './marketing-consent-service.js';
 import { checkActionConsentsFromBody, validateAndRecordActionConsents } from './homeowner-consent.js';
 import { applyReferralCode, ensureReferralCode } from './referrals.js';
 import { syncUserHomeCareEntitlement, toPublicHomeCareSubscriptionDto } from './subscription-state.js';
-import { randomUUID } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import jwt from 'jsonwebtoken';
 
 function looksLikeGoogleWebClientId(value) {
@@ -395,7 +395,8 @@ async function handleHomeownerGoogle(pool, req, res, { googleUser, makeToken, ro
     }
 
     const phone = String(req.body?.phone || '').trim() || null;
-    const randomPass = `GOOGLE_OAUTH_${googleUser.sub}`;
+    // Unguessable: a Google account has no usable password until the owner sets one.
+    const randomPass = randomBytes(32).toString('base64url');
     const hashed = await bcrypt.hash(randomPass, 10);
     const referredByCode =
       typeof req.body?.referredByCode === 'string' && req.body.referredByCode.trim()
@@ -406,8 +407,9 @@ async function handleHomeownerGoogle(pool, req, res, { googleUser, makeToken, ro
     try {
       const { rows: inserted } = await pool.query(
         `INSERT INTO users (
-           role, name, email, password, phone, oauth_google_sub, google_avatar_url, signup_method, referred_by_code
-         ) VALUES ('homeowner', $1, $2, $3, $4, $5, $6, 'google', $7)
+           role, name, email, password, phone, oauth_google_sub, google_avatar_url, signup_method, referred_by_code,
+           password_login_enabled
+         ) VALUES ('homeowner', $1, $2, $3, $4, $5, $6, 'google', $7, FALSE)
          RETURNING *`,
         [googleUser.name, googleUser.email, hashed, phone, googleUser.sub, googleUser.picture, referredByCode]
       );
@@ -551,13 +553,15 @@ async function handleContractorGoogle(pool, req, res, { googleUser, makeToken, r
     });
   }
 
-  const randomPass = `GOOGLE_OAUTH_${googleUser.sub}`;
+  // Unguessable: a Google account has no usable password until the owner sets one.
+  const randomPass = randomBytes(32).toString('base64url');
   const hashed = await bcrypt.hash(randomPass, 10);
   try {
     const { rows: inserted } = await pool.query(
       `INSERT INTO users (
-         role, name, email, password, oauth_google_sub, google_avatar_url, signup_method, compliance_status
-       ) VALUES ('contractor', $1, $2, $3, $4, $5, 'google', 'draft')
+         role, name, email, password, oauth_google_sub, google_avatar_url, signup_method, compliance_status,
+         password_login_enabled
+       ) VALUES ('contractor', $1, $2, $3, $4, $5, 'google', 'draft', FALSE)
        RETURNING *`,
       [googleUser.name, googleUser.email, hashed, googleUser.sub, googleUser.picture]
     );
@@ -786,13 +790,15 @@ export function registerGoogleAuthRoutes(app, {
   app.get('/api/auth/google/linked', requireAuth, async (req, res) => {
     try {
       const { rows } = await pool.query(
-        `SELECT oauth_google_sub, google_avatar_url, signup_method, email, password
+        `SELECT oauth_google_sub, google_avatar_url, signup_method, email, password_login_enabled
          FROM users WHERE id=$1`,
         [req.authUser.id]
       );
       const row = rows[0];
       if (!row) return res.status(404).json({ ok: false, message: 'User not found.' });
-      const hasPassword = String(row.signup_method || 'email') !== 'google';
+      const hasPassword = row.password_login_enabled == null
+        ? String(row.signup_method || 'email') !== 'google'
+        : row.password_login_enabled === true;
       res.json({
         ok: true,
         google: {

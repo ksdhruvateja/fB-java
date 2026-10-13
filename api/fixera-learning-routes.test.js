@@ -112,17 +112,24 @@ t('only admins can use the review queue; homeowners are refused', async () => {
   assert.ok(list.body.counts.with_outcome >= 2);
 });
 
-t('unreviewed cases are not reused; approved and corrected ones are', async () => {
-  const query = 'kitchen faucet dripping from spout';
-  assert.equal((await loop.retrieveConfirmedCases(pool, { category: 'plumbing', query })).items.length, 0, 'nothing reused before review');
-
+t('by default no house ever receives another house\'s cases, even approved ones', async () => {
   const approve = await call('POST', `/api/admin/fixera/review/${ids.first.candidateId}`, ids.admin, { action: 'approve', gold: true });
   assert.equal(approve.status, 200);
   assert.equal(approve.body.candidate.approved_for_training, true);
+  delete process.env.FIXERA_CROSS_HOME_REUSE;
+  assert.equal((await loop.retrieveConfirmedCases(pool, { category: 'plumbing', query: 'kitchen faucet dripping from spout' })).items.length, 0);
+});
+
+t('with cross-home reuse switched on, only reviewed patterns are used, without the homeowner\'s words', async () => {
+  process.env.FIXERA_CROSS_HOME_REUSE = 'true';
+  const query = 'kitchen faucet dripping from spout';
+  await call('POST', `/api/admin/fixera/review/${ids.first.candidateId}`, ids.admin, { action: 'reset' });
+  assert.equal((await loop.retrieveConfirmedCases(pool, { category: 'plumbing', query })).items.length, 0, 'nothing reused before review');
+  await call('POST', `/api/admin/fixera/review/${ids.first.candidateId}`, ids.admin, { action: 'approve', gold: true });
   const found = await loop.retrieveConfirmedCases(pool, { category: 'plumbing', query });
   assert.equal(found.items.length, 1);
   assert.match(found.items[0], /Worn faucet cartridge/);
-  assert.match(found.items[0], /Replaced the cartridge/);
+  assert.doesNotMatch(found.items[0], /Replaced the cartridge|drips from the spout|\[phone\]/, 'no homeowner text crosses houses');
   assert.equal((await loop.retrieveConfirmedCases(pool, { category: 'plumbing', query, excludeJobId: ids.first.jobId })).items.length, 0, 'a case never feeds itself');
   assert.equal((await loop.retrieveConfirmedCases(pool, { category: 'electrical', query })).items.length, 0, 'category must match');
 
@@ -135,9 +142,11 @@ t('unreviewed cases are not reused; approved and corrected ones are', async () =
   const toilet = await loop.retrieveConfirmedCases(pool, { category: 'plumbing', query: 'toilet running after flush' });
   assert.match(toilet.items[0], /confirmed cause: Fill valve set too high/);
   assert.match(toilet.items[0], /Lower the fill valve float/);
+  delete process.env.FIXERA_CROSS_HOME_REUSE;
 });
 
 t('rejected and unsafe cases are never reused or exported', async () => {
+  process.env.FIXERA_CROSS_HOME_REUSE = 'true';
   await call('POST', `/api/admin/fixera/review/${ids.first.candidateId}`, ids.admin, { action: 'safety_reject' });
   assert.equal((await loop.retrieveConfirmedCases(pool, { category: 'plumbing', query: 'kitchen faucet dripping' })).items.length, 0);
   const blocked = await call('POST', `/api/admin/fixera/review/${ids.first.candidateId}`, ids.admin, { action: 'approve' });
@@ -146,4 +155,5 @@ t('rejected and unsafe cases are never reused or exported', async () => {
   assert.equal(exported.status, 200);
   assert.doesNotMatch(exported.body.jsonl, /Worn faucet cartridge/);
   assert.match(exported.body.jsonl, /Fill valve set too high/);
+  delete process.env.FIXERA_CROSS_HOME_REUSE;
 });

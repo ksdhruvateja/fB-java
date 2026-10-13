@@ -1310,13 +1310,23 @@ app.post('/api/auth/signin', signInLimiter, async (req, res) => {
       return res.status(403).json({ ok: false, message: 'This account has been blocked. Please contact support.' });
     }
 
-    // Former social-login accounts: no local password until they reset one
+    // Accounts created with Google have no usable password until the owner sets one with
+    // Forgot password. Older Google accounts were given a password derived from the Google
+    // account ID, which is not secret: those are detected here and refused too.
+    const googleOnlyMessage =
+      'This account uses Google sign-in. Continue with Google, or use Forgot password to add a password.';
     if (['GOOGLE_OAUTH', 'APPLE_OAUTH', 'AUTH0_OAUTH'].includes(String(rows[0].password))) {
-      return res.status(401).json({
-        ok: false,
-        message:
-          'Social login has been removed. Use Forgot password to set a password for this account, or contact support.',
-      });
+      return res.status(401).json({ ok: false, code: 'PASSWORD_NOT_SET', message: googleOnlyMessage });
+    }
+    if (rows[0].password_login_enabled === false) {
+      return res.status(401).json({ ok: false, code: 'PASSWORD_NOT_SET', message: googleOnlyMessage });
+    }
+    if (rows[0].password_login_enabled == null && rows[0].oauth_google_sub) {
+      const legacyGooglePassword = await bcrypt.compare(`GOOGLE_OAUTH_${rows[0].oauth_google_sub}`, rows[0].password);
+      if (legacyGooglePassword) {
+        await pool.query(`UPDATE users SET password_login_enabled=FALSE WHERE id=$1`, [rows[0].id]);
+        return res.status(401).json({ ok: false, code: 'PASSWORD_NOT_SET', message: googleOnlyMessage });
+      }
     }
 
     const valid = await bcrypt.compare(password, rows[0].password);

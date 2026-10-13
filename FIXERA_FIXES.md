@@ -185,7 +185,7 @@ Fixera does **not** retrain any model. It improves by reusing cases that admins 
 - **Export:** `GET /api/admin/fixera/training/export` now returns the approved and corrected cases with their outcomes and corrections, ready for a future fine-tune.
 
 ### 9.3 Reuse
-Each new assessment and reassessment looks up up to 3 **approved or corrected** past cases from other homes. They must be in the same category and match the problem's words.
+**Off by default since section 10**, so houses stay separate. When enabled, each new assessment and reassessment looks up up to 3 **approved or corrected** past cases from other homes. They must be in the same category and match the problem's words.
 - **What goes into the prompt:** each case's problem, confirmed cause and what fixed it, labelled "reference only, not evidence about this home; every safety rule still applies".
 - **Safety:** the risk engine and guardrails still check everything the model returns.
 - **Tracing:** the case IDs used are saved with each assessment (`knowledge_refs`).
@@ -197,13 +197,50 @@ Each new assessment and reassessment looks up up to 3 **approved or corrected** 
 - **Simple matching:** reuse matches on words (PostgreSQL full-text search), not meaning. Semantic search can be added later.
 - **De-identification has limits:** it uses fixed patterns. Admins should still reject a case if personal details slip through.
 
+## 10. House separation, data use, accounts and subscriptions
+
+### 10.1 Each house's data stays with that house
+- **Fixera's context comes from one house at a time.** Every prompt is built from a single property, after checking that the user owns it or is a household member. This covers the house's equipment, history, documents, cases, photos, maintenance and DIY outcomes.
+- **Fixed: mixing two houses of the same owner.** Home Assistant could combine a job from one of an owner's houses with the context of another house. A job now has to belong to the house being discussed.
+- **Cross-home reuse is off by default.** No case from one house is placed in another house's prompt, even after an admin approves it. Collected cases are used only for the review queue and the training export (section 9).
+  - To allow it, set `FIXERA_CROSS_HOME_REUSE=true`.
+  - Even then, only the category plus the diagnosis and fix written by the reviewer or Fixera are used. The other homeowner's own words, outcome notes, property, job and identity are never included.
+- **Where collected data goes:**
+  - only to the admin review queue and the admin-only training export
+  - never to homeowners or contractors
+  - with personal details removed before it is saved for review or training
+
+### 10.2 Accounts and sign-in
+**Already in place:**
+- **Password accounts** are stored as bcrypt hashes. Sign-in matches the email in any letter case.
+- **Google sign-in** is verified on the server (audience, issuer, expiry and verified email), then matched to an account by its Google ID or email.
+  - A password account that later uses Google with the same email is linked to the **same** account, with the same profile, houses and subscription. Password sign-in keeps working.
+  - Each Google identity can belong to only one FixBridge account.
+- **Both sign-in types** store the session the same way. Every visit restores the account and subscription from the server through `/api/auth/me`.
+
+**Fixed:**
+- **Guessable password on Google accounts.** Accounts created through Google were given the password `GOOGLE_OAUTH_<Google ID>`. A Google ID is not a secret, so anyone who knew it could sign in with a password.
+  - New Google accounts now get a random password, and password sign-in is off for them (`users.password_login_enabled = FALSE`).
+  - Existing Google accounts are detected on the first password attempt and refused.
+  - Owners can add a password with **Forgot password**, which turns password sign-in on. They then see "This account uses Google sign-in. Continue with Google, or use Forgot password to add a password."
+- **Free HomeCare Pro by email address.** Any `demo.homeowner.*@example.com` sign-up got free Pro, with no payment. In production this now only applies to addresses listed in `QA_GUIDED_DIY_EMAILS`.
+
+### 10.3 Subscription status
+**Already in place:**
+- The `subscriptions` table is the source of truth. Pro needs an active or trialing row whose period has not ended; a stored plan code alone never grants it.
+- It is re-checked on every sign-in, every session restore and every request (cached for 15 seconds).
+- Expired rows are marked expired, and `users.plan_code` is kept in sync.
+- Stripe checkout, the webhook and the post-payment check all update it.
+
+No change was needed beyond the free-Pro fix above.
+
 ## Tests
 
 ```bash
-node --test $(find api -name "*.test.js")    # 37 pass, 27 database tests skip
+node --test $(find api -name "*.test.js")    # 37 pass, 35 database tests skip
 # With a real PostgreSQL (or a Neon branch) for the route/pricing tests:
 FIXERA_TEST_DATABASE_URL=postgresql://... DB_SSL_REJECT_UNAUTHORIZED=false \
-  node --test --test-concurrency=1 $(find api -name "*.test.js")   # 64 pass
+  node --test --test-concurrency=1 $(find api -name "*.test.js")   # 72 pass
 ```
 
 **New test files:**
@@ -216,6 +253,7 @@ FIXERA_TEST_DATABASE_URL=postgresql://... DB_SSL_REJECT_UNAUTHORIZED=false \
 - `api/fixera-workflow-routes.test.js`: popup gate, DIY outcome → reminders, passport save, notifications, 5-photo upload
 - `api/fixera/learning-loop.test.js`: de-identification, case record, prompt framing
 - `api/fixera-learning-routes.test.js`: record → outcome → professional correction → chat capture → admin review → reuse → export
+- `api/account-and-isolation.test.js`: password and Google sign-in to the same account, subscription restore, no guessable Google password, demo-email rule, one house per context
 
 The in-memory `pg-mem` fallback cannot run the full schema (it lacks `trim()` and other functions). That's why the route tests need a real PostgreSQL.
 
