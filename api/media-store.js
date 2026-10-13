@@ -17,7 +17,7 @@ import {
  * Optional (MEDIA_STORAGE=s3): bytes go to an S3-compatible bucket instead (object-storage.js).
  *
  * Older rows that still hold a full "data:" URL keep working everywhere;
- * scripts/migrate-media-to-object-storage.mjs moves them to the configured store.
+ * scripts/migrate-case-photos.mjs moves them to the configured store.
  */
 
 export const NEON_REF_PREFIX = 'neonmedia:';
