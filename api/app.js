@@ -87,6 +87,7 @@ import { postgresSslOptions } from './db-ssl.js';
 import { buildPropertyAIContext } from './property-ai-context.js';
 import { installJobDebugLogger } from './job-debug-log.js';
 import { BoundedCache } from './bounded-cache.js';
+import { resolveMediaDataUrl } from './object-storage.js';
 import { aiFairnessGuard } from './ai-fairness.js';
 import {
   requirePermission,
@@ -3498,7 +3499,7 @@ async function handleFixeraReassess(req, res) {
       return res.status(404).json({ ok: false, code: 'CASE_NOT_FOUND', message: 'Repair case not found.' });
     }
 
-    let imageDataUrl = authorizedCase.media_data_url || null;
+    let imageDataUrl = await resolveMediaDataUrl(authorizedCase.media_data_url || null);
     let newImages = [];
     try {
       newImages = readCasePhotoList(req.body || {}, { arrayKey: 'imageDataUrls', singleKey: 'imageDataUrl' });
@@ -3511,8 +3512,9 @@ async function handleFixeraReassess(req, res) {
       });
     }
     if (newImages.length) {
+      let storedPhotos = [];
       try {
-        await storeFixeraCasePhotos(pool, {
+        storedPhotos = await storeFixeraCasePhotos(pool, {
           userId: req.authUser.id,
           caseType,
           caseId,
@@ -3528,7 +3530,8 @@ async function handleFixeraReassess(req, res) {
         caseType === 'managed_job'
           ? `UPDATE managed_jobs SET media_data_url=$1, media_type='image', updated_at=NOW() WHERE id=$2 AND homeowner_user_id=$3`
           : `UPDATE pending_service_requests SET media_data_url=$1, media_type='image', updated_at=NOW() WHERE id=$2 AND homeowner_user_id=$3`,
-        [imageDataUrl, caseId, req.authUser.id]
+        // The stored reference when photos are in object storage; the photo itself otherwise.
+        [storedPhotos[0]?.data_url || imageDataUrl, caseId, req.authUser.id]
       );
     }
 

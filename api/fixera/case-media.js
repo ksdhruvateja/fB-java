@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isObjectRef, objectStorageEnabled, putDataUrl, resolveMediaDataUrl } from '../object-storage.js';
 
 export async function storeFixeraCaseMedia(pool, {
   userId,
@@ -44,12 +45,17 @@ export async function storeFixeraCaseMedia(pool, {
   }
 
   const storageKey = `fixera/${caseType}/${caseId}/${randomUUID()}`;
+  // With object storage on, the bytes go to the bucket (under this case's own prefix) and the
+  // row keeps only the reference.
+  const stored = objectStorageEnabled()
+    ? await putDataUrl(source, { prefix: `cases/${caseType}/${caseId}` })
+    : source;
   const { rows } = await pool.query(
     `INSERT INTO media_objects (
        owner_user_id, job_id, pending_service_request_id, case_type, property_id,
        equipment_key, kind, storage_key, content_type, byte_size, data_url
      ) VALUES ($1,$2,$3,$4,$5,$6,'fixera_repair_case',$7,$8,$9,$10)
-     RETURNING id, storage_key, content_type, byte_size, created_at`,
+     RETURNING id, storage_key, content_type, byte_size, created_at, data_url`,
     [
       userId,
       isManagedJob ? caseId : null,
@@ -60,7 +66,7 @@ export async function storeFixeraCaseMedia(pool, {
       storageKey,
       contentType,
       byteSize,
-      source,
+      stored,
     ]
   );
   return rows[0] || null;
@@ -99,13 +105,22 @@ export function readCasePhotoList(body = {}, { arrayKey = 'mediaDataUrls', singl
   return list;
 }
 
-/** Stores each photo as case media. Returns the stored rows. */
+/**
+ * Stores each photo as case media. With object storage on, the case's cover column
+ * (media_data_url) is switched to the first photo's reference, so the bytes are not also kept in
+ * the database. Returns the stored rows.
+ */
 export async function storeFixeraCasePhotos(pool, { dataUrls = [], ...rest }) {
   const stored = [];
   for (const dataUrl of dataUrls.slice(0, MAX_CASE_PHOTOS)) {
     stored.push(await storeFixeraCaseMedia(pool, { ...rest, dataUrl }));
   }
-  return stored.filter(Boolean);
+  const rows = stored.filter(Boolean);
+  if (rows[0] && isObjectRef(rows[0].data_url)) {
+    const table = rest.caseType === 'managed_job' ? 'managed_jobs' : 'pending_service_requests';
+    await pool.query(`UPDATE ${table} SET media_data_url=$1 WHERE id=$2 AND homeowner_user_id=$3`, [rows[0].data_url, rest.caseId, rest.userId]);
+  }
+  return rows;
 }
 
 /**
@@ -123,11 +138,15 @@ export async function listFixeraCaseImages(pool, { caseType, caseId, coverDataUr
         LIMIT $2`,
       [caseId, Math.min(Math.max(1, limit), MAX_CASE_PHOTOS)]
     );
-    urls = rows.map((r) => r.data_url).reverse();
+    // Photos in object storage are fetched for the AI (it needs the bytes); unreadable ones are skipped.
+    urls = (await Promise.all(rows.map((r) => resolveMediaDataUrl(r.data_url)))).filter(Boolean).reverse();
   } catch (err) {
     console.warn('[fixera] case photos unavailable', err?.code || err?.message);
   }
-  if (!urls.length && typeof coverDataUrl === 'string' && coverDataUrl.startsWith('data:image/')) urls = [coverDataUrl];
+  if (!urls.length && coverDataUrl) {
+    const cover = await resolveMediaDataUrl(coverDataUrl);
+    if (typeof cover === 'string' && cover.startsWith('data:image/')) urls = [cover];
+  }
   return urls;
 }
 

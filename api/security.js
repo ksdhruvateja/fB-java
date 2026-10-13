@@ -71,6 +71,8 @@ export function securityHeaders(_req, res, next) {
         "frame-ancestors 'none'",
         "object-src 'none'",
         "img-src 'self' data: blob: https:",
+        // Case videos load from the object-storage bucket through short-lived signed links.
+        "media-src 'self' data: blob: https:",
         "font-src 'self' data: https:",
         "style-src 'self' 'unsafe-inline' https: https://accounts.google.com/gsi/style",
         "script-src 'self' 'unsafe-inline' https://js.stripe.com https://cdn.jsdelivr.net https://accounts.google.com/gsi/client",

@@ -25,6 +25,7 @@ import {
 } from './fixera/safety-confirmation.js';
 import { recordDiySafetyEvent } from './diy-safety-events.js';
 import { decodeDataUrl, signedMediaUrl, verifyMediaSignature } from './media-signing.js';
+import { isObjectRef, presignedUrlForRef, resolveMediaDataUrl } from './object-storage.js';
 import { sanitizeMaintenanceUpdate, scheduleFollowUpMaintenance } from './fixera/maintenance-reminders.js';
 import { getUserProfile, personalizationContext, rebuildUserProfile } from './fixera/user-profile.js';
 import {
@@ -566,6 +567,12 @@ function parseJson(val, fallback = null) {
   }
 }
 
+/** Replaces an object-storage reference with a signed display link (raw rows sent to the browser). */
+function withDisplayMedia(row, kind, idField = 'id') {
+  if (!row || !isObjectRef(row.media_data_url)) return row;
+  return { ...row, media_data_url: signedMediaUrl(kind, Number(row[idField])) };
+}
+
 /** Role-aware job serializer */
 function serializeJob(row, viewer) {
   if (!row) return null;
@@ -590,7 +597,9 @@ function serializeJob(row, viewer) {
     title: row.title,
     description: row.description,
     // Lists omit the photo bytes (has_media) and link to a signed URL instead.
-    mediaDataUrl: row.media_data_url || (row.has_media ? signedMediaUrl('job', Number(row.id)) : null),
+    mediaDataUrl: row.has_media || isObjectRef(row.media_data_url)
+      ? signedMediaUrl('job', Number(row.id))
+      : row.media_data_url || null,
     mediaType: row.media_type,
     equipmentKey: row.equipment_key || null,
     preferredDate: row.preferred_date,
@@ -1221,7 +1230,7 @@ async function runManagedJobAssessment(pool, job, viewer) {
   const result = await assessRepair({
     category: job.category,
     description: job.description,
-    imageDataUrl: caseImages[0] || job.media_data_url,
+    imageDataUrl: caseImages[0] || (await resolveMediaDataUrl(job.media_data_url)),
     imageDataUrls: caseImages,
     task: 'repair_assessment',
     jobId: recordId,
@@ -4154,7 +4163,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           type: 'pending_service_request',
           pendingServiceRequestId:
             pending.id,
-          pendingServiceRequest: pending,
+          pendingServiceRequest: withDisplayMedia(pending, 'pending'),
           media: mediaObject,
           entitlement: {
             hasAccess: false,
@@ -4768,7 +4777,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           ORDER BY COALESCE(updated_at, created_at) DESC, id DESC`,
         [req.authUser.id]
       );
-      return res.json({ ok: true, pendingServiceRequests: rows });
+      return res.json({ ok: true, pendingServiceRequests: rows.map((r) => withDisplayMedia(r, 'pending')) });
     } catch (e) {
       console.error('pending-service-requests my:', e);
       return res.status(500).json({
@@ -4828,7 +4837,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       }
       return res.json({
         ok: true,
-        pendingServiceRequest: pending,
+        pendingServiceRequest: withDisplayMedia(pending, 'pending'),
         managedJob,
         converted: Boolean(managedJob),
       });
@@ -5069,7 +5078,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           status: 'ready',
           assessmentStatus: 'ready',
           pendingServiceRequestId: pendingId,
-          pendingServiceRequest: pending,
+          pendingServiceRequest: withDisplayMedia(pending, 'pending'),
         });
       }
 
@@ -5351,13 +5360,20 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
   // ── List jobs ──────────────────────────────────────────────────────────────
   // Signed photo links from job lists. The signature names the job and expires; no other job's
   // file can be fetched with it.
-  app.get('/api/media/job/:id', async (req, res) => {
+  app.get('/api/media/:kind/:id', async (req, res) => {
     try {
+      const kind = req.params.kind;
+      const table = kind === 'job' ? 'managed_jobs' : kind === 'pending' ? 'pending_service_requests' : null;
       const id = Number(req.params.id);
-      if (!Number.isInteger(id) || id <= 0 || !verifyMediaSignature('job', id, req.query.exp, req.query.sig)) {
+      if (!table || !Number.isInteger(id) || id <= 0 || !verifyMediaSignature(kind, id, req.query.exp, req.query.sig)) {
         return res.status(403).json({ ok: false, message: 'This link has expired.' });
       }
-      const { rows } = await pool.query(`SELECT media_data_url FROM managed_jobs WHERE id=$1`, [id]);
+      const { rows } = await pool.query(`SELECT media_data_url FROM ${table} WHERE id=$1`, [id]);
+      if (isObjectRef(rows[0]?.media_data_url)) {
+        // Object storage: send the browser straight to a short-lived link to the private bucket.
+        res.set('Cache-Control', 'private, max-age=300');
+        return res.redirect(302, presignedUrlForRef(rows[0].media_data_url));
+      }
       const file = decodeDataUrl(rows[0]?.media_data_url);
       if (!file) return res.status(404).json({ ok: false, message: 'Not found.' });
       res.set('Content-Type', file.contentType);
@@ -6871,7 +6887,7 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
           category: r.category,
           title: r.title,
           description: r.description,
-          mediaDataUrl: r.media_data_url || null,
+          mediaDataUrl: isObjectRef(r.media_data_url) ? signedMediaUrl('job', Number(r.job_id)) : r.media_data_url || null,
           mediaType: r.media_type || null,
           preferredDate: r.preferred_date,
           preferredTimeSlot: r.preferred_time_slot,
