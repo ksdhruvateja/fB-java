@@ -820,7 +820,7 @@ export default function HomeownerDashboard({
     } else if (diyConsentAfter === "chat" && pendingDiyChatText) {
       const text = pendingDiyChatText;
       setPendingDiyChatText(null);
-      await sendDiyChatMessage(text);
+      await sendDiyChatMessage(text, { safetyAccepted: true });
     }
     setDiyConsentAfter(null);
   }
@@ -3463,14 +3463,15 @@ export default function HomeownerDashboard({
     125;
   const dispatchHoldAmount = dispatchCouponPreview?.discountedAmount ?? baseDispatchFee;
 
-  async function sendDiyChatMessage(forcedText?: string) {
+  async function sendDiyChatMessage(forcedText?: string, opts?: { safetyAccepted?: boolean }) {
     const text = (forcedText ?? diyChatInput).trim();
     if (!text || !activeJob) return;
     if (requireSafetyConfirmation(() => void sendDiyChatMessage(text))) {
       setDiyChatInput(text);
       return;
     }
-    if (!diySafetyAccepted) {
+    // Right after the homeowner accepts, `diySafetyAccepted` in this render is still false.
+    if (!diySafetyAccepted && !opts?.safetyAccepted) {
       setDiyChatInput(text);
       await openDiySafetyModal("chat", text);
       return;
