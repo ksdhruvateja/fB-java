@@ -44,6 +44,12 @@ const AI_FETCH_TIMEOUT_MS = Number(
   process.env.AI_FETCH_TIMEOUT_MS || 38000
 );
 
+// Repair assessments carry property history, past cases and photos, and run in the background
+// queue, so they get a longer deadline than chat. The homeowner's screen waits about 2.5 minutes.
+const AI_ASSESSMENT_TIMEOUT_MS = Number(
+  process.env.FIXERA_ASSESSMENT_TIMEOUT_MS || 70000
+);
+
 const AI_MAX_IMAGE_CHARS = Number(
   process.env.AI_MAX_IMAGE_CHARS || 700000
 );
@@ -1991,6 +1997,7 @@ async function analyzeWithProvider(
         await runWithTimeout(
           (signal) => config.adapter.analyze({
             signal,
+            timeoutMs: AI_ASSESSMENT_TIMEOUT_MS,
             messages,
 
             temperature:
@@ -2006,7 +2013,7 @@ async function analyzeWithProvider(
               jsonMode,
           }),
 
-          AI_FETCH_TIMEOUT_MS
+          AI_ASSESSMENT_TIMEOUT_MS
         );
     } catch (err) {
       lastError =

@@ -2056,6 +2056,13 @@ export default function HomeownerDashboard({
     const propZip = properties.find((p) => p.id === activeJob.propertyId)?.zip || null;
     void (async () => {
       try {
+        // Only resume work the server is still doing. A finished or failed run needs a fresh
+        // acknowledgment to restart, and calling it again here would hide the real result.
+        const latest = await getManagedJob(jobId).catch(() => null);
+        if (latest?.ok && latest.job && !isAssessmentProcessing(latest.job)) {
+          setActiveJob(latest.job);
+          return;
+        }
         const assessed = await runAssessWithProgress(jobId, propZip);
         if (assessed.ok && assessed.job) {
           setActiveJob(assessed.job);

@@ -99,7 +99,7 @@ function convertResponseFormat(responseFormat) {
   return "";
 }
 
-async function createCompletion({ messages = [], system, temperature = 0.2, maxTokens = 2500, responseFormat, signal } = {}) {
+async function createCompletion({ messages = [], system, temperature = 0.2, maxTokens = 2500, responseFormat, signal, timeoutMs } = {}) {
   const requestId = randomUUID();
   const startedAt = Date.now();
   let timeout;
@@ -124,7 +124,7 @@ async function createCompletion({ messages = [], system, temperature = 0.2, maxT
     if (finalSystem.trim()) body.system = finalSystem.trim();
 
     const controller = new AbortController();
-    timeout = setTimeout(() => controller.abort(), ANTHROPIC_TIMEOUT_MS);
+    timeout = setTimeout(() => controller.abort(), Number(timeoutMs) > 0 ? Number(timeoutMs) : ANTHROPIC_TIMEOUT_MS);
 
     if (signal) {
       if (signal.aborted) controller.abort();
@@ -132,7 +132,7 @@ async function createCompletion({ messages = [], system, temperature = 0.2, maxT
     }
 
     const hasImage = JSON.stringify(normalizedMessages).includes('"type":"image"');
-    console.log("[fixa] Claude request started", { provider: "anthropic", model: ANTHROPIC_MODEL, hasImage, messageCount: normalizedMessages.length, timeoutMs: ANTHROPIC_TIMEOUT_MS, requestId });
+    console.log("[fixa] Claude request started", { provider: "anthropic", model: ANTHROPIC_MODEL, hasImage, messageCount: normalizedMessages.length, timeoutMs: Number(timeoutMs) > 0 ? Number(timeoutMs) : ANTHROPIC_TIMEOUT_MS, requestId });
 
     const response = await fetch(`${ANTHROPIC_BASE_URL}/messages`, { method: "POST", headers: getHeaders(requestId), body: JSON.stringify(body), signal: controller.signal });
     const latencyMs = Date.now() - startedAt;
@@ -199,8 +199,9 @@ async function healthCheck() {
   return { ok: true, provider: "anthropic", model: ANTHROPIC_MODEL, code: "configured" };
 }
 
-async function analyze({ messages = [], temperature = 0.2, maxTokens = 2500, json = false, signal } = {}) {
+async function analyze({ messages = [], temperature = 0.2, maxTokens = 2500, json = false, signal, timeoutMs } = {}) {
   return createCompletion({
+    timeoutMs,
     messages,
     temperature,
     maxTokens,

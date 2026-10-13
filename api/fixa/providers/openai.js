@@ -31,11 +31,11 @@ function normalizeMessages(messages) {
   }));
 }
 
-async function createCompletion({ messages = [], temperature = 0.2, maxTokens = 2500, responseFormat, signal } = {}) {
+async function createCompletion({ messages = [], temperature = 0.2, maxTokens = 2500, responseFormat, signal, timeoutMs } = {}) {
   const requestId = randomUUID();
   const startedAt = Date.now();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), Number(timeoutMs) > 0 ? Number(timeoutMs) : OPENAI_TIMEOUT_MS);
   if (signal) {
     if (signal.aborted) controller.abort();
     else signal.addEventListener('abort', () => controller.abort(), { once: true });
@@ -93,8 +93,9 @@ async function createCompletion({ messages = [], temperature = 0.2, maxTokens = 
   }
 }
 
-async function analyze({ messages = [], temperature = 0.2, maxTokens = 2500, json = false, signal } = {}) {
+async function analyze({ messages = [], temperature = 0.2, maxTokens = 2500, json = false, signal, timeoutMs } = {}) {
   return createCompletion({
+    timeoutMs,
     messages,
     temperature,
     maxTokens,

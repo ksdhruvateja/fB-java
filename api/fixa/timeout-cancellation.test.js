@@ -2,14 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 test('a timed-out provider request is aborted, not left running in the background', async () => {
-  const keys = ['OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'GEMINI_MODEL', 'GOOGLE_API_KEY', 'GOOGLE_CLOUD_API_KEY', 'AI_FETCH_TIMEOUT_MS', 'GEMINI_TIMEOUT_MS', 'FIXERA_AI_PROVIDER'];
+  const keys = ['OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'GEMINI_MODEL', 'GOOGLE_API_KEY', 'GOOGLE_CLOUD_API_KEY', 'AI_FETCH_TIMEOUT_MS', 'GEMINI_TIMEOUT_MS', 'FIXERA_AI_PROVIDER', 'FIXERA_ASSESSMENT_TIMEOUT_MS'];
   const previous = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
   const previousFetch = globalThis.fetch;
   for (const k of keys) delete process.env[k];
   process.env.GEMINI_API_KEY = 'test-gemini-key';
   process.env.GEMINI_MODEL = 'gemini-test-model';
-  process.env.AI_FETCH_TIMEOUT_MS = '300';
-  // Adapter's own timer is longer, so only the outer deadline can stop the request.
+  // Repair assessments use their own deadline; the adapter's default timer is far longer.
+  process.env.FIXERA_ASSESSMENT_TIMEOUT_MS = '300';
   process.env.GEMINI_TIMEOUT_MS = '60000';
   const signals = [];
   // Provider that never answers until its request is aborted.

@@ -100,6 +100,7 @@ async function createCompletion({
     maxTokens = 2500,
     responseFormat,
     signal,
+    timeoutMs,
 } = {}) {
     const requestId = randomUUID();
     const normalizedMessages = [];
@@ -128,7 +129,7 @@ async function createCompletion({
 
     const timeout = setTimeout(() => {
         controller.abort();
-    }, AI_FETCH_TIMEOUT_MS);
+    }, Number(timeoutMs) > 0 ? Number(timeoutMs) : AI_FETCH_TIMEOUT_MS);
 
     if (signal) {
         if (signal.aborted) {
@@ -149,7 +150,7 @@ async function createCompletion({
             provider: "openrouter",
             model: OPENROUTER_MODEL,
             messageCount: normalizedMessages.length,
-            timeoutMs: AI_FETCH_TIMEOUT_MS,
+            timeoutMs: Number(timeoutMs) > 0 ? Number(timeoutMs) : AI_FETCH_TIMEOUT_MS,
             requestId,
         });
 
@@ -260,8 +261,9 @@ async function healthCheck() {
     };
 }
 
-async function analyze({ messages = [], temperature = 0.2, maxTokens = 2500, json = false, signal } = {}) {
+async function analyze({ messages = [], temperature = 0.2, maxTokens = 2500, json = false, signal, timeoutMs } = {}) {
     return createCompletion({
+        timeoutMs,
         messages,
         temperature,
         maxTokens,
