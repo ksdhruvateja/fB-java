@@ -24,7 +24,9 @@ import {
   withholdUnconfirmedGuidance,
 } from './fixera/safety-confirmation.js';
 import { recordDiySafetyEvent } from './diy-safety-events.js';
+import { decodeDataUrl, signedMediaUrl, verifyMediaSignature } from './media-signing.js';
 import { sanitizeMaintenanceUpdate, scheduleFollowUpMaintenance } from './fixera/maintenance-reminders.js';
+import { getUserProfile, personalizationContext, rebuildUserProfile } from './fixera/user-profile.js';
 import {
   buildProfessionalDispatchBreakdown,
   validateProfessionalDispatchPricingConfig,
@@ -299,6 +301,40 @@ function formatBookingId(id, createdAt = new Date()) {
   return `FB-${stamp}-${suffix}`;
 }
 
+/*
+ * List version of JOB_WITH_TECH_SELECT: the same columns without the large embedded files (case
+ * photo, contractor insurance document, employee photo). Those were sent for every job on every
+ * dashboard load. The serializer only needs to know whether they exist.
+ */
+let jobListColumnsPromise = null;
+function jobListColumns(pool) {
+  if (!jobListColumnsPromise) {
+    jobListColumnsPromise = pool.query(
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_name='managed_jobs' AND table_schema = current_schema()
+        ORDER BY ordinal_position`
+    ).then(({ rows }) => {
+      const cols = rows.map((r) => r.column_name).filter((c) => c !== 'media_data_url');
+      return cols.length ? `${cols.map((c) => `j."${c}"`).join(', ')}, (j.media_data_url IS NOT NULL) AS has_media` : null;
+    }).catch((e) => {
+      jobListColumnsPromise = null;
+      console.warn('[jobs] list columns fallback', e?.message);
+      return null;
+    });
+  }
+  return jobListColumnsPromise;
+}
+
+/** Homeowner list: JOB_WITH_TECH_SELECT without the embedded files. */
+async function jobListSelect(pool) {
+  const cols = await jobListColumns(pool);
+  if (!cols) return JOB_WITH_TECH_SELECT;
+  return JOB_WITH_TECH_SELECT
+    .replace('SELECT j.*,', `SELECT ${cols},`)
+    .replace('u.insurance_document_data,', '(u.insurance_document_data IS NOT NULL) AS insurance_document_data,')
+    .replace('emp.photo_data AS employee_photo_data,', '(emp.photo_data IS NOT NULL) AS employee_photo_data,');
+}
+
 const JOB_WITH_TECH_SELECT = `
   SELECT j.*,
     u.name AS tech_name,
@@ -553,7 +589,8 @@ function serializeJob(row, viewer) {
     serviceSubcategory: row.service_subcategory || undefined,
     title: row.title,
     description: row.description,
-    mediaDataUrl: row.media_data_url,
+    // Lists omit the photo bytes (has_media) and link to a signed URL instead.
+    mediaDataUrl: row.media_data_url || (row.has_media ? signedMediaUrl('job', Number(row.id)) : null),
     mediaType: row.media_type,
     equipmentKey: row.equipment_key || null,
     preferredDate: row.preferred_date,
@@ -1207,6 +1244,7 @@ async function runManagedJobAssessment(pool, job, viewer) {
       propertyAiContext ? `Authorized Property Passport context:\n${propertyAiContext}` : '',
       globalKnowledgeContext,
       confirmedCasesContext(pastCases),
+      personalizationContext(await getUserProfile(pool, job.homeowner_user_id), job.category),
     ].filter(Boolean).join('\n\n'),
     zip: preCtx.zip,
     city: preCtx.city,
@@ -4537,6 +4575,9 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
          WHERE id=$2 AND homeowner_user_id=$3`,
         [JSON.stringify(nextReport), jobId, req.authUser.id]
       );
+      if (event === 'step_failed' || event === 'step_different') {
+        await rebuildUserProfile(pool, req.authUser.id).catch(() => {});
+      }
       const learningOutcome = { fixed: 'DIY_FIXED', still_broken: 'DIY_STILL_BROKEN', professional_requested: 'PROFESSIONAL_REQUESTED' }[event];
       if (learningOutcome) {
         await recordCaseOutcome(pool, {
@@ -5308,24 +5349,47 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
   );
 
   // ── List jobs ──────────────────────────────────────────────────────────────
+  // Signed photo links from job lists. The signature names the job and expires; no other job's
+  // file can be fetched with it.
+  app.get('/api/media/job/:id', async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0 || !verifyMediaSignature('job', id, req.query.exp, req.query.sig)) {
+        return res.status(403).json({ ok: false, message: 'This link has expired.' });
+      }
+      const { rows } = await pool.query(`SELECT media_data_url FROM managed_jobs WHERE id=$1`, [id]);
+      const file = decodeDataUrl(rows[0]?.media_data_url);
+      if (!file) return res.status(404).json({ ok: false, message: 'Not found.' });
+      res.set('Content-Type', file.contentType);
+      res.set('Cache-Control', 'private, max-age=3600');
+      res.set('X-Content-Type-Options', 'nosniff');
+      return res.send(file.body);
+    } catch (e) {
+      return res.status(500).json({ ok: false, message: 'Could not load this file.' });
+    }
+  });
+
   app.get('/api/managed/jobs/my', requireAuth, async (req, res) => {
     try {
       let rows;
       if (req.authUser.role === 'homeowner') {
         ({ rows } = await pool.query(
-          `${JOB_WITH_TECH_SELECT}
+          `${await jobListSelect(pool)}
            WHERE j.homeowner_user_id=$1
-           ORDER BY j.created_at DESC`,
-          [req.authUser.id]
+           ORDER BY j.created_at DESC
+           LIMIT $2`,
+          [req.authUser.id, Math.min(Number(req.query.limit) || 500, 500)]
         ));
         rows = await attachAuthoritativeInvoices(pool, rows);
       } else if (req.authUser.role === 'contractor') {
+        const contractorCols = (await jobListColumns(pool)) || 'j.*';
         ({ rows } = await pool.query(
-          `SELECT j.* FROM managed_jobs j
+          `SELECT ${contractorCols} FROM managed_jobs j
            WHERE j.assigned_contractor_user_id=$1
               OR j.id IN (SELECT job_id FROM job_invitations WHERE contractor_user_id=$1)
-           ORDER BY j.created_at DESC`,
-          [req.authUser.id]
+           ORDER BY j.created_at DESC
+           LIMIT $2`,
+          [req.authUser.id, Math.min(Number(req.query.limit) || 500, 500)]
         ));
       } else {
         rows = [];

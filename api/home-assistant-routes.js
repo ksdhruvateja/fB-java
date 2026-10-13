@@ -9,6 +9,7 @@ import { assertPropertyAccess } from './property-access.js';
 import { mergeEquipmentRecord, appendMemoryAudit } from './property-memory.js';
 import { requireFixeraAiAccess } from './fixera/entitlement.js';
 import { recordChatForLearning } from './fixera/learning-loop.js';
+import { aiFairnessGuard } from './ai-fairness.js';
 
 function enforceSingleQuestion(reply, riskLevel) {
   const text = String(reply || '').trim();
@@ -46,7 +47,7 @@ export function registerHomeAssistantRoutes(app, { pool, requireAuth }) {
     }
   });
 
-  app.post('/api/home-assistant/chat', requireAuth, async (req, res) => {
+  app.post('/api/home-assistant/chat', requireAuth, aiFairnessGuard(), async (req, res) => {
     try {
       if (!(await requireFixeraAiAccess(pool, req, res))) return;
       const b = req.body || {};

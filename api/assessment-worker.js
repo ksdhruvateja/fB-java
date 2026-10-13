@@ -2,7 +2,19 @@
  * Async AI assessment worker scheduling (Netlify background function + local fallback).
  */
 
+import { enqueueAssessment } from './assessment-queue.js';
+
 let assessmentProcessor = null;
+let assessmentQueue = null;
+
+/** Set by server.js once the durable queue worker is running on this instance. */
+export function attachAssessmentQueue(queue) {
+  assessmentQueue = queue;
+}
+
+export function getAssessmentProcessor() {
+  return assessmentProcessor;
+}
 
 export function registerAssessmentProcessor(fn) {
   assessmentProcessor = fn;
@@ -116,6 +128,28 @@ function scheduleAssessmentPayload(pool, payload) {
       });
   }
 
+  // Long-running servers: put the work in the durable queue (see assessment-queue.js). Instances
+  // with the worker switched off enqueue for a separate worker service when
+  // FIXERA_QUEUE_EXTERNAL_WORKER=true.
+  if (assessmentQueue || process.env.FIXERA_QUEUE_EXTERNAL_WORKER === 'true') {
+    return enqueueAssessment(pool, {
+      recordType: normalized.recordType,
+      recordId,
+      actorUserId: actorId,
+    })
+      .then((r) => {
+        assessmentQueue?.kick();
+        return { ok: true, mode: 'queue', queued: r.queued };
+      })
+      .catch((err) => {
+        console.error('[assessment] enqueue failed; running in-process', err?.message || err);
+        return runInProcess(pool, normalized);
+      });
+  }
+  return runInProcess(pool, normalized);
+}
+
+function runInProcess(pool, normalized) {
   setImmediate(() => {
     runAssessmentProcessor(pool, normalized).catch((err) => {
       console.error('[assessment] local processor failed', {

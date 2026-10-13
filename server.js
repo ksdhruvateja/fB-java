@@ -6,6 +6,8 @@ import { fileURLToPath } from 'url';
 import app, { initDb, pool } from './api/app.js';
 import { processDueServiceReminders } from './api/service-reminders.js';
 import { processComplianceExpirationAlerts } from './api/contractor-compliance-alerts.js';
+import { ensureAssessmentQueueSchema, startAssessmentQueueWorker } from './api/assessment-queue.js';
+import { attachAssessmentQueue, getAssessmentProcessor } from './api/assessment-worker.js';
 
 const PORT = process.env.PORT || process.env.API_PORT || 3001;
 const distDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'dist');
@@ -26,8 +28,24 @@ if (process.env.PORT) {
 }
 
 initDb()
-  .then(() => {
-    app.listen(PORT, '0.0.0.0', () => {
+  .then(async () => {
+    // Durable AI-assessment queue. Set FIXERA_WORKER_ENABLED=false on API-only instances when a
+    // separate worker service runs (with FIXERA_QUEUE_EXTERNAL_WORKER=true on the API side).
+    let queueWorker = null;
+    if (process.env.NEON_DATABASE_URL) {
+      try {
+        await ensureAssessmentQueueSchema(pool);
+        if (process.env.FIXERA_WORKER_ENABLED !== 'false') {
+          queueWorker = startAssessmentQueueWorker(pool, (p, payload) => getAssessmentProcessor()(p, payload));
+          attachAssessmentQueue(queueWorker);
+          console.log('[FixBridge API] Assessment queue worker running', queueWorker.stats());
+        }
+      } catch (e) {
+        console.error('[FixBridge API] Assessment queue unavailable; using in-process scheduling', e.message);
+      }
+    }
+
+    const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`[FixBridge API] Running on http://localhost:${PORT}`);
       if (process.env.ENABLE_SERVICE_REMINDER_POLL === 'true') {
         const intervalMs = Number(process.env.SERVICE_REMINDER_POLL_MS || 15 * 60 * 1000);
@@ -55,6 +73,22 @@ initDb()
         setInterval(runComplianceSweep, complianceIntervalMs);
       }
     });
+
+    // Graceful shutdown: on a deploy or scale-in, finish in-flight requests and return
+    // database connections instead of dropping users mid-request.
+    let shuttingDown = false;
+    const shutdown = (signal) => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      console.log(`[FixBridge API] ${signal} received; draining`);
+      queueWorker?.stop();
+      server.close(() => {
+        pool.end().catch(() => {}).finally(() => process.exit(0));
+      });
+      setTimeout(() => process.exit(0), Number(process.env.SHUTDOWN_GRACE_MS || 25_000)).unref();
+    };
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
   })
   .catch((err) => {
     console.error('[FixBridge API] DB init failed:', err.message);

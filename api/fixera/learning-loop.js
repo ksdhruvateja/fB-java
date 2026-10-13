@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { persistFixeraInteraction, recordFixeraInteraction } from './experience/store.js';
+import { rebuildUserProfile } from './user-profile.js';
 
 /*
  * Fixera learning loop (no model training happens here):
@@ -163,6 +164,13 @@ export async function recordCaseOutcome(pool, { jobId, outcome, source, details 
         WHERE interaction_id=$1`,
       [interactionId, outcome, source || null, JSON.stringify(clean), correction ? JSON.stringify(correction) : null]
     );
+  }
+  // Keep the homeowner's own DIY profile current (their cases only).
+  try {
+    const { rows: owner } = await pool.query(`SELECT homeowner_user_id FROM managed_jobs WHERE id=$1`, [jobId]);
+    if (owner[0]?.homeowner_user_id) await rebuildUserProfile(pool, owner[0].homeowner_user_id);
+  } catch (e) {
+    console.warn('[fixera] profile refresh failed', e?.message || e);
   }
   return { id: Number(rows[0].id), interactionId };
 }

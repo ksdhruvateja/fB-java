@@ -2222,6 +2222,14 @@ export async function initManagedSchema(pool) {
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_fixera_case_outcomes_job ON fixera_case_outcomes (job_id, created_at DESC)`);
+  // Per-homeowner DIY profile (api/fixera/user-profile.js), built from that homeowner's cases only.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fixera_user_profiles (
+      user_id    INT PRIMARY KEY,
+      profile    JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fixera_knowledge_entries (
       id BIGSERIAL PRIMARY KEY,

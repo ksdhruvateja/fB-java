@@ -234,13 +234,47 @@ Fixera does **not** retrain any model. It improves by reusing cases that admins 
 
 No change was needed beyond the free-Pro fix above.
 
+## 11. Scale, independence of users, and per-user personalisation
+
+See **SCALING.md** for the details, measurements and the infrastructure plan.
+
+### Independent sessions under load
+- **No shared bottleneck:** the per-request debug log that rewrote one shared file (with every user's data in it) is off. It now runs only with `JOB_DEBUG_LOG=true` outside production.
+- **AI work cannot pile up:**
+  - assessments go through a durable PostgreSQL queue that is shared by all instances and survives restarts
+  - concurrency is bounded
+  - one running assessment per homeowner at a time
+- **Fair limits on instant AI calls:** 2 per user, 64 per instance. When an instance is full it answers "busy, retry" instead of slowing everyone down.
+- **Dashboard lists are about 60× smaller.** Photos load through signed, expiring links.
+- **Bounded memory and connections:** capped caches, configurable pool and statement timeout, a lock on reminders so several instances never double-send, and graceful shutdown.
+- **Measured** on one 4-core container, before/after at 400 simultaneous users: requests per second 248 → 549, median latency 1.67 s → 0.79 s, 0 errors, 0 responses containing another user's data.
+
+### Per-user personalisation (`api/fixera/user-profile.js`)
+- **What the profile records** (one per homeowner, `fixera_user_profiles`), built only from that homeowner's own cases:
+  - per-category experience level and DIY success rate
+  - steps that failed or looked different
+  - times they stopped or chose a professional
+  - how often a professional confirmed Fixera's diagnosis
+- **How it is used:** it is added to that homeowner's own assessments, reassessments and DIY chat. It adjusts the level of detail, adds checkpoints where they struggled before, states uncertainty where past diagnoses were corrected, and puts Hire a Professional first for people who usually choose it.
+- **What it never does:** change the safety decision or the guardrails. Those come from the case alone.
+- **When it updates:** on every outcome, and on every failed or different step.
+- **Visibility:** the homeowner can read their own profile at `GET /api/fixera/my-profile`.
+
+### New settings
+- **Queue:** `FIXERA_WORKER_CONCURRENCY`, `FIXERA_QUEUE_POLL_MS`, `FIXERA_QUEUE_STALE_MS`, `FIXERA_WORKER_ENABLED`, `FIXERA_QUEUE_EXTERNAL_WORKER`
+- **AI limits:** `AI_MAX_INFLIGHT`, `AI_MAX_INFLIGHT_PER_USER`
+- **Caches:** `AUTH_CACHE_MAX`, `ENTITLEMENT_CACHE_MAX`
+- **Database:** `DB_POOL_MAX`, `DB_POOL_IDLE_MS`, `DB_CONNECT_TIMEOUT_MS`, `DB_STATEMENT_TIMEOUT_MS`
+- **Photos and shutdown:** `MEDIA_URL_TTL_S`, `MEDIA_SIGNING_SECRET` (optional), `SHUTDOWN_GRACE_MS`
+- **Debugging:** `JOB_DEBUG_LOG`
+
 ## Tests
 
 ```bash
-node --test $(find api -name "*.test.js")    # 37 pass, 35 database tests skip
+node --test $(find api -name "*.test.js")    # 41 pass, 39 database tests skip
 # With a real PostgreSQL (or a Neon branch) for the route/pricing tests:
 FIXERA_TEST_DATABASE_URL=postgresql://... DB_SSL_REJECT_UNAUTHORIZED=false \
-  node --test --test-concurrency=1 $(find api -name "*.test.js")   # 72 pass
+  node --test --test-concurrency=1 $(find api -name "*.test.js")   # 80 pass
 ```
 
 **New test files:**
@@ -253,6 +287,8 @@ FIXERA_TEST_DATABASE_URL=postgresql://... DB_SSL_REJECT_UNAUTHORIZED=false \
 - `api/fixera-workflow-routes.test.js`: popup gate, DIY outcome → reminders, passport save, notifications, 5-photo upload
 - `api/fixera/learning-loop.test.js`: de-identification, case record, prompt framing
 - `api/fixera-learning-routes.test.js`: record → outcome → professional correction → chat capture → admin review → reuse → export
+- `api/scale-and-personalization.test.js`: capped cache, fair AI limits, signed photo links, light job list, queue (once, one per user, no head-of-line blocking, crash recovery), per-user profile isolation
+- `scripts/loadtest.mjs`: concurrency load test with a cross-user leak check (staging only)
 - `api/account-and-isolation.test.js`: password and Google sign-in to the same account, subscription restore, no guessable Google password, demo-email rule, one house per context
 
 The in-memory `pg-mem` fallback cannot run the full schema (it lacks `trim()` and other functions). That's why the route tests need a real PostgreSQL.
@@ -262,6 +298,6 @@ The in-memory `pg-mem` fallback cannot run the full schema (it lacks `trim()` an
 - Saved pending (unpaid) requests in `GET /api/pending-service-requests/my` still return the raw assessment. DIY runs on managed jobs, where steps are withheld until confirmed.
 - Unsaved intake drafts keep only the first photo.
 - The safety patterns and guardrails are deterministic English-language rules. Review them with your safety or legal adviser before relying on them.
-- `logs/fixbridge-jobs-debug.json` is written into the repository at runtime. Consider adding it to `.gitignore`.
-- Assessment jobs still use in-process scheduling (`setImmediate`) on Railway, as before.
+- `logs/fixbridge-jobs-debug.json` is no longer written unless `JOB_DEBUG_LOG=true` (section 11).
+- Case photos are still stored in PostgreSQL. Moving them to object storage is the first step toward very large scale (SCALING.md §5).
 - Real AI answer quality has not been evaluated, including the new photo-quality and part-price fields. No provider keys were available.

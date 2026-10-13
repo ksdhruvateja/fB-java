@@ -3,6 +3,7 @@
  * Stripe subscription rows in `subscriptions` are the billing source of truth;
  * `users.plan_code` is a denormalized effective plan kept in sync here.
  */
+import { BoundedCache } from './bounded-cache.js';
 import {
   FREE_PLAN_CODE,
   PAID_HOME_CARE_PLAN_CODE,
@@ -199,8 +200,8 @@ export async function loadBestHomeCareSubscription(pool, userId) {
  * Sync users.plan_code from authoritative subscription state.
  * Returns resolved state for API responses.
  */
-const entitlementCache = new Map();
 const ENTITLEMENT_TTL_MS = 15_000;
+const entitlementCache = new BoundedCache({ max: Number(process.env.ENTITLEMENT_CACHE_MAX || 50_000), ttlMs: ENTITLEMENT_TTL_MS });
 
 export function invalidateHomeCareEntitlementCache(userId) {
   if (userId == null) entitlementCache.clear();
@@ -209,7 +210,7 @@ export function invalidateHomeCareEntitlementCache(userId) {
 
 export async function syncUserHomeCareEntitlement(pool, userId, { now = new Date(), force = false } = {}) {
   const cached = entitlementCache.get(Number(userId));
-  if (!force && cached && Date.now() - cached.at < ENTITLEMENT_TTL_MS) {
+  if (!force && cached) {
     return cached.state;
   }
   const { rows: userRows } = await pool.query(`SELECT plan_code, email FROM users WHERE id=$1`, [userId]);

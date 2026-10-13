@@ -1,4 +1,5 @@
 import { listKnowledgeEntries, retrieveGlobalKnowledge, writeKnowledgeEntry } from './fixa/knowledge/knowledgeWriter.js';
+import { getUserProfile, personalizationContext } from './fixera/user-profile.js';
 import { attachCasePayload, confirmedCasesContext, listReviewQueue, recordCaseOutcome, recordChatForLearning, retrieveConfirmedCases, reviewCandidate } from './fixera/learning-loop.js';
 import { storeFixeraCasePhotos, readCasePhotoList, listFixeraCaseImages, MAX_CASE_PHOTOS } from './fixera/case-media.js';
 import { appendAssessmentRevision } from './fixera/assessment-history.js';
@@ -85,6 +86,8 @@ import {
 import { postgresSslOptions } from './db-ssl.js';
 import { buildPropertyAIContext } from './property-ai-context.js';
 import { installJobDebugLogger } from './job-debug-log.js';
+import { BoundedCache } from './bounded-cache.js';
+import { aiFairnessGuard } from './ai-fairness.js';
 import {
   requirePermission,
   resolveAdminPreset,
@@ -155,7 +158,13 @@ function createPool() {
     return new Pool({
       connectionString,
       ssl: postgresSslOptions(),
-      max: process.env.NETLIFY || process.env.NETLIFY_DEV ? 3 : 10,
+      // Per instance. Use Neon's pooled (-pooler) connection string so many instances share
+      // a bounded number of server connections.
+      max: Number(process.env.DB_POOL_MAX || (process.env.NETLIFY || process.env.NETLIFY_DEV ? 3 : 20)),
+      idleTimeoutMillis: Number(process.env.DB_POOL_IDLE_MS || 30_000),
+      connectionTimeoutMillis: Number(process.env.DB_CONNECT_TIMEOUT_MS || 10_000),
+      // A runaway query cannot hold a connection that other users are waiting for.
+      statement_timeout: Number(process.env.DB_STATEMENT_TIMEOUT_MS || 60_000),
     });
   }
 
@@ -723,8 +732,9 @@ function makeToken(user, { authStage = 'complete', expiresIn = '7d' } = {}) {
   );
 }
 
-const authUserCache = new Map();
+// Capped so memory stays flat with any number of users; holds only what requireAuth needs.
 const AUTH_USER_TTL_MS = 15_000;
+const authUserCache = new BoundedCache({ max: Number(process.env.AUTH_CACHE_MAX || 50_000), ttlMs: AUTH_USER_TTL_MS });
 
 /** Reject requests that don't carry a valid JWT. */
 async function requireAuth(req, res, next) {
@@ -735,8 +745,8 @@ async function requireAuth(req, res, next) {
   try {
     const decoded = jwt.verify(authHeader.slice(7), JWT_SECRET, { algorithms: ['HS256'] });
     const cached = authUserCache.get(Number(decoded.id));
-    if (cached && Date.now() - cached.at < AUTH_USER_TTL_MS) {
-      if (cached.row.is_blocked === true) {
+    if (cached) {
+      if (cached.isBlocked === true) {
         return res.status(403).json({ ok: false, message: 'This account has been blocked. Please contact support.' });
       }
       req.authUser = {
@@ -777,8 +787,7 @@ async function requireAuth(req, res, next) {
       authStage: decoded.authStage || 'complete',
     };
     authUserCache.set(Number(rows[0].id), {
-      at: Date.now(),
-      row: rows[0],
+      isBlocked: rows[0].is_blocked === true,
       authUser: req.authUser,
     });
     next();
@@ -1171,7 +1180,12 @@ app.use(
 
 // Debug-only tracing: keeps the baseline business logic unchanged while recording
 // job-scoped requests and database snapshots in one JSON store.
-installJobDebugLogger(app, { pool, requireAdmin });
+// It rewrites one shared file on every API request and stores request and response bodies from
+// all users together, so it is a bottleneck and mixes users' data. Off unless explicitly enabled
+// outside production.
+if (process.env.JOB_DEBUG_LOG === 'true' && !isDeployedProduction()) {
+  installJobDebugLogger(app, { pool, requireAdmin });
+}
 
 // ── Rate limiters ─────────────────────────────────────────────────────────────
 // Netlify/serverless sometimes has no req.ip. express-rate-limit v8 then throws
@@ -1256,6 +1270,7 @@ const signupLimiter = rateLimit({
     res.status(429).json({ ok: false, message: 'Too many sign-up attempts. Please wait and try again.' }),
 });
 
+const aiGuard = aiFairnessGuard();
 const aiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 40,
@@ -3337,6 +3352,7 @@ async function handleFixaAssessment(req, res) {
           ? `Approved general FixBridge repair knowledge (global, not property-specific):\n${globalKnowledge.items.map((item) => `- ${item}`).join('\n')}`
           : '',
         confirmedCasesContext(pastCases),
+        personalizationContext(await getUserProfile(pool, req.authUser.id), cat),
       ].filter(Boolean).join('\n\n'),
     });
     const a = structured.assessment;
@@ -3442,9 +3458,9 @@ async function handleFixaAssessment(req, res) {
   }
 }
 
-app.post('/api/ai/assess', requireAuth, aiLimiter, handleFixaAssessment);
-app.post('/api/fixera/assessment', requireAuth, aiLimiter, handleFixaAssessment);
-app.post('/api/fixa/assessment', requireAuth, aiLimiter, handleFixaAssessment);
+app.post('/api/ai/assess', requireAuth, aiLimiter, aiGuard, handleFixaAssessment);
+app.post('/api/fixera/assessment', requireAuth, aiLimiter, aiGuard, handleFixaAssessment);
+app.post('/api/fixa/assessment', requireAuth, aiLimiter, aiGuard, handleFixaAssessment);
 
 async function handleFixeraReassess(req, res) {
   try {
@@ -3569,6 +3585,7 @@ async function handleFixeraReassess(req, res) {
           ? `Approved general FixBridge repair knowledge (global, not property-specific):\n${globalKnowledge.items.map((item) => `- ${item}`).join('\n')}`
           : '',
         confirmedCasesContext(pastCases),
+        personalizationContext(await getUserProfile(pool, authorizedCase.homeowner_user_id), authorizedCase.category),
       ].filter(Boolean).join('\n\n'),
     });
     const interaction = recordFixeraInteraction({
@@ -3639,8 +3656,8 @@ async function homeownerAssessmentView(caseType, caseId, assessment) {
   return withholdUnconfirmedGuidance(assessment, report);
 }
 
-app.post('/api/fixera/reassess', requireAuth, aiLimiter, handleFixeraReassess);
-app.post('/api/fixa/reassess', requireAuth, aiLimiter, handleFixeraReassess);
+app.post('/api/fixera/reassess', requireAuth, aiLimiter, aiGuard, handleFixeraReassess);
+app.post('/api/fixa/reassess', requireAuth, aiLimiter, aiGuard, handleFixeraReassess);
 
 /**
  * Loads a repair case the caller may act on. Homeowners see only their own cases; admins
@@ -3758,6 +3775,7 @@ async function handleFixaChat(req, res) {
     let riskLevel = 'green';
     let assessment = null;
     let jobIdNum = null;
+    let jobCategory = null;
     // Every reply, including safety-policy refusals, is recorded (de-identified) for review.
     const lastUserText = normalized.filter((m) => m.role === 'user').pop()?.content || '';
     const send = (payload) => {
@@ -3780,7 +3798,7 @@ async function handleFixaChat(req, res) {
     if (jobId != null && req.authUser.role === 'homeowner') {
       jobIdNum = Number(jobId);
       const { rows } = await pool.query(
-        `SELECT ai_assessment, diy_risk_level, description, homeowner_user_id, completion_report FROM managed_jobs WHERE id=$1`,
+        `SELECT ai_assessment, diy_risk_level, description, homeowner_user_id, completion_report, category FROM managed_jobs WHERE id=$1`,
         [jobIdNum]
       );
       const job = rows[0];
@@ -3792,6 +3810,7 @@ async function handleFixaChat(req, res) {
       if (!ackOk) return;
 
       assessment = typeof job.ai_assessment === 'string' ? JSON.parse(job.ai_assessment) : job.ai_assessment;
+      jobCategory = job.category || null;
       const { diyGuidanceUnlocked, SAFETY_CONFIRMATION_REQUIRED } = await import('./fixera/safety-confirmation.js');
       if (!diyGuidanceUnlocked(assessment, job.completion_report)) {
         return res.status(409).json({
@@ -3922,7 +3941,14 @@ async function handleFixaChat(req, res) {
       }
     }
 
-    const result = await complete({ messages: normalized, riskLevel, assessment, task: 'diy_guidance' });
+    // DIY chat on a case is adapted to this homeowner's own history (never to safety rules).
+    const personal = jobIdNum ? personalizationContext(await getUserProfile(pool, req.authUser.id), jobCategory) : '';
+    const result = await complete({
+      messages: personal ? [{ role: 'system', content: personal }, ...normalized] : normalized,
+      riskLevel,
+      assessment,
+      task: 'diy_guidance',
+    });
     return send({ ...result, model: undefined, riskLevel });
   } catch (e) {
     console.error('ai chat:', e);
@@ -3935,9 +3961,9 @@ async function handleFixaChat(req, res) {
   }
 }
 
-app.post('/api/ai/chat', requireAuth, aiLimiter, handleFixaChat);
-app.post('/api/fixera/chat', requireAuth, aiLimiter, handleFixaChat);
-app.post('/api/fixa/chat', requireAuth, aiLimiter, handleFixaChat);
+app.post('/api/ai/chat', requireAuth, aiLimiter, aiGuard, handleFixaChat);
+app.post('/api/fixera/chat', requireAuth, aiLimiter, aiGuard, handleFixaChat);
+app.post('/api/fixa/chat', requireAuth, aiLimiter, aiGuard, handleFixaChat);
 
 async function handleFixeraFeedback(req, res) {
   let jobId = null;
@@ -3970,6 +3996,12 @@ async function handleFixeraFeedback(req, res) {
   }
   return res.json({ ok: true, assistant: 'Fixera', feedback: { helpful: row.helpful, diy_result: row.diy_result } });
 }
+
+// A homeowner can see the DIY profile Fixera keeps about them (their own only).
+app.get('/api/fixera/my-profile', requireAuth, async (req, res) => {
+  const profile = await getUserProfile(pool, req.authUser.id);
+  return res.json({ ok: true, profile: profile || null });
+});
 
 app.post('/api/fixera/feedback', requireAuth, handleFixeraFeedback);
 app.post('/api/fixa/feedback', requireAuth, handleFixeraFeedback);

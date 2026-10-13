@@ -319,7 +319,7 @@ export default function ContractorJobsPanel({
                 <div>
                   <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">Attachments</p>
                   <div className="flex flex-wrap gap-2">
-                    {selected.mediaDataUrl && String(selected.mediaDataUrl).startsWith("data:image") ? (
+                    {selected.mediaDataUrl && (String(selected.mediaDataUrl).startsWith("data:image") || (String(selected.mediaDataUrl).startsWith("/api/media/") && String(selected.mediaType || "").startsWith("image"))) ? (
                       <img src={selected.mediaDataUrl} alt="" className="h-20 w-28 rounded-lg object-cover border border-border" />
                     ) : (
                       <span className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs">

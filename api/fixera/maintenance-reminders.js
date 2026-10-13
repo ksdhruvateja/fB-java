@@ -185,7 +185,24 @@ export function sanitizeMaintenanceUpdate(previous, items) {
 }
 
 /** Sends one in-app reminder per Fixera maintenance item that is due within a few days. */
-export async function processDueMaintenanceReminders(pool, { asOf = new Date(), maxProperties = 200 } = {}) {
+const MAINTENANCE_LOCK_KEY = 815_204_311; // pg advisory lock: one sender at a time across instances
+
+export async function processDueMaintenanceReminders(pool, opts = {}) {
+  // Several API instances run the reminder poll. Only the one holding the lock sends, so a
+  // homeowner never gets the same reminder twice.
+  const client = await pool.connect();
+  let locked = false;
+  try {
+    locked = (await client.query(`SELECT pg_try_advisory_lock($1) AS ok`, [MAINTENANCE_LOCK_KEY])).rows[0]?.ok === true;
+    if (!locked) return { sent: 0, propertiesChecked: 0, skipped: 'another_instance_running' };
+    return await sendDueMaintenanceReminders(pool, opts);
+  } finally {
+    if (locked) await client.query(`SELECT pg_advisory_unlock($1)`, [MAINTENANCE_LOCK_KEY]).catch(() => {});
+    client.release();
+  }
+}
+
+async function sendDueMaintenanceReminders(pool, { asOf = new Date(), maxProperties = 200 } = {}) {
   const today = asOf.toISOString().slice(0, 10);
   const horizon = addDays(today, REMIND_DAYS_BEFORE);
   const { rows } = await pool.query(
