@@ -21,11 +21,16 @@ app.use((req, res, next) => {
 });
 
 if (process.env.PORT) {
-  const siteUrlFor = (req) => (process.env.APP_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
   let indexHtml = null;
   const readIndex = () => {
     if (indexHtml == null) indexHtml = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8');
     return indexHtml;
+  };
+  // Public URLs use the site's canonical domain (VITE_SITE_URL, baked into index.html at build),
+  // not APP_URL, which can point at the hosting provider's domain.
+  const siteUrlFor = (req) => {
+    const fromBuild = readIndex().match(/<link\s+rel="canonical"\s+href="(https?:\/\/[^"]+?)\/?"/)?.[1];
+    return (process.env.PUBLIC_SITE_URL || fromBuild || process.env.APP_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
   };
 
   app.get('/sitemap.xml', (req, res) => {
