@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api } from "./platformApi";
+import AdminFixeraReviewQueue from "./AdminFixeraReviewQueue";
 
 type FixeraProvider = {
   id: string;
@@ -95,7 +96,7 @@ const EMPTY_KNOWLEDGE_FORM: KnowledgeForm = {
   status: "draft",
 };
 
-const TABS = ["Overview", "Providers", "Health", "Experience", "Knowledge", "Pricing", "Evaluations", "Training", "Models"] as const;
+const TABS = ["Overview", "Providers", "Health", "Experience", "Review", "Knowledge", "Pricing", "Evaluations", "Training", "Models"] as const;
 
 function Card({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -216,6 +217,8 @@ export default function AdminFixeraPanel() {
         ))}
       </div>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
+
+      {tab === "Review" ? <AdminFixeraReviewQueue /> : null}
 
       {tab === "Overview" || tab === "Health" ? (
         <div className="grid gap-3 sm:grid-cols-2">

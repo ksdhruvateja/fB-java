@@ -1,4 +1,5 @@
 import { listKnowledgeEntries, retrieveGlobalKnowledge, writeKnowledgeEntry } from './fixa/knowledge/knowledgeWriter.js';
+import { attachCasePayload, confirmedCasesContext, listReviewQueue, recordCaseOutcome, recordChatForLearning, retrieveConfirmedCases, reviewCandidate } from './fixera/learning-loop.js';
 import { storeFixeraCasePhotos, readCasePhotoList, listFixeraCaseImages, MAX_CASE_PHOTOS } from './fixera/case-media.js';
 import { appendAssessmentRevision } from './fixera/assessment-history.js';
 import express from 'express';
@@ -3126,6 +3127,40 @@ app.get('/api/admin/fixera/training', requireAuth, requireAdmin, requirePermissi
   }
 });
 
+// Learning loop review queue: de-identified cases with their outcomes.
+app.get('/api/admin/fixera/review', requireAuth, requireAdmin, requirePermission('settings.view'), async (req, res) => {
+  try {
+    const result = await listReviewQueue(pool, {
+      filter: String(req.query.filter || 'with_outcome'),
+      task: String(req.query.task || 'assessment'),
+      limit: req.query.limit,
+      offset: req.query.offset,
+    });
+    return res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('fixera review queue:', e);
+    return res.status(500).json({ ok: false, message: 'The Fixera review queue is unavailable.' });
+  }
+});
+
+app.post('/api/admin/fixera/review/:id', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+  try {
+    const updated = await reviewCandidate(pool, String(req.params.id).slice(0, 120), {
+      action: String(req.body?.action || ''),
+      correctedDiagnosis: req.body?.correctedDiagnosis,
+      correctedFix: req.body?.correctedFix,
+      notes: req.body?.notes,
+      gold: req.body?.gold === true,
+      reviewerId: req.authUser.id,
+    });
+    return res.json({ ok: true, candidate: updated });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ ok: false, code: e.code, message: e.message });
+    console.error('fixera review:', e);
+    return res.status(500).json({ ok: false, message: 'Could not save the review.' });
+  }
+});
+
 app.get('/api/admin/fixera/training/export', requireAuth, requireAdmin, requirePermission('settings.view'), async (_req, res) => {
   try {
     const rows = await exportApprovedTraining(pool);
@@ -3234,6 +3269,11 @@ async function handleFixaAssessment(req, res) {
       category: authorizedCase?.category || body.category,
       query: [authorizedCase?.title, body.description || authorizedCase?.description].filter(Boolean).join(' '),
     });
+    const pastCases = await retrieveConfirmedCases(pool, {
+      category: authorizedCase?.category || body.category,
+      query: [authorizedCase?.title, body.description || authorizedCase?.description].filter(Boolean).join(' '),
+      excludeJobId: caseType === 'managed_job' ? authorizedCase?.id : null,
+    });
 
     const desc = clampString(body.description || authorizedCase?.description, 4000);
     const cat = clampString(body.category || authorizedCase?.category, 80);
@@ -3286,6 +3326,7 @@ async function handleFixaAssessment(req, res) {
         globalKnowledge.items.length
           ? `Approved general FixBridge repair knowledge (global, not property-specific):\n${globalKnowledge.items.map((item) => `- ${item}`).join('\n')}`
           : '',
+        confirmedCasesContext(pastCases),
       ].filter(Boolean).join('\n\n'),
     });
     const a = structured.assessment;
@@ -3309,13 +3350,14 @@ async function handleFixaAssessment(req, res) {
         success: Boolean(a),
         failureCode: structured.providerCode || null,
         providerAttempts: structured.providerAttempts,
-          knowledgeRefs: globalKnowledge.references,
+          knowledgeRefs: [...globalKnowledge.references, ...pastCases.references],
         outputSummary: a?.summary || structured.error || null,
         safety: a?.diy_risk_level || null,
         evaluator: a ? 'recorded' : 'fail',
         schemaQuality: a ? 'present' : 'missing',
         professionalEscalation: Boolean(a?.professional_required),
       });
+      attachCasePayload(interaction, { assessment: a, category: cat, description: desc });
       await persistFixeraInteraction(pool, interaction);
     } catch (captureError) {
       console.warn('fixera experience capture:', captureError?.message || captureError);
@@ -3478,6 +3520,11 @@ async function handleFixeraReassess(req, res) {
       category: authorizedCase.category,
       query: [authorizedCase.title, authorizedCase.description, observation, authorizedCase.equipment_key].filter(Boolean).join(' '),
     });
+    const pastCases = await retrieveConfirmedCases(pool, {
+      category: authorizedCase.category,
+      query: [authorizedCase.title, authorizedCase.description, observation].filter(Boolean).join(' '),
+      excludeJobId: caseType === 'managed_job' ? caseId : null,
+    });
     const result = await reassessRepair({
       category: authorizedCase.category,
       description: authorizedCase.description,
@@ -3511,6 +3558,7 @@ async function handleFixeraReassess(req, res) {
         globalKnowledge.items.length
           ? `Approved general FixBridge repair knowledge (global, not property-specific):\n${globalKnowledge.items.map((item) => `- ${item}`).join('\n')}`
           : '',
+        confirmedCasesContext(pastCases),
       ].filter(Boolean).join('\n\n'),
     });
     const interaction = recordFixeraInteraction({
@@ -3531,12 +3579,17 @@ async function handleFixeraReassess(req, res) {
       success: Boolean(result?.assessment),
       failureCode: result?.providerCode || result?.code || null,
       providerAttempts: result?.providerAttempts || [],
-      knowledgeRefs: globalKnowledge.references,
+      knowledgeRefs: [...globalKnowledge.references, ...pastCases.references],
       outputSummary: result?.assessment?.summary || result?.error || null,
       safety: result?.assessment?.diy_risk_level || null,
       evaluator: result?.assessment ? 'recorded' : 'fail',
       schemaQuality: result?.assessment ? 'present' : 'missing',
       professionalEscalation: Boolean(result?.assessment?.professional_required),
+    });
+    attachCasePayload(interaction, {
+      assessment: result?.assessment,
+      category: authorizedCase.category,
+      description: `${authorizedCase.description || ''} Follow-up: ${observation}`,
     });
     await persistFixeraInteraction(pool, interaction).catch((error) => {
       console.warn('[fixera] reassessment audit persistence failed', error?.message || error);
@@ -3695,6 +3748,25 @@ async function handleFixaChat(req, res) {
     let riskLevel = 'green';
     let assessment = null;
     let jobIdNum = null;
+    // Every reply, including safety-policy refusals, is recorded (de-identified) for review.
+    const lastUserText = normalized.filter((m) => m.role === 'user').pop()?.content || '';
+    const send = (payload) => {
+      recordChatForLearning(pool, {
+        userId: req.authUser.id,
+        userRole: req.authUser.role,
+        jobId: jobIdNum,
+        task: jobIdNum ? 'diy_chat' : 'general_chat',
+        userMessage: lastUserText,
+        reply: payload?.reply || null,
+        riskLevel: payload?.riskLevel || null,
+        provider: payload?.source || null,
+        blockedBy: payload?.source === 'safety_policy'
+          ? payload.promptInjectionBlocked ? 'prompt_injection' : payload.userStopRequested ? 'user_stop' : 'safety_hazard'
+          : null,
+        guardrailRemovals: payload?.guardrailRemovals || 0,
+      }).catch(() => {});
+      return res.json(payload);
+    };
     if (jobId != null && req.authUser.role === 'homeowner') {
       jobIdNum = Number(jobId);
       const { rows } = await pool.query(
@@ -3741,7 +3813,7 @@ async function handleFixaChat(req, res) {
           req,
         });
         await pool.query(`UPDATE managed_jobs SET diy_risk_level='red', updated_at=NOW() WHERE id=$1`, [jobIdNum]);
-        return res.json({
+        return send({
           ok: true,
           reply: redSafetyReply(),
           source: 'safety_policy',
@@ -3764,7 +3836,7 @@ async function handleFixaChat(req, res) {
           riskReasonCodes: classified.reasonCodes,
           req,
         });
-        return res.json({
+        return send({
           ok: true,
           reply: yellowStopReply(),
           source: 'safety_policy',
@@ -3788,7 +3860,7 @@ async function handleFixaChat(req, res) {
             req,
           });
         }
-        return res.json({
+        return send({
           ok: true,
           reply: redSafetyReply(),
           source: 'safety_policy',
@@ -3824,12 +3896,12 @@ async function handleFixaChat(req, res) {
       const lastUser = normalized.filter((m) => m.role === 'user').pop()?.content || '';
       const { classifyDiyRiskLevel, detectPromptInjection, redSafetyReply, isEmergencyHazard } = await import('./diy-safety.js');
       if (detectPromptInjection(lastUser)) {
-        return res.json({ ok: true, reply: redSafetyReply(), source: 'safety_policy', riskLevel: 'red', promptInjectionBlocked: true, emergencyRecommended: true });
+        return send({ ok: true, reply: redSafetyReply(), source: 'safety_policy', riskLevel: 'red', promptInjectionBlocked: true, emergencyRecommended: true });
       }
       const classified = classifyDiyRiskLevel(lastUser, null);
       riskLevel = classified.level;
       if (riskLevel === 'red') {
-        return res.json({
+        return send({
           ok: true,
           reply: redSafetyReply(),
           source: 'safety_policy',
@@ -3841,7 +3913,7 @@ async function handleFixaChat(req, res) {
     }
 
     const result = await complete({ messages: normalized, riskLevel, assessment, task: 'diy_guidance' });
-    return res.json({ ...result, model: undefined, riskLevel });
+    return send({ ...result, model: undefined, riskLevel });
   } catch (e) {
     console.error('ai chat:', e);
     return res.status(500).json({
@@ -3877,6 +3949,15 @@ async function handleFixeraFeedback(req, res) {
     diyResult: allowedDiy,
     note: req.body?.note,
   });
+  if (jobId && (allowedHelpful || allowedDiy)) {
+    await recordCaseOutcome(pool, {
+      jobId,
+      outcome: 'USER_FEEDBACK',
+      source: req.authUser.role === 'admin' ? 'admin' : 'homeowner',
+      details: { helpful: allowedHelpful || allowedDiy, note: req.body?.note },
+      actorUserId: req.authUser.id,
+    }).catch((e) => console.warn('[fixera] feedback outcome not recorded', e?.message));
+  }
   return res.json({ ok: true, assistant: 'Fixera', feedback: { helpful: row.helpful, diy_result: row.diy_result } });
 }
 

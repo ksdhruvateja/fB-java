@@ -107,6 +107,8 @@ export default function ContractorJobsPanel({
   const [completeOpen, setCompleteOpen] = useState(false);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [completeSummary, setCompleteSummary] = useState("");
+  const [actualCause, setActualCause] = useState("");
+  const [fixeraDiagnosisMatch, setFixeraDiagnosisMatch] = useState("");
   const [healthSystem, setHealthSystem] = useState("HVAC");
   const [healthStatus, setHealthStatus] = useState("good");
   const [healthNextAction, setHealthNextAction] = useState("");
@@ -533,6 +535,34 @@ export default function ContractorJobsPanel({
                     value={completeSummary}
                     onChange={(e) => setCompleteSummary(e.target.value)}
                   />
+                  <div className="space-y-2 rounded-xl border border-border/70 bg-muted/20 p-3">
+                    {selected.aiAssessment?.summary ? (
+                      <p className="text-xs text-muted-foreground">
+                        Fixera&apos;s diagnosis: <span className="font-medium text-foreground">{selected.aiAssessment.summary}</span>
+                      </p>
+                    ) : null}
+                    {selected.aiAssessment?.summary ? (
+                      <select
+                        className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm"
+                        value={fixeraDiagnosisMatch}
+                        onChange={(e) => setFixeraDiagnosisMatch(e.target.value)}
+                        aria-label="Did Fixera's diagnosis match what you found?"
+                      >
+                        <option value="">Did Fixera&apos;s diagnosis match what you found? (optional)</option>
+                        <option value="matched">Yes, it matched</option>
+                        <option value="partly">Partly</option>
+                        <option value="different">No, the cause was different</option>
+                        <option value="not_applicable">Not applicable</option>
+                      </select>
+                    ) : null}
+                      <input
+                        className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm"
+                        placeholder="Actual cause you found (optional, helps Fixera improve)"
+                        value={actualCause}
+                        maxLength={1000}
+                        onChange={(e) => setActualCause(e.target.value)}
+                      />
+                  </div>
                   <div className="grid gap-2 sm:grid-cols-3">
                     <select className="rounded-xl border border-border bg-background px-3 py-2 text-sm" value={healthSystem} onChange={(e) => setHealthSystem(e.target.value)}>
                       {["HVAC", "Plumbing", "Electrical", "Roof", "Appliances", "Pest", "Safety"].map((s) => (
@@ -619,6 +649,8 @@ export default function ContractorJobsPanel({
                       const structuredEquipment = buildStructuredEquipmentPayload(selected, equipmentDraft);
                       const r = await completeJob(selected.id, {
                         summary: completeSummary.trim(),
+                        actualCause: actualCause.trim() || undefined,
+                        fixeraDiagnosisMatch: fixeraDiagnosisMatch || undefined,
                         beforePhotoUrl,
                         afterPhotoUrl,
                         equipmentLabelPhotoUrl,
@@ -637,6 +669,8 @@ export default function ContractorJobsPanel({
                       }
                       setCompleteOpen(false);
                       setCompleteSummary("");
+                      setActualCause("");
+                      setFixeraDiagnosisMatch("");
                       setBeforePhotoUrl(null);
                       setAfterPhotoUrl(null);
                       setEquipmentLabelPhotoUrl(null);

@@ -4,6 +4,7 @@
  */
 
 import { displayAssistantName } from '../brand.js';
+import { scrubPii } from '../learning-loop.js';
 
 const MEMORY = {
   interactions: [],
@@ -173,27 +174,35 @@ export async function persistFixeraInteraction(pool, row) {
       JSON.stringify(row.provider_attempts || []),
     ]
   );
+  // Failed provider calls are kept in fixera_interactions for operations, not as training cases.
+  if (row.success === false) return { persisted: true, candidate: false };
   await pool.query(
     `INSERT INTO fixera_training_candidates (
        id, interaction_id, job_id, category, scenario, diagnosis, quality_status,
-       approved_for_training, gold_example, pii_minimized, dataset_version, payload
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,FALSE,FALSE,TRUE,$8,$9::jsonb)
+       approved_for_training, gold_example, pii_minimized, dataset_version, payload, case_category
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,FALSE,FALSE,TRUE,$8,$9::jsonb,$10)
      ON CONFLICT (id) DO NOTHING`,
     [
       `cand_${row.interaction_id}`,
       row.interaction_id,
       row.job_id,
       row.task_type,
-      row.input_summary,
-      row.output_summary,
+      scrubPii(row.input_summary, 180),
+      scrubPii(row.output_summary, 240),
       row.quality_status === 'SAFETY_REJECTED' ? 'SAFETY_REJECTED' : 'UNREVIEWED',
       DATASET_VERSION,
-      JSON.stringify(minimizeTrainingPayload({
-        scenario: row.input_summary,
-        diagnosis: row.output_summary,
-        safety: row.safety_classification,
-        qualityStatus: row.quality_status,
-      })),
+      JSON.stringify({
+        ...minimizeTrainingPayload({
+          scenario: scrubPii(row.input_summary, 180),
+          diagnosis: scrubPii(row.output_summary, 240),
+          safety: row.safety_classification,
+          qualityStatus: row.quality_status,
+        }),
+        ...(row.case_payload || {}),
+        task: row.task_type,
+        prompt_version: row.prompt_version || null,
+      }),
+      row.case_category || null,
     ]
   );
   return { persisted: true };
@@ -235,7 +244,12 @@ export async function trainingOverview(pool) {
 export async function exportApprovedTraining(pool) {
   if (!pool) return [];
   const { rows } = await pool.query(
-    `SELECT payload
+    `SELECT payload || jsonb_build_object(
+              'quality_status', quality_status,
+              'gold_example', gold_example,
+              'corrected_diagnosis', corrected_diagnosis,
+              'outcome_type', outcome_type,
+              'approved_for_training', TRUE) AS payload
      FROM fixera_training_candidates
      WHERE approved_for_training = TRUE
        AND quality_status <> 'SAFETY_REJECTED'

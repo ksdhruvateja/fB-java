@@ -55,6 +55,7 @@ import { buildPropertyAIContext } from './property-ai-context.js';
 import { storeFixeraCasePhotos, readCasePhotoList, listFixeraCaseImages } from './fixera/case-media.js';
 import { recordFixeraInteraction, persistFixeraInteraction } from './fixera/experience/store.js';
 import { retrieveGlobalKnowledge } from './fixa/knowledge/knowledgeWriter.js';
+import { attachCasePayload, confirmedCasesContext, recordCaseOutcome, retrieveConfirmedCases } from './fixera/learning-loop.js';
 import { appendAssessmentRevision } from './fixera/assessment-history.js';
 import { assertPropertyAccess } from './property-access.js';
 import { assessRepair, extractDocument } from './fixa/index.js';
@@ -1159,6 +1160,11 @@ async function runManagedJobAssessment(pool, job, viewer) {
     category: job.category,
     query: [job.title, job.description, job.equipment_key].filter(Boolean).join(' '),
   });
+  const pastCases = await retrieveConfirmedCases(pool, {
+    category: job.category,
+    query: [job.title, job.description].filter(Boolean).join(' '),
+    excludeJobId: isPending ? null : recordId,
+  });
   const globalKnowledgeContext = globalKnowledge.items.length
     ? `Approved general FixBridge repair knowledge (global, not property-specific):\n${globalKnowledge.items.map((item) => `- ${item}`).join('\n')}`
     : '';
@@ -1200,6 +1206,7 @@ async function runManagedJobAssessment(pool, job, viewer) {
       preCtx.locationContext,
       propertyAiContext ? `Authorized Property Passport context:\n${propertyAiContext}` : '',
       globalKnowledgeContext,
+      confirmedCasesContext(pastCases),
     ].filter(Boolean).join('\n\n'),
     zip: preCtx.zip,
     city: preCtx.city,
@@ -1225,13 +1232,14 @@ async function runManagedJobAssessment(pool, job, viewer) {
       success: Boolean(result?.assessment),
       failureCode: result?.providerCode || result?.code || null,
       providerAttempts: result?.providerAttempts || [],
-      knowledgeRefs: globalKnowledge.references,
+      knowledgeRefs: [...globalKnowledge.references, ...pastCases.references],
       outputSummary: result?.assessment?.summary || result?.error || null,
       safety: result?.assessment?.diy_risk_level || null,
       evaluator: result?.assessment ? 'recorded' : 'fail',
       schemaQuality: result?.assessment ? 'present' : 'missing',
       professionalEscalation: Boolean(result?.assessment?.professional_required),
     });
+    attachCasePayload(interaction, { assessment: result?.assessment, category: job.category, description: job.description });
     await persistFixeraInteraction(pool, interaction);
   } catch (captureError) {
     console.warn('[fixera] assessment audit persistence failed', captureError?.message || captureError);
@@ -4416,6 +4424,12 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
       } catch (auditError) {
         console.warn('[safety-confirmation] audit event failed', auditError?.message);
       }
+      await recordCaseOutcome(pool, {
+        jobId,
+        outcome: decision === 'continue' ? 'SAFETY_CONFIRMED' : 'SAFETY_DECLINED',
+        source: 'homeowner',
+        actorUserId: req.authUser.id,
+      }).catch((e) => console.warn('[safety-confirmation] learning outcome not recorded', e?.message));
       return res.json({ ok: true, decision, job: serializeJob(updated[0], req.authUser) });
     } catch (e) {
       console.error('[safety-confirmation] failed', { jobId: req.params.id, error: e?.message || String(e) });
@@ -4523,6 +4537,16 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
          WHERE id=$2 AND homeowner_user_id=$3`,
         [JSON.stringify(nextReport), jobId, req.authUser.id]
       );
+      const learningOutcome = { fixed: 'DIY_FIXED', still_broken: 'DIY_STILL_BROKEN', professional_requested: 'PROFESSIONAL_REQUESTED' }[event];
+      if (learningOutcome) {
+        await recordCaseOutcome(pool, {
+          jobId,
+          outcome: learningOutcome,
+          source: 'homeowner',
+          details: { action: actualAction, parts: partsUsed, observation },
+          actorUserId: req.authUser.id,
+        }).catch((e) => console.warn('[fixera-diy] learning outcome not recorded', e?.message));
+      }
 
       if (event === 'fixed' && job.property_id) {
         const { rows: propertyRows } = await pool.query(
@@ -9400,6 +9424,11 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         afterPhotoUrl: req.body?.afterPhotoUrl || null,
         equipmentLabelPhotoUrl: req.body?.equipmentLabelPhotoUrl || null,
         warranty: req.body?.warranty || '',
+        // What the professional actually found, compared with Fixera's diagnosis (learning loop).
+        actualCause: typeof req.body?.actualCause === 'string' ? req.body.actualCause.trim().slice(0, 1000) : '',
+        fixeraDiagnosisMatch: ['matched', 'partly', 'different', 'not_applicable'].includes(req.body?.fixeraDiagnosisMatch)
+          ? req.body.fixeraDiagnosisMatch
+          : null,
         healthUpdate: req.body?.healthUpdate || null,
         structuredEquipment: hasStructuredEquipmentData(structuredEquipment) ? structuredEquipment : null,
         completedAt: new Date().toISOString(),
@@ -9413,6 +9442,18 @@ export function registerManagedRoutes(app, { pool, requireAuth, requireAdmin, re
         `UPDATE managed_jobs SET completion_report=$1, updated_at=NOW() WHERE id=$2`,
         [JSON.stringify(report), jobId]
       );
+      await recordCaseOutcome(pool, {
+        jobId,
+        outcome: 'PROFESSIONAL_COMPLETED',
+        source: isAdmin ? 'admin' : 'professional',
+        details: {
+          professionalFindings: report.summary,
+          actualCause: report.actualCause,
+          diagnosisMatch: report.fixeraDiagnosisMatch,
+          parts: report.materialsUsed ? String(report.materialsUsed).split(/[,;\n]/) : [],
+        },
+        actorUserId: req.authUser.id,
+      }).catch((e) => console.warn('[completion] learning outcome not recorded', e?.message));
 
       // Contractor completion is the authoritative WORK COMPLETED milestone.
       // The homeowner's remaining invoice balance becomes available immediately;

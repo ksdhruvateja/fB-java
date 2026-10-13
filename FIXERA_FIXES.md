@@ -148,13 +148,62 @@ For `diy_with_guardrails` the DIY steps are withheld from the homeowner until th
 ### Prompt version
 `FIXERA_PROMPT_VERSION` is now `fixera-repair-v4`.
 
+## 9. Learning loop: record, review, reuse
+
+Fixera does **not** retrain any model. It improves by reusing cases that admins have reviewed, and it builds a clean dataset you can use for fine-tuning later.
+
+### 9.1 Record
+- **Every AI call is saved** to `fixera_interactions`, and every successful one also becomes a review case in `fixera_training_candidates`. Before saving, Fixera removes emails, phone numbers, street addresses, ZIP codes and stated names.
+- **Coverage:** assessments, reassessments, DIY chat, general Fixera chat and Home Assistant chat. Safety-policy refusals (prompt injection, hazards, user stop) are included.
+- **What each assessment case holds:** the problem, Fixera's diagnosis, likely causes, the safety decision and risk factors, the DIY steps, the parts and the follow-up maintenance.
+- **Outcomes are linked back** to the assessment they test, in the new table `fixera_case_outcomes`:
+
+| Outcome | Recorded when |
+| --- | --- |
+| `DIY_FIXED`, `DIY_STILL_BROKEN`, `PROFESSIONAL_REQUESTED` | The homeowner reports the DIY result, with what they did and the parts they used |
+| `SAFETY_CONFIRMED`, `SAFETY_DECLINED` | The homeowner answers the safety-concern popup |
+| `PROFESSIONAL_COMPLETED` | A professional completes the job, with their summary |
+| `USER_FEEDBACK` | The homeowner rates the answer helpful or not |
+
+- **Professional's completion form:** two new optional fields, "Did Fixera's diagnosis match what you found?" and "Actual cause you found". These become the case's correction. An already-approved case goes back to review (`NEEDS_REREVIEW`) when a professional's findings arrive.
+
+### 9.2 Review (Admin → Fixera → Review)
+- **Filters:** has an outcome, needs review, approved, rejected. You can switch between assessments and chat.
+- **Each card shows** the problem, Fixera's diagnosis, the steps, the safety factors, every outcome and the professional's finding.
+- **Actions:**
+
+| Action | Effect |
+| --- | --- |
+| Approve | Reused and exported as it is |
+| Approve as gold | Approved, and ranked first when reused |
+| Correct | Enter the right diagnosis and fix; the case is approved with your correction |
+| Reject | Never reused or exported |
+| Unsafe guidance | Never reused or exported, and cannot be approved unless you reset it first |
+| Reset | Back to unreviewed |
+
+- **Permissions:** viewing needs `settings.view`, the same as the existing Training tab. Actions need admin write access.
+- **Export:** `GET /api/admin/fixera/training/export` now returns the approved and corrected cases with their outcomes and corrections, ready for a future fine-tune.
+
+### 9.3 Reuse
+Each new assessment and reassessment looks up up to 3 **approved or corrected** past cases from other homes. They must be in the same category and match the problem's words.
+- **What goes into the prompt:** each case's problem, confirmed cause and what fixed it, labelled "reference only, not evidence about this home; every safety rule still applies".
+- **Safety:** the risk engine and guardrails still check everything the model returns.
+- **Tracing:** the case IDs used are saved with each assessment (`knowledge_refs`).
+
+**Nothing is reused until an admin approves it.** To also reuse cases confirmed fixed (by the homeowner or a professional) before review, set `FIXERA_REUSE_CONFIRMED_OUTCOMES=true`. It's off by default because unreviewed outcomes can be wrong.
+
+### What this does not do
+- **No training:** it does not train or change model weights. A fine-tune (step 4) needs a few thousand approved cases first, then a side-by-side comparison against the current provider.
+- **Simple matching:** reuse matches on words (PostgreSQL full-text search), not meaning. Semantic search can be added later.
+- **De-identification has limits:** it uses fixed patterns. Admins should still reject a case if personal details slip through.
+
 ## Tests
 
 ```bash
-node --test $(find api -name "*.test.js")    # 34 pass, 20 database tests skip
+node --test $(find api -name "*.test.js")    # 37 pass, 27 database tests skip
 # With a real PostgreSQL (or a Neon branch) for the route/pricing tests:
 FIXERA_TEST_DATABASE_URL=postgresql://... DB_SSL_REJECT_UNAUTHORIZED=false \
-  node --test --test-concurrency=1 $(find api -name "*.test.js")   # 54 pass
+  node --test --test-concurrency=1 $(find api -name "*.test.js")   # 64 pass
 ```
 
 **New test files:**
@@ -165,6 +214,8 @@ FIXERA_TEST_DATABASE_URL=postgresql://... DB_SSL_REJECT_UNAUTHORIZED=false \
 - `api/hire-pricing.test.js`
 - `api/fixera/workflow.test.js`: safety engine, guardrails, evidence check, parts cost, confirmation, reminders, photo limits
 - `api/fixera-workflow-routes.test.js`: popup gate, DIY outcome → reminders, passport save, notifications, 5-photo upload
+- `api/fixera/learning-loop.test.js`: de-identification, case record, prompt framing
+- `api/fixera-learning-routes.test.js`: record → outcome → professional correction → chat capture → admin review → reuse → export
 
 The in-memory `pg-mem` fallback cannot run the full schema (it lacks `trim()` and other functions). That's why the route tests need a real PostgreSQL.
 

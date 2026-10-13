@@ -2192,6 +2192,33 @@ export async function initManagedSchema(pool) {
       created_at            TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  // Learning loop: review state, outcomes and the case's real category on each candidate.
+  await pool.query(`
+    ALTER TABLE fixera_training_candidates
+      ADD COLUMN IF NOT EXISTS case_category TEXT,
+      ADD COLUMN IF NOT EXISTS outcome_type TEXT,
+      ADD COLUMN IF NOT EXISTS outcome_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS corrected_diagnosis TEXT,
+      ADD COLUMN IF NOT EXISTS review_notes TEXT,
+      ADD COLUMN IF NOT EXISTS reviewed_by INT,
+      ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fixera_candidates_review ON fixera_training_candidates (quality_status, outcome_at DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fixera_candidates_interaction ON fixera_training_candidates (interaction_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fixera_interactions_job ON fixera_interactions (job_id, created_at DESC)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fixera_case_outcomes (
+      id             BIGSERIAL PRIMARY KEY,
+      job_id         BIGINT NOT NULL,
+      interaction_id TEXT,
+      outcome        TEXT NOT NULL,
+      source         TEXT,
+      details        JSONB,
+      actor_user_id  INT,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fixera_case_outcomes_job ON fixera_case_outcomes (job_id, created_at DESC)`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fixera_knowledge_entries (
       id BIGSERIAL PRIMARY KEY,

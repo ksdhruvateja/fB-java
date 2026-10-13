@@ -8,6 +8,7 @@ import { buildPropertyTimeline } from './property-timeline.js';
 import { assertPropertyAccess } from './property-access.js';
 import { mergeEquipmentRecord, appendMemoryAudit } from './property-memory.js';
 import { requireFixeraAiAccess } from './fixera/entitlement.js';
+import { recordChatForLearning } from './fixera/learning-loop.js';
 
 function enforceSingleQuestion(reply, riskLevel) {
   const text = String(reply || '').trim();
@@ -92,6 +93,18 @@ export function registerHomeAssistantRoutes(app, { pool, requireAuth }) {
 
       const ai = await complete({ messages: aiMessages, task: 'customer_support' });
       const reply = enforceSingleQuestion(ai?.reply || 'I could not generate a response. Please try again.', ctx.riskLevel);
+      recordChatForLearning(pool, {
+        userId: req.authUser.id,
+        userRole: req.authUser.role,
+        jobId: Number.isFinite(Number(jobId)) && jobId != null ? Number(jobId) : null,
+        propertyId: propertyId || null,
+        task: 'home_assistant',
+        userMessage,
+        reply: ai?.reply ? reply : null,
+        riskLevel: ctx.riskLevel,
+        provider: ai?.source || null,
+        guardrailRemovals: ai?.guardrailRemovals || 0,
+      }).catch(() => {});
       res.json({
         ok: true,
         reply,
