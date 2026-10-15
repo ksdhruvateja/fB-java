@@ -37,9 +37,9 @@ export function Fieldwork({ bundle, team, onChange }: { bundle: JobBundle; team:
       title="Site visits"
       actions={!closed ? <Button size="sm" tone={visits.length ? "secondary" : "primary"} onClick={() => setStartOpen(true)}>{visits.length ? "Start return visit" : "Start visit"}</Button> : null}
     >
-      {notice ? <p className="mb-3 flex items-center gap-2 rounded-md bg-amber-50 p-3 text-sm text-amber-900"><CloudOff className="h-4 w-4" />{notice}</p> : null}
+      {notice ? <p className="mb-3 flex items-center gap-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-900"><CloudOff className="h-4 w-4" />{notice}</p> : null}
       {pending.filter((p) => p.path.includes("/visits/") || p.path.includes(`/jobs/${j.id}/`)).map((p) => (
-        <p key={p.id} className="mb-2 rounded-md bg-slate-100 px-3 py-2 text-xs dark:bg-slate-800">
+        <p key={p.id} className="mb-2 rounded-xl bg-muted px-3 py-2 text-xs ">
           Waiting to sync: {p.label} ({when(p.queued_at)}){p.last_error ? <span className="block font-medium text-red-600">Not accepted: {p.last_error}</span> : null}
         </p>
       ))}
@@ -48,7 +48,7 @@ export function Fieldwork({ bundle, team, onChange }: { bundle: JobBundle; team:
         <ul className="mt-2 space-y-2">
           {visits.filter((v) => !mine.includes(v)).map((v) => <VisitSummary key={v.id} visit={v} />)}
         </ul>
-      ) : <p className="text-sm text-slate-500">No visits yet.{j.checkin_method !== "none" ? ` This customer requires check-in: ${CHECKIN_LABEL[j.checkin_method]}.` : ""}</p>}
+      ) : <p className="text-sm text-muted-foreground">No visits yet.{j.checkin_method !== "none" ? ` This customer requires check-in: ${CHECKIN_LABEL[j.checkin_method]}.` : ""}</p>}
       <StartVisitModal open={startOpen} onClose={() => setStartOpen(false)} bundle={bundle} team={team} onDone={() => { setStartOpen(false); onChange(); }} />
     </Card>
   );
@@ -56,21 +56,21 @@ export function Fieldwork({ bundle, team, onChange }: { bundle: JobBundle; team:
 
 function VisitSummary({ visit: v }: { visit: Visit }) {
   return (
-    <li className="rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700">
+    <li className="rounded-2xl bg-muted p-4 text-sm ">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-semibold">Visit {v.visit_number}</span>
-        <span className="text-slate-500">· {v.technician_name || "Technician"}</span>
+        <span className="text-muted-foreground">· {v.technician_name || "Technician"}</span>
         {v.outcome ? <Badge tone={v.outcome === "completed" ? "green" : v.outcome === "no_access" ? "red" : "orange"}>{OUTCOME_LABEL[v.outcome]}</Badge> : <Badge>{v.status.replace("_", " ")}</Badge>}
         <CheckinBadge status={v.external_checkin_status} />
       </div>
-      <p className="mt-1 text-xs text-slate-500">
+      <p className="mt-1 text-xs text-muted-foreground">
         {v.en_route_at ? `On the way ${when(v.en_route_at)} · ` : ""}{v.arrived_at ? `Arrived ${when(v.arrived_at)}` : "Not arrived"}{v.departed_at ? ` · Left ${when(v.departed_at)}` : ""}
         {v.arrival_lat != null ? " · location recorded" : v.arrived_at ? ` · ${v.arrival_location_note || "no location"}` : ""}
       </p>
       {v.external_checkin_note || v.external_checkin_reference ? <p className="mt-1 text-xs">Customer check-in: {[v.external_checkin_reference && `ref ${v.external_checkin_reference}`, v.external_checkin_note].filter(Boolean).join(" — ")}</p> : null}
       {v.work_performed ? <p className="mt-2 whitespace-pre-line">{v.work_performed}</p> : null}
       {v.parts_needed ? <p className="mt-1 text-xs"><span className="font-semibold">Parts needed:</span> {v.parts_needed}</p> : null}
-      {v.notes ? <p className="mt-1 whitespace-pre-line text-xs text-slate-500">{v.notes}</p> : null}
+      {v.notes ? <p className="mt-1 whitespace-pre-line text-xs text-muted-foreground">{v.notes}</p> : null}
     </li>
   );
 }
@@ -119,10 +119,10 @@ function ActiveVisit({ visit: v, bundle, onDone }: { visit: Visit; bundle: JobBu
   }
 
   return (
-    <div className="mb-3 rounded-xl border-2 border-primary/40 bg-primary/5 p-4">
+    <div className="mb-3 rounded-3xl bg-primary/[0.05] p-5 ring-1 ring-primary/30">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-lg font-bold">Visit {v.visit_number}</span>
-        <span className="text-sm text-slate-600 dark:text-slate-400">{v.technician_name}</span>
+        <span className="text-sm text-muted-foreground">{v.technician_name}</span>
         <Badge tone={v.status === "on_site" ? "green" : v.status === "en_route" ? "blue" : "slate"}>{v.status === "on_site" ? `On site since ${when(v.arrived_at)}` : v.status === "en_route" ? "On the way" : "Not started"}</Badge>
         <CheckinBadge status={v.external_checkin_status} />
       </div>
@@ -135,7 +135,7 @@ function ActiveVisit({ visit: v, bundle, onDone }: { visit: Visit; bundle: JobBu
         {v.status === "scheduled" || v.status === "en_route" ? (
           <div>
             <Button size="xl" className="w-full" onClick={checkIn} busy={busy === "check_in"}><LogIn className="h-6 w-6" />Check in</Button>
-            <label className="mt-2 flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+            <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
               <input type="checkbox" checked={shareLocation} onChange={(e) => setShareLocation(e.target.checked)} /> <MapPin className="h-3.5 w-3.5" />Record my location (optional)
             </label>
           </div>
@@ -148,7 +148,7 @@ function ActiveVisit({ visit: v, bundle, onDone }: { visit: Visit; bundle: JobBu
         ) : null}
       </div>
       {v.status === "on_site" && j.checkin_method !== "none" && v.external_checkin_status === "pending" ? (
-        <p className="mt-3 rounded-md bg-amber-100 p-3 text-sm text-amber-900">
+        <p className="mt-3 rounded-xl bg-amber-100 p-3 text-sm text-amber-900">
           Check in with the customer too ({CHECKIN_LABEL[j.checkin_method]}). {j.checkin_instructions}
         </p>
       ) : null}
@@ -219,7 +219,7 @@ function PhotoButton({ jobId, visitId, onDone }: { jobId: number; visitId: numbe
       <Select value={stage} onChange={(e) => setStage(e.target.value)} className="w-auto" aria-label="Photo stage">
         <option value="before">Before</option><option value="during">During</option><option value="after">After / completion</option><option value="document">Document / receipt</option>
       </Select>
-      <label className={cx("inline-flex cursor-pointer items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold dark:border-slate-700 dark:bg-slate-900", busy && "opacity-60")}>
+      <label className={cx("inline-flex cursor-pointer items-center gap-2 rounded-full bg-secondary px-4 py-2 text-sm font-semibold  ", busy && "opacity-60")}>
         <Camera className="h-4 w-4" />{busy ? "Uploading…" : "Add photo"}
         <input type="file" accept="image/*" capture="environment" multiple className="hidden" onChange={onFile} disabled={busy} />
       </label>
@@ -236,12 +236,12 @@ function ExternalCheckinModal({ open, kind, method, instructions, onClose, onSub
   const label = kind === "external_checkout" ? "check-out" : "check-in";
   return (
     <Modal open={open} onClose={onClose} title={`Customer ${label}`}>
-      <p className="mb-3 text-sm text-slate-600 dark:text-slate-400">{CHECKIN_LABEL[method] || "Customer system"}{instructions ? ` — ${instructions}` : ""}</p>
+      <p className="mb-3 text-sm text-muted-foreground">{CHECKIN_LABEL[method] || "Customer system"}{instructions ? ` — ${instructions}` : ""}</p>
       <div className="grid grid-cols-2 gap-2">
-        <button type="button" onClick={() => setStatus("confirmed")} className={cx("flex items-center justify-center gap-2 rounded-lg border-2 p-4 font-semibold", status === "confirmed" ? "border-emerald-600 bg-emerald-50 text-emerald-800" : "border-slate-200")}><CheckCircle2 className="h-5 w-5" />Confirmed</button>
-        <button type="button" onClick={() => setStatus("failed")} className={cx("flex items-center justify-center gap-2 rounded-lg border-2 p-4 font-semibold", status === "failed" ? "border-red-600 bg-red-50 text-red-800" : "border-slate-200")}><XCircle className="h-5 w-5" />Did not work</button>
+        <button type="button" onClick={() => setStatus("confirmed")} className={cx("flex items-center justify-center gap-2 rounded-2xl border-2 p-4 font-semibold", status === "confirmed" ? "border-emerald-600 bg-emerald-50 text-emerald-800" : "border-border")}><CheckCircle2 className="h-5 w-5" />Confirmed</button>
+        <button type="button" onClick={() => setStatus("failed")} className={cx("flex items-center justify-center gap-2 rounded-2xl border-2 p-4 font-semibold", status === "failed" ? "border-red-600 bg-red-50 text-red-800" : "border-border")}><XCircle className="h-5 w-5" />Did not work</button>
       </div>
-      <button type="button" onClick={() => setStatus("exception")} className={cx("mt-2 w-full rounded-lg border-2 p-2 text-sm", status === "exception" ? "border-amber-600 bg-amber-50 text-amber-900" : "border-slate-200")}>Exception (dispatcher told me to skip it, site has no system, …)</button>
+      <button type="button" onClick={() => setStatus("exception")} className={cx("mt-2 w-full rounded-2xl border-2 p-2 text-sm", status === "exception" ? "border-amber-600 bg-amber-50 text-amber-900" : "border-border")}>Exception (dispatcher told me to skip it, site has no system, …)</button>
       <div className="mt-3 space-y-3">
         <Field label="Confirmation / reference number"><Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="IVR confirmation, portal code…" /></Field>
         <Field label={status === "confirmed" ? "Note (optional)" : "What happened? (required)"}>
@@ -273,7 +273,7 @@ function CheckoutModal({ open, visit, checkinRequired, onClose, onSubmit }: { op
         <legend className="mb-2 text-sm font-medium">Outcome</legend>
         <div className="grid grid-cols-2 gap-2">
           {Object.entries(OUTCOME_LABEL).map(([k, v]) => (
-            <button key={k} type="button" onClick={() => setOutcome(k)} className={cx("rounded-lg border-2 p-3 text-sm font-semibold", outcome === k ? "border-primary bg-primary/10" : "border-slate-200 dark:border-slate-700")}>{v}</button>
+            <button key={k} type="button" onClick={() => setOutcome(k)} className={cx("rounded-2xl border-2 p-3 text-sm font-semibold", outcome === k ? "border-primary bg-primary/10" : "border-border")}>{v}</button>
           ))}
         </div>
       </fieldset>
@@ -282,7 +282,7 @@ function CheckoutModal({ open, visit, checkinRequired, onClose, onSubmit }: { op
         {outcome === "parts_needed" ? <Field label="Parts needed (required)"><Textarea value={parts} onChange={(e) => setParts(e.target.value)} /></Field> : null}
         <Field label="Notes for the office"><Textarea value={notes} onChange={(e) => setNotes(e.target.value)} className="min-h-[60px]" /></Field>
         {needsCheckout ? (
-          <div className="rounded-md border border-slate-200 p-3 dark:border-slate-700">
+          <div className="rounded-2xl bg-muted p-4 ">
             <p className="text-sm font-medium">Customer check-out</p>
             <Select className="mt-2" value={extStatus} onChange={(e) => setExtStatus(e.target.value)}>
               <option value="confirmed">Confirmed</option><option value="failed">Did not work</option><option value="exception">Exception</option><option value="not_required">Not required for this visit</option>
@@ -291,7 +291,7 @@ function CheckoutModal({ open, visit, checkinRequired, onClose, onSubmit }: { op
             {extStatus === "failed" || extStatus === "exception" ? <Textarea className="mt-2" placeholder="What happened? (required)" value={extNote} onChange={(e) => setExtNote(e.target.value)} /> : null}
           </div>
         ) : null}
-        {outcome === "completed" ? <p className="text-xs text-slate-500">Add “after” photos before checking out — the completion package needs them.</p> : null}
+        {outcome === "completed" ? <p className="text-xs text-muted-foreground">Add “after” photos before checking out — the completion package needs them.</p> : null}
       </div>
       <div className="mt-3"><ErrorNote error={error} /></div>
       <Button className="mt-4 w-full" size="lg" tone="success" busy={busy}
@@ -322,7 +322,7 @@ function StartVisitModal({ open, onClose, bundle, team, onDone }: { open: boolea
   const openTrips = bundle.visits.filter((v) => ["en_route", "on_site"].includes(v.status));
   return (
     <Modal open={open} onClose={onClose} title={bundle.visits.length ? "Start a return visit" : "Start a visit"}>
-      {bundle.visits.length ? <p className="mb-3 text-sm text-slate-600 dark:text-slate-400">Earlier visits stay on the job’s history.</p> : null}
+      {bundle.visits.length ? <p className="mb-3 text-sm text-muted-foreground">Earlier visits stay on the job’s history.</p> : null}
       <div className="space-y-3">
         {isOffice ? (
           <Field label="Technician">

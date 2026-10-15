@@ -6,6 +6,7 @@ export function navigate(to: string, { replace = false } = {}) {
   else window.history.pushState({}, "", to);
   window.dispatchEvent(new Event("commercial-navigate"));
   window.scrollTo({ top: 0 });
+  document.getElementById("root")?.scrollTo({ top: 0 });
 }
 
 export function usePath() {

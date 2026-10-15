@@ -29,17 +29,17 @@ export function ApprovalsAndBilling({ bundle, onChange }: { bundle: JobBundle; o
         ) : null}
       >
         {pendingApprovals.length ? (
-          <p className="mb-3 flex items-center gap-2 rounded-md bg-orange-50 p-3 text-sm font-medium text-orange-900 dark:bg-orange-950 dark:text-orange-200">
+          <p className="mb-3 flex items-center gap-2 rounded-xl bg-orange-50 p-3 text-sm font-medium text-orange-900 dark:bg-orange-950 dark:text-orange-200">
             <CircleAlert className="h-4 w-4" />Additional work is waiting for authorization. Do not start it until it is approved.
           </p>
         ) : null}
-        {j.approval_conditions ? <p className="mb-3 text-xs text-slate-600 dark:text-slate-400"><span className="font-semibold">Customer’s approval rules:</span> {j.approval_conditions}</p> : null}
-        {!bundle.proposals.length && !bundle.approvals.length ? <p className="text-sm text-slate-500">No proposals or NTE requests.</p> : null}
+        {j.approval_conditions ? <p className="mb-3 text-xs text-muted-foreground"><span className="font-semibold">Customer’s approval rules:</span> {j.approval_conditions}</p> : null}
+        {!bundle.proposals.length && !bundle.approvals.length ? <p className="text-sm text-muted-foreground">No proposals or NTE requests.</p> : null}
         <ul className="space-y-3">
           {bundle.proposals.slice().reverse().map((p) => {
             const approval = bundle.approvals.filter((a) => a.proposal_id === p.id).slice(-1)[0];
             return (
-              <li key={p.id} className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+              <li key={p.id} className="rounded-2xl bg-muted p-4 ">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-semibold">Proposal v{p.version}</span>
                   <Badge tone={p.status === "approved" ? "green" : p.status === "declined" ? "red" : p.status === "submitted" ? "orange" : "slate"}>{p.status === "submitted" ? (approval?.status === "needs_review" ? "Reply needs review" : "Waiting for approval") : p.status}</Badge>
@@ -47,7 +47,7 @@ export function ApprovalsAndBilling({ bundle, onChange }: { bundle: JobBundle; o
                 </div>
                 {p.findings ? <p className="mt-2 text-sm"><span className="font-medium">Findings:</span> {p.findings}</p> : null}
                 {p.scope ? <p className="mt-1 text-sm"><span className="font-medium">Scope:</span> {p.scope}</p> : null}
-                {p.exclusions ? <p className="mt-1 text-xs text-slate-500">Excludes: {p.exclusions}</p> : null}
+                {p.exclusions ? <p className="mt-1 text-xs text-muted-foreground">Excludes: {p.exclusions}</p> : null}
                 {approval ? <ApprovalLine approval={approval} /> : null}
                 <div className="mt-3 flex flex-wrap gap-2">
                   {p.status === "draft" ? <Button size="sm" tone="secondary" onClick={() => setProposalOpen(p)}>{isOffice ? "Review & price" : "Edit"}</Button> : null}
@@ -58,7 +58,7 @@ export function ApprovalsAndBilling({ bundle, onChange }: { bundle: JobBundle; o
             );
           })}
           {bundle.approvals.filter((a) => a.kind === "nte_increase").map((a) => (
-            <li key={a.id} className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+            <li key={a.id} className="rounded-2xl bg-muted p-4 ">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-semibold">NTE increase</span>
                 <Badge tone={statusTone(a.status === "pending" ? "awaiting_approval" : a.status === "approved" ? "completed" : a.status === "declined" ? "declined" : "received")}>{a.status.replace("_", " ")}</Badge>
@@ -83,7 +83,7 @@ export function ApprovalsAndBilling({ bundle, onChange }: { bundle: JobBundle; o
 function ApprovalLine({ approval: a }: { approval: any }) {
   const { canSeeMoney } = useSession();
   return (
-    <div className="mt-2 rounded-md bg-slate-50 p-2 text-xs dark:bg-slate-800/60">
+    <div className="mt-2 rounded-xl bg-muted p-3 text-xs /60">
       {canSeeMoney ? (
         <p>
           Original authorization {money(a.original_amount)} · requested {money(a.requested_amount)}
@@ -107,7 +107,7 @@ function SubmitProposal({ proposal, job, onDone }: { proposal: any; job: any; on
     <>
       <Button size="sm" onClick={() => setOpen(true)}><Send className="h-4 w-4" />Submit to customer</Button>
       <Modal open={open} onClose={() => setOpen(false)} title={`Submit proposal v${proposal.version} — ${money(proposal.total)}`}>
-        <p className="mb-3 text-sm text-slate-600 dark:text-slate-400">The proposal is sent once. Its total becomes the new authorized amount when the customer approves it.</p>
+        <p className="mb-3 text-sm text-muted-foreground">The proposal is sent once. Its total becomes the new authorized amount when the customer approves it.</p>
         <div className="space-y-3">
           <Field label="How">
             <Select value={via} onChange={(e) => setVia(e.target.value)}>
@@ -158,12 +158,12 @@ function DecisionButton({ approval, onDone }: { approval: any; onDone: () => voi
             ["declined", "Declined", XCircle, "border-red-600 bg-red-50 text-red-900"],
             ["unclear", "Not clear", CircleAlert, "border-amber-600 bg-amber-50 text-amber-900"],
           ] as const).map(([k, label, Icon, on]) => (
-            <button key={k} type="button" onClick={() => setDecision(k)} className={cx("flex flex-col items-center gap-1 rounded-lg border-2 p-3 text-sm font-semibold", decision === k ? on : "border-slate-200 dark:border-slate-700")}>
+            <button key={k} type="button" onClick={() => setDecision(k)} className={cx("flex flex-col items-center gap-1 rounded-2xl border-2 p-3 text-sm font-semibold", decision === k ? on : "border-border")}>
               <Icon className="h-5 w-5" />{label}
             </button>
           ))}
         </div>
-        {decision === "unclear" ? <p className="mt-2 text-xs text-slate-600">An unclear reply is not treated as approval. It goes to the exception queue for someone to follow up.</p> : null}
+        {decision === "unclear" ? <p className="mt-2 text-xs text-muted-foreground">An unclear reply is not treated as approval. It goes to the exception queue for someone to follow up.</p> : null}
         <div className="mt-3 space-y-3">
           {decision === "approved" ? <Field label="Approved amount"><Input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field> : null}
           {decision !== "unclear" ? (
@@ -255,7 +255,7 @@ function ProposalForm({ proposal, jobId, onSaved }: { proposal: any; jobId: numb
         onChange={setMaterials}
         blank={{ description: "", quantity: "", unit_cost: "" }}
       />
-      {canSeeMoney ? <p className="text-right text-lg font-bold">Total {money(total)}</p> : <p className="text-xs text-slate-500">The office adds prices before it goes to the customer.</p>}
+      {canSeeMoney ? <p className="text-right text-lg font-bold">Total {money(total)}</p> : <p className="text-xs text-muted-foreground">The office adds prices before it goes to the customer.</p>}
       <ErrorNote error={error} />
       <Button onClick={save} busy={busy}>{proposal.id ? "Save" : "Save draft"}</Button>
     </div>
@@ -273,7 +273,7 @@ function LineTable<T extends Record<string, any>>({ title, rows, cols, onChange,
               <Input key={c.key} aria-label={c.label} placeholder={c.label} className={c.wide ? "flex-1" : "w-24"} inputMode={c.wide ? undefined : "decimal"}
                 value={row[c.key] ?? ""} onChange={(e) => onChange(rows.map((r, ri) => (ri === i ? { ...r, [c.key]: e.target.value } : r)))} />
             ))}
-            <button type="button" className="px-2 text-slate-400 hover:text-red-600" aria-label="Remove line" onClick={() => onChange(rows.filter((_, ri) => ri !== i))}>×</button>
+            <button type="button" className="px-2 text-muted-foreground hover:text-red-600" aria-label="Remove line" onClick={() => onChange(rows.filter((_, ri) => ri !== i))}>×</button>
           </div>
         ))}
         <Button size="sm" tone="ghost" onClick={() => onChange([...rows, { ...blank }])}>+ Add line</Button>
@@ -288,7 +288,7 @@ function NteModal({ open, jobId, current, onClose, onSaved }: { open: boolean; j
   const [error, setError] = useState<unknown>(null);
   return (
     <Modal open={open} onClose={onClose} title="Request an NTE increase">
-      <p className="mb-3 text-sm text-slate-600">Currently authorized: {money(current)}. Record the request here, send it the way this customer accepts, then record their reply.</p>
+      <p className="mb-3 text-sm text-muted-foreground">Currently authorized: {money(current)}. Record the request here, send it the way this customer accepts, then record their reply.</p>
       <div className="space-y-3">
         <Field label="New NTE requested"><Input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
         <Field label="Why"><Textarea value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
@@ -314,7 +314,7 @@ function CompletionCard({ bundle, onChange }: { bundle: JobBundle; onChange: () 
         <div className="text-sm">
           <p className="flex items-center gap-2 font-semibold text-emerald-700"><CheckCircle2 className="h-5 w-5" />Finalized {when(j.completion_finalized_at)}</p>
           {j.completion_summary ? <p className="mt-2 whitespace-pre-line">{j.completion_summary}</p> : null}
-          {j.signoff_name ? <p className="mt-1 text-xs text-slate-500">Signed off by {j.signoff_name}</p> : null}
+          {j.signoff_name ? <p className="mt-1 text-xs text-muted-foreground">Signed off by {j.signoff_name}</p> : null}
         </div>
       ) : (
         <>
@@ -322,7 +322,7 @@ function CompletionCard({ bundle, onChange }: { bundle: JobBundle; onChange: () 
             {bundle.completion.map((c) => (
               <li key={c.code} className="flex items-start gap-2">
                 {c.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" /> : <XCircle className={cx("mt-0.5 h-4 w-4 shrink-0", c.severity === "blocking" ? "text-red-600" : "text-amber-500")} />}
-                <span>{c.label}{!c.ok && c.detail ? <span className="block text-xs text-slate-500">{c.detail}</span> : null}</span>
+                <span>{c.label}{!c.ok && c.detail ? <span className="block text-xs text-muted-foreground">{c.detail}</span> : null}</span>
               </li>
             ))}
           </ul>
@@ -343,7 +343,7 @@ function CompletionCard({ bundle, onChange }: { bundle: JobBundle; onChange: () 
                   setBusy(false);
                 }
               }}>Finalize completion package</Button>
-              {blocking.length ? <p className="text-xs text-slate-500">Finish the items marked in red first.</p> : null}
+              {blocking.length ? <p className="text-xs text-muted-foreground">Finish the items marked in red first.</p> : null}
             </div>
           ) : null}
         </>
@@ -364,8 +364,8 @@ function InvoiceCard({ bundle, onChange }: { bundle: JobBundle; onChange: () => 
         <ul className="mb-3 space-y-2">
           {invoices.map((i) => (
             <li key={i.id}>
-              <Link to={`/commercial/app/invoices/${i.id}`} className="flex items-center justify-between gap-2 rounded-md border border-slate-200 p-3 hover:border-primary dark:border-slate-700">
-                <span><span className="font-semibold">{i.invoice_number}</span> <span className="text-sm text-slate-500">{money(i.total)}</span></span>
+              <Link to={`/commercial/app/invoices/${i.id}`} className="flex items-center justify-between gap-2 rounded-2xl bg-muted p-4 hover:border-primary ">
+                <span><span className="font-semibold">{i.invoice_number}</span> <span className="text-sm text-muted-foreground">{money(i.total)}</span></span>
                 <Badge tone={statusTone(i.status)}>{i.status.replace("_", " ")}</Badge>
               </Link>
             </li>
@@ -374,7 +374,7 @@ function InvoiceCard({ bundle, onChange }: { bundle: JobBundle; onChange: () => 
       ) : null}
       {!live.length ? (
         <>
-          <p className="mb-3 text-sm text-slate-600 dark:text-slate-400">
+          <p className="mb-3 text-sm text-muted-foreground">
             {j.completion_finalized_at ? "Ready to bill. The draft is built from approved work and visit times." : "You can draft the invoice now; it can only be sent after the completion package is finalized."}
           </p>
           <ErrorNote error={error} />

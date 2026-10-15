@@ -10,20 +10,21 @@ function AuthFrame({ title, subtitle, children, admin }: { title: string; subtit
     document.title = `${title} · FixBridge Commercial`;
   }, [title]);
   return (
-    <div className="flex min-h-svh flex-col bg-slate-100 dark:bg-slate-950">
-      <header className={admin ? "bg-slate-900" : "bg-white dark:bg-slate-900"}>
-        <div className="mx-auto flex max-w-5xl items-center px-4 py-3">
-          <Link to={admin ? "/commercial/admin/login" : "/commercial"}><CommercialLogo inverted={admin} /></Link>
-          {admin ? <span className="ml-3 rounded bg-amber-400 px-2 py-0.5 text-xs font-bold uppercase text-slate-900">Commercial admin</span> : null}
+    <div className="flex min-h-svh flex-col bg-white dark:bg-black">
+      <header className="border-b border-black/10 bg-[#fbfbfd]/80 backdrop-blur-xl dark:border-white/10 dark:bg-[#161617]/80">
+        <div className="mx-auto flex h-12 max-w-[1024px] items-center justify-between px-5">
+          <Link to={admin ? "/commercial/admin/login" : "/commercial"} aria-label="FixBridge Commercial"><CommercialLogo small /></Link>
+          {admin ? <span className="rounded-full bg-[#1d1d1f] px-3 py-1 text-[12px] font-medium text-white dark:bg-white dark:text-black">Commercial admin</span> : <a href="/commercial" className="text-[12px] text-muted-foreground hover:text-foreground">Back to Commercial</a>}
         </div>
       </header>
-      <main className="flex flex-1 items-start justify-center px-4 py-10 sm:items-center">
-        <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-8">
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">{title}</h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">{subtitle}</p>
-          <div className="mt-6">{children}</div>
+      <main className="flex flex-1 items-start justify-center px-5 py-16 sm:py-24">
+        <div className="w-full max-w-[440px] text-center">
+          <h1 className="text-[32px] font-semibold leading-tight tracking-[-0.025em] text-foreground sm:text-[40px]">{title}</h1>
+          <p className="mx-auto mt-3 max-w-sm text-[17px] text-muted-foreground">{subtitle}</p>
+          <div className="mt-10 text-left">{children}</div>
         </div>
       </main>
+      <footer className="border-t border-black/10 py-5 text-center text-[12px] text-muted-foreground dark:border-white/10">Copyright © {new Date().getFullYear()} FixBridge. All rights reserved.</footer>
     </div>
   );
 }
@@ -48,15 +49,15 @@ export function CompanyLogin() {
     }
   }
   return (
-    <AuthFrame title="Sign in" subtitle="FixBridge Commercial company accounts. Homeowner and contractor marketplace logins do not work here.">
+    <AuthFrame title="Sign in to Commercial" subtitle="Use your FixBridge Commercial company account. Homeowner and contractor logins don’t work here.">
       <form onSubmit={submit} className="space-y-4">
         <Field label="Email"><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" required /></Field>
         <Field label="Password"><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required /></Field>
         {error ? <p className="text-sm font-medium text-red-600" role="alert">{error}</p> : null}
         <Button type="submit" size="lg" className="w-full" busy={busy}>Sign in</Button>
       </form>
-      <p className="mt-6 text-sm text-slate-600 dark:text-slate-400">
-        New to FixBridge Commercial? <Link to="/commercial#apply" className="font-semibold text-primary" onClick={() => setTimeout(() => document.getElementById("apply")?.scrollIntoView(), 50)}>Apply for the pilot</Link>.
+      <p className="mt-8 text-center text-[14px] text-muted-foreground">
+        New to FixBridge Commercial? <Link to="/commercial#apply" className="text-primary hover:underline" onClick={() => setTimeout(() => document.getElementById("apply")?.scrollIntoView(), 50)}>Apply for the pilot</Link>.
         Team members get an invite link from their company owner.
       </p>
     </AuthFrame>
@@ -130,7 +131,7 @@ export function AdminLogin() {
     }
   }
   return (
-    <AuthFrame admin title="Commercial admin" subtitle={<span className="inline-flex items-center gap-1"><ShieldCheck className="h-4 w-4" /> Separate from the FixBridge marketplace admin panel.</span>}>
+    <AuthFrame admin title="Commercial admin" subtitle={<span className="inline-flex items-center gap-1.5"><ShieldCheck className="h-4 w-4" /> Separate from the FixBridge marketplace admin.</span>}>
       <form onSubmit={submit} className="space-y-4">
         <Field label="Email"><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" required /></Field>
         <Field label="Password"><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required /></Field>

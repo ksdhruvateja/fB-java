@@ -56,7 +56,7 @@ export function JobDetailPage({ id }: { id: number }) {
       {b.exceptions.filter((e) => e.status === "open").length ? (
         <div className="mb-4 space-y-2">
           {b.exceptions.filter((e) => e.status === "open").map((e) => (
-            <div key={e.id} className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+            <div key={e.id} className="flex items-start gap-3 rounded-2xl bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
               <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
               <div className="min-w-0 flex-1">
                 <p className="font-semibold">{e.title}</p>
@@ -90,7 +90,7 @@ export function JobDetailPage({ id }: { id: number }) {
 
 function BackLink() {
   return (
-    <Link to="/commercial/app/jobs" className="mb-3 inline-flex items-center gap-1 text-sm font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400">
+    <Link to="/commercial/app/jobs" className="mb-3 inline-flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground dark:text-muted-foreground">
       <ArrowLeft className="h-4 w-4" /> Jobs
     </Link>
   );
@@ -101,7 +101,7 @@ function ReviewPanel({ bundle, onSaved }: { bundle: JobBundle; onSaved: () => vo
   const open = bundle.job.flags.filter((f) => !f.resolved);
   return (
     <Card title={<span className="flex items-center gap-2"><ShieldAlert className="h-5 w-5 text-red-600" />Review this dispatch</span>} className="border-red-200 dark:border-red-900">
-      <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
+      <p className="mb-4 text-sm text-muted-foreground">
         Check each field against the original email. Fix what is wrong, or explain flagged items that are correct as they are. A reviewed dispatch can then be accepted with an ETA.
       </p>
       <JobForm bundle={bundle} flags={open} onSaved={onSaved} reviewMode />
@@ -158,7 +158,7 @@ function JobForm({ bundle, flags, onSaved, reviewMode, onCancel }: { bundle: Job
   const FlagNotes = ({ field }: { field: string }) => (
     <>
       {flagFor(field).map((f) => (
-        <div key={f.code} className={cx("mt-1 rounded-md p-2 text-xs", f.severity === "blocking" ? "bg-red-50 text-red-800 dark:bg-red-950 dark:text-red-200" : "bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200")}>
+        <div key={f.code} className={cx("mt-1.5 rounded-xl p-3 text-xs", f.severity === "blocking" ? "bg-red-50 text-red-800 dark:bg-red-950 dark:text-red-200" : "bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200")}>
           <p className="font-medium">{f.message}</p>
           <Input
             className="mt-1 text-xs"
@@ -289,7 +289,7 @@ function AcceptPanel({ job, team, onDone }: { job: Job; team: CUser[]; onDone: (
 
   return (
     <Card title="Accept this work order" className="border-amber-300 dark:border-amber-800">
-      <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">Reviewed. Until you accept it, this is only a received dispatch.</p>
+      <p className="mb-4 text-sm text-muted-foreground">Reviewed. Until you accept it, this is only a received dispatch.</p>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="ETA on site"><Input type="datetime-local" value={eta} onChange={(e) => setEta(e.target.value)} /></Field>
         <Field label="Let the dispatcher know">
@@ -308,7 +308,7 @@ function AcceptPanel({ job, team, onDone }: { job: Job; team: CUser[]; onDone: (
               const on = assigned.includes(u.id);
               return (
                 <button key={u.id} type="button" aria-pressed={on} onClick={() => setAssigned(on ? assigned.filter((x) => x !== u.id) : [...assigned, u.id])}
-                  className={cx("rounded-full border px-3 py-1.5 text-sm", on ? "border-primary bg-primary text-white" : "border-slate-300 dark:border-slate-700")}>
+                  className={cx("rounded-full border px-3 py-1.5 text-sm", on ? "border-primary bg-primary text-white" : "border-border")}>
                   {u.name || u.email} <span className="text-xs opacity-75">({u.role})</span>
                 </button>
               );
@@ -337,11 +337,11 @@ function DetailsCard({ bundle, team, onSaved }: { bundle: JobBundle; team: CUser
   const j = bundle.job;
   const names = useMemo(() => new Map(team.map((u) => [u.id, u.name || u.email])), [team]);
   const row = (label: string, value: React.ReactNode) => (value ? (
-    <div className="py-2"><dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt><dd className="mt-0.5 whitespace-pre-line text-sm">{value}</dd></div>
+    <div className="py-2"><dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</dt><dd className="mt-0.5 whitespace-pre-line text-sm">{value}</dd></div>
   ) : null);
   return (
     <Card title="Work order" actions={isOffice && j.status !== "received" ? <Button tone="ghost" size="sm" onClick={() => setEditing(true)}><Pencil className="h-3.5 w-3.5" />Edit</Button> : null}>
-      <dl className="divide-y divide-slate-100 dark:divide-slate-800">
+      <dl className="divide-y divide-border">
         {row("Site", <>{j.site_name}{j.site_address ? <><br /><a className="text-primary underline" href={`https://maps.google.com/?q=${encodeURIComponent(j.site_address)}`} target="_blank" rel="noreferrer">{j.site_address}</a></> : null}</>)}
         {row("Due", j.due_at ? `${when(j.due_at, j.timezone)}${new Date(j.due_at) < new Date() && !["completed", "invoiced", "paid"].includes(j.status) ? " — overdue" : ""}` : j.due_text)}
         {row("ETA", j.eta_at ? when(j.eta_at, j.timezone) : "")}
@@ -378,7 +378,7 @@ function AssignModal({ open, onClose, job, team, onSaved }: { open: boolean; onC
         {team.filter((u) => u.active).map((u) => (
           <label key={u.id} className="flex items-center gap-3 text-sm">
             <input type="checkbox" checked={ids.includes(u.id)} onChange={(e) => setIds(e.target.checked ? [...ids, u.id] : ids.filter((x) => x !== u.id))} />
-            {u.name || u.email} <span className="text-xs text-slate-500">{u.role}{u.invited ? " · invite pending" : ""}</span>
+            {u.name || u.email} <span className="text-xs text-muted-foreground">{u.role}{u.invited ? " · invite pending" : ""}</span>
           </label>
         ))}
       </div>
@@ -400,7 +400,7 @@ function FilesCard({ files }: { files: any[] }) {
       {photos.length ? (
         <div className="grid grid-cols-3 gap-2">
           {photos.map((p) => (
-            <a key={p.id} href={p.url} target="_blank" rel="noreferrer" className="group relative block aspect-square overflow-hidden rounded-md bg-slate-100">
+            <a key={p.id} href={p.url} target="_blank" rel="noreferrer" className="group relative block aspect-square overflow-hidden rounded-xl bg-muted">
               <img src={p.url} alt={p.caption || `${p.stage} photo`} className="h-full w-full object-cover" loading="lazy" />
               <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-white">{p.stage}</span>
             </a>
@@ -425,15 +425,15 @@ function OriginalEmails({ emails }: { emails: any[] }) {
           <li key={e.id} className="flex items-start justify-between gap-2">
             <span className="min-w-0">
               <span className="block truncate font-medium">{e.subject || "(no subject)"}</span>
-              <span className="text-xs text-slate-500">{when(e.created_at)} · {e.outcome.replace(/_/g, " ")}</span>
+              <span className="text-xs text-muted-foreground">{when(e.created_at)} · {e.outcome.replace(/_/g, " ")}</span>
             </span>
             <Button tone="ghost" size="sm" onClick={async () => setOpen((await api.get(`/dispatch-emails/${e.id}`)).email)}>View</Button>
           </li>
         ))}
       </ul>
       <Modal open={!!open} onClose={() => setOpen(null)} title={open?.subject || "Original email"} wide>
-        <p className="mb-2 text-xs text-slate-500">From {open?.from_address || "unknown"} · added {open ? when(open.created_at) : ""} · kept exactly as received</p>
-        <pre className="max-h-[60svh] overflow-auto whitespace-pre-wrap rounded-md bg-slate-50 p-3 font-mono text-xs dark:bg-slate-950">{open?.raw_text}</pre>
+        <p className="mb-2 text-xs text-muted-foreground">From {open?.from_address || "unknown"} · added {open ? when(open.created_at) : ""} · kept exactly as received</p>
+        <pre className="max-h-[60svh] overflow-auto whitespace-pre-wrap rounded-xl bg-muted p-3 font-mono text-xs ">{open?.raw_text}</pre>
       </Modal>
     </Card>
   );
@@ -444,12 +444,12 @@ function Timeline({ events, timezone }: { events: any[]; timezone: string }) {
   const list = all ? events : events.slice(-12);
   return (
     <Card title={<span className="flex items-center gap-2"><Clock className="h-4 w-4" />History</span>} actions={events.length > 12 ? <Button tone="ghost" size="sm" onClick={() => setAll(!all)}>{all ? "Show recent" : `Show all ${events.length}`}</Button> : null}>
-      <ol className="relative ml-2 border-l border-slate-200 dark:border-slate-700">
+      <ol className="relative ml-2 border-l border-border">
         {list.map((e) => (
           <li key={e.id} className="ml-4 pb-3">
-            <span className={cx("absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full border-2 border-white dark:border-slate-900", /fail|declined|exception|unclear/.test(e.kind + e.summary) ? "bg-red-500" : /approv|completed|paid|accepted|sent/.test(e.kind) ? "bg-emerald-500" : "bg-slate-400")} />
+            <span className={cx("absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full border-2 border-background", /fail|declined|exception|unclear/.test(e.kind + e.summary) ? "bg-red-500" : /approv|completed|paid|accepted|sent/.test(e.kind) ? "bg-emerald-500" : "bg-muted-foreground")} />
             <p className="text-sm">{e.summary}</p>
-            <p className="text-xs text-slate-500">{when(e.occurred_at, timezone)}{e.actor_name ? ` · ${e.actor_name}` : ""}</p>
+            <p className="text-xs text-muted-foreground">{when(e.occurred_at, timezone)}{e.actor_name ? ` · ${e.actor_name}` : ""}</p>
           </li>
         ))}
       </ol>

@@ -406,6 +406,7 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
         { label: "Compliance Docs", page: "contractors" as Page },
         { label: "Contractor Portal", page: "contractor-login" as Page },
         { label: "FAQ", page: "contractors" as Page },
+        { label: "Commercial tools", page: "contractors" as Page, href: "/commercial" },
       ],
     },
     {
@@ -474,9 +475,13 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
                 {title}
               </p>
               <ul className="space-y-2 sm:space-y-2.5">
-                {links.map(({ label, page }) => (
+                {links.map(({ label, page, href }: { label: string; page: Page; href?: string }) => (
                   <li key={label}>
-                    {isPublicContentPage(page) ? (
+                    {href ? (
+                      <a href={href} className="text-sm text-muted-foreground hover:text-foreground transition-colors text-left leading-snug">
+                        {label}
+                      </a>
+                    ) : isPublicContentPage(page) ? (
                       <a
                         href={PUBLIC_CONTENT_PAGES[page].path}
                         onClick={(event) => {

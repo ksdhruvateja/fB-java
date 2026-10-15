@@ -25,25 +25,25 @@ export default function AdminApp({ path }: { path: string }) {
     { to: "/commercial/admin/companies", label: "Companies", icon: Building2 },
   ];
   return (
-    <div className="min-h-svh bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-      <header className="bg-slate-900 text-white">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-3 px-4 py-3">
-          <CommercialLogo inverted />
-          <span className="rounded bg-amber-400 px-2 py-0.5 text-xs font-bold uppercase text-slate-900">Commercial admin</span>
-          <nav className="order-3 flex w-full gap-1 overflow-x-auto sm:order-none sm:ml-6 sm:w-auto">
+    <div className="min-h-svh bg-background text-foreground">
+      <header className="sticky top-0 z-40 border-b border-black/10 bg-[#fbfbfd]/80 backdrop-blur-xl backdrop-saturate-150 dark:border-white/10 dark:bg-[#161617]/80">
+        <div className="mx-auto flex max-w-[1180px] flex-wrap items-center gap-x-6 gap-y-2 px-5 py-2.5">
+          <CommercialLogo small />
+          <span className="rounded-full bg-[#1d1d1f] px-2.5 py-0.5 text-[11px] font-medium text-white dark:bg-white dark:text-black">Admin</span>
+          <nav className="order-3 flex w-full gap-1 overflow-x-auto rounded-full bg-secondary p-1 sm:order-none sm:w-auto">
             {nav.map((n) => (
-              <Link key={n.to} to={n.to} className={cx("flex items-center gap-2 whitespace-nowrap rounded-md px-3 py-1.5 text-sm", path === n.to ? "bg-white/15 font-semibold" : "text-slate-300 hover:text-white")}>
-                <n.icon className="h-4 w-4" />{n.label}
+              <Link key={n.to} to={n.to} className={cx("flex items-center gap-1.5 whitespace-nowrap rounded-full px-3.5 py-1.5 text-[13px] transition", path === n.to ? "bg-card font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+                <n.icon className="h-3.5 w-3.5" />{n.label}
               </Link>
             ))}
           </nav>
-          <span className="ml-auto hidden text-xs text-slate-400 md:inline">{admin.email}</span>
-          <button type="button" onClick={() => { tokens.setAdmin(""); navigate("/commercial/admin/login"); }} className="flex items-center gap-1 rounded-md px-2 py-1 text-sm text-slate-300 hover:text-white">
-            <LogOut className="h-4 w-4" />Sign out
+          <span className="ml-auto hidden text-[12px] text-muted-foreground md:inline">{admin.email}</span>
+          <button type="button" onClick={() => { tokens.setAdmin(""); navigate("/commercial/admin/login"); }} className="flex items-center gap-1 text-[13px] text-primary hover:underline">
+            <LogOut className="h-3.5 w-3.5" />Sign out
           </button>
         </div>
       </header>
-      <main className="mx-auto max-w-7xl px-4 py-6">
+      <main className="mx-auto max-w-[1180px] px-5 py-10">
         {path === "/commercial/admin/applications" ? <Applications /> : path === "/commercial/admin/companies" ? <Companies /> : <Overview />}
       </main>
     </div>
@@ -65,19 +65,19 @@ function Overview() {
   ] as const;
   return (
     <>
-      <h1 className="mb-5 text-2xl font-bold">Overview</h1>
+      <h1 className="mb-8 text-[40px] font-semibold leading-none tracking-[-0.03em]">Overview</h1>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {tiles.map(([label, value, to]) => {
           const body = (
-            <div className="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-              <p className="text-sm text-slate-500">{label}</p>
+            <div className="rounded-2xl bg-card p-5">
+              <p className="text-sm text-muted-foreground">{label}</p>
               <p className="mt-1 text-3xl font-bold">{value}</p>
             </div>
           );
           return to ? <Link key={label} to={to}>{body}</Link> : <div key={label}>{body}</div>;
         })}
       </div>
-      <p className="mt-6 text-sm text-slate-500">This panel manages FixBridge Commercial only. Homeowner and contractor marketplace administration stays in the main admin panel.</p>
+      <p className="mt-6 text-sm text-muted-foreground">This panel manages FixBridge Commercial only. Homeowner and contractor marketplace administration stays in the main admin panel.</p>
     </>
   );
 }
@@ -90,31 +90,31 @@ function Applications() {
   const [result, setResult] = useState<any>(null);
   return (
     <>
-      <h1 className="mb-4 text-2xl font-bold">Pilot applications</h1>
+      <h1 className="mb-6 text-[40px] font-semibold leading-none tracking-[-0.03em]">Pilot applications</h1>
       <div className="mb-4 flex gap-1">
-        {["new", "approved", "declined", ""].map((s) => <button key={s} type="button" onClick={() => setStatus(s)} className={cx("rounded-full px-3 py-1.5 text-sm capitalize", status === s ? "bg-slate-900 text-white" : "bg-white dark:bg-slate-900")}>{s || "all"}</button>)}
+        {["new", "approved", "declined", ""].map((s) => <button key={s} type="button" onClick={() => setStatus(s)} className={cx("rounded-full px-4 py-1.5 text-[13px] capitalize", status === s ? "bg-foreground text-background" : "bg-card text-muted-foreground hover:text-foreground")}>{s || "all"}</button>)}
       </div>
       {loading && !data ? <Spinner /> : error ? <ErrorNote error={error} /> : !data.applications.length ? <Empty>No applications.</Empty> : (
         <ul className="space-y-3">
           {data.applications.map((a: any) => (
-            <li key={a.id} className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+            <li key={a.id} className="rounded-2xl bg-card p-4">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-lg font-semibold">{a.company_name}</span>
                 <Badge tone={a.status === "new" ? "amber" : a.status === "approved" ? "green" : "red"}>{a.status}</Badge>
                 <Badge>{a.plan_interest}</Badge>
-                <span className="ml-auto text-xs text-slate-500">{when(a.created_at)}</span>
+                <span className="ml-auto text-xs text-muted-foreground">{when(a.created_at)}</span>
               </div>
               <p className="mt-1 text-sm">{a.contact_name} · <a className="text-primary underline" href={`mailto:${a.email}`}>{a.email}</a>{a.phone ? ` · ${a.phone}` : ""}</p>
               <dl className="mt-2 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
-                <div><dt className="inline text-slate-500">Trades: </dt><dd className="inline">{a.trades.join(", ")}</dd></div>
-                <div><dt className="inline text-slate-500">Area: </dt><dd className="inline">{a.service_area || "—"}</dd></div>
-                <div><dt className="inline text-slate-500">Team: </dt><dd className="inline">{a.team_size || "—"}</dd></div>
-                <div><dt className="inline text-slate-500">Work orders/month: </dt><dd className="inline">{a.monthly_dispatch_volume || "—"}</dd></div>
-                <div className="sm:col-span-2"><dt className="inline text-slate-500">Dispatch sources: </dt><dd className="inline">{a.dispatch_sources || "—"}</dd></div>
-                <div className="sm:col-span-2"><dt className="inline text-slate-500">Uses today: </dt><dd className="inline">{a.current_tools || "—"}</dd></div>
+                <div><dt className="inline text-muted-foreground">Trades: </dt><dd className="inline">{a.trades.join(", ")}</dd></div>
+                <div><dt className="inline text-muted-foreground">Area: </dt><dd className="inline">{a.service_area || "—"}</dd></div>
+                <div><dt className="inline text-muted-foreground">Team: </dt><dd className="inline">{a.team_size || "—"}</dd></div>
+                <div><dt className="inline text-muted-foreground">Work orders/month: </dt><dd className="inline">{a.monthly_dispatch_volume || "—"}</dd></div>
+                <div className="sm:col-span-2"><dt className="inline text-muted-foreground">Dispatch sources: </dt><dd className="inline">{a.dispatch_sources || "—"}</dd></div>
+                <div className="sm:col-span-2"><dt className="inline text-muted-foreground">Uses today: </dt><dd className="inline">{a.current_tools || "—"}</dd></div>
               </dl>
-              {a.message ? <p className="mt-2 whitespace-pre-line rounded-md bg-slate-50 p-2 text-sm dark:bg-slate-800">{a.message}</p> : null}
-              {a.decision_note ? <p className="mt-2 text-xs text-slate-500">Note: {a.decision_note}</p> : null}
+              {a.message ? <p className="mt-2 whitespace-pre-line rounded-xl bg-muted p-3 text-sm ">{a.message}</p> : null}
+              {a.decision_note ? <p className="mt-2 text-xs text-muted-foreground">Note: {a.decision_note}</p> : null}
               {a.status === "new" ? (
                 <div className="mt-3 flex gap-2">
                   <Button tone="success" size="sm" onClick={() => setApproving(a)}>Approve</Button>
@@ -132,7 +132,7 @@ function Applications() {
           <div className="space-y-3 text-sm">
             <p>{result.company.name} is set up. {result.emailed ? `We emailed ${result.owner.email} a link to set their password.` : `Email is not configured or was not sent — share this link with ${result.owner.email}:`}</p>
             <InviteLink url={result.invite_link} />
-            <p className="text-xs text-slate-500">The link works once and expires in 7 days. You can issue a new one from Companies.</p>
+            <p className="text-xs text-muted-foreground">The link works once and expires in 7 days. You can issue a new one from Companies.</p>
           </div>
         ) : null}
       </Modal>
@@ -199,22 +199,22 @@ function Companies() {
   const [open, setOpen] = useState<number | null>(null);
   return (
     <>
-      <h1 className="mb-4 text-2xl font-bold">Companies</h1>
+      <h1 className="mb-6 text-[40px] font-semibold leading-none tracking-[-0.03em]">Companies</h1>
       {loading && !data ? <Spinner /> : error ? <ErrorNote error={error} /> : !data.companies.length ? <Empty>No companies yet. Approve a pilot application to create one.</Empty> : (
-        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+        <div className="overflow-x-auto rounded-2xl bg-card">
           <table className="w-full min-w-[820px] text-sm">
-            <thead className="whitespace-nowrap bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/50">
+            <thead className="whitespace-nowrap bg-muted text-left text-xs uppercase tracking-wide text-muted-foreground /50">
               <tr><th className="px-4 py-2">Company</th><th className="px-4 py-2">Plan</th><th className="px-4 py-2">Status</th><th className="px-4 py-2">Billing</th><th className="px-4 py-2">Users</th><th className="px-4 py-2">Jobs</th><th className="px-4 py-2">Open exceptions</th><th /></tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+            <tbody className="divide-y divide-border">
               {data.companies.map((c: any) => (
                 <tr key={c.id}>
-                  <td className="px-4 py-3"><p className="font-semibold">{c.name}</p><p className="text-xs text-slate-500">{c.email}</p></td>
+                  <td className="px-4 py-3"><p className="font-semibold">{c.name}</p><p className="text-xs text-muted-foreground">{c.email}</p></td>
                   <td className="px-4 py-3 capitalize">{c.plan}{c.extra_seats ? ` +${c.extra_seats}` : ""}{c.founding_member ? <Badge tone="orange" className="ml-1">Founding</Badge> : null}</td>
                   <td className="px-4 py-3"><Badge tone={c.status === "active" || c.status === "pilot" ? "green" : "red"}>{c.status}</Badge></td>
-                  <td className="px-4 py-3">{PHASE[c.billing.phase]}<div className="text-xs text-slate-500">{money(c.billing.monthly)}/mo{c.billing.waiting_for?.length ? ` · waiting for ${c.billing.waiting_for.join(", ")}` : ""}</div></td>
+                  <td className="px-4 py-3">{PHASE[c.billing.phase]}<div className="text-xs text-muted-foreground">{money(c.billing.monthly)}/mo{c.billing.waiting_for?.length ? ` · waiting for ${c.billing.waiting_for.join(", ")}` : ""}</div></td>
                   <td className="px-4 py-3">{c.active_users} / {c.billing.seats}</td>
-                  <td className="px-4 py-3">{c.job_count}{c.last_job_at ? <div className="text-xs text-slate-500">last {when(c.last_job_at)}</div> : null}</td>
+                  <td className="px-4 py-3">{c.job_count}{c.last_job_at ? <div className="text-xs text-muted-foreground">last {when(c.last_job_at)}</div> : null}</td>
                   <td className="px-4 py-3">{c.open_exceptions}</td>
                   <td className="px-4 py-3 text-right"><Button size="sm" tone="secondary" onClick={() => setOpen(c.id)}>Manage</Button></td>
                 </tr>
@@ -250,13 +250,13 @@ function CompanyModal({ id, onClose, onSaved }: { id: number; onClose: () => voi
             </div>
             <Field label="Billing notes" className="sm:col-span-2"><Textarea value={form.billing_notes} onChange={(e) => setForm({ ...form, billing_notes: e.target.value })} className="min-h-[60px]" /></Field>
           </div>
-          <div className="rounded-md bg-slate-50 p-3 text-sm dark:bg-slate-800">
+          <div className="rounded-xl bg-muted p-3 text-sm ">
             <p className="font-semibold">{PHASE[data.company.billing.phase]} · {money(data.company.billing.monthly)}/month</p>
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-muted-foreground">
               Intake configured: {data.company.intake_configured_at ? when(data.company.intake_configured_at) : "no"} · First job accepted: {data.company.first_job_processed_at ? when(data.company.first_job_processed_at) : "no"}
               {data.company.billing.trial_ends_at ? ` · Trial ends ${when(data.company.billing.trial_ends_at)} · $49 until ${when(data.company.billing.founding_price_ends_at)}` : ""}
             </p>
-            <p className="mt-1 text-xs text-slate-500">Pilot billing is tracked here only; no card is charged through FixBridge yet. Give advance notice before the price changes.</p>
+            <p className="mt-1 text-xs text-muted-foreground">Pilot billing is tracked here only; no card is charged through FixBridge yet. Give advance notice before the price changes.</p>
           </div>
           <ErrorNote error={saveError} />
           <div className="flex flex-wrap gap-2">
@@ -265,12 +265,12 @@ function CompanyModal({ id, onClose, onSaved }: { id: number; onClose: () => voi
           </div>
           {link ? <InviteLink url={link} /> : null}
           <Card title="Users">
-            <ul className="divide-y divide-slate-100 text-sm dark:divide-slate-800">
-              {data.users.map((u: any) => <li key={u.id} className="flex justify-between py-2"><span>{u.name} · {u.email}</span><span className="capitalize text-slate-500">{u.role}{u.invited ? " · invite pending" : ""}{!u.active ? " · deactivated" : ""}</span></li>)}
+            <ul className="divide-y divide-border text-sm ">
+              {data.users.map((u: any) => <li key={u.id} className="flex justify-between py-2"><span>{u.name} · {u.email}</span><span className="capitalize text-muted-foreground">{u.role}{u.invited ? " · invite pending" : ""}{!u.active ? " · deactivated" : ""}</span></li>)}
             </ul>
           </Card>
           <Card title="Jobs by status">
-            {data.job_counts.length ? <div className="flex flex-wrap gap-2">{data.job_counts.map((s: any) => <Badge key={s.status}>{s.status.replace(/_/g, " ")}: {s.n}</Badge>)}</div> : <p className="text-sm text-slate-500">No jobs yet.</p>}
+            {data.job_counts.length ? <div className="flex flex-wrap gap-2">{data.job_counts.map((s: any) => <Badge key={s.status}>{s.status.replace(/_/g, " ")}: {s.n}</Badge>)}</div> : <p className="text-sm text-muted-foreground">No jobs yet.</p>}
           </Card>
         </div>
       )}

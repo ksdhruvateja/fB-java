@@ -1,31 +1,47 @@
-import { useEffect, useState, type FormEvent } from "react";
-import {
-  ArrowRight, BadgeCheck, Building2, CheckCircle2, ClipboardCheck, FileText, Inbox, MapPin, Receipt, ShieldCheck,
-  Smartphone, TriangleAlert, Users, Wallet, WifiOff,
-} from "lucide-react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { CheckCircle2, ChevronRight, LogIn, Menu, MapPin, Moon, Sun, Truck, X } from "lucide-react";
+import { BrandLogo } from "../app/BrandLogo";
 import { api } from "./api";
 import { Link } from "./router";
 import { Button, Field, Input, Select, Textarea, cx } from "./ui";
-import { CommercialLogo } from "./CommercialLogo";
+import { useDark } from "./portal/Shell";
+
+const IMG = {
+  hero: "/media/commercial/hero-technician.jpg",
+  field: "/media/commercial/field-visit.jpg",
+  plans: "/media/commercial/proposal-plans.jpg",
+  facility: "/media/commercial/facility.jpg",
+  crew: "/media/commercial/crew.jpg",
+  office: "/media/commercial/office-laptop.jpg",
+};
 
 const WORKFLOW = [
-  { icon: Inbox, title: "Dispatch email", text: "Paste or upload the work order email. The original is kept exactly as received." },
-  { icon: ClipboardCheck, title: "Reviewed job record", text: "WO#, site, NTE, priority, due time and instructions are pulled out. Anything missing or contradictory is flagged for review." },
-  { icon: BadgeCheck, title: "Acceptance & ETA", text: "A received dispatch is not an accepted job. Accept it with an ETA and assign technicians." },
-  { icon: MapPin, title: "Site visit", text: "On my way, check in, check out — plus the customer’s own check-in (IVR, code or portal), including when it fails." },
-  { icon: FileText, title: "Proposal / authorized work", text: "Findings, labor and materials go to the office for review. Extra work waits until it is authorized." },
-  { icon: ShieldCheck, title: "Completion package", text: "Work notes, after photos and check-in records are checked before the job can be closed." },
-  { icon: Receipt, title: "Invoice submission", text: "Invoices are drafted from approved work and visits, then checked against the WO, the authorized amount and duplicates." },
-  { icon: Wallet, title: "Payment tracking", text: "Sent, bounced, acknowledged, disputed, paid — with the evidence for each payment." },
+  ["Dispatch email", "Paste or upload the work order. The original is kept exactly as received."],
+  ["Reviewed job record", "WO#, site, NTE, priority and due time are pulled out. Anything missing or contradictory is flagged."],
+  ["Acceptance & ETA", "A received dispatch isn’t an accepted job until you accept it with an ETA."],
+  ["Site visit", "On my way, check in, check out — plus the customer’s own check-in, even when it fails."],
+  ["Authorized work", "Findings, labor and materials go to the office. Extra work waits for approval."],
+  ["Completion package", "Notes, after photos and check-in records are checked before the job closes."],
+  ["Invoice submission", "Checked against the WO, the authorized amount and duplicates before it goes out."],
+  ["Payment tracking", "Sent, bounced, acknowledged, disputed, paid — with evidence for each payment."],
 ];
 
-const FEATURES = [
-  { icon: Inbox, title: "Dispatch intake", points: ["Paste or upload .eml / .txt work orders", "Repeat emails for the same WO update the existing job", "Unclear address or NTE goes to a review queue"] },
-  { icon: Smartphone, title: "Built for the phone", points: ["“What needs my attention today?” on one screen", "Large On my way / Check in / Check out buttons", "Optional location; recorded even when it is not shared"] },
-  { icon: WifiOff, title: "Works with weak signal", points: ["Field actions save on the phone when offline", "They send with the original time when signal returns", "Never recorded twice"] },
-  { icon: ShieldCheck, title: "Authorizations on record", points: ["Original NTE, requested increase, approved amount", "Who approved, and the reply as evidence", "Unclear replies go to a person to review"] },
-  { icon: Receipt, title: "Invoices that go through", points: ["Recipient, WO#, approved amount and service dates checked", "Customer-specific subject lines and submission method", "Bounced invoices are flagged and assigned"] },
-  { icon: Users, title: "Your team, your rules", points: ["Owner and office see everything", "Technicians see the jobs assigned to them", "Choose who can see prices and invoices"] },
+const PLANS = [
+  { name: "Network", price: "Free", note: "Join the FixBridge contractor network.", points: ["Contractor profile in the network", "No monthly fee"] },
+  {
+    name: "Commercial Essentials", price: "$99", per: "/mo.", note: "Includes 3 users.", featured: true,
+    points: ["Dispatch intake and review queue", "Visits, check-in and check-out", "Proposals, approvals and NTE tracking", "Completion packages and invoice checks", "Exceptions and payment tracking"],
+  },
+  { name: "Commercial Team", price: "$199", per: "/mo.", note: "Includes 10 users.", points: ["Everything in Essentials", "Room for office staff and a field crew", "Configurable financial permissions"] },
+];
+
+const FAQ = [
+  ["Will FixBridge send me commercial jobs?", "Joining the network is free. The commercial tools are for managing the work orders you already receive from your own customers. We don’t promise job volume or faster payment."],
+  ["Do my customers have to use FixBridge?", "No. Your facility managers keep sending dispatches the way they do today. You paste or upload the email, and invoices go out through the submission method each customer already accepts."],
+  ["Does FixBridge collect my payments or take a cut?", "No. Customers pay you directly. You record payments in FixBridge with the reference or remittance as evidence. There’s no percentage of invoices and no per-job charge."],
+  ["Can technicians see prices?", "Only if you allow it. Owners and office staff see everything; technicians see the jobs assigned to them, and financial access is a per-person setting."],
+  ["Can dispatch emails be forwarded automatically?", "In the pilot you paste or upload dispatch emails. Automatic forwarding is planned for a later release."],
+  ["Is this separate from my FixBridge homeowner or contractor login?", "Yes. FixBridge Commercial has its own accounts and sign-in, and its data is kept separate from the homeowner and contractor marketplace."],
 ];
 
 const TRADES = ["Plumbing", "HVAC", "Refrigeration", "Electrical", "Roofing", "Doors & Locks", "General Maintenance", "Painting", "Flooring", "Landscaping"];
@@ -34,249 +50,361 @@ interface Offer {
   founding: { limit: number; remaining: number; monthly: number };
 }
 
+const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+
+function Pill({ children, onClick, href, tone = "primary", className }: { children: ReactNode; onClick?: () => void; href?: string; tone?: "primary" | "light" | "dark"; className?: string }) {
+  const cls = cx(
+    "inline-flex items-center justify-center whitespace-nowrap rounded-full px-6 py-3 text-[17px] font-normal transition active:scale-[0.98]",
+    tone === "primary" && "bg-primary text-white hover:brightness-110",
+    tone === "light" && "bg-white text-[#1d1d1f] hover:bg-white/90",
+    tone === "dark" && "bg-[#1d1d1f] text-white hover:bg-black dark:bg-white dark:text-[#1d1d1f]",
+    className
+  );
+  return href ? <a href={href} className={cls}>{children}</a> : <button type="button" onClick={onClick} className={cls}>{children}</button>;
+}
+
+function More({ children, onClick, href, light }: { children: ReactNode; onClick?: () => void; href?: string; light?: boolean }) {
+  const cls = cx("inline-flex items-center gap-0.5 text-[17px] hover:underline", light ? "text-[#2997ff]" : "text-primary");
+  const body = <>{children}<ChevronRight size={18} strokeWidth={2} aria-hidden /></>;
+  return href ? <a href={href} className={cls}>{body}</a> : <button type="button" onClick={onClick} className={cls}>{body}</button>;
+}
+
+function Headline({ children, className, as: Tag = "h2" }: { children: ReactNode; className?: string; as?: "h1" | "h2" }) {
+  return <Tag className={cx("font-semibold tracking-[-0.03em]", className)}>{children}</Tag>;
+}
+
 export default function Landing() {
   const [offer, setOffer] = useState<Offer | null>(null);
   useEffect(() => {
-    document.title = "FixBridge Commercial · Work order management for commercial contractors";
+    document.title = "Commercial — Work Order Management for Contractors · FixBridge";
     api.public<Offer>("GET", "/public/offer").then(setOffer).catch(() => setOffer(null));
   }, []);
+  const remaining = offer?.founding.remaining;
 
   return (
-    <div className="min-h-svh bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-      <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95">
-        <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3 sm:px-6">
-          <Link to="/commercial" aria-label="FixBridge Commercial home"><CommercialLogo /></Link>
-          <nav className="ml-6 hidden items-center gap-1 text-sm font-medium text-slate-600 dark:text-slate-300 md:flex">
-            <a href="#workflow" className="px-3 py-2 hover:text-slate-900 dark:hover:text-white">How it works</a>
-            <a href="#pricing" className="px-3 py-2 hover:text-slate-900 dark:hover:text-white">Pricing</a>
-            <a href="#founding" className="px-3 py-2 hover:text-slate-900 dark:hover:text-white">Founding offer</a>
-            <a href="#faq" className="px-3 py-2 hover:text-slate-900 dark:hover:text-white">FAQ</a>
-          </nav>
-          <div className="ml-auto flex items-center gap-2">
-            <Link to="/commercial/login" className="whitespace-nowrap px-2 py-2 text-sm font-medium text-slate-700 hover:text-slate-900 dark:text-slate-300 sm:px-3">Sign in</Link>
-            <a href="#apply" className="whitespace-nowrap rounded-md bg-primary px-3 py-2 text-sm font-semibold text-white hover:bg-primary/90 sm:px-4"><span className="sm:hidden">Apply</span><span className="hidden sm:inline">Apply for the pilot</span></a>
-          </div>
-        </div>
-      </header>
+    <div className="bg-white text-[#1d1d1f] dark:bg-black dark:text-[#f5f5f7]">
+      <GlobalNav />
 
-      <section className="relative overflow-hidden bg-slate-950 text-white">
-        <div className="absolute inset-0 opacity-30" style={{ backgroundImage: "radial-gradient(circle at 20% 20%, rgba(255,77,28,.35), transparent 40%), radial-gradient(circle at 80% 60%, rgba(56,189,248,.18), transparent 45%)" }} />
-        <div className="relative mx-auto grid max-w-7xl gap-10 px-4 py-16 sm:px-6 lg:grid-cols-[1.15fr_1fr] lg:py-24">
-          <div>
-            <p className="inline-flex items-center gap-2 rounded-full border border-white/20 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-orange-300">
-              <Building2 className="h-3.5 w-3.5" /> For commercial service contractors
-            </p>
-            <h1 className="mt-5 text-4xl font-bold leading-tight tracking-tight sm:text-5xl">
-              From dispatch email to paid invoice, without the spreadsheet.
-            </h1>
-            <p className="mt-5 max-w-xl text-lg text-slate-300">
-              Free to join the FixBridge contractor network. Optional commercial tools help you manage the jobs you already have.
-            </p>
-            <div className="mt-8 flex flex-wrap gap-3">
-              <a href="#apply" className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-3 font-semibold text-white hover:bg-primary/90">
-                Apply for the pilot <ArrowRight className="h-4 w-4" />
-              </a>
-              <a href="#workflow" className="inline-flex items-center gap-2 rounded-md border border-white/30 px-5 py-3 font-semibold text-white hover:bg-white/10">
-                See the workflow
-              </a>
-            </div>
-            <p className="mt-6 text-sm text-slate-400">No percentage of your invoices. No per-job fees. Nothing charged to your facility customers.</p>
-          </div>
-          <TodayPreview />
-        </div>
-      </section>
-
-      <section id="workflow" className="mx-auto max-w-7xl scroll-mt-20 px-4 py-16 sm:px-6">
-        <h2 className="text-3xl font-bold tracking-tight">One record for every work order</h2>
-        <p className="mt-3 max-w-2xl text-slate-600 dark:text-slate-400">
-          Every step is saved on the job, so the office, the technician and the invoice all work from the same facts.
-        </p>
-        <ol className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {WORKFLOW.map((step, i) => (
-            <li key={step.title} className="relative rounded-lg border border-slate-200 p-5 dark:border-slate-800">
-              <div className="flex items-center gap-3">
-                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-900 text-sm font-bold text-white dark:bg-white dark:text-slate-900">{i + 1}</span>
-                <step.icon className="h-5 w-5 text-primary" />
-              </div>
-              <h3 className="mt-4 font-semibold">{step.title}</h3>
-              <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">{step.text}</p>
-            </li>
-          ))}
-        </ol>
-      </section>
-
-      <section className="border-y border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900/40">
-        <div className="mx-auto grid max-w-7xl gap-6 px-4 py-16 sm:grid-cols-2 sm:px-6 lg:grid-cols-3">
-          {FEATURES.map((f) => (
-            <div key={f.title} className="rounded-lg bg-white p-6 shadow-sm dark:bg-slate-900">
-              <f.icon className="h-6 w-6 text-primary" />
-              <h3 className="mt-3 text-lg font-semibold">{f.title}</h3>
-              <ul className="mt-3 space-y-2 text-sm text-slate-600 dark:text-slate-400">
-                {f.points.map((p) => (
-                  <li key={p} className="flex gap-2"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />{p}</li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section id="pricing" className="mx-auto max-w-7xl scroll-mt-20 px-4 py-16 sm:px-6">
-        <h2 className="text-3xl font-bold tracking-tight">Simple monthly pricing</h2>
-        <p className="mt-3 max-w-2xl text-slate-600 dark:text-slate-400">
-          Pay for the tools, not for the work. FixBridge does not take a percentage of your invoices, charge per job, charge your facility customers, or require you to collect payments through FixBridge.
-        </p>
-        <div className="mt-10 grid gap-5 lg:grid-cols-3">
-          <PlanCard name="Network" price="Free" note="Join the FixBridge contractor network." points={["Contractor profile in the FixBridge network", "No monthly fee"]} />
-          <PlanCard
-            name="Commercial Essentials"
-            price="$99"
-            per="/month"
-            note="Includes 3 users"
-            highlight
-            points={["Dispatch intake and review queue", "Mobile visits, check-in and check-out", "Proposals, approvals and NTE tracking", "Completion packages and invoice checks", "Exception queue and payment tracking"]}
-          />
-          <PlanCard name="Commercial Team" price="$199" per="/month" note="Includes 10 users" points={["Everything in Essentials", "Room for office staff and a field crew", "Configurable financial permissions"]} />
-        </div>
-        <p className="mt-5 text-sm text-slate-600 dark:text-slate-400">Additional users: $15 per user per month. Cancel monthly. No setup fee.</p>
-      </section>
-
-      <section id="founding" className="scroll-mt-20 bg-slate-950 text-white">
-        <div className="mx-auto grid max-w-7xl gap-8 px-4 py-16 sm:px-6 lg:grid-cols-[1.2fr_1fr] lg:items-center">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-wider text-orange-300">Founding contractor offer</p>
-            <h2 className="mt-2 text-3xl font-bold tracking-tight">For the first 10 companies</h2>
-            <ul className="mt-6 space-y-3 text-slate-200">
-              <li className="flex gap-3"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-orange-300" />30 days free — the clock starts only after your intake is set up and a real job has been processed.</li>
-              <li className="flex gap-3"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-orange-300" />Then $49/month for 12 months.</li>
-              <li className="flex gap-3"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-orange-300" />After that, $99/month — with advance notice before it changes.</li>
-              <li className="flex gap-3"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-orange-300" />No setup fee. Cancel monthly.</li>
-            </ul>
-          </div>
-          <div className="rounded-xl border border-white/15 bg-white/5 p-6">
-            {offer ? (
-              offer.founding.remaining > 0 ? (
-                <>
-                  <p className="text-5xl font-bold">{offer.founding.remaining}</p>
-                  <p className="mt-1 text-slate-300">of {offer.founding.limit} founding spots still open</p>
-                </>
-              ) : (
-                <p className="text-lg font-semibold">All founding spots have been taken. You can still apply for the pilot at standard pricing.</p>
-              )
-            ) : (
-              <p className="text-lg font-semibold">Founding spots are limited to the first {10} companies.</p>
-            )}
-            <a href="#apply" className="mt-6 inline-flex items-center gap-2 rounded-md bg-primary px-5 py-3 font-semibold text-white hover:bg-primary/90">
-              Apply now <ArrowRight className="h-4 w-4" />
-            </a>
-            <p className="mt-3 text-xs text-slate-400">Applying is free. No payment details are collected during the pilot.</p>
-          </div>
-        </div>
-      </section>
-
-      <section id="faq" className="mx-auto max-w-4xl scroll-mt-20 px-4 py-16 sm:px-6">
-        <h2 className="text-3xl font-bold tracking-tight">Questions</h2>
-        <div className="mt-8 divide-y divide-slate-200 dark:divide-slate-800">
-          <Faq q="Will FixBridge send me commercial jobs?">
-            Joining the network is free. The commercial tools are for managing the work orders you already receive from your own customers. We do not promise job volume or faster payment.
-          </Faq>
-          <Faq q="Do my customers have to use FixBridge?">
-            No. Your facility managers keep sending dispatches the way they do today. You paste or upload the email, and invoices go out through the submission method each customer already accepts.
-          </Faq>
-          <Faq q="Does FixBridge collect my payments or take a cut?">
-            No. Customers pay you directly. You record payments in FixBridge with the reference or remittance as evidence. There is no percentage of invoices and no per-job charge.
-          </Faq>
-          <Faq q="Can technicians see prices?">
-            Only if you allow it. Owners and office staff see everything; technicians see the jobs assigned to them, and financial access is a per-person setting.
-          </Faq>
-          <Faq q="Can dispatch emails be forwarded automatically?">
-            In the pilot you paste or upload dispatch emails. Automatic forwarding is planned for a later release.
-          </Faq>
-          <Faq q="Is the commercial account separate from my FixBridge homeowner or contractor login?">
-            Yes. FixBridge Commercial uses its own accounts and sign-in, and its data is kept separate from the homeowner and contractor marketplace.
-          </Faq>
-        </div>
-      </section>
-
-      <section id="apply" className="scroll-mt-20 border-t border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900/40">
-        <div className="mx-auto max-w-3xl px-4 py-16 sm:px-6">
-          <h2 className="text-3xl font-bold tracking-tight">Apply for the pilot</h2>
-          <p className="mt-3 text-slate-600 dark:text-slate-400">
-            Tell us about your company and how your work orders arrive. We review every application and reply by email with next steps.
+      {/* Hero */}
+      <section className="pt-[150px] text-center sm:pt-[170px]">
+        <div className="mx-auto max-w-5xl px-5">
+          <p className="text-[21px] font-semibold text-primary">FixBridge Commercial</p>
+          <Headline as="h1" className="mt-2 text-[44px] leading-[1.05] sm:text-[64px] lg:text-[80px]">Every work order.<br />One clear record.</Headline>
+          <p className="mx-auto mt-5 max-w-2xl text-[19px] leading-snug text-[#6e6e73] sm:text-[24px] dark:text-[#a1a1a6]">
+            Free to join the FixBridge contractor network. Optional commercial tools help you manage the jobs you already have.
           </p>
-          <PilotForm />
+          <div className="mt-8 flex flex-wrap items-center justify-center gap-x-8 gap-y-4">
+            <Pill onClick={() => scrollTo("apply")}>Apply for the pilot</Pill>
+            <More onClick={() => scrollTo("workflow")}>See how it works</More>
+          </div>
+        </div>
+        <div className="mx-auto mt-14 max-w-[1400px] px-3 sm:px-5">
+          <div className="relative overflow-hidden rounded-[28px] sm:rounded-[36px]">
+            <img src={IMG.hero} alt="Technician working on an electrical panel" className="h-[420px] w-full object-cover object-[50%_30%] sm:h-[560px] lg:h-[640px]" />
+            <div aria-hidden className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent" />
+            <TodayCard className="absolute bottom-5 right-5 hidden md:block lg:bottom-10 lg:right-10" />
+            <p className="absolute bottom-5 left-6 max-w-sm text-left text-[15px] font-medium text-white/90 sm:bottom-8 sm:left-10 sm:text-[17px]">
+              No percentage of invoices. No per-job fees. Nothing charged to your facility customers.
+            </p>
+          </div>
         </div>
       </section>
 
-      <footer className="border-t border-slate-200 dark:border-slate-800">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-8 text-sm text-slate-500 sm:px-6">
-          <CommercialLogo small />
-          <a href="/" className="hover:text-slate-900 dark:hover:text-white">FixBridge home</a>
-          <Link to="/commercial/login" className="hover:text-slate-900 dark:hover:text-white">Company sign in</Link>
-          <a href="/legal/privacy" className="hover:text-slate-900 dark:hover:text-white">Privacy</a>
-          <a href="/contact" className="hover:text-slate-900 dark:hover:text-white">Contact</a>
-          <span className="ml-auto">© {new Date().getFullYear()} FixBridge</span>
+      {/* Workflow */}
+      <section id="workflow" className="scroll-mt-14 bg-[#f5f5f7] py-24 dark:bg-[#0b0b0c] sm:py-32">
+        <div className="mx-auto max-w-[1180px] px-5">
+          <div className="max-w-3xl">
+            <Headline className="text-[40px] leading-[1.08] sm:text-[56px]">From dispatch email<br className="hidden sm:block" /> to paid invoice.</Headline>
+            <p className="mt-4 text-[19px] text-[#6e6e73] sm:text-[21px] dark:text-[#a1a1a6]">Eight steps. Every one saved on the job, so the office, the technician and the invoice work from the same facts.</p>
+          </div>
+          <ol className="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {WORKFLOW.map(([title, body], i) => (
+              <li key={title} className="flex flex-col rounded-[24px] bg-white p-7 dark:bg-[#1c1c1e]">
+                <span className="text-[15px] font-semibold text-primary">Step {i + 1}</span>
+                <h3 className="mt-3 text-[21px] font-semibold leading-tight tracking-[-0.02em]">{title}</h3>
+                <p className="mt-2 text-[15px] leading-relaxed text-[#6e6e73] dark:text-[#a1a1a6]">{body}</p>
+              </li>
+            ))}
+          </ol>
         </div>
-      </footer>
+      </section>
+
+      {/* Feature tiles */}
+      <section className="py-24 sm:py-32">
+        <div className="mx-auto max-w-[1180px] px-5">
+          <Headline className="max-w-3xl text-[40px] leading-[1.08] sm:text-[56px]">Built for the office.<br />Ready for the truck.</Headline>
+          <div className="mt-14 grid gap-4 lg:grid-cols-2">
+            <PhotoTile img={IMG.field} eyebrow="Site visits" title="Big buttons. Even with gloves on." body="On my way, Check in and Check out on one screen. Record the customer’s IVR or portal check-in — and what happened when it didn’t work." />
+            <PhotoTile img={IMG.facility} eyebrow="Dispatch intake" title="Paste the email. Get a job." body="WO#, site, NTE and due time are read from the dispatch. A repeat email updates the same job instead of creating a duplicate." />
+            <DarkTile eyebrow="Offline" title="No signal in the basement? Keep working." body="Field actions are saved on the phone and sent with their original time when signal returns — never recorded twice." icon={<Truck size={40} strokeWidth={1.5} aria-hidden />} />
+            <LightTile eyebrow="Authorizations" title="Every approval on record." body="Original NTE, requested increase, approved amount, who approved and their reply. Unclear replies go to a person, not to “approved”." />
+            <PhotoTile img={IMG.office} eyebrow="Invoices" title="Checked before it’s sent." body="Recipient, WO#, approved amount, completion evidence and service dates — then sent once. Bounced invoices are flagged and assigned." />
+            <PhotoTile img={IMG.crew} eyebrow="Your team" title="Everyone sees what they need." body="Owner and office see everything. Technicians see their assigned jobs. You decide who sees prices." />
+          </div>
+        </div>
+      </section>
+
+      {/* Pricing */}
+      <section id="pricing" className="scroll-mt-14 bg-[#f5f5f7] py-24 dark:bg-[#0b0b0c] sm:py-32">
+        <div className="mx-auto max-w-[1180px] px-5">
+          <div className="text-center">
+            <Headline className="text-[40px] leading-[1.08] sm:text-[56px]">Pay for the tools.<br />Not for the work.</Headline>
+            <p className="mx-auto mt-4 max-w-2xl text-[19px] text-[#6e6e73] sm:text-[21px] dark:text-[#a1a1a6]">
+              No percentage of invoices, no per-job charges, nothing charged to your facility customers — and no requirement to collect payments through FixBridge.
+            </p>
+          </div>
+          <div className="mt-14 grid gap-4 lg:grid-cols-3">
+            {PLANS.map((p) => (
+              <div key={p.name} className={cx("flex flex-col rounded-[28px] bg-white p-8 dark:bg-[#1c1c1e]", p.featured && "ring-2 ring-primary")}>
+                {p.featured ? <p className="mb-2 text-[13px] font-semibold text-primary">Most teams</p> : <p className="mb-2 text-[13px] font-semibold text-transparent" aria-hidden>.</p>}
+                <h3 className="text-[24px] font-semibold tracking-tight">{p.name}</h3>
+                <p className="mt-1 text-[15px] text-[#6e6e73] dark:text-[#a1a1a6]">{p.note}</p>
+                <p className="mt-6"><span className="text-[48px] font-semibold tracking-[-0.03em]">{p.price}</span>{p.per ? <span className="text-[17px] text-[#6e6e73]">{p.per}</span> : null}</p>
+                <ul className="mt-6 flex-1 space-y-3 border-t border-black/10 pt-6 text-[15px] dark:border-white/10">
+                  {p.points.map((pt) => <li key={pt}>{pt}</li>)}
+                </ul>
+                <Pill className="mt-8 w-full" tone={p.featured ? "primary" : "dark"} onClick={() => scrollTo("apply")}>Apply</Pill>
+              </div>
+            ))}
+          </div>
+          <p className="mt-8 text-center text-[13px] text-[#6e6e73] dark:text-[#a1a1a6]">Additional users $15 per user per month. No setup fee. Cancel monthly.</p>
+        </div>
+      </section>
+
+      {/* Founding offer */}
+      <section id="founding" className="scroll-mt-14 bg-black py-24 text-[#f5f5f7] sm:py-32">
+        <div className="mx-auto max-w-[1180px] px-5 text-center">
+          <p className="text-[21px] font-semibold text-primary">Founding contractors</p>
+          <Headline className="mt-2 text-[40px] leading-[1.08] sm:text-[64px]">For the first 10 companies.</Headline>
+          {remaining != null && remaining > 0 ? (
+            <p className="mt-10">
+              <span className="bg-gradient-to-b from-[#ff8a5c] to-primary bg-clip-text text-[96px] font-semibold leading-none tracking-[-0.04em] text-transparent sm:text-[140px]">{remaining}</span>
+              <span className="mt-2 block text-[19px] text-[#a1a1a6]">of {offer!.founding.limit} founding spots open</span>
+            </p>
+          ) : remaining === 0 ? (
+            <p className="mx-auto mt-8 max-w-xl text-[21px] text-[#a1a1a6]">All founding spots have been taken. You can still apply for the pilot at standard pricing.</p>
+          ) : null}
+          <div className="mx-auto mt-14 grid max-w-5xl gap-px overflow-hidden rounded-[28px] bg-white/10 text-left sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              ["30 days free", "The clock starts only after your intake is set up and a real job has been processed."],
+              ["Then $49/mo.", "For the 12 months after the free period."],
+              ["Then $99/mo.", "With advance notice before it changes."],
+              ["No setup fee", "Cancel monthly."],
+            ].map(([t, b]) => (
+              <div key={t} className="bg-[#1c1c1e] p-7">
+                <p className="text-[24px] font-semibold tracking-tight">{t}</p>
+                <p className="mt-2 text-[15px] leading-relaxed text-[#a1a1a6]">{b}</p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-12 flex flex-wrap items-center justify-center gap-x-8 gap-y-4">
+            <Pill onClick={() => scrollTo("apply")}>Apply now</Pill>
+            <More light href="/commercial/login">Company sign in</More>
+          </div>
+          <p className="mt-5 text-[13px] text-[#86868b]">Applying is free. No payment details are collected during the pilot.</p>
+        </div>
+      </section>
+
+      {/* FAQ */}
+      <section id="faq" className="scroll-mt-14 py-24 sm:py-32">
+        <div className="mx-auto max-w-[880px] px-5">
+          <Headline className="text-[40px] leading-[1.08] sm:text-[56px]">Questions? Answers.</Headline>
+          <div className="mt-10 divide-y divide-black/10 border-y border-black/10 dark:divide-white/10 dark:border-white/10">
+            {FAQ.map(([q, a]) => (
+              <details key={q} className="group py-6">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-6 text-[19px] font-semibold tracking-tight sm:text-[21px]">
+                  {q}
+                  <span className="text-[28px] font-light leading-none text-[#86868b] transition-transform group-open:rotate-45" aria-hidden>+</span>
+                </summary>
+                <p className="mt-3 max-w-2xl text-[17px] leading-relaxed text-[#6e6e73] dark:text-[#a1a1a6]">{a}</p>
+              </details>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Apply */}
+      <section id="apply" className="scroll-mt-14 bg-[#f5f5f7] py-24 dark:bg-[#0b0b0c] sm:py-32">
+        <div className="mx-auto grid max-w-[1180px] gap-12 px-5 lg:grid-cols-[1fr_1.4fr]">
+          <div>
+            <Headline className="text-[40px] leading-[1.08] sm:text-[56px]">Apply for the pilot.</Headline>
+            <p className="mt-4 text-[19px] text-[#6e6e73] dark:text-[#a1a1a6]">Tell us about your company and how your work orders arrive. We review every application and reply by email.</p>
+            <div className="mt-8 overflow-hidden rounded-[28px]">
+              <img src={IMG.plans} alt="Contractor reviewing plans" className="h-64 w-full object-cover lg:h-80" loading="lazy" />
+            </div>
+          </div>
+          <div className="rounded-[28px] bg-white p-6 sm:p-10 dark:bg-[#1c1c1e]">
+            <PilotForm />
+          </div>
+        </div>
+      </section>
+
+      <Footer />
     </div>
   );
 }
 
-function TodayPreview() {
-  const rows = [
-    { tone: "bg-red-500", label: "Needs review", value: "NTE unclear", sub: "WO 5512 · Oak Plaza" },
-    { tone: "bg-orange-500", label: "Due today", value: "2 jobs", sub: "Store #218 · 5:00 PM CT" },
-    { tone: "bg-sky-500", label: "On site", value: "Visit 2", sub: "Customer check-in confirmed" },
-    { tone: "bg-amber-500", label: "Invoice bounced", value: "INV-1004", sub: "Assigned to office" },
+function PhotoTile({ img, eyebrow, title, body }: { img: string; eyebrow: string; title: string; body: string }) {
+  return (
+    <article className="group relative flex min-h-[460px] flex-col overflow-hidden rounded-[28px] bg-black text-white sm:min-h-[540px]">
+      <img src={img} alt="" loading="lazy" className="absolute inset-0 h-full w-full object-cover transition duration-700 group-hover:scale-[1.03]" />
+      <div aria-hidden className="absolute inset-0 bg-gradient-to-b from-black/85 via-black/45 to-black/5" />
+      <div className="relative p-8 sm:p-10">
+        <p className="text-[15px] font-semibold text-[#ff8a5c]">{eyebrow}</p>
+        <h3 className="mt-2 max-w-md text-[28px] font-semibold leading-[1.1] tracking-[-0.02em] sm:text-[36px]">{title}</h3>
+        <p className="mt-3 max-w-md text-[17px] leading-relaxed text-white/80">{body}</p>
+      </div>
+    </article>
+  );
+}
+
+function DarkTile({ eyebrow, title, body, icon }: { eyebrow: string; title: string; body: string; icon: ReactNode }) {
+  return (
+    <article className="flex min-h-[460px] flex-col justify-between rounded-[28px] bg-[#1d1d1f] p-8 text-white sm:min-h-[540px] sm:p-10">
+      <div>
+        <p className="text-[15px] font-semibold text-[#ff8a5c]">{eyebrow}</p>
+        <h3 className="mt-2 max-w-md text-[28px] font-semibold leading-[1.1] tracking-[-0.02em] sm:text-[36px]">{title}</h3>
+        <p className="mt-3 max-w-md text-[17px] leading-relaxed text-white/70">{body}</p>
+      </div>
+      <div className="flex items-end justify-between">
+        <span className="text-primary">{icon}</span>
+        <div className="rounded-2xl bg-white/10 px-4 py-3 text-[13px] text-white/80 backdrop-blur">
+          <p className="font-semibold text-white">2 updates saved on this phone</p>
+          <p>Sending when you’re back online</p>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function LightTile({ eyebrow, title, body }: { eyebrow: string; title: string; body: string }) {
+  return (
+    <article className="flex min-h-[460px] flex-col justify-between rounded-[28px] bg-[#f5f5f7] p-8 sm:min-h-[540px] sm:p-10 dark:bg-[#1c1c1e]">
+      <div>
+        <p className="text-[15px] font-semibold text-primary">{eyebrow}</p>
+        <h3 className="mt-2 max-w-md text-[28px] font-semibold leading-[1.1] tracking-[-0.02em] sm:text-[36px]">{title}</h3>
+        <p className="mt-3 max-w-md text-[17px] leading-relaxed text-[#6e6e73] dark:text-[#a1a1a6]">{body}</p>
+      </div>
+      <div className="mt-8 rounded-2xl bg-white p-5 text-[14px] shadow-sm dark:bg-black/40" aria-label="Example approval record">
+        <p className="text-[12px] font-semibold uppercase tracking-wide text-[#86868b]">Example</p>
+        <div className="mt-3 grid grid-cols-3 gap-3">
+          {[["Original NTE", "$650"], ["Requested", "$1,180"], ["Approved", "$1,180"]].map(([k, v]) => (
+            <div key={k}><p className="text-[12px] text-[#86868b]">{k}</p><p className="text-[21px] font-semibold tracking-tight">{v}</p></div>
+          ))}
+        </div>
+        <p className="mt-4 border-t border-black/5 pt-3 text-[13px] italic text-[#6e6e73] dark:border-white/10">“Approved to proceed at $1,180.” — facility manager, by email</p>
+      </div>
+    </article>
+  );
+}
+
+function TodayCard({ className }: { className?: string }) {
+  const rows: [string, string, string][] = [
+    ["#ff3b30", "Needs review", "NTE unclear · WO 5512"],
+    ["#ff9f0a", "Due today", "Store #218 · 5:00 PM CT"],
+    ["#34c759", "On site", "Customer check-in confirmed"],
   ];
   return (
-    <div className="mx-auto w-full max-w-sm rounded-[2rem] border-8 border-slate-800 bg-white p-4 text-slate-900 shadow-2xl" aria-label="Example of the Today screen">
-      <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Example</p>
-      <p className="mt-1 text-lg font-bold">What needs my attention today?</p>
-      <ul className="mt-4 space-y-3">
-        {rows.map((r) => (
-          <li key={r.label} className="flex items-start gap-3 rounded-lg border border-slate-200 p-3">
-            <span className={cx("mt-1 h-2.5 w-2.5 shrink-0 rounded-full", r.tone)} />
-            <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{r.label}</p>
-              <p className="font-semibold">{r.value}</p>
-              <p className="truncate text-xs text-slate-500">{r.sub}</p>
-            </div>
+    <div className={cx("w-[320px] rounded-[24px] bg-white/85 p-5 text-left text-[#1d1d1f] shadow-2xl backdrop-blur-xl", className)} aria-label="Example of the Today screen">
+      <p className="text-[12px] font-semibold uppercase tracking-wide text-[#86868b]">Example · Today</p>
+      <p className="mt-1 text-[19px] font-semibold tracking-tight">What needs my attention?</p>
+      <ul className="mt-3 space-y-2">
+        {rows.map(([color, t, sub]) => (
+          <li key={t} className="flex items-center gap-3 rounded-2xl bg-white px-3 py-2.5">
+            <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: color }} />
+            <span className="min-w-0"><span className="block text-[14px] font-semibold">{t}</span><span className="block truncate text-[12px] text-[#6e6e73]">{sub}</span></span>
           </li>
         ))}
       </ul>
-      <div className="mt-4 grid grid-cols-2 gap-2">
-        <span className="rounded-md bg-slate-900 py-3 text-center text-sm font-semibold text-white">On my way</span>
-        <span className="rounded-md bg-primary py-3 text-center text-sm font-semibold text-white">Check in</span>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-[14px] font-medium">
+        <span className="rounded-full bg-[#1d1d1f] py-2.5 text-center text-white">On my way</span>
+        <span className="rounded-full bg-primary py-2.5 text-center text-white">Check in</span>
       </div>
     </div>
   );
 }
 
-function PlanCard({ name, price, per, note, points, highlight }: { name: string; price: string; per?: string; note: string; points: string[]; highlight?: boolean }) {
+/** Thin, translucent navigation bar in the style of apple.com, with a product sub-nav. */
+function GlobalNav() {
+  const [open, setOpen] = useState(false);
+  const [dark, setDark] = useDark();
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    // The site scrolls inside #root, so listen in the capture phase to catch any scroller.
+    const onScroll = () => setScrolled(Math.max(window.scrollY, document.getElementById("root")?.scrollTop || 0) > 8);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true, capture: true });
+    return () => window.removeEventListener("scroll", onScroll, { capture: true });
+  }, []);
+  const links: [string, string][] = [["Overview", "workflow"], ["Pricing", "pricing"], ["Founding offer", "founding"], ["FAQ", "faq"]];
   return (
-    <div className={cx("flex flex-col rounded-xl border p-6", highlight ? "border-primary shadow-lg ring-1 ring-primary" : "border-slate-200 dark:border-slate-800")}>
-      <h3 className="text-lg font-semibold">{name}</h3>
-      <p className="mt-3"><span className="text-4xl font-bold">{price}</span>{per ? <span className="text-slate-500">{per}</span> : null}</p>
-      <p className="mt-1 text-sm font-medium text-slate-600 dark:text-slate-400">{note}</p>
-      <ul className="mt-5 space-y-2 text-sm">
-        {points.map((p) => (
-          <li key={p} className="flex gap-2"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />{p}</li>
-        ))}
-      </ul>
-    </div>
+    <header className="fixed inset-x-0 top-0 z-50">
+      <div className="bg-[#fbfbfd]/80 backdrop-blur-xl backdrop-saturate-150 dark:bg-[#161617]/80">
+        <div className="mx-auto flex h-11 max-w-[1024px] items-center justify-between px-5 text-[12px] text-[#1d1d1f]/80 dark:text-white/80">
+          <a href="/" aria-label="FixBridge home" className="flex items-center">
+            <BrandLogo variant="nav" tone="onLight" className="!w-[6.5rem] dark:hidden" />
+            <BrandLogo variant="nav" tone="color" className="hidden !w-[6.5rem] dark:block" />
+          </a>
+          <nav className="hidden items-center gap-8 md:flex">
+            <a href="/" className="hover:text-[#1d1d1f] dark:hover:text-white">FixBridge</a>
+            <span className="text-[#1d1d1f] dark:text-white">Commercial</span>
+            <a href="/about" className="hover:text-[#1d1d1f] dark:hover:text-white">About</a>
+            <a href="/contact" className="hover:text-[#1d1d1f] dark:hover:text-white">Support</a>
+          </nav>
+          <div className="flex items-center gap-4">
+            <button type="button" onClick={() => setDark(!dark)} aria-label={dark ? "Switch to light mode" : "Switch to dark mode"} className="hover:text-[#1d1d1f] dark:hover:text-white">
+              {dark ? <Sun size={15} /> : <Moon size={15} />}
+            </button>
+            <Link to="/commercial/login" aria-label="Company sign in" className="hover:text-[#1d1d1f] dark:hover:text-white"><LogIn size={15} /></Link>
+            <button type="button" className="md:hidden" onClick={() => setOpen(!open)} aria-label={open ? "Close menu" : "Open menu"}>
+              {open ? <X size={18} /> : <Menu size={18} />}
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className={cx("border-b backdrop-blur-xl backdrop-saturate-150 transition-colors", scrolled ? "border-black/10 bg-white/80 dark:border-white/10 dark:bg-black/70" : "border-transparent bg-white/0 dark:bg-black/0")}>
+        <div className="mx-auto flex h-[52px] max-w-[1024px] items-center justify-between px-5">
+          <span className="text-[21px] font-semibold tracking-tight text-[#1d1d1f] dark:text-white">Commercial</span>
+          <div className="flex items-center gap-6 text-[12px]">
+            <nav className="hidden items-center gap-6 text-[#1d1d1f]/80 sm:flex dark:text-white/80">
+              {links.map(([label, id]) => <button key={id} type="button" onClick={() => scrollTo(id)} className="hover:text-primary">{label}</button>)}
+            </nav>
+            <button type="button" onClick={() => scrollTo("apply")} className="rounded-full bg-primary px-3.5 py-1 text-[12px] text-white hover:brightness-110">Apply</button>
+          </div>
+        </div>
+      </div>
+      {open ? (
+        <div className="border-b border-black/10 bg-white px-8 pb-6 pt-2 text-[#1d1d1f] md:hidden dark:border-white/10 dark:bg-black dark:text-white">
+          {[["FixBridge home", "/"], ["About", "/about"], ["Support", "/contact"], ["Company sign in", "/commercial/login"]].map(([l, h]) => (
+            <a key={h} href={h} className="block border-b border-black/5 py-3 text-[17px] font-semibold dark:border-white/10">{l}</a>
+          ))}
+          {links.map(([label, id]) => (
+            <button key={id} type="button" onClick={() => { setOpen(false); scrollTo(id); }} className="block w-full border-b border-black/5 py-3 text-left text-[17px] font-semibold dark:border-white/10">{label}</button>
+          ))}
+        </div>
+      ) : null}
+    </header>
   );
 }
 
-function Faq({ q, children }: { q: string; children: string }) {
+function Footer() {
   return (
-    <details className="group py-4">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-4 font-semibold">
-        {q}
-        <span className="text-xl text-slate-400 transition-transform group-open:rotate-45">+</span>
-      </summary>
-      <p className="mt-2 text-slate-600 dark:text-slate-400">{children}</p>
-    </details>
+    <footer className="bg-[#f5f5f7] text-[12px] text-[#6e6e73] dark:bg-[#0b0b0c] dark:text-[#86868b]">
+      <div className="mx-auto max-w-[1024px] px-5 py-8">
+        <p className="border-b border-black/10 pb-4 leading-relaxed dark:border-white/10">
+          Pilot sign-up only — no payment details are collected and nothing is charged through FixBridge during the pilot. Joining the network is free; FixBridge does not promise job volume or payment timing. Photos: Unsplash.
+        </p>
+        <div className="flex flex-col gap-3 pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="flex items-center gap-1.5"><MapPin size={12} aria-hidden />Copyright © {new Date().getFullYear()} FixBridge. All rights reserved.</p>
+          <nav className="flex flex-wrap gap-x-4 gap-y-1">
+            <a href="/" className="hover:underline">FixBridge home</a>
+            <Link to="/commercial/login" className="hover:underline">Company sign in</Link>
+            <a href="/contact" className="hover:underline">Contact</a>
+            <a href="/legal/privacy" className="hover:underline">Privacy Policy</a>
+          </nav>
+        </div>
+      </div>
+    </footer>
   );
 }
 
@@ -310,22 +438,22 @@ function PilotForm() {
 
   if (done) {
     return (
-      <div className="mt-8 rounded-lg border border-emerald-200 bg-emerald-50 p-6 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-100" role="status">
-        <CheckCircle2 className="h-6 w-6" />
-        <p className="mt-2 text-lg font-semibold">Application received.</p>
-        <p className="mt-1 text-sm">We will review it and reply to {form.email} with next steps. No payment is taken during the pilot.</p>
+      <div className="py-10 text-center" role="status">
+        <CheckCircle2 className="mx-auto h-12 w-12 text-[#34c759]" strokeWidth={1.5} />
+        <p className="mt-4 text-[28px] font-semibold tracking-tight">Application received.</p>
+        <p className="mx-auto mt-2 max-w-sm text-[17px] text-muted-foreground">We will review it and reply to {form.email} with next steps. No payment is taken during the pilot.</p>
       </div>
     );
   }
 
   return (
-    <form onSubmit={submit} className="mt-8 grid gap-4 sm:grid-cols-2" noValidate>
+    <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2" noValidate>
       <Field label="Company name" error={errors.company_name}><Input value={form.company_name} onChange={(e) => set("company_name", e.target.value)} autoComplete="organization" required /></Field>
       <Field label="Your name" error={errors.contact_name}><Input value={form.contact_name} onChange={(e) => set("contact_name", e.target.value)} autoComplete="name" required /></Field>
       <Field label="Work email" error={errors.email}><Input type="email" value={form.email} onChange={(e) => set("email", e.target.value)} autoComplete="email" required /></Field>
       <Field label="Phone" error={errors.phone}><Input type="tel" value={form.phone} onChange={(e) => set("phone", e.target.value)} autoComplete="tel" /></Field>
       <fieldset className="sm:col-span-2">
-        <legend className="mb-2 text-sm font-medium">Trades you cover</legend>
+        <legend className="mb-2 text-[13px] font-medium text-muted-foreground">Trades you cover</legend>
         <div className="flex flex-wrap gap-2">
           {TRADES.map((t) => {
             const on = form.trades.includes(t);
@@ -335,7 +463,7 @@ function PilotForm() {
                 type="button"
                 aria-pressed={on}
                 onClick={() => set("trades", on ? form.trades.filter((x) => x !== t) : [...form.trades, t])}
-                className={cx("rounded-full border px-3 py-1.5 text-sm", on ? "border-primary bg-primary text-white" : "border-slate-300 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300")}
+                className={cx("rounded-full px-4 py-2 text-[14px] transition", on ? "bg-primary text-white" : "bg-secondary text-foreground hover:brightness-95")}
               >
                 {t}
               </button>
@@ -387,8 +515,8 @@ function PilotForm() {
       </label>
       {message ? <p className="text-sm font-medium text-red-600 sm:col-span-2" role="alert">{message}</p> : null}
       <div className="sm:col-span-2">
-        <Button type="submit" size="lg" busy={busy}>Send application</Button>
-        <p className="mt-2 text-xs text-slate-500"><TriangleAlert className="mr-1 inline h-3.5 w-3.5" />Pilot sign-up only — no payment details are collected.</p>
+        <Button type="submit" size="lg" busy={busy} className="w-full sm:w-auto">Send application</Button>
+        <p className="mt-3 text-[13px] text-muted-foreground">Pilot sign-up only — no payment details are collected.</p>
       </div>
     </form>
   );

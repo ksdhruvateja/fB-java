@@ -3,16 +3,21 @@ import { Loader2, X } from "lucide-react";
 import { twMerge } from "tailwind-merge";
 import { ApiError } from "./api";
 
+/** Headline and small-label styles (Apple-like: semibold, tight, sentence case). */
+export const DISPLAY_FONT = "";
+export const display = "font-semibold tracking-[-0.025em]";
+export const eyebrow = "text-sm font-semibold";
+
 /** Joins class names; later classes win over conflicting earlier ones (e.g. w-24 over w-full). */
 export const cx = (...parts: Array<string | false | null | undefined>) => twMerge(...parts);
 
 type Tone = "primary" | "secondary" | "ghost" | "danger" | "success";
 const TONES: Record<Tone, string> = {
-  primary: "bg-primary text-white hover:bg-primary/90 disabled:bg-primary/50",
-  secondary: "border border-slate-300 bg-white text-slate-900 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800",
-  ghost: "text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800",
-  danger: "bg-red-600 text-white hover:bg-red-700 disabled:bg-red-400",
-  success: "bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-emerald-400",
+  primary: "bg-primary text-white hover:brightness-110 disabled:bg-primary/50",
+  secondary: "bg-secondary text-foreground hover:brightness-95",
+  ghost: "text-primary hover:bg-primary/10",
+  danger: "bg-[#ff3b30] text-white hover:brightness-110",
+  success: "bg-[#34c759] text-white hover:brightness-105",
 };
 
 export function Button({
@@ -23,12 +28,18 @@ export function Button({
   children,
   ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & { tone?: Tone; size?: "sm" | "md" | "lg" | "xl"; busy?: boolean }) {
-  const sizes = { sm: "px-3 py-1.5 text-xs", md: "px-4 py-2 text-sm", lg: "px-5 py-3 text-base", xl: "px-6 py-5 text-lg" };
+  const sizes = {
+    sm: "px-3.5 py-1.5 text-[13px]",
+    md: "px-5 py-2.5 text-sm",
+    lg: "px-6 py-3 text-[15px]",
+    // Field buttons: large targets that are easy to hit with gloves on.
+    xl: "rounded-2xl px-6 py-5 text-lg",
+  };
   return (
     <button
       type="button"
       className={cx(
-        "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-70",
+        "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full font-medium transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50",
         TONES[tone],
         sizes[size],
         className
@@ -47,17 +58,17 @@ export function Field({ label, hint, error, children, className }: { label: Reac
   return (
     <div className={cx("block text-sm", className)}>
       <label className="block">
-        <span className="mb-1 block font-medium text-slate-800 dark:text-slate-200">{label}</span>
+        <span className="mb-1.5 block text-[13px] font-medium text-muted-foreground">{label}</span>
         {children}
       </label>
-      {hint ? <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">{hint}</span> : null}
+      {hint ? <span className="mt-1 block text-xs text-muted-foreground">{hint}</span> : null}
       {error ? <span className="mt-1 block text-xs font-medium text-red-600" role="alert">{error}</span> : null}
     </div>
   );
 }
 
 const inputClass =
-  "w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/25 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100";
+  "w-full rounded-xl border border-[color:var(--input)] bg-card px-3.5 py-3 text-[15px] text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-4 focus:ring-primary/15";
 
 export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={cx(inputClass, props.className)} />;
@@ -71,10 +82,10 @@ export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
 
 export function Card({ title, actions, children, className, id }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string; id?: string }) {
   return (
-    <section id={id} className={cx("rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5", className)}>
+    <section id={id} className={cx("rounded-2xl bg-card p-5 sm:p-6", className)}>
       {title || actions ? (
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          {title ? <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">{title}</h2> : <span />}
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          {title ? <h2 className="text-[17px] font-semibold tracking-tight text-foreground">{title}</h2> : <span />}
           {actions}
         </div>
       ) : null}
@@ -84,15 +95,15 @@ export function Card({ title, actions, children, className, id }: { title?: Reac
 }
 
 const BADGE: Record<string, string> = {
-  slate: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
-  red: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200",
-  amber: "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200",
-  green: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200",
-  blue: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-200",
-  orange: "bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-200",
+  slate: "bg-secondary text-muted-foreground",
+  red: "bg-[#ff3b30]/12 text-[#d70015] dark:text-[#ff6961]",
+  amber: "bg-[#ff9f0a]/15 text-[#a05a00] dark:text-[#ffb340]",
+  green: "bg-[#34c759]/15 text-[#1a7f37] dark:text-[#30d158]",
+  blue: "bg-[#0071e3]/10 text-[#0066cc] dark:text-[#64d2ff]",
+  orange: "bg-primary/12 text-primary",
 };
 export function Badge({ tone = "slate", children, className }: { tone?: keyof typeof BADGE; children: ReactNode; className?: string }) {
-  return <span className={cx("inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-semibold", BADGE[tone], className)}>{children}</span>;
+  return <span className={cx("inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium", BADGE[tone], className)}>{children}</span>;
 }
 
 export function statusTone(status: string): keyof typeof BADGE {
@@ -117,11 +128,11 @@ export function Modal({ open, onClose, title, children, wide }: { open: boolean;
   }, [open, onClose]);
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4" role="dialog" aria-modal="true">
-      <div className={cx("max-h-[92svh] w-full overflow-y-auto rounded-t-xl bg-white p-5 shadow-xl dark:bg-slate-900 sm:rounded-xl", wide ? "sm:max-w-3xl" : "sm:max-w-lg")}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 backdrop-blur-sm sm:items-center sm:p-4" role="dialog" aria-modal="true">
+      <div className={cx("max-h-[92svh] w-full overflow-y-auto rounded-t-[28px] bg-card p-6 shadow-2xl sm:rounded-[28px] sm:p-8", wide ? "sm:max-w-3xl" : "sm:max-w-lg")}>
         <div className="mb-4 flex items-start justify-between gap-3">
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{title}</h2>
-          <button type="button" onClick={onClose} className="rounded p-1 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Close">
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground">{title}</h2>
+          <button type="button" onClick={onClose} className="rounded-full bg-secondary p-1.5 text-muted-foreground hover:text-foreground" aria-label="Close">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -136,7 +147,7 @@ export function ErrorNote({ error }: { error: unknown }) {
   const message = error instanceof Error ? error.message : String(error);
   const checks: any[] = error instanceof ApiError ? error.body?.checks || error.body?.flags || [] : [];
   return (
-    <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200" role="alert">
+    <div className="rounded-2xl bg-[#ff3b30]/10 p-4 text-sm text-[#d70015] dark:text-[#ff6961]" role="alert">
       <p className="font-medium">{message}</p>
       {checks.length ? (
         <ul className="mt-1 list-disc pl-5 text-xs">
@@ -150,12 +161,12 @@ export function ErrorNote({ error }: { error: unknown }) {
 }
 
 export function Empty({ children }: { children: ReactNode }) {
-  return <p className="rounded-md border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500 dark:border-slate-700">{children}</p>;
+  return <p className="rounded-2xl bg-card p-8 text-center text-[15px] text-muted-foreground">{children}</p>;
 }
 
 export function Spinner({ label = "Loading…" }: { label?: string }) {
   return (
-    <div className="flex items-center gap-2 p-6 text-sm text-slate-500">
+    <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
       <Loader2 className="h-4 w-4 animate-spin" /> {label}
     </div>
   );

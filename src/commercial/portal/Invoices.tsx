@@ -17,24 +17,24 @@ export function InvoicesPage() {
       <PageTitle title="Invoices" subtitle="Draft, sent, bounced, acknowledged, disputed and paid — with who is responsible." />
       <div className="mb-4 flex flex-wrap gap-1">
         {["", "draft", "sent", "delivery_failed", "disputed", "acknowledged", "paid", "void"].map((s) => (
-          <button key={s} type="button" onClick={() => setStatus(s)} className={cx("rounded-full px-3 py-1.5 text-sm font-medium", status === s ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900" : "bg-white text-slate-700 dark:bg-slate-900 dark:text-slate-300")}>
+          <button key={s} type="button" onClick={() => setStatus(s)} className={cx("rounded-full px-4 py-1.5 text-[13px] font-medium", status === s ? "bg-foreground text-background" : "bg-card text-muted-foreground hover:text-foreground")}>
             {s ? STATUS_TEXT[s] : "All"}
           </button>
         ))}
       </div>
       {loading && !data ? <Spinner /> : error ? <ErrorNote error={error} /> : !data.invoices.length ? <Empty>No invoices yet. Draft one from a completed job.</Empty> : (
-        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+        <div className="overflow-x-auto rounded-2xl bg-card">
           <table className="w-full min-w-[640px] text-sm">
-            <thead className="whitespace-nowrap bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/50">
+            <thead className="whitespace-nowrap bg-muted text-left text-xs uppercase tracking-wide text-muted-foreground /50">
               <tr><th className="px-4 py-2">Invoice</th><th className="px-4 py-2">Job / site</th><th className="px-4 py-2">Customer</th><th className="px-4 py-2">Status</th><th className="px-4 py-2">Responsible</th><th className="px-4 py-2 text-right">Total</th><th className="px-4 py-2 text-right">Paid</th></tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+            <tbody className="divide-y divide-border">
               {data.invoices.map((i: any) => (
                 <tr key={i.id}>
-                  <td className="px-4 py-3"><Link to={`/commercial/app/invoices/${i.id}`} className="font-semibold text-primary">{i.invoice_number}</Link><div className="text-xs text-slate-500">WO {i.wo_reference}</div></td>
-                  <td className="px-4 py-3">{i.job_number}<div className="text-xs text-slate-500">{i.site_name}</div></td>
+                  <td className="px-4 py-3"><Link to={`/commercial/app/invoices/${i.id}`} className="font-semibold text-primary">{i.invoice_number}</Link><div className="text-xs text-muted-foreground">WO {i.wo_reference}</div></td>
+                  <td className="px-4 py-3">{i.job_number}<div className="text-xs text-muted-foreground">{i.site_name}</div></td>
                   <td className="px-4 py-3">{i.dispatcher_name}</td>
-                  <td className="px-4 py-3"><Badge tone={statusTone(i.status)}>{STATUS_TEXT[i.status]}</Badge>{i.sent_at && ["sent", "acknowledged"].includes(i.status) ? <div className="text-xs text-slate-500">{Math.floor((Date.now() - new Date(i.sent_at).getTime()) / 86400000)} days out</div> : null}</td>
+                  <td className="px-4 py-3"><Badge tone={statusTone(i.status)}>{STATUS_TEXT[i.status]}</Badge>{i.sent_at && ["sent", "acknowledged"].includes(i.status) ? <div className="text-xs text-muted-foreground">{Math.floor((Date.now() - new Date(i.sent_at).getTime()) / 86400000)} days out</div> : null}</td>
                   <td className="px-4 py-3">{i.assigned_name || "—"}</td>
                   <td className="px-4 py-3 text-right">{money(i.total)}</td>
                   <td className="px-4 py-3 text-right">{money(i.amount_paid)}</td>
@@ -58,13 +58,13 @@ export function InvoiceDetailPage({ id }: { id: number }) {
   const blocking = checks.filter((c: any) => !c.ok && c.severity === "blocking");
   return (
     <>
-      <Link to={`/commercial/app/jobs/${job.id}`} className="mb-3 inline-flex items-center gap-1 text-sm font-medium text-slate-600 dark:text-slate-400"><ArrowLeft className="h-4 w-4" />{job.job_number}</Link>
+      <Link to={`/commercial/app/jobs/${job.id}`} className="mb-3 inline-flex items-center gap-1 text-sm font-medium text-muted-foreground"><ArrowLeft className="h-4 w-4" />{job.job_number}</Link>
       <PageTitle
         title={`Invoice ${invoice.invoice_number}`}
         subtitle={<span className="flex flex-wrap items-center gap-2">WO {invoice.wo_reference || "—"} · {job.site_name}<Badge tone={statusTone(invoice.status)}>{STATUS_TEXT[invoice.status]}</Badge></span>}
       />
-      {invoice.status === "delivery_failed" ? <p className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">Not delivered: {invoice.delivery_failure_reason}. Fix the recipient or method and send again.</p> : null}
-      {invoice.status === "disputed" ? <p className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">Disputed: {invoice.dispute_reason}</p> : null}
+      {invoice.status === "delivery_failed" ? <p className="mb-4 rounded-2xl bg-red-50 dark:bg-red-950/40 p-3 text-sm text-red-800">Not delivered: {invoice.delivery_failure_reason}. Fix the recipient or method and send again.</p> : null}
+      {invoice.status === "disputed" ? <p className="mb-4 rounded-2xl bg-red-50 dark:bg-red-950/40 p-3 text-sm text-red-800">Disputed: {invoice.dispute_reason}</p> : null}
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-4">
           {editable ? <InvoiceEditor key={invoice.updated_at} invoice={invoice} team={team || []} onSaved={(d) => setData(d)} /> : <InvoiceView invoice={invoice} />}
@@ -72,7 +72,7 @@ export function InvoiceDetailPage({ id }: { id: number }) {
             <Card title="Payments">
               <ul className="space-y-2 text-sm">
                 {payments.map((p: any) => (
-                  <li key={p.id} className="flex justify-between gap-2"><span>{when(p.received_at || p.created_at)} · {p.method || "payment"}{p.reference ? ` · ref ${p.reference}` : ""}{p.evidence_text ? <span className="block text-xs text-slate-500">{p.evidence_text}</span> : null}</span><span className="font-semibold">{money(p.amount)}</span></li>
+                  <li key={p.id} className="flex justify-between gap-2"><span>{when(p.received_at || p.created_at)} · {p.method || "payment"}{p.reference ? ` · ref ${p.reference}` : ""}{p.evidence_text ? <span className="block text-xs text-muted-foreground">{p.evidence_text}</span> : null}</span><span className="font-semibold">{money(p.amount)}</span></li>
                 ))}
               </ul>
             </Card>
@@ -81,7 +81,7 @@ export function InvoiceDetailPage({ id }: { id: number }) {
             <Card title="Delivery history">
               <ul className="space-y-1 text-sm">
                 {messages.map((m: any) => (
-                  <li key={m.id}>{when(m.created_at)} · {m.channel} {m.recipient ? `to ${m.recipient}` : ""} · <Badge tone={m.status === "sent" || m.status === "recorded" ? "green" : "red"}>{m.status}</Badge>{m.error ? <span className="block text-xs text-slate-500">{m.error}</span> : null}{m.reference ? <span className="block text-xs text-slate-500">{m.reference}</span> : null}</li>
+                  <li key={m.id}>{when(m.created_at)} · {m.channel} {m.recipient ? `to ${m.recipient}` : ""} · <Badge tone={m.status === "sent" || m.status === "recorded" ? "green" : "red"}>{m.status}</Badge>{m.error ? <span className="block text-xs text-muted-foreground">{m.error}</span> : null}{m.reference ? <span className="block text-xs text-muted-foreground">{m.reference}</span> : null}</li>
                 ))}
               </ul>
             </Card>
@@ -93,7 +93,7 @@ export function InvoiceDetailPage({ id }: { id: number }) {
               {checks.map((c: any) => (
                 <li key={c.code} className="flex items-start gap-2">
                   {c.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" /> : <XCircle className={cx("mt-0.5 h-4 w-4 shrink-0", c.severity === "blocking" ? "text-red-600" : "text-amber-500")} />}
-                  <span>{c.label}{c.detail ? <span className="block text-xs text-slate-500">{c.detail}</span> : null}</span>
+                  <span>{c.label}{c.detail ? <span className="block text-xs text-muted-foreground">{c.detail}</span> : null}</span>
                 </li>
               ))}
             </ul>
@@ -109,9 +109,9 @@ function InvoiceView({ invoice }: { invoice: any }) {
   return (
     <Card title="Invoice">
       <dl className="mb-4 grid gap-2 text-sm sm:grid-cols-2">
-        <div><dt className="text-xs text-slate-500">Recipient</dt><dd>{invoice.submission_method === "portal" ? "Customer portal" : invoice.recipient}</dd></div>
-        <div><dt className="text-xs text-slate-500">Service dates</dt><dd>{invoice.service_dates}</dd></div>
-        {invoice.sent_at ? <div><dt className="text-xs text-slate-500">Sent</dt><dd>{when(invoice.sent_at)}{invoice.sent_reference ? ` · ${invoice.sent_reference}` : ""}</dd></div> : null}
+        <div><dt className="text-xs text-muted-foreground">Recipient</dt><dd>{invoice.submission_method === "portal" ? "Customer portal" : invoice.recipient}</dd></div>
+        <div><dt className="text-xs text-muted-foreground">Service dates</dt><dd>{invoice.service_dates}</dd></div>
+        {invoice.sent_at ? <div><dt className="text-xs text-muted-foreground">Sent</dt><dd>{when(invoice.sent_at)}{invoice.sent_reference ? ` · ${invoice.sent_reference}` : ""}</dd></div> : null}
       </dl>
       <Lines lines={invoice.lines} />
       <Totals invoice={invoice} />
@@ -122,9 +122,9 @@ function InvoiceView({ invoice }: { invoice: any }) {
 function Lines({ lines }: { lines: any[] }) {
   return (
     <table className="w-full text-sm">
-      <thead className="text-left text-xs uppercase text-slate-500"><tr><th className="py-1">Item</th><th className="py-1 text-right">Qty</th><th className="py-1 text-right">Price</th><th className="py-1 text-right">Amount</th></tr></thead>
-      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-        {lines.map((l, i) => <tr key={i}><td className="py-1.5">{l.description} <span className="text-xs text-slate-500">({l.type})</span></td><td className="py-1.5 text-right">{l.quantity}</td><td className="py-1.5 text-right">{money(l.unit_price)}</td><td className="py-1.5 text-right">{money(Number(l.quantity) * Number(l.unit_price))}</td></tr>)}
+      <thead className="text-left text-xs uppercase text-muted-foreground"><tr><th className="py-1">Item</th><th className="py-1 text-right">Qty</th><th className="py-1 text-right">Price</th><th className="py-1 text-right">Amount</th></tr></thead>
+      <tbody className="divide-y divide-border">
+        {lines.map((l, i) => <tr key={i}><td className="py-1.5">{l.description} <span className="text-xs text-muted-foreground">({l.type})</span></td><td className="py-1.5 text-right">{l.quantity}</td><td className="py-1.5 text-right">{money(l.unit_price)}</td><td className="py-1.5 text-right">{money(Number(l.quantity) * Number(l.unit_price))}</td></tr>)}
       </tbody>
     </table>
   );
@@ -182,7 +182,7 @@ function InvoiceEditor({ invoice, team, onSaved }: { invoice: any; team: any[]; 
             <Input className="min-w-0 flex-1" placeholder="Description" value={l.description} onChange={(e) => set("lines", form.lines.map((x: any, xi: number) => (xi === i ? { ...x, description: e.target.value } : x)))} />
             <Input className="w-20" inputMode="decimal" aria-label="Quantity" value={l.quantity} onChange={(e) => set("lines", form.lines.map((x: any, xi: number) => (xi === i ? { ...x, quantity: e.target.value } : x)))} />
             <Input className="w-24" inputMode="decimal" aria-label="Unit price" value={l.unit_price} onChange={(e) => set("lines", form.lines.map((x: any, xi: number) => (xi === i ? { ...x, unit_price: e.target.value } : x)))} />
-            <button type="button" className="px-2 text-slate-400 hover:text-red-600" aria-label="Remove line" onClick={() => set("lines", form.lines.filter((_: any, xi: number) => xi !== i))}>×</button>
+            <button type="button" className="px-2 text-muted-foreground hover:text-red-600" aria-label="Remove line" onClick={() => set("lines", form.lines.filter((_: any, xi: number) => xi !== i))}>×</button>
           </div>
         ))}
         <Button size="sm" tone="ghost" onClick={() => set("lines", [...form.lines, { type: "material", description: "", quantity: "1", unit_price: "" }])}>+ Add line</Button>
@@ -233,7 +233,7 @@ function InvoiceActions({ invoice, blocking, onDone }: { invoice: any; blocking:
     <Card title="Actions">
       <div className="flex flex-col gap-2">
         {sendable ? <Button disabled={blocking > 0} onClick={() => setModal("send")}><Send className="h-4 w-4" />{invoice.submission_method === "email" ? (resend ? "Send again" : "Send invoice") : "Record portal submission"}</Button> : null}
-        {blocking > 0 && sendable ? <p className="text-xs text-slate-500">Fix the {blocking} red check{blocking === 1 ? "" : "s"} first.</p> : null}
+        {blocking > 0 && sendable ? <p className="text-xs text-muted-foreground">Fix the {blocking} red check{blocking === 1 ? "" : "s"} first.</p> : null}
         {["sent", "acknowledged"].includes(invoice.status) ? <Button tone="secondary" onClick={() => { setStatus("delivery_failed"); setModal("status"); }}>It bounced / was rejected</Button> : null}
         {["sent", "delivery_failed"].includes(invoice.status) ? <Button tone="secondary" onClick={() => { setStatus("acknowledged"); setModal("status"); }}>Customer acknowledged it</Button> : null}
         {["sent", "acknowledged"].includes(invoice.status) ? <Button tone="secondary" onClick={() => { setStatus("disputed"); setModal("status"); }}>Customer disputed it</Button> : null}
@@ -251,7 +251,7 @@ function InvoiceActions({ invoice, blocking, onDone }: { invoice: any; blocking:
 
       <Modal open={modal === "status"} onClose={() => setModal("")} title={{ delivery_failed: "Mark as not delivered", acknowledged: "Mark acknowledged", disputed: "Mark disputed", sent: "Dispute settled", void: "Void invoice" }[status] || ""}>
         <Field label={status === "acknowledged" ? "Note (optional)" : "Reason / details"}><Textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder={status === "delivery_failed" ? "Bounce message, portal rejection reason…" : ""} /></Field>
-        {status === "delivery_failed" || status === "disputed" ? <p className="mt-2 text-xs text-slate-500">This opens an exception assigned to the responsible person.</p> : null}
+        {status === "delivery_failed" || status === "disputed" ? <p className="mt-2 text-xs text-muted-foreground">This opens an exception assigned to the responsible person.</p> : null}
         <div className="mt-3"><ErrorNote error={error} /></div>
         <Button className="mt-4" tone={status === "void" ? "danger" : "primary"} busy={busy} onClick={() => run(() => api.post(`/invoices/${invoice.id}/status`, { status, reason }))}>Save</Button>
       </Modal>

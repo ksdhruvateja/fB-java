@@ -28,7 +28,7 @@ export function JobsPage() {
       <PageTitle
         title="Jobs"
         subtitle={isOffice ? "Every work order, from received dispatch to paid invoice." : "Jobs assigned to you."}
-        actions={isOffice ? <Link to="/commercial/app/intake" className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white">New dispatch</Link> : null}
+        actions={isOffice ? <Link to="/commercial/app/intake" className="rounded-full bg-primary px-5 py-2.5 text-sm font-medium text-white hover:brightness-110">New dispatch</Link> : null}
       />
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="-mx-3 flex gap-1 overflow-x-auto px-3 sm:mx-0 sm:px-0">
@@ -37,7 +37,7 @@ export function JobsPage() {
               key={f.key}
               type="button"
               onClick={() => setFilter(f.key)}
-              className={cx("whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium", filter === f.key ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900" : "bg-white text-slate-700 dark:bg-slate-900 dark:text-slate-300")}
+              className={cx("whitespace-nowrap rounded-full px-4 py-1.5 text-[13px] font-medium", filter === f.key ? "bg-foreground text-background" : "bg-card text-muted-foreground hover:text-foreground")}
             >
               {f.label}
             </button>
@@ -51,25 +51,25 @@ export function JobsPage() {
       {loading && !data ? <Spinner /> : error ? <ErrorNote error={error} /> : !data!.jobs.length ? (
         <Empty>No jobs here yet.{isOffice ? " Paste a dispatch email on the Intake page to create one." : ""}</Empty>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+        <div className="overflow-hidden rounded-2xl bg-card">
           <table className="hidden w-full text-sm md:table">
-            <thead className="whitespace-nowrap bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/50">
+            <thead className="whitespace-nowrap bg-muted text-left text-xs uppercase tracking-wide text-muted-foreground /50">
               <tr><th className="px-4 py-2">Job</th><th className="px-4 py-2">Site</th><th className="px-4 py-2">Customer</th><th className="px-4 py-2">Due</th><th className="px-4 py-2">Status</th>{canSeeMoney ? <th className="px-4 py-2 text-right">Authorized</th> : null}</tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+            <tbody className="divide-y divide-border">
               {data!.jobs.map((j) => (
-                <tr key={j.id} className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50" onClick={() => navigate(`/commercial/app/jobs/${j.id}`)}>
-                  <td className="px-4 py-3"><Link to={`/commercial/app/jobs/${j.id}`} className="font-semibold">{j.job_number}</Link><div className="text-xs text-slate-500">WO {j.external_wo_number || "—"}</div></td>
-                  <td className="px-4 py-3"><div className="font-medium">{j.site_name || "—"}</div><div className="max-w-xs truncate text-xs text-slate-500">{j.site_address}</div></td>
-                  <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{j.dispatcher_name || j.billing_customer || "—"}</td>
-                  <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{j.due_at ? when(j.due_at, j.timezone) : "—"}{j.priority !== "routine" ? <Badge tone={priorityTone(j.priority)} className="ml-2">{j.priority}</Badge> : null}</td>
+                <tr key={j.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/commercial/app/jobs/${j.id}`)}>
+                  <td className="px-4 py-3"><Link to={`/commercial/app/jobs/${j.id}`} className="font-semibold">{j.job_number}</Link><div className="text-xs text-muted-foreground">WO {j.external_wo_number || "—"}</div></td>
+                  <td className="px-4 py-3"><div className="font-medium">{j.site_name || "—"}</div><div className="max-w-xs truncate text-xs text-muted-foreground">{j.site_address}</div></td>
+                  <td className="px-4 py-3 text-muted-foreground">{j.dispatcher_name || j.billing_customer || "—"}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{j.due_at ? when(j.due_at, j.timezone) : "—"}{j.priority !== "routine" ? <Badge tone={priorityTone(j.priority)} className="ml-2">{j.priority}</Badge> : null}</td>
                   <td className="px-4 py-3"><Badge tone={statusTone(j.status)}>{STATUS_LABEL[j.status] || j.status}</Badge>{j.status === "received" && j.review_status !== "reviewed" ? <Badge tone="red" className="ml-1">Review</Badge> : null}</td>
                   {canSeeMoney ? <td className="px-4 py-3 text-right">{money(j.authorized_amount ?? j.nte_amount)}</td> : null}
                 </tr>
               ))}
             </tbody>
           </table>
-          <ul className="divide-y divide-slate-100 dark:divide-slate-800 md:hidden">
+          <ul className="divide-y divide-border md:hidden">
             {data!.jobs.map((j) => (
               <li key={j.id}>
                 <Link to={`/commercial/app/jobs/${j.id}`} className="block p-4">
@@ -77,7 +77,7 @@ export function JobsPage() {
                     <span className="font-semibold">{j.site_name || j.site_address || j.job_number}</span>
                     <Badge tone={statusTone(j.status)}>{STATUS_LABEL[j.status] || j.status}</Badge>
                   </div>
-                  <p className="mt-1 text-xs text-slate-500">{j.job_number} · WO {j.external_wo_number || "—"}{j.due_at ? ` · Due ${when(j.due_at, j.timezone)}` : ""}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{j.job_number} · WO {j.external_wo_number || "—"}{j.due_at ? ` · Due ${when(j.due_at, j.timezone)}` : ""}</p>
                 </Link>
               </li>
             ))}
@@ -157,7 +157,7 @@ export function IntakePage() {
             className="min-h-[320px] font-mono text-xs"
           />
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium dark:border-slate-700">
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-full bg-secondary px-4 py-2 text-sm font-medium ">
               <FileUp className="h-4 w-4" /> Upload .eml / .txt or attachments
               <input type="file" multiple accept=".eml,.txt,message/rfc822,text/plain,application/pdf,image/*" className="hidden" onChange={onFiles} />
             </label>
@@ -169,12 +169,12 @@ export function IntakePage() {
             <Button tone="secondary" onClick={runPreview} busy={busy === "preview"} disabled={text.trim().length < 20}><Sparkles className="h-4 w-4" />Read email</Button>
             <Button onClick={create} busy={busy === "create"} disabled={text.trim().length < 20}>Create job for review</Button>
           </div>
-          <p className="mt-2 text-xs text-slate-500">If this WO number already exists, the existing job is updated instead of creating a second one.</p>
+          <p className="mt-2 text-xs text-muted-foreground">If this WO number already exists, the existing job is updated instead of creating a second one.</p>
           <div className="mt-3"><ErrorNote error={error} /></div>
           {result && result.outcome === "duplicate_ignored" ? (
-            <p className="mt-3 rounded-md bg-amber-50 p-3 text-sm text-amber-900">{result.message} <Link to={`/commercial/app/jobs/${result.job_id}`} className="font-semibold underline">Open the job</Link></p>
+            <p className="mt-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">{result.message} <Link to={`/commercial/app/jobs/${result.job_id}`} className="font-semibold underline">Open the job</Link></p>
           ) : result && result.outcome === "duplicate_no_changes" ? (
-            <p className="mt-3 rounded-md bg-amber-50 p-3 text-sm text-amber-900">This WO is already a job and nothing changed. <Link to={`/commercial/app/jobs/${result.job_id}`} className="font-semibold underline">Open the job</Link></p>
+            <p className="mt-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">This WO is already a job and nothing changed. <Link to={`/commercial/app/jobs/${result.job_id}`} className="font-semibold underline">Open the job</Link></p>
           ) : null}
         </Card>
         <Card title="What FixBridge found">
@@ -198,22 +198,22 @@ function PreviewFields({ preview }: { preview: Preview }) {
       {preview.flags.length ? (
         <ul className="space-y-1">
           {preview.flags.map((fl) => (
-            <li key={fl.code} className={cx("rounded-md px-3 py-2 text-xs font-medium", fl.severity === "blocking" ? "bg-red-50 text-red-800 dark:bg-red-950 dark:text-red-200" : "bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200")}>
+            <li key={fl.code} className={cx("rounded-xl px-3 py-2 text-xs font-medium", fl.severity === "blocking" ? "bg-red-50 text-red-800 dark:bg-red-950 dark:text-red-200" : "bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200")}>
               {fl.severity === "blocking" ? "Must review: " : "Check: "}{fl.message}
             </li>
           ))}
         </ul>
-      ) : <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">No missing or conflicting details found. It still gets a quick review before acceptance.</p>}
-      <dl className="divide-y divide-slate-100 dark:divide-slate-800">
+      ) : <p className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">No missing or conflicting details found. It still gets a quick review before acceptance.</p>}
+      <dl className="divide-y divide-border">
         {rows.map(([k, v]) => (
           <div key={k} className="grid grid-cols-[8.5rem_1fr] gap-2 py-1.5">
-            <dt className="text-slate-500">{k}</dt>
-            <dd className={cx("whitespace-pre-line", !v && "italic text-slate-400")}>{v || "not found"}</dd>
+            <dt className="text-muted-foreground">{k}</dt>
+            <dd className={cx("whitespace-pre-line", !v && "italic text-muted-foreground")}>{v || "not found"}</dd>
           </div>
         ))}
         {f.contacts?.length ? (
           <div className="grid grid-cols-[8.5rem_1fr] gap-2 py-1.5">
-            <dt className="text-slate-500">Contacts</dt>
+            <dt className="text-muted-foreground">Contacts</dt>
             <dd>{f.contacts.map((c: any, i: number) => <div key={i}>{[c.name, c.phone, c.email, c.role && `(${c.role})`].filter(Boolean).join(" · ")}</div>)}</dd>
           </div>
         ) : null}

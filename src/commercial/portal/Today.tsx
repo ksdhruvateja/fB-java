@@ -20,7 +20,7 @@ export function TodayPage() {
       <PageTitle
         title="Today"
         subtitle={`${greeting}, ${user.name.split(" ")[0] || "there"}. ${urgent ? `${urgent} item${urgent === 1 ? "" : "s"} need attention first.` : "Nothing urgent right now."}`}
-        actions={isOffice ? <Link to="/commercial/app/intake" className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white"><Inbox className="h-4 w-4" />New dispatch</Link> : null}
+        actions={isOffice ? <Link to="/commercial/app/intake" className="inline-flex items-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-medium text-white hover:brightness-110"><Inbox className="h-4 w-4" />New dispatch</Link> : null}
       />
 
       {d.active_visits.length ? (
@@ -28,15 +28,15 @@ export function TodayPage() {
           <ul className="grid gap-3 sm:grid-cols-2">
             {d.active_visits.map((v: any) => (
               <li key={v.id}>
-                <Link to={`/commercial/app/jobs/${v.job_id}`} className="flex items-center gap-3 rounded-lg border border-slate-200 p-4 hover:border-primary dark:border-slate-700">
-                  <span className={cx("flex h-11 w-11 shrink-0 items-center justify-center rounded-full", v.status === "on_site" ? "bg-emerald-100 text-emerald-700" : v.status === "en_route" ? "bg-sky-100 text-sky-700" : "bg-slate-100 text-slate-600")}>
+                <Link to={`/commercial/app/jobs/${v.job_id}`} className="flex items-center gap-3 rounded-2xl bg-muted p-4 hover:border-primary ">
+                  <span className={cx("flex h-11 w-11 shrink-0 items-center justify-center rounded-full", v.status === "on_site" ? "bg-emerald-100 text-emerald-700" : v.status === "en_route" ? "bg-sky-100 text-sky-700" : "bg-muted text-muted-foreground")}>
                     {v.status === "on_site" ? <MapPin className="h-5 w-5" /> : v.status === "en_route" ? <Truck className="h-5 w-5" /> : <CalendarClock className="h-5 w-5" />}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block font-semibold">{v.site_name || v.site_address || v.job_number}</span>
-                    <span className="block truncate text-xs text-slate-500">WO {v.external_wo_number} · Visit {v.visit_number} · {v.status === "on_site" ? "On site" : v.status === "en_route" ? "On the way" : "Scheduled"}</span>
+                    <span className="block truncate text-xs text-muted-foreground">WO {v.external_wo_number} · Visit {v.visit_number} · {v.status === "on_site" ? "On site" : v.status === "en_route" ? "On the way" : "Scheduled"}</span>
                   </span>
-                  <ArrowRight className="h-4 w-4 text-slate-400" />
+                  <ArrowRight className="h-4 w-4 text-muted-foreground" />
                 </Link>
               </li>
             ))}
@@ -60,7 +60,7 @@ export function TodayPage() {
         return (
           <>
             {empty.length ? (
-              <p className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-white px-4 py-3 text-sm text-slate-600 dark:bg-slate-900 dark:text-slate-400">
+              <p className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-2xl bg-card px-5 py-3.5 text-sm text-muted-foreground dark:text-muted-foreground">
                 <span className="font-semibold text-emerald-700 dark:text-emerald-400">All clear:</span>
                 {empty.map((x) => x.title.split(" — ")[0]).join(" · ")}
               </p>
@@ -71,19 +71,19 @@ export function TodayPage() {
         {isOffice && canSeeMoney ? (
           <Card title={<span className="flex items-center gap-2"><Receipt className="h-4 w-4 text-red-600" />Invoice problems</span>}>
             {d.invoice_problems.length ? (
-              <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+              <ul className="divide-y divide-border">
                 {d.invoice_problems.map((i: any) => (
                   <li key={i.id} className="py-2">
                     <Link to={`/commercial/app/invoices/${i.id}`} className="flex items-center justify-between gap-2">
-                      <span><span className="font-semibold">{i.invoice_number}</span> <span className="text-xs text-slate-500">· {i.job_number} · {i.site_name}</span></span>
+                      <span><span className="font-semibold">{i.invoice_number}</span> <span className="text-xs text-muted-foreground">· {i.job_number} · {i.site_name}</span></span>
                       <Badge tone="red">{i.status === "delivery_failed" ? "Bounced" : "Disputed"}</Badge>
                     </Link>
                   </li>
                 ))}
               </ul>
-            ) : <p className="text-sm text-slate-500">No bounced or disputed invoices.</p>}
+            ) : <p className="text-sm text-muted-foreground">No bounced or disputed invoices.</p>}
             {d.unpaid_invoices.length ? (
-              <p className="mt-3 text-sm text-slate-600 dark:text-slate-400">
+              <p className="mt-3 text-sm text-muted-foreground">
                 {d.unpaid_invoices.length} sent invoice{d.unpaid_invoices.length === 1 ? "" : "s"} unpaid ({money(d.unpaid_invoices.reduce((s: number, i: any) => s + Number(i.total) - Number(i.amount_paid), 0))}).{" "}
                 <Link to="/commercial/app/invoices" className="font-semibold text-primary">Review</Link>
               </p>
@@ -93,7 +93,7 @@ export function TodayPage() {
 
         <Card title={<span className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-600" />{isOffice ? "Open exceptions" : "Exceptions assigned to you"}</span>}>
           {d.exceptions.length ? (
-            <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+            <ul className="divide-y divide-border">
               {d.exceptions.slice(0, 8).map((e: any) => (
                 <li key={e.id} className="py-2 text-sm">
                   <Link to={e.job_id ? `/commercial/app/jobs/${e.job_id}` : "/commercial/app/exceptions"} className="block">
@@ -103,7 +103,7 @@ export function TodayPage() {
                 </li>
               ))}
             </ul>
-          ) : <p className="text-sm text-slate-500">No open exceptions.</p>}
+          ) : <p className="text-sm text-muted-foreground">No open exceptions.</p>}
           <Link to="/commercial/app/exceptions" className="mt-3 inline-block text-sm font-semibold text-primary">All exceptions</Link>
         </Card>
       </div>
@@ -119,10 +119,10 @@ function Bucket({ title, jobs, empty, icon, tone, showFlags }: { title: string; 
   return (
     <Card title={<span className="flex items-center gap-2"><span className={colors[tone]}>{icon}</span>{title}{jobs.length ? <Badge tone={tone === "green" ? "green" : tone === "red" ? "red" : "amber"}>{jobs.length}</Badge> : null}</span>}>
       {jobs.length ? (
-        <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+        <ul className="divide-y divide-border">
           {jobs.slice(0, 8).map((j) => <JobRow key={j.id} job={j} showFlags={showFlags} />)}
         </ul>
-      ) : <p className="text-sm text-slate-500">{empty}</p>}
+      ) : <p className="text-sm text-muted-foreground">{empty}</p>}
       {jobs.length > 8 ? <Link to="/commercial/app/jobs" className="mt-2 inline-block text-sm font-semibold text-primary">+{jobs.length - 8} more</Link> : null}
     </Card>
   );
@@ -132,12 +132,12 @@ export function JobRow({ job, showFlags }: { job: Job; showFlags?: boolean }) {
   const open = (job.flags || []).filter((f) => !f.resolved && f.severity === "blocking");
   return (
     <li className="py-2">
-      <Link to={`/commercial/app/jobs/${job.id}`} className="block rounded-md hover:bg-slate-50 dark:hover:bg-slate-800/60">
+      <Link to={`/commercial/app/jobs/${job.id}`} className="-mx-2 block rounded-xl px-2 py-1 hover:bg-muted">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-semibold">{job.site_name || job.site_address || "Site not set"}</span>
           {job.priority !== "routine" ? <Badge tone={priorityTone(job.priority)}>{job.priority}</Badge> : null}
         </div>
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-slate-500">
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
           <span>{job.job_number}</span>
           <span>WO {job.external_wo_number || "—"}</span>
           {job.due_at ? <span>Due {when(job.due_at, job.timezone)}</span> : null}

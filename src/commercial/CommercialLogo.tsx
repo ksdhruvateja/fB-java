@@ -1,15 +1,21 @@
-import { brand } from "../config/brand";
+import { BrandLogo } from "../app/BrandLogo";
 import { cx } from "./ui";
 
-/** FixBridge mark with a "Commercial" wordmark, so the commercial product reads as its own space. */
+/** FixBridge lockup with a quiet "Commercial" label beside it. */
 export function CommercialLogo({ small, inverted }: { small?: boolean; inverted?: boolean }) {
+  const size = small ? "!w-[7.5rem]" : "!w-[8.75rem]";
   return (
-    <span className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap">
-      <img src={brand.logoMarkUrl} alt="" className={small ? "h-6 w-6" : "h-8 w-8"} />
-      <span className={cx("leading-none", inverted ? "text-white" : "text-slate-900 dark:text-white")}>
-        <span className={cx("block font-bold tracking-tight", small ? "text-sm" : "text-base")}>{brand.productName}</span>
-        <span className={cx("block font-semibold uppercase tracking-[0.18em] text-primary", small ? "text-[9px]" : "text-[10px]")}>Commercial</span>
-      </span>
+    <span className="inline-flex shrink-0 items-center gap-2.5">
+      {inverted ? (
+        <BrandLogo variant="nav" tone="color" className={size} />
+      ) : (
+        <>
+          {/* The color lockup has white lettering, so light mode uses the dark-lettered version. */}
+          <BrandLogo variant="nav" tone="onLight" className={cx(size, "dark:hidden")} />
+          <BrandLogo variant="nav" tone="color" className={cx(size, "hidden dark:block")} />
+        </>
+      )}
+      <span className={cx("whitespace-nowrap border-l pl-2.5 text-[13px] font-medium", small && "hidden sm:inline", inverted ? "border-white/25 text-white/80" : "border-border text-muted-foreground")}>Commercial</span>
     </span>
   );
 }

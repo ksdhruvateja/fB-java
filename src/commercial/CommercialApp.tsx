@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
+import "./commercial.css";
 import { AdminLogin, CompanyLogin, SetPassword } from "./AuthPages";
 import AdminApp from "./admin/AdminApp";
 import Landing from "./Landing";
@@ -28,6 +29,10 @@ export default function CommercialApp() {
     return () => window.removeEventListener("commercial-signed-out", onSignedOut);
   }, [path]);
 
+  return <div className="fbc min-h-svh">{route(path)}</div>;
+}
+
+function route(path: string): ReactNode {
   if (path === "/commercial/login") return <CompanyLogin />;
   if (path === "/commercial/set-password") return <SetPassword />;
   if (path === "/commercial/admin/login") return <AdminLogin />;

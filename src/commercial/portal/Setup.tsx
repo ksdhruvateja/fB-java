@@ -24,22 +24,22 @@ export function ExceptionsPage() {
     <>
       <PageTitle title="Exceptions" subtitle="Every problem has one responsible person until it is resolved." />
       <div className="mb-4 flex gap-1">
-        {["open", "resolved"].map((s) => <button key={s} type="button" onClick={() => setStatus(s)} className={cx("rounded-full px-3 py-1.5 text-sm font-medium capitalize", status === s ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900" : "bg-white dark:bg-slate-900")}>{s}</button>)}
+        {["open", "resolved"].map((s) => <button key={s} type="button" onClick={() => setStatus(s)} className={cx("rounded-full px-4 py-1.5 text-[13px] font-medium capitalize", status === s ? "bg-foreground text-background" : "bg-card")}>{s}</button>)}
       </div>
       {loading && !data ? <Spinner /> : error ? <ErrorNote error={error} /> : !data.exceptions.length ? <Empty>{status === "open" ? "No open exceptions." : "Nothing resolved yet."}</Empty> : (
         <ul className="space-y-3">
           {data.exceptions.map((e: any) => (
-            <li key={e.id} className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+            <li key={e.id} className="rounded-2xl bg-card p-4">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge tone={status === "open" ? "amber" : "green"}>{KIND_LABEL[e.kind] || e.kind}</Badge>
                 <span className="font-semibold">{e.title}</span>
                 {e.job_id ? <Link to={`/commercial/app/jobs/${e.job_id}`} className="text-sm text-primary underline">{e.job_number}</Link> : null}
-                <span className="ml-auto text-xs text-slate-500">{when(e.created_at)}</span>
+                <span className="ml-auto text-xs text-muted-foreground">{when(e.created_at)}</span>
               </div>
-              {e.detail ? <p className="mt-2 whitespace-pre-line text-sm text-slate-700 dark:text-slate-300">{e.detail}</p> : null}
+              {e.detail ? <p className="mt-2 whitespace-pre-line text-sm text-foreground/80">{e.detail}</p> : null}
               {status === "open" ? (
                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <span className="text-sm text-slate-500">Responsible:</span>
+                  <span className="text-sm text-muted-foreground">Responsible:</span>
                   {isOffice ? (
                     <Select className="w-auto" value={e.assigned_user_id || ""} onChange={async (ev) => { try { await api.patch(`/exceptions/${e.id}`, { assigned_user_id: Number(ev.target.value) }); reload(); } catch (x) { setErr(x); } }}>
                       {(team || []).filter((u) => u.active).map((u) => <option key={u.id} value={u.id}>{u.name || u.email}</option>)}
@@ -47,7 +47,7 @@ export function ExceptionsPage() {
                   ) : <span className="text-sm font-medium">{e.assigned_name}</span>}
                   <Button size="sm" tone="success" className="ml-auto" onClick={() => { setResolving(e); setNote(""); }}>Resolve</Button>
                 </div>
-              ) : <p className="mt-2 text-xs text-slate-500">Resolved {when(e.resolved_at)}: {e.resolution_note}</p>}
+              ) : <p className="mt-2 text-xs text-muted-foreground">Resolved {when(e.resolved_at)}: {e.resolution_note}</p>}
             </li>
           ))}
         </ul>
@@ -81,13 +81,13 @@ export function CustomersPage() {
       <div className="grid gap-4 xl:grid-cols-2">
         <Card title="Customers" actions={<Button size="sm" onClick={() => setEditCustomer({ ...BLANK_CUSTOMER })}><Plus className="h-4 w-4" />Add customer</Button>}>
           {customers.loading && !customers.data ? <Spinner /> : !customers.data?.length ? <Empty>Add the facility managers and companies that send you work orders.</Empty> : (
-            <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+            <ul className="divide-y divide-border">
               {customers.data.map((c) => (
                 <li key={c.id} className="flex items-start justify-between gap-2 py-3">
                   <div className="min-w-0 text-sm">
                     <p className="font-semibold">{c.name}</p>
-                    <p className="text-xs text-slate-500">Invoices via {c.submission_method}{c.submission_method === "email" && (c.invoice_recipients || c.billing_email) ? ` to ${c.invoice_recipients || c.billing_email}` : c.portal_name ? ` (${c.portal_name})` : ""} · check-in: {CHECKIN_LABEL[c.checkin_method]} · {c.site_count} sites</p>
-                    {c.email_domains?.length ? <p className="text-xs text-slate-500">Dispatches from @{c.email_domains.join(", @")}</p> : null}
+                    <p className="text-xs text-muted-foreground">Invoices via {c.submission_method}{c.submission_method === "email" && (c.invoice_recipients || c.billing_email) ? ` to ${c.invoice_recipients || c.billing_email}` : c.portal_name ? ` (${c.portal_name})` : ""} · check-in: {CHECKIN_LABEL[c.checkin_method]} · {c.site_count} sites</p>
+                    {c.email_domains?.length ? <p className="text-xs text-muted-foreground">Dispatches from @{c.email_domains.join(", @")}</p> : null}
                   </div>
                   <Button size="sm" tone="ghost" onClick={() => setEditCustomer({ ...c, email_domains: (c.email_domains || []).join(", ") })}>Edit</Button>
                 </li>
@@ -97,12 +97,12 @@ export function CustomersPage() {
         </Card>
         <Card title="Sites" actions={<Button size="sm" onClick={() => setEditSite({ ...BLANK_SITE })}><Plus className="h-4 w-4" />Add site</Button>}>
           {sites.loading && !sites.data ? <Spinner /> : !sites.data?.length ? <Empty>Sites are matched by store number or address when dispatches arrive.</Empty> : (
-            <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+            <ul className="divide-y divide-border">
               {sites.data.map((s) => (
                 <li key={s.id} className="flex items-start justify-between gap-2 py-3 text-sm">
                   <div className="min-w-0">
                     <p className="font-semibold">{s.name || s.address}{s.store_number ? ` #${s.store_number}` : ""}</p>
-                    <p className="text-xs text-slate-500">{[s.address, s.city, s.state, s.zip].filter(Boolean).join(", ")}{s.customer_name ? ` · ${s.customer_name}` : ""}</p>
+                    <p className="text-xs text-muted-foreground">{[s.address, s.city, s.state, s.zip].filter(Boolean).join(", ")}{s.customer_name ? ` · ${s.customer_name}` : ""}</p>
                   </div>
                   <Button size="sm" tone="ghost" onClick={() => setEditSite({ ...s, customer_id: s.customer_id ? String(s.customer_id) : "" })}>Edit</Button>
                 </li>
@@ -212,14 +212,14 @@ export function TeamPage() {
     <>
       <PageTitle title="Team" subtitle={`${data.seats_used} of ${data.seats} seats used. Additional users are $15/user/month.`}
         actions={owner ? <Button onClick={() => { setInviteOpen(true); setLink(null); }} disabled={data.seats_used >= data.seats}><UserPlus className="h-4 w-4" />Invite</Button> : null} />
-      {data.seats_used >= data.seats && owner ? <p className="mb-4 rounded-md bg-amber-50 p-3 text-sm text-amber-900">All seats are in use. Contact FixBridge to add a seat, or deactivate someone who no longer needs access.</p> : null}
-      <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+      {data.seats_used >= data.seats && owner ? <p className="mb-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">All seats are in use. Contact FixBridge to add a seat, or deactivate someone who no longer needs access.</p> : null}
+      <div className="overflow-x-auto rounded-2xl bg-card">
         <table className="w-full min-w-[560px] text-sm">
-          <thead className="whitespace-nowrap bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/50"><tr><th className="px-4 py-2">Person</th><th className="px-4 py-2">Role</th><th className="px-4 py-2">Sees prices & invoices</th><th className="px-4 py-2">Status</th>{owner ? <th /> : null}</tr></thead>
-          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+          <thead className="whitespace-nowrap bg-muted text-left text-xs uppercase tracking-wide text-muted-foreground /50"><tr><th className="px-4 py-2">Person</th><th className="px-4 py-2">Role</th><th className="px-4 py-2">Sees prices & invoices</th><th className="px-4 py-2">Status</th>{owner ? <th /> : null}</tr></thead>
+          <tbody className="divide-y divide-border">
             {data.users.map((u: CUser) => (
               <tr key={u.id}>
-                <td className="px-4 py-3"><p className="font-medium">{u.name}</p><p className="text-xs text-slate-500">{u.email}</p></td>
+                <td className="px-4 py-3"><p className="font-medium">{u.name}</p><p className="text-xs text-muted-foreground">{u.email}</p></td>
                 <td className="px-4 py-3">
                   {owner && u.id !== user.id ? (
                     <Select className="w-auto" value={u.role} onChange={async (e) => { try { await api.patch(`/team/${u.id}`, { role: e.target.value }); reload(); } catch (x) { setErr(x); } }}>
@@ -326,27 +326,27 @@ export function SettingsPage() {
             {saved ? <span className="ml-3 text-sm text-emerald-700">Saved.</span> : null}
           </Card>
         ) : (
-          <Card title="Your account"><p className="text-sm">{user.name} · {user.email} · <span className="capitalize">{user.role}</span></p><p className="mt-1 text-sm text-slate-500">{company.name}</p></Card>
+          <Card title="Your account"><p className="text-sm">{user.name} · {user.email} · <span className="capitalize">{user.role}</span></p><p className="mt-1 text-sm text-muted-foreground">{company.name}</p></Card>
         )}
         {owner && billing ? (
           <Card title="Plan">
             <p className="text-lg font-semibold capitalize">{billing.plan === "network" ? "Network (free)" : `Commercial ${billing.plan}`} · {billing.seats} users</p>
             {company.founding_member ? <Badge tone="orange" className="mt-1">Founding contractor</Badge> : null}
-            <div className="mt-3 text-sm text-slate-700 dark:text-slate-300">
+            <div className="mt-3 text-sm text-foreground/80">
               {billing.phase === "waiting" ? <p>Your 30 free days start once {billing.waiting_for.join(" and ")} {billing.waiting_for.length > 1 ? "are" : "is"} done.</p> : null}
               {billing.phase === "trial" ? <p>Free until {when(billing.trial_ends_at)}. Then {money(billing.founding_monthly)}/month until {when(billing.founding_price_ends_at)}.</p> : null}
               {billing.phase === "founding" ? <p>Founding price {money(billing.founding_monthly)}/month until {when(billing.founding_price_ends_at)}, then {money(billing.standard_monthly)}/month with advance notice.</p> : null}
               {billing.phase === "standard" ? <p>{money(billing.monthly)}/month.</p> : null}
-              <p className="mt-2 text-xs text-slate-500">Pilot: no card on file and nothing is charged through FixBridge yet. Cancel monthly; no setup fee.</p>
+              <p className="mt-2 text-xs text-muted-foreground">Pilot: no card on file and nothing is charged through FixBridge yet. Cancel monthly; no setup fee.</p>
             </div>
           </Card>
         ) : null}
         <Card title="This phone’s outbox">
-          {!items.length ? <p className="text-sm text-slate-500">Nothing waiting to sync.</p> : (
+          {!items.length ? <p className="text-sm text-muted-foreground">Nothing waiting to sync.</p> : (
             <ul className="space-y-2 text-sm">
               {items.map((i) => (
                 <li key={i.id} className="flex items-start justify-between gap-2">
-                  <span>{i.label} <span className="text-xs text-slate-500">({when(i.queued_at)})</span>{i.last_error ? <span className="block text-xs text-red-600">{i.last_error}</span> : null}</span>
+                  <span>{i.label} <span className="text-xs text-muted-foreground">({when(i.queued_at)})</span>{i.last_error ? <span className="block text-xs text-red-600">{i.last_error}</span> : null}</span>
                   <Button size="sm" tone="ghost" onClick={() => { discardOutboxItem(i.id); setItems(outbox.items()); }}>Discard</Button>
                 </li>
               ))}
