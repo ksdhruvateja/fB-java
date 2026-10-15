@@ -48,6 +48,10 @@ async function getTransporter() {
           user: gmailUser(),
           pass: gmailPass(),
         },
+        // Fail fast instead of holding the request open for minutes when SMTP is unreachable.
+        connectionTimeout: Number(process.env.SMTP_CONNECT_TIMEOUT_MS || 10_000),
+        greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT_MS || 10_000),
+        socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT_MS || 20_000),
       })
     );
   }
