@@ -155,6 +155,18 @@ function loadInitialState(): {
     const pathPage = publicContentPageForPath(window.location.pathname);
     if (pathPage) return { page: pathPage, marketingContext, currentUser };
 
+    // Links from other sites (e.g. /commercial) can open a marketing page: /?view=contractors.
+    const view = new URLSearchParams(window.location.search).get("view");
+    if (view === "contractors" || view === "homeowners") {
+      const params = new URLSearchParams(window.location.search);
+      params.delete("view");
+      const rest = params.toString();
+      window.history.replaceState(window.history.state, "", window.location.pathname + (rest ? `?${rest}` : ""));
+      return view === "contractors"
+        ? { page: "contractors", marketingContext: "contractors", currentUser }
+        : { page: "home", marketingContext: "home", currentUser };
+    }
+
     // Never restore a dashboard page without a cached user — prevents white screen
     // flash on first load after logout (clearSession removes the user but not the page).
     const page =

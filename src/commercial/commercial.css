@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@500;600&display=swap');
 /*
  * FixBridge Commercial look: Apple-style system type, soft greys, large rounded tiles and pill
  * buttons, keeping the FixBridge orange. Scoped to .fbc so the main site is unaffected.
@@ -60,4 +61,12 @@
 
 .fbc details > summary::-webkit-details-marker {
   display: none;
+}
+
+@keyframes fbc-fade {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fbc *, .fbc *::before, .fbc *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
 }
