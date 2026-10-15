@@ -341,6 +341,7 @@ export function SettingsPage() {
             </div>
           </Card>
         ) : null}
+        <ChangePassword />
         <Card title="This phone’s outbox">
           {!items.length ? <p className="text-sm text-muted-foreground">Nothing waiting to sync.</p> : (
             <ul className="space-y-2 text-sm">
@@ -356,5 +357,46 @@ export function SettingsPage() {
         </Card>
       </div>
     </>
+  );
+}
+
+function ChangePassword() {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  return (
+    <Card title="Change password">
+      <form
+        className="space-y-3"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setError(null);
+          setDone(false);
+          if (next !== confirm) return setError(new Error("The new passwords do not match."));
+          setBusy(true);
+          try {
+            await api.post("/auth/change-password", { current_password: current, new_password: next });
+            setDone(true);
+            setCurrent("");
+            setNext("");
+            setConfirm("");
+          } catch (x) {
+            setError(x);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <Field label="Current password"><Input type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} required /></Field>
+        <Field label="New password" hint="At least 10 characters."><Input type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} required /></Field>
+        <Field label="Confirm new password"><Input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required /></Field>
+        <ErrorNote error={error} />
+        {done ? <p className="text-sm text-emerald-700">Password changed.</p> : null}
+        <Button type="submit" busy={busy}>Change password</Button>
+      </form>
+    </Card>
   );
 }

@@ -314,6 +314,15 @@ t('demo accounts sign in with the configured password and see only the demo comp
   const tech = await call('POST', '/auth/login', { email: 'demo.tech@fixbridge.us', password: 'demo-password-123' });
   assert.equal(tech.body.user.role, 'technician');
   assert.equal((await call('POST', '/auth/login', { email: 'demo.owner@fixbridge.us', password: 'wrong-password' })).status, 401);
+  // Each role has its own sign-in page: a technician cannot use the owner sign-in.
+  const wrong = await call('POST', '/auth/login', { email: 'demo.tech@fixbridge.us', password: 'demo-password-123', role: 'owner' });
+  assert.equal(wrong.status, 403);
+  assert.equal(wrong.body.code, 'WRONG_ROLE');
+  assert.equal((await call('POST', '/auth/login', { email: 'demo.tech@fixbridge.us', password: 'demo-password-123', role: 'technician' })).status, 200);
+  // Changing a password needs the current one.
+  assert.equal((await call('POST', '/auth/change-password', { current_password: 'nope', new_password: 'new-password-123' }, tech.body.token)).status, 400);
+  assert.equal((await call('POST', '/auth/change-password', { current_password: 'demo-password-123', new_password: 'new-password-123' }, tech.body.token)).status, 200);
+  assert.equal((await call('POST', '/auth/login', { email: 'demo.tech@fixbridge.us', password: 'new-password-123' })).status, 200);
   const customers = await call('GET', '/customers', undefined, owner.body.token);
   assert.ok(customers.body.customers.every((c) => c.billing_email.endsWith('@example.com')));
   const offer = await call('GET', '/public/offer');

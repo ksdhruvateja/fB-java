@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import "./commercial.css";
-import { AdminLogin, CompanyLogin, SetPassword } from "./AuthPages";
+import { AdminLogin, CompanyLogin, LoginChooser, SetPassword } from "./AuthPages";
 import AdminApp from "./admin/AdminApp";
 import Landing from "./Landing";
 import { InvoiceDetailPage, InvoicesPage } from "./portal/Invoices";
@@ -33,7 +33,10 @@ export default function CommercialApp() {
 }
 
 function route(path: string): ReactNode {
-  if (path === "/commercial/login") return <CompanyLogin />;
+  if (path === "/commercial/login") return <LoginChooser />;
+  if (path === "/commercial/login/owner") return <CompanyLogin key="owner" role="owner" />;
+  if (path === "/commercial/login/office") return <CompanyLogin key="office" role="office" />;
+  if (path === "/commercial/login/technician") return <CompanyLogin key="technician" role="technician" />;
   if (path === "/commercial/set-password") return <SetPassword />;
   if (path === "/commercial/admin/login") return <AdminLogin />;
   if (path.startsWith("/commercial/admin")) return <AdminApp path={path} />;

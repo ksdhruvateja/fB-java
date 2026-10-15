@@ -163,6 +163,12 @@ export function registerCommercialRoutes(app, { pool }) {
     const user = rows[0];
     const ok = user?.password_hash && user.active && (await bcrypt.compare(password, user.password_hash));
     if (!ok) return res.status(401).json({ ok: false, message: 'Email or password is incorrect.' });
+    // Each role has its own sign-in page; point people to the right one.
+    const wanted = String(req.body?.role || '');
+    if (ROLES.includes(wanted) && wanted !== user.role) {
+      const names = { owner: 'company owner', office: 'office staff', technician: 'technician' };
+      return res.status(403).json({ ok: false, code: 'WRONG_ROLE', role: user.role, message: `This is a ${names[user.role]} account. Use the ${names[user.role]} sign-in.` });
+    }
     if (['suspended', 'cancelled'].includes(user.company_status)) {
       return res.status(403).json({ ok: false, message: 'This company account is not active. Contact FixBridge.' });
     }
@@ -190,6 +196,15 @@ export function registerCommercialRoutes(app, { pool }) {
     );
     if (!rows[0]) return res.status(404).json({ ok: false, message: 'This link has expired or was already used. Ask your company owner for a new one.' });
     res.json({ ok: true, token: makeCommercialUserToken(rows[0]), user: publicUser(rows[0]) });
+  }));
+
+  r.post('/auth/change-password', authLimiter, userAuth, wrap(async (req, res) => {
+    const current = String(req.body?.current_password || '');
+    const next = String(req.body?.new_password || '');
+    if (next.length < 10) throw new HttpError(400, 'Use at least 10 characters for the new password.');
+    if (!(await bcrypt.compare(current, req.cuser.password_hash))) throw new HttpError(400, 'Your current password is incorrect.');
+    await pool.query('UPDATE commercial_users SET password_hash=$2 WHERE id=$1', [req.cuser.id, await bcrypt.hash(next, 12)]);
+    res.json({ ok: true });
   }));
 
   r.get('/me', userAuth, wrap(async (req, res) => {

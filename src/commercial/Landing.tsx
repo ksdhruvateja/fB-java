@@ -752,78 +752,81 @@ function Bento() {
   );
 }
 
-const RESOURCES: [string, string][] = [
-  ["Fixera Assessment", "/fixera-assessment"], ["Find a Contractor", "/find-a-contractor"], ["Blog", "/blog"],
-  ["Press", "/press"], ["Careers", "/careers"], ["Contact", "/contact"],
+/** Single site header, matching the commercial design: nav across FixBridge, sign in and Get Started. */
+const SIGN_INS: [string, string, string][] = [
+  ["Company owner", "/commercial/login/owner", "Plans, team, billing and everything else"],
+  ["Office staff", "/commercial/login/office", "Dispatches, approvals and invoices"],
+  ["Technician", "/commercial/login/technician", "Your assigned jobs and site visits"],
+  ["Commercial admin", "/commercial/admin/login", "FixBridge staff only"],
 ];
 
-/** Single site header, matching the commercial design: nav across FixBridge, sign in and Get Started. */
+/** Commercial header: logo, Home and How It Works, a Sign In menu per role, and Get Started. */
 function SiteHeader() {
   const [open, setOpen] = useState(false);
-  const [resources, setResources] = useState(false);
+  const [signIn, setSignIn] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onScroll = () => setScrolled(Math.max(window.scrollY, document.getElementById("root")?.scrollTop || 0) > 8);
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true, capture: true });
-    const onDoc = (e: MouseEvent) => { if (!menuRef.current?.contains(e.target as Node)) setResources(false); };
+    const onDoc = (e: MouseEvent) => { if (!menuRef.current?.contains(e.target as Node)) setSignIn(false); };
     document.addEventListener("mousedown", onDoc);
     return () => {
       window.removeEventListener("scroll", onScroll, { capture: true });
       document.removeEventListener("mousedown", onDoc);
     };
   }, []);
-  const links: [string, string, boolean?][] = [
-    ["Home", "/"], ["Homeowners", "/?view=homeowners"], ["Contractors", "/?view=contractors"], ["Commercial", "/commercial", true], ["How It Works", "/how-it-works"],
-  ];
+  const howItWorks = () => { setOpen(false); scrollTo("workflow"); };
   return (
     <header className={cx("fixed inset-x-0 top-0 z-50 bg-white/95 backdrop-blur transition-shadow", (scrolled || open) && "shadow-[0_1px_0_rgba(0,0,0,0.08)]")}>
-      <div className="mx-auto flex h-[72px] max-w-[1240px] items-center gap-8 px-5 sm:px-8">
+      <div className="mx-auto grid h-[72px] max-w-[1240px] grid-cols-[auto_1fr_auto] items-center gap-6 px-5 sm:px-8">
         <a href="/commercial" aria-label="FixBridge Commercial home" className="shrink-0">
           <BrandLogo variant="nav" tone="onLight" className="!w-[9.5rem] sm:!w-[10.5rem]" />
         </a>
-        <nav className="hidden flex-1 items-center justify-center gap-7 text-[14px] text-[#2a2d33] lg:flex" aria-label="Main">
-          {links.map(([label, href, active]) => (
-            <a key={label} href={href} aria-current={active ? "page" : undefined}
-              className={cx("relative py-2 transition-colors hover:text-primary", active && "text-primary after:absolute after:inset-x-0 after:-bottom-[2px] after:h-[2px] after:bg-primary")}>
-              {label}
-            </a>
-          ))}
-          <div className="relative" ref={menuRef}>
-            <button type="button" onClick={() => setResources(!resources)} aria-expanded={resources} className="flex items-center gap-1 py-2 transition-colors hover:text-primary">
-              Resources <ChevronDown size={14} className={cx("transition-transform", resources && "rotate-180")} aria-hidden />
+        <nav className="hidden items-center justify-center gap-10 text-[14px] text-[#2a2d33] md:flex" aria-label="Main">
+          <a href="/" className="py-2 transition-colors hover:text-primary">Home</a>
+          <button type="button" onClick={howItWorks} className="py-2 text-[14px] font-normal transition-colors hover:text-primary">How It Works</button>
+        </nav>
+        <div className="col-start-3 flex items-center justify-end gap-5">
+          <div className="relative hidden sm:block" ref={menuRef}>
+            <button type="button" onClick={() => setSignIn(!signIn)} aria-expanded={signIn} aria-haspopup="menu"
+              className="flex items-center gap-1 py-2 text-[14px] font-medium text-[#2a2d33] transition-colors hover:text-primary">
+              Sign In <ChevronDown size={14} className={cx("transition-transform", signIn && "rotate-180")} aria-hidden />
             </button>
-            {resources ? (
-              <div className="absolute left-1/2 top-full mt-2 w-56 -translate-x-1/2 rounded-xl border border-black/10 bg-white p-2 shadow-xl">
-                {RESOURCES.map(([l, h]) => <a key={h} href={h} className="block rounded-lg px-3 py-2 text-[14px] hover:bg-[#f6f6f4] hover:text-primary">{l}</a>)}
+            {signIn ? (
+              <div role="menu" className="absolute right-0 top-full mt-2 w-72 rounded-xl border border-black/10 bg-white p-2 shadow-xl">
+                {SIGN_INS.map(([label, href, note], i) => (
+                  <a key={href} href={href} role="menuitem" className={cx("block rounded-lg px-3 py-2.5 hover:bg-[#f6f6f4]", i === 3 && "mt-1 border-t border-black/5 pt-3")}>
+                    <span className="block text-[14px] font-semibold text-[#14161a]">{label}</span>
+                    <span className="block text-[12px] text-[#6b7078]">{note}</span>
+                  </a>
+                ))}
               </div>
             ) : null}
           </div>
-        </nav>
-        <div className="ml-auto flex items-center gap-5 lg:ml-0">
-          <Link to="/commercial/login" className="hidden text-[14px] font-medium text-[#2a2d33] hover:text-primary sm:inline">Sign In</Link>
           <button type="button" onClick={() => { setOpen(false); scrollTo("apply"); }} className="hidden items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-[14px] font-semibold text-white hover:brightness-110 sm:inline-flex">
             Get Started <ArrowRight size={15} aria-hidden />
           </button>
-          <button type="button" className="text-[#14161a] lg:hidden" onClick={() => setOpen(!open)} aria-label={open ? "Close menu" : "Open menu"} aria-expanded={open}>
+          <button type="button" className="text-[#14161a] md:hidden" onClick={() => setOpen(!open)} aria-label={open ? "Close menu" : "Open menu"} aria-expanded={open}>
             {open ? <X size={22} /> : <Menu size={22} />}
           </button>
         </div>
       </div>
       {open ? (
-        <div className="max-h-[calc(100svh-72px)] overflow-y-auto border-t border-black/10 bg-white px-5 pb-6 sm:px-8 lg:hidden">
-          {links.map(([label, href, active]) => (
-            <a key={label} href={href} className={cx("block border-b border-black/5 py-3.5 text-[17px] font-semibold", active && "text-primary")}>{label}</a>
-          ))}
-          <p className={cx("mt-5", EYEBROW, "text-[10px] text-[#6b7078]")}>Resources</p>
-          <div className="mt-2 grid grid-cols-2 gap-x-4">
-            {RESOURCES.map(([l, h]) => <a key={h} href={h} className="py-2 text-[15px] text-[#2a2d33]">{l}</a>)}
+        <div className="max-h-[calc(100svh-72px)] overflow-y-auto border-t border-black/10 bg-white px-5 pb-6 sm:px-8 md:hidden">
+          <a href="/" className="block border-b border-black/5 py-3.5 text-[17px] font-semibold">Home</a>
+          <button type="button" onClick={howItWorks} className="block w-full border-b border-black/5 py-3.5 text-left text-[17px] font-semibold">How It Works</button>
+          <p className="mt-5 text-[13px] font-semibold text-[#6b7078]">Sign in as</p>
+          <div className="mt-2 space-y-2">
+            {SIGN_INS.map(([label, href, note]) => (
+              <a key={href} href={href} className="block rounded-md border border-black/10 px-4 py-3">
+                <span className="block text-[15px] font-semibold">{label}</span>
+                <span className="block text-[12px] text-[#6b7078]">{note}</span>
+              </a>
+            ))}
           </div>
-          <div className="mt-5 grid grid-cols-2 gap-3">
-            <Link to="/commercial/login" className="rounded-md border border-black/15 py-3 text-center text-[15px] font-semibold">Sign In</Link>
-            <button type="button" onClick={() => { setOpen(false); scrollTo("apply"); }} className="rounded-md bg-primary py-3 text-[15px] font-semibold text-white">Get Started</button>
-          </div>
+          <button type="button" onClick={() => { setOpen(false); scrollTo("apply"); }} className="mt-4 w-full rounded-md bg-primary py-3 text-[15px] font-semibold text-white">Get Started</button>
         </div>
       ) : null}
     </header>

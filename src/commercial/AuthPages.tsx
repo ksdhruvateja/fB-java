@@ -29,18 +29,49 @@ function AuthFrame({ title, subtitle, children, admin }: { title: string; subtit
   );
 }
 
-export function CompanyLogin() {
+type CompanyRole = "owner" | "office" | "technician";
+const ROLE_LOGIN: Record<CompanyRole, { title: string; subtitle: string }> = {
+  owner: { title: "Company owner sign in", subtitle: "For the account owner: plan, team, billing, customers and every job." },
+  office: { title: "Office staff sign in", subtitle: "Review dispatches, assign technicians, record approvals and send invoices." },
+  technician: { title: "Technician sign in", subtitle: "Your assigned jobs, site visits, check-ins and photos." },
+};
+
+/** /commercial/login: pick which kind of account to sign in with. */
+export function LoginChooser() {
+  const options: [string, string, string][] = [
+    ["Company owner", "/commercial/login/owner", "Plan, team, billing and every job"],
+    ["Office staff", "/commercial/login/office", "Dispatches, approvals and invoices"],
+    ["Technician", "/commercial/login/technician", "Assigned jobs and site visits"],
+    ["Commercial admin", "/commercial/admin/login", "FixBridge staff only"],
+  ];
+  return (
+    <AuthFrame title="Sign in to Commercial" subtitle="Choose how you use FixBridge Commercial.">
+      <div className="space-y-3">
+        {options.map(([label, to, note]) => (
+          <Link key={to} to={to} className="flex items-center justify-between rounded-2xl bg-muted px-5 py-4 transition hover:bg-secondary">
+            <span><span className="block text-[16px] font-semibold text-foreground">{label}</span><span className="block text-[13px] text-muted-foreground">{note}</span></span>
+            <span aria-hidden className="text-primary">›</span>
+          </Link>
+        ))}
+      </div>
+    </AuthFrame>
+  );
+}
+
+export function CompanyLogin({ role }: { role: CompanyRole }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const copy = ROLE_LOGIN[role];
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError("");
     try {
-      const res = await api.public<{ token: string }>("POST", "/auth/login", { email, password });
+      const res = await api.public<{ token: string }>("POST", "/auth/login", { email, password, role });
       tokens.setUser(res.token);
+      try { localStorage.setItem("fixbridge-commercial-role", role); } catch { /* ignore */ }
       navigate("/commercial/app", { replace: true });
     } catch (err: any) {
       setError(err?.message || "Could not sign in.");
@@ -48,8 +79,9 @@ export function CompanyLogin() {
       setBusy(false);
     }
   }
+  const others = (Object.keys(ROLE_LOGIN) as CompanyRole[]).filter((r) => r !== role);
   return (
-    <AuthFrame title="Sign in to Commercial" subtitle="Use your FixBridge Commercial company account. Homeowner and contractor logins don’t work here.">
+    <AuthFrame title={copy.title} subtitle={copy.subtitle}>
       <form onSubmit={submit} className="space-y-4">
         <Field label="Email"><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" required /></Field>
         <Field label="Password"><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required /></Field>
@@ -57,8 +89,17 @@ export function CompanyLogin() {
         <Button type="submit" size="lg" className="w-full" busy={busy}>Sign in</Button>
       </form>
       <p className="mt-8 text-center text-[14px] text-muted-foreground">
-        New to FixBridge Commercial? <Link to="/commercial#apply" className="text-primary hover:underline" onClick={() => setTimeout(() => document.getElementById("apply")?.scrollIntoView(), 50)}>Apply for the pilot</Link>.
-        Team members get an invite link from their company owner.
+        Not {role === "office" ? "office staff" : `a ${role === "owner" ? "company owner" : "technician"}`}? Sign in as{" "}
+        {others.map((r, i) => (
+          <span key={r}>
+            <Link to={`/commercial/login/${r}`} className="text-primary hover:underline">{r === "owner" ? "company owner" : r === "office" ? "office staff" : "technician"}</Link>
+            {i === 0 ? " or " : ""}
+          </span>
+        ))}
+        .
+      </p>
+      <p className="mt-3 text-center text-[13px] text-muted-foreground">
+        Team members get an invite link from their company owner. New company? <Link to="/commercial#apply" className="text-primary hover:underline" onClick={() => setTimeout(() => document.getElementById("apply")?.scrollIntoView(), 50)}>Apply for the pilot</Link>.
       </p>
     </AuthFrame>
   );

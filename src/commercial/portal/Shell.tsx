@@ -38,9 +38,20 @@ export function useDark() {
   return [dark, setDark] as const;
 }
 
+/** The sign-in page this person used last (owner, office or technician). */
+function loginPath() {
+  try {
+    const role = localStorage.getItem("fixbridge-commercial-role");
+    if (role === "owner" || role === "office" || role === "technician") return `/commercial/login/${role}`;
+  } catch {
+    /* ignore */
+  }
+  return "/commercial/login";
+}
+
 export function signOut() {
   tokens.setUser("");
-  navigate("/commercial/login", { replace: true });
+  navigate(loginPath(), { replace: true });
 }
 
 export function PortalShell({ path, children }: { path: string; children: ReactNode }) {
@@ -58,14 +69,14 @@ export function PortalShell({ path, children }: { path: string; children: ReactN
     } catch (e: any) {
       if (e?.status === 401 || e?.status === 403) {
         tokens.setUser("");
-        navigate("/commercial/login", { replace: true });
+        navigate(loginPath(), { replace: true });
       } else setError(e?.message || "Could not load your account.");
     }
   };
 
   useEffect(() => {
     if (!tokens.user()) {
-      navigate("/commercial/login", { replace: true });
+      navigate(loginPath(), { replace: true });
       return;
     }
     void load();
