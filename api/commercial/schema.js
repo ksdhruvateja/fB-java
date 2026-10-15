@@ -382,6 +382,7 @@ export function ensureCommercialSchema(pool) {
     ready = (async () => {
       for (const sql of STATEMENTS) await pool.query(sql);
       await bootstrapCommercialAdmin(pool);
+      await syncDemoCompany(pool);
     })().catch((err) => {
       ready = null;
       throw err;
@@ -402,4 +403,68 @@ async function bootstrapCommercialAdmin(pool) {
     [email, String(process.env.COMMERCIAL_ADMIN_NAME || 'Commercial admin'), await bcrypt.hash(password, 12)]
   );
   console.log(`[commercial] Created commercial admin ${email}`);
+}
+
+export const DEMO_COMPANY_NAME = 'FixBridge Demo Services';
+export const DEMO_USERS = [
+  { email: 'demo.owner@fixbridge.us', name: 'Demo Owner', role: 'owner', can_view_financials: true },
+  { email: 'demo.office@fixbridge.us', name: 'Demo Office', role: 'office', can_view_financials: true },
+  { email: 'demo.tech@fixbridge.us', name: 'Demo Technician', role: 'technician', can_view_financials: false },
+];
+
+/**
+ * Optional demo company for trying the product. Enabled only while COMMERCIAL_DEMO_PASSWORD is
+ * set (10+ characters); all demo users share that password. Removing the variable deactivates
+ * the demo users on the next start. The demo company is never a founding member and its customer
+ * uses example.com addresses, so nothing is emailed to real people.
+ */
+async function syncDemoCompany(pool) {
+  const password = String(process.env.COMMERCIAL_DEMO_PASSWORD || '');
+  const enabled = password.length >= 10;
+  const existing = await pool.query('SELECT id FROM commercial_companies WHERE name=$1 AND application_id IS NULL ORDER BY id LIMIT 1', [DEMO_COMPANY_NAME]);
+  if (!enabled) {
+    if (existing.rows[0]) {
+      await pool.query('UPDATE commercial_users SET active=FALSE WHERE company_id=$1', [existing.rows[0].id]);
+    }
+    return;
+  }
+  let companyId = existing.rows[0]?.id;
+  if (!companyId) {
+    const { rows } = await pool.query(
+      `INSERT INTO commercial_companies (name, email, phone, trades, service_area, timezone, plan, status, founding_member, labor_rate)
+       VALUES ($1, 'demo.office@fixbridge.us', '555-0100', ARRAY['Plumbing','HVAC','Electrical'], 'Demo area', 'America/Chicago', 'team', 'pilot', FALSE, 95)
+       RETURNING id`,
+      [DEMO_COMPANY_NAME]
+    );
+    companyId = rows[0].id;
+    const customer = await pool.query(
+      `INSERT INTO commercial_customers (company_id, name, kind, email_domains, billing_email, invoice_recipients, submission_method,
+         subject_format, checkin_method, checkin_instructions, billing_instructions)
+       VALUES ($1, 'Northwind Facility Services (demo)', 'facility_manager', ARRAY['example.com'], 'ap@example.com', 'ap@example.com', 'email',
+         'Invoice {invoice_number} - WO {wo_number} - {site_name}', 'phone_ivr', 'Call the IVR with the WO# and PIN on arrival and departure.',
+         'Email invoice with before/after photos within 7 days.')
+       RETURNING id`,
+      [companyId]
+    );
+    await pool.query(
+      `INSERT INTO commercial_sites (company_id, customer_id, name, store_number, address, city, state, zip, timezone, access_instructions)
+       VALUES ($1, $2, 'Brightway Grocers Store #218 (demo)', '218', '1450 Market Street', 'Springfield', 'IL', '62704', 'America/Chicago',
+         'Use the rear receiving door. Store hours 6am–11pm.')`,
+      [companyId, customer.rows[0].id]
+    );
+  }
+  const hash = await bcrypt.hash(password, 12);
+  for (const u of DEMO_USERS) {
+    await pool.query(
+      `INSERT INTO commercial_users (company_id, email, name, role, can_view_financials, password_hash, active)
+       VALUES ($1,$2,$3,$4,$5,$6,TRUE)
+       ON CONFLICT (email) DO UPDATE SET password_hash=EXCLUDED.password_hash, active=TRUE, role=EXCLUDED.role,
+         can_view_financials=EXCLUDED.can_view_financials
+       WHERE commercial_users.company_id=$1`,
+      [companyId, u.email, u.name, u.role, u.can_view_financials, hash]
+    );
+  }
+  const owner = await pool.query(`SELECT id FROM commercial_users WHERE company_id=$1 AND role='owner' ORDER BY id LIMIT 1`, [companyId]);
+  await pool.query('UPDATE commercial_companies SET default_assignee_user_id=COALESCE(default_assignee_user_id, $2) WHERE id=$1', [companyId, owner.rows[0]?.id || null]);
+  console.log(`[commercial] Demo company enabled (${DEMO_USERS.map((u) => u.email).join(', ')})`);
 }

@@ -90,6 +90,36 @@ export function JobsPage() {
 
 interface Preview { fields: any; flags: Flag[]; subject: string; from: string }
 
+/** A realistic example dispatch (example.com addresses) for trying intake. */
+function sampleDispatch() {
+  const wo = `DEMO-${Math.floor(100000 + Math.random() * 900000)}`;
+  const due = new Date(Date.now() + 26 * 3600 * 1000);
+  const dueText = `${due.getMonth() + 1}/${due.getDate()}/${due.getFullYear()} 5:00 PM CST`;
+  return `From: "Northwind Facility Services" <dispatch@example.com>
+Subject: Work Order ${wo} - Store #218 - Plumbing - P2
+
+Work Order #: ${wo}
+Client: Northwind Facility Services
+Bill To: Brightway Grocers Inc.
+Location: Brightway Grocers Store #218
+Store #: 218
+Address: 1450 Market Street
+Springfield, IL 62704
+Priority: P2 - 24 Hour
+Due Date: ${dueText}
+NTE: $650.00
+Trade: Plumbing
+Contact: Dana Ruiz (Store Manager) 217-555-0143
+Problem Description: Men's restroom toilet running continuously and leaking at base.
+Water on floor near stall 2.
+
+Check-In: Call IVR 1-800-555-0199 with WO# and PIN on arrival and departure.
+Approval: Any work over NTE requires written approval before proceeding.
+Invoice Instructions: Email invoice to ap@example.com with before/after photos within 7 days.
+Access: Use rear receiving door; store hours 6am-11pm.
+`;
+}
+
 export function IntakePage() {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<{ name: string; dataUrl: string }[]>([]);
@@ -161,6 +191,7 @@ export function IntakePage() {
               <FileUp className="h-4 w-4" /> Upload .eml / .txt or attachments
               <input type="file" multiple accept=".eml,.txt,message/rfc822,text/plain,application/pdf,image/*" className="hidden" onChange={onFiles} />
             </label>
+            <Button tone="ghost" size="sm" onClick={() => { setText(sampleDispatch()); setSource("paste"); setPreview(null); setResult(null); }}>Use a sample email</Button>
             {attachments.map((a) => (
               <Badge key={a.name}>{a.name}<button type="button" className="ml-1" onClick={() => setAttachments((x) => x.filter((y) => y.name !== a.name))} aria-label={`Remove ${a.name}`}>×</button></Badge>
             ))}

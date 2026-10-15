@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { CheckCircle2, ChevronRight, LogIn, Menu, MapPin, Moon, Sun, Truck, X } from "lucide-react";
+import { CheckCircle2, ChevronRight, Menu, MapPin, Moon, Sun, Truck, X } from "lucide-react";
 import { BrandLogo } from "../app/BrandLogo";
 import { api } from "./api";
 import { Link } from "./router";
@@ -86,7 +86,7 @@ export default function Landing() {
       <GlobalNav />
 
       {/* Hero */}
-      <section className="pt-[150px] text-center sm:pt-[170px]">
+      <section className="pt-[120px] text-center sm:pt-[140px]">
         <div className="mx-auto max-w-5xl px-5">
           <p className="text-[21px] font-semibold text-primary">FixBridge Commercial</p>
           <Headline as="h1" className="mt-2 text-[44px] leading-[1.05] sm:text-[64px] lg:text-[80px]">Every work order.<br />One clear record.</Headline>
@@ -111,7 +111,7 @@ export default function Landing() {
       </section>
 
       {/* Workflow */}
-      <section id="workflow" className="scroll-mt-14 bg-[#f5f5f7] py-24 dark:bg-[#0b0b0c] sm:py-32">
+      <section id="workflow" className="scroll-mt-16 bg-[#f5f5f7] py-24 dark:bg-[#0b0b0c] sm:py-32">
         <div className="mx-auto max-w-[1180px] px-5">
           <div className="max-w-3xl">
             <Headline className="text-[40px] leading-[1.08] sm:text-[56px]">From dispatch email<br className="hidden sm:block" /> to paid invoice.</Headline>
@@ -145,7 +145,7 @@ export default function Landing() {
       </section>
 
       {/* Pricing */}
-      <section id="pricing" className="scroll-mt-14 bg-[#f5f5f7] py-24 dark:bg-[#0b0b0c] sm:py-32">
+      <section id="pricing" className="scroll-mt-16 bg-[#f5f5f7] py-24 dark:bg-[#0b0b0c] sm:py-32">
         <div className="mx-auto max-w-[1180px] px-5">
           <div className="text-center">
             <Headline className="text-[40px] leading-[1.08] sm:text-[56px]">Pay for the tools.<br />Not for the work.</Headline>
@@ -172,7 +172,7 @@ export default function Landing() {
       </section>
 
       {/* Founding offer */}
-      <section id="founding" className="scroll-mt-14 bg-black py-24 text-[#f5f5f7] sm:py-32">
+      <section id="founding" className="scroll-mt-16 bg-black py-24 text-[#f5f5f7] sm:py-32">
         <div className="mx-auto max-w-[1180px] px-5 text-center">
           <p className="text-[21px] font-semibold text-primary">Founding contractors</p>
           <Headline className="mt-2 text-[40px] leading-[1.08] sm:text-[64px]">For the first 10 companies.</Headline>
@@ -206,7 +206,7 @@ export default function Landing() {
       </section>
 
       {/* FAQ */}
-      <section id="faq" className="scroll-mt-14 py-24 sm:py-32">
+      <section id="faq" className="scroll-mt-16 py-24 sm:py-32">
         <div className="mx-auto max-w-[880px] px-5">
           <Headline className="text-[40px] leading-[1.08] sm:text-[56px]">Questions? Answers.</Headline>
           <div className="mt-10 divide-y divide-black/10 border-y border-black/10 dark:divide-white/10 dark:border-white/10">
@@ -224,7 +224,7 @@ export default function Landing() {
       </section>
 
       {/* Apply */}
-      <section id="apply" className="scroll-mt-14 bg-[#f5f5f7] py-24 dark:bg-[#0b0b0c] sm:py-32">
+      <section id="apply" className="scroll-mt-16 bg-[#f5f5f7] py-24 dark:bg-[#0b0b0c] sm:py-32">
         <div className="mx-auto grid max-w-[1180px] gap-12 px-5 lg:grid-cols-[1fr_1.4fr]">
           <div>
             <Headline className="text-[40px] leading-[1.08] sm:text-[56px]">Apply for the pilot.</Headline>
@@ -324,7 +324,7 @@ function TodayCard({ className }: { className?: string }) {
   );
 }
 
-/** Thin, translucent navigation bar in the style of apple.com, with a product sub-nav. */
+/** One translucent navigation bar: brand, page sections, sign in and Apply. */
 function GlobalNav() {
   const [open, setOpen] = useState(false);
   const [dark, setDark] = useDark();
@@ -337,50 +337,42 @@ function GlobalNav() {
     return () => window.removeEventListener("scroll", onScroll, { capture: true });
   }, []);
   const links: [string, string][] = [["Overview", "workflow"], ["Pricing", "pricing"], ["Founding offer", "founding"], ["FAQ", "faq"]];
+  const go = (id: string) => { setOpen(false); scrollTo(id); };
   return (
-    <header className="fixed inset-x-0 top-0 z-50">
-      <div className="bg-[#fbfbfd]/80 backdrop-blur-xl backdrop-saturate-150 dark:bg-[#161617]/80">
-        <div className="mx-auto flex h-11 max-w-[1024px] items-center justify-between px-5 text-[12px] text-[#1d1d1f]/80 dark:text-white/80">
-          <a href="/" aria-label="FixBridge home" className="flex items-center">
-            <BrandLogo variant="nav" tone="onLight" className="!w-[6.5rem] dark:hidden" />
-            <BrandLogo variant="nav" tone="color" className="hidden !w-[6.5rem] dark:block" />
-          </a>
-          <nav className="hidden items-center gap-8 md:flex">
-            <a href="/" className="hover:text-[#1d1d1f] dark:hover:text-white">FixBridge</a>
-            <span className="text-[#1d1d1f] dark:text-white">Commercial</span>
-            <a href="/about" className="hover:text-[#1d1d1f] dark:hover:text-white">About</a>
-            <a href="/contact" className="hover:text-[#1d1d1f] dark:hover:text-white">Support</a>
-          </nav>
-          <div className="flex items-center gap-4">
-            <button type="button" onClick={() => setDark(!dark)} aria-label={dark ? "Switch to light mode" : "Switch to dark mode"} className="hover:text-[#1d1d1f] dark:hover:text-white">
-              {dark ? <Sun size={15} /> : <Moon size={15} />}
-            </button>
-            <Link to="/commercial/login" aria-label="Company sign in" className="hover:text-[#1d1d1f] dark:hover:text-white"><LogIn size={15} /></Link>
-            <button type="button" className="md:hidden" onClick={() => setOpen(!open)} aria-label={open ? "Close menu" : "Open menu"}>
-              {open ? <X size={18} /> : <Menu size={18} />}
-            </button>
-          </div>
-        </div>
-      </div>
-      <div className={cx("border-b backdrop-blur-xl backdrop-saturate-150 transition-colors", scrolled ? "border-black/10 bg-white/80 dark:border-white/10 dark:bg-black/70" : "border-transparent bg-white/0 dark:bg-black/0")}>
-        <div className="mx-auto flex h-[52px] max-w-[1024px] items-center justify-between px-5">
-          <span className="text-[21px] font-semibold tracking-tight text-[#1d1d1f] dark:text-white">Commercial</span>
-          <div className="flex items-center gap-6 text-[12px]">
-            <nav className="hidden items-center gap-6 text-[#1d1d1f]/80 sm:flex dark:text-white/80">
-              {links.map(([label, id]) => <button key={id} type="button" onClick={() => scrollTo(id)} className="hover:text-primary">{label}</button>)}
-            </nav>
-            <button type="button" onClick={() => scrollTo("apply")} className="rounded-full bg-primary px-3.5 py-1 text-[12px] text-white hover:brightness-110">Apply</button>
-          </div>
+    <header className={cx(
+      "fixed inset-x-0 top-0 z-50 border-b backdrop-blur-xl backdrop-saturate-150 transition-colors",
+      open ? "border-black/10 bg-white dark:border-white/10 dark:bg-black" : scrolled ? "border-black/10 bg-white/80 dark:border-white/10 dark:bg-black/75" : "border-transparent bg-white/60 dark:bg-black/40"
+    )}>
+      <div className="mx-auto flex h-14 max-w-[1180px] items-center gap-6 px-5">
+        <a href="/commercial" className="flex shrink-0 items-center gap-2.5" aria-label="FixBridge Commercial home">
+          <BrandLogo variant="nav" tone="onLight" className="!w-[7.25rem] dark:hidden" />
+          <BrandLogo variant="nav" tone="color" className="hidden !w-[7.25rem] dark:block" />
+          <span className="whitespace-nowrap border-l border-black/15 pl-2.5 text-[15px] font-semibold tracking-tight text-[#1d1d1f] dark:border-white/20 dark:text-white">Commercial</span>
+        </a>
+        <nav className="hidden flex-1 items-center justify-center gap-7 text-[13px] text-[#1d1d1f]/80 md:flex dark:text-white/80" aria-label="Sections">
+          {links.map(([label, id]) => (
+            <button key={id} type="button" onClick={() => go(id)} className="transition-colors hover:text-[#1d1d1f] dark:hover:text-white">{label}</button>
+          ))}
+        </nav>
+        <div className="ml-auto flex items-center gap-4 text-[13px] text-[#1d1d1f]/80 md:ml-0 dark:text-white/80">
+          <button type="button" onClick={() => setDark(!dark)} aria-label={dark ? "Switch to light mode" : "Switch to dark mode"} className="hidden hover:text-[#1d1d1f] sm:block dark:hover:text-white">
+            {dark ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          <Link to="/commercial/login" className="hidden whitespace-nowrap hover:text-[#1d1d1f] sm:inline dark:hover:text-white">Sign in</Link>
+          <button type="button" onClick={() => go("apply")} className="whitespace-nowrap rounded-full bg-primary px-4 py-1.5 text-[13px] text-white hover:brightness-110">Apply</button>
+          <button type="button" className="md:hidden" onClick={() => setOpen(!open)} aria-label={open ? "Close menu" : "Open menu"} aria-expanded={open}>
+            {open ? <X size={20} /> : <Menu size={20} />}
+          </button>
         </div>
       </div>
       {open ? (
-        <div className="border-b border-black/10 bg-white px-8 pb-6 pt-2 text-[#1d1d1f] md:hidden dark:border-white/10 dark:bg-black dark:text-white">
-          {[["FixBridge home", "/"], ["About", "/about"], ["Support", "/contact"], ["Company sign in", "/commercial/login"]].map(([l, h]) => (
-            <a key={h} href={h} className="block border-b border-black/5 py-3 text-[17px] font-semibold dark:border-white/10">{l}</a>
-          ))}
+        <div className="px-6 pb-6 md:hidden">
           {links.map(([label, id]) => (
-            <button key={id} type="button" onClick={() => { setOpen(false); scrollTo(id); }} className="block w-full border-b border-black/5 py-3 text-left text-[17px] font-semibold dark:border-white/10">{label}</button>
+            <button key={id} type="button" onClick={() => go(id)} className="block w-full border-b border-black/5 py-3.5 text-left text-[19px] font-semibold tracking-tight dark:border-white/10">{label}</button>
           ))}
+          <Link to="/commercial/login" className="block border-b border-black/5 py-3.5 text-[19px] font-semibold tracking-tight dark:border-white/10">Company sign in</Link>
+          <a href="/" className="block border-b border-black/5 py-3.5 text-[19px] font-semibold tracking-tight dark:border-white/10">FixBridge home</a>
+          <button type="button" onClick={() => setDark(!dark)} className="mt-3 flex items-center gap-2 text-[15px] text-[#6e6e73]">{dark ? <Sun size={16} /> : <Moon size={16} />}{dark ? "Light mode" : "Dark mode"}</button>
         </div>
       ) : null}
     </header>

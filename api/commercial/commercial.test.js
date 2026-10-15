@@ -12,6 +12,7 @@ process.env.DISABLE_OUTBOUND_EMAIL = 'true';
 const RUN = Date.now().toString(36);
 process.env.COMMERCIAL_ADMIN_EMAIL = `cadmin-${RUN}@example.test`;
 process.env.COMMERCIAL_ADMIN_PASSWORD = 'commercial-admin-pass-123';
+process.env.COMMERCIAL_DEMO_PASSWORD = 'demo-password-123';
 
 let base, server, pool;
 
@@ -304,6 +305,21 @@ t('full first workflow and the plan’s pass criteria', async () => {
   // Seat limit: Essentials includes 3 users (owner + technician + one more).
   assert.equal((await call('POST', '/team', { email: `office-${RUN}@example.test`, name: 'Olive Office', role: 'office' }, a.token)).status, 200);
   assert.equal((await call('POST', '/team', { email: `extra-${RUN}@example.test`, name: 'Extra Person', role: 'technician' }, a.token)).status, 402);
+});
+
+t('demo accounts sign in with the configured password and see only the demo company', async () => {
+  const owner = await call('POST', '/auth/login', { email: 'demo.owner@fixbridge.us', password: 'demo-password-123' });
+  assert.equal(owner.status, 200, JSON.stringify(owner.body));
+  assert.equal(owner.body.user.role, 'owner');
+  const tech = await call('POST', '/auth/login', { email: 'demo.tech@fixbridge.us', password: 'demo-password-123' });
+  assert.equal(tech.body.user.role, 'technician');
+  assert.equal((await call('POST', '/auth/login', { email: 'demo.owner@fixbridge.us', password: 'wrong-password' })).status, 401);
+  const customers = await call('GET', '/customers', undefined, owner.body.token);
+  assert.ok(customers.body.customers.every((c) => c.billing_email.endsWith('@example.com')));
+  const offer = await call('GET', '/public/offer');
+  const founding = await pool.query(`SELECT founding_member FROM commercial_companies WHERE name='FixBridge Demo Services'`);
+  assert.equal(founding.rows[0].founding_member, false);
+  assert.ok(offer.body.founding.remaining >= 0);
 });
 
 function failingBlockingCodes(checks) {

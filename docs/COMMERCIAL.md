@@ -24,6 +24,14 @@ accounts, sign-in, data or admin screens with the homeowner/contractor marketpla
   `COMMERCIAL_ADMIN_EMAIL` + `COMMERCIAL_ADMIN_PASSWORD`, or
   `COMMERCIAL_ADMIN_PASSWORD=... node scripts/create-commercial-admin.mjs <email> "<name>"`.
 
+## Demo / test accounts
+
+Set `COMMERCIAL_DEMO_PASSWORD` (10+ characters) to create "FixBridge Demo Services" with three users
+that share that password: `demo.owner@fixbridge.us` (owner), `demo.office@fixbridge.us` (office) and
+`demo.tech@fixbridge.us` (technician). Its customer uses example.com addresses, so nothing is emailed
+to real people, and it never takes a founding spot. Removing the variable deactivates the demo users.
+The Intake page has a "Use a sample email" button for trying dispatch intake.
+
 ## Workflow
 
 Dispatch email → reviewed job record → acceptance & ETA → site visit → proposal / authorized
