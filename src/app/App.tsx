@@ -7,7 +7,7 @@ import AboutPage from "./AboutPage";
 import HomeownerLogin from "./HomeownerLogin";
 import ContractorLogin from "./ContractorLogin";
 import AdminLogin from "./AdminLogin";
-import HomeownerDashboard from "./HomeownerDashboard";
+import HomeownerDashboard, { UPGRADE_ORIGIN_TAB_KEY } from "./HomeownerDashboard";
 import ContractorDashboard from "./ContractorDashboard";
 import AdminPanel from "./AdminPanel";
 import AppErrorBoundary from "./AppErrorBoundary";
@@ -1291,7 +1291,15 @@ export default function App() {
               onUserUpdated={(u) => setCurrentUser(u)}
               initialTab={
                 postPaymentDashboard
-                  ? "go-pro"
+                  ? (() => {
+                      // Back to where the homeowner was before opening the plans, not the plans page.
+                      try {
+                        const origin = sessionStorage.getItem(UPGRADE_ORIGIN_TAB_KEY);
+                        return origin && origin !== "go-pro" ? (origin as never) : "overview";
+                      } catch {
+                        return "overview";
+                      }
+                    })()
                   : (() => {
                       try {
                         const back = sessionStorage.getItem("fixbridge-upgrade-return");

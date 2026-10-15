@@ -113,7 +113,6 @@ import HomeownerBottomNav from "./HomeownerBottomNav";
 import HomeownerMoreMenu from "./HomeownerMoreMenu";
 import HomeownerInboxPanel from "./HomeownerInboxPanel";
 import NotificationBell from "./NotificationBell";
-import NeedHelpButton from "./NeedHelpButton";
 import HomeCareUpgradePrompt from "./HomeCareUpgradePrompt";
 import { useInAppComms } from "./useInAppComms";
 import { formatBadgeCount, type InAppNotification } from "./notificationsApi";
@@ -192,6 +191,9 @@ function hasRenderableAssessment(job: ManagedJob | null | undefined): job is Man
   const assessment = job?.aiAssessment;
   return Boolean(assessment && typeof assessment === "object" && !Array.isArray(assessment));
 }
+
+/** Tab the homeowner was on when they opened HomeCare plans; read by App after checkout returns. */
+export const UPGRADE_ORIGIN_TAB_KEY = "fixbridge-upgrade-origin-tab";
 
 function isAssessmentProcessing(job: ManagedJob | null | undefined) {
   const st = job?.assessmentStatus;
@@ -1111,6 +1113,14 @@ export default function HomeownerDashboard({
   }, [properties, propertyId, primaryPropertyId]);
 
   function navigateTab(next: DashTab) {
+    // Remember where the homeowner opened the plans from, so a completed upgrade returns there.
+    if (resolveNavTab(next) === "go-pro" && tab !== "go-pro") {
+      try {
+        sessionStorage.setItem(UPGRADE_ORIGIN_TAB_KEY, tab);
+      } catch {
+        /* ignore */
+      }
+    }
     navigateTo({
       role: "homeowner",
       tab: resolveNavTab(next),
@@ -2404,7 +2414,18 @@ export default function HomeownerDashboard({
     setCheckoutBusy(true);
     setError(null);
     try {
-      const returnTo = tab === "report" || diyView === "step" || diyView === "home" ? "diy" : tab === "go-pro" ? "dashboard" : tab;
+      let originTab: string | null = null;
+      try {
+        originTab = sessionStorage.getItem(UPGRADE_ORIGIN_TAB_KEY);
+      } catch {
+        /* ignore */
+      }
+      const returnTo =
+        tab === "report" || diyView === "step" || diyView === "home"
+          ? "diy"
+          : tab === "go-pro"
+            ? originTab === "report" ? "report" : "dashboard"
+            : tab;
       try {
         sessionStorage.setItem("fixbridge-upgrade-return", returnTo);
       } catch {
@@ -2484,6 +2505,23 @@ export default function HomeownerDashboard({
     if (!plan.planCode) return;
     void handleSubscribe(selectedJobId || undefined, plan.planCode);
   }
+
+  // After a completed HomeCare checkout, go back to where the plans were opened from.
+  useEffect(() => {
+    if (!showSubscriptionSuccess) return;
+    let origin: string | null = null;
+    try {
+      origin = sessionStorage.getItem(UPGRADE_ORIGIN_TAB_KEY);
+      sessionStorage.removeItem(UPGRADE_ORIGIN_TAB_KEY);
+    } catch {
+      /* ignore */
+    }
+    if (origin === "report") resumeIntakeDraft();
+    else if (origin && origin !== "go-pro") navigateTab(sanitizeDashTab(origin));
+    else if (tab === "go-pro") navigateTab("overview");
+    // Run once per success.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showSubscriptionSuccess]);
 
   const successPlanCard =
     goProPlans.find((p) => p.planCode === subscriptionSuccessPlanCode) ||
@@ -2643,6 +2681,18 @@ export default function HomeownerDashboard({
     if (!user.id) return;
     const draft = loadIntakeDraft(Number(user.id));
     if (!draft) return;
+    restoreIntakeDraftFields(draft);
+    navigateTo({
+      role: "homeowner",
+      tab: "report",
+      reportStep: "intake",
+      intakePhase: normalizeIntakePhase(draft.intakePhase),
+      reportPath: null,
+      jobId: null,
+    });
+  }
+
+  function restoreIntakeDraftFields(draft: NonNullable<ReturnType<typeof loadIntakeDraft>>) {
     setIntakePhase(normalizeIntakePhase(draft.intakePhase));
     if (draft.requestSystemId) setRequestSystemId(draft.requestSystemId);
     if (draft.issueArea) setIssueArea(draft.issueArea);
@@ -2655,15 +2705,17 @@ export default function HomeownerDashboard({
       setMediaDataUrl(draft.mediaDataUrl);
       setMediaType(draft.mediaType);
     }
-    navigateTo({
-      role: "homeowner",
-      tab: "report",
-      reportStep: "intake",
-      intakePhase: normalizeIntakePhase(draft.intakePhase),
-      reportPath: null,
-      jobId: null,
-    });
   }
+
+  // Opening the dashboard on the request form (page reload, return from checkout) restores the
+  // saved draft before the form's autosave can overwrite it with empty fields.
+  useEffect(() => {
+    if (tab !== "report" || step !== "intake" || description.trim() || !user.id) return;
+    const draft = loadIntakeDraft(Number(user.id));
+    if (draft && (draft.description || draft.requestSystemId || draft.mediaDataUrl)) restoreIntakeDraftFields(draft);
+    // Mount only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!selectedJobId) {
@@ -3708,7 +3760,6 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                 HomeCare
               </button>
             )}
-            <NeedHelpButton variant="icon" className="h-8 w-8 border-0" />
             <NotificationBell
               unreadCount={unreadNotifications}
               onRefreshCounts={refreshComms}
@@ -3744,7 +3795,6 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
               {goProPromoCard}
             </div>
             <div className="space-y-1 border-t border-border p-3">
-              <NeedHelpButton variant="link" label="Need help? Chat with us" className="w-full rounded-md px-3 py-2.5 text-foreground hover:bg-muted [&_svg]:mr-1.5" />
               <button type="button" onClick={onToggleDark} className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm hover:bg-muted">
                 {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
                 {isDark ? "Light mode" : "Dark mode"}
@@ -4086,16 +4136,13 @@ CRITICAL SAFETY INSTRUCTION: If the user describes a dangerous situation (e.g. g
                       Tell FixBridge what&apos;s going on - we&apos;ll analyze it and help you DIY or hire a pro.
                     </p>
                   </div>
-                  <div className="flex flex-col items-end gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setTab("jobs")}
-                      className="text-sm font-semibold text-primary hover:underline"
-                    >
-                      View my requests
-                    </button>
-                    <NeedHelpButton variant="link" label="Need help?" className="text-xs" />
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTab("jobs")}
+                    className="text-sm font-semibold text-primary hover:underline"
+                  >
+                    View my requests
+                  </button>
                 </div>
 
                 {assistantHandoffIntent ? (

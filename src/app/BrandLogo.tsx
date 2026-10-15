@@ -37,8 +37,9 @@ const VARIANT: Record<
   },
 };
 
-function logoSrc(kind: "mark" | "lockup" | "full", tone: "color" | "black") {
+function logoSrc(kind: "mark" | "lockup" | "full", tone: "color" | "black" | "onLight") {
   if (tone === "black" && kind === "lockup") return brand.logoLockupBlackUrl;
+  if (tone === "onLight" && kind === "lockup") return brand.logoLockupLightBgUrl;
   if (kind === "mark") return brand.logoMarkUrl;
   if (kind === "lockup") return brand.logoLockupUrl;
   return brand.logoUrl;
@@ -53,13 +54,13 @@ export function BrandLogo({
 }: {
   variant?: BrandLogoVariant;
   /** `black` uses the monochrome lockup (marketing nav when scrolled). */
-  tone?: "white" | "black" | "color" | "auto";
+  tone?: "white" | "black" | "color" | "auto" | "onLight";
   className?: string;
   /** @deprecated Wordmark is baked into lockup/full assets. */
   showName?: boolean;
 }) {
   const cfg = VARIANT[variant];
-  const resolvedTone = tone === "black" ? "black" : "color";
+  const resolvedTone = tone === "black" ? "black" : tone === "onLight" ? "onLight" : "color";
   const src = logoSrc(cfg.src, resolvedTone);
 
   return (

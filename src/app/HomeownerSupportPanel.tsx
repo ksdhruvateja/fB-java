@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { AuthUser } from "./auth";
 import { brand } from "../config/brand";
+import NeedHelpButton from "./NeedHelpButton";
 import type { ManagedJob, Property } from "./managedJobs";
 import {
   buildLocalContextPreview,
@@ -206,6 +207,14 @@ export default function HomeownerSupportPanel({
           {title}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">{blurb}</p>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-[1.5rem] border border-primary/25 bg-primary/5 p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold">Need help right now?</p>
+          <p className="text-xs text-muted-foreground">Chat with the {brand.productName} support team. Your conversation history is kept.</p>
+        </div>
+        <NeedHelpButton variant="button" label="Chat with us" className="shrink-0 bg-background" />
       </div>
 
       <div className="rounded-[1.5rem] border border-border bg-card p-5 space-y-3">

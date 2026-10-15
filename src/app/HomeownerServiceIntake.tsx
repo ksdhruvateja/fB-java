@@ -353,13 +353,32 @@ export default function HomeownerServiceIntake(props: Props) {
     }
   }
 
+  // The action the homeowner chose before confirming the photo; it runs as soon as they confirm,
+  // so "Get AI assessment" or "Hire a Professional" needs only one click.
+  const afterPhotoConfirmedRef = useRef<(() => void) | null>(null);
+
   function runAfterPhotoConfirmation(action: () => void) {
     if (mediaType === "image" && !photoConfirmed) {
-      setError("Preview and confirm the photo before continuing.");
+      afterPhotoConfirmedRef.current = action;
+      setError(null);
       setPreviewOpen(true);
       return;
     }
     action();
+  }
+
+  function confirmPhoto() {
+    setPhotoConfirmed(true);
+    setPreviewOpen(false);
+    setError(null);
+    const next = afterPhotoConfirmedRef.current;
+    afterPhotoConfirmedRef.current = null;
+    next?.();
+  }
+
+  function closePreview() {
+    afterPhotoConfirmedRef.current = null;
+    setPreviewOpen(false);
   }
 
   function goNextFromLocation() {
@@ -564,16 +583,16 @@ export default function HomeownerServiceIntake(props: Props) {
                 )}
                 <div className="mt-3 flex justify-end gap-2">
                   {onClearMedia ? (
-                    <button type="button" onClick={() => { onClearMedia(); setPreviewOpen(false); }} className="min-h-11 rounded-xl border px-3 text-sm font-semibold">
+                    <button type="button" onClick={() => { onClearMedia(); closePreview(); }} className="min-h-11 rounded-xl border px-3 text-sm font-semibold">
                       Remove
                     </button>
                   ) : null}
                   {mediaType === "image" ? (
-                    <button type="button" onClick={() => { setPhotoConfirmed(true); setPreviewOpen(false); setError(null); }} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-semibold text-white">
-                      Use this photo
+                    <button type="button" onClick={confirmPhoto} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-semibold text-white">
+                      {afterPhotoConfirmedRef.current ? "Use this photo & continue" : "Use this photo"}
                     </button>
                   ) : null}
-                  <button type="button" onClick={() => setPreviewOpen(false)} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-semibold text-white">
+                  <button type="button" onClick={closePreview} className="min-h-11 rounded-xl border px-3 text-sm font-semibold">
                     Close
                   </button>
                 </div>

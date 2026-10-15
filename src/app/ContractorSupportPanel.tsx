@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Loader2, MessageSquare, Ticket } from "lucide-react";
 import type { AuthUser } from "./auth";
+import NeedHelpButton from "./NeedHelpButton";
 import {
   createSupportTicket,
   getMySupportTicket,
@@ -102,6 +103,14 @@ export default function ContractorSupportPanel({ user }: { user: AuthUser }) {
       <div>
         <h1 className="text-2xl font-bold">My Support Tickets</h1>
         <p className="text-sm text-muted-foreground mt-1">Create tickets and follow up with FixBridge support.</p>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-2xl border border-primary/25 bg-primary/5 p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold">Need help right now?</p>
+          <p className="text-xs text-muted-foreground">Chat with the FixBridge support team. Your conversation history is kept.</p>
+        </div>
+        <NeedHelpButton variant="button" label="Chat with us" className="shrink-0 bg-background" />
       </div>
 
       <form onSubmit={(e) => void submit(e)} className="rounded-2xl border border-border bg-card p-5 space-y-3">
