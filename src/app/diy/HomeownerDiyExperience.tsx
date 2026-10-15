@@ -641,8 +641,9 @@ export default function HomeownerDiyExperience(props: Props) {
           <Home className="h-7 w-7" />
         </div>
       </div>
-      <DIYProgressCard completed={doneCount} total={steps.length} />
-      {showConfirm && working ? (
+      {steps.length > 0 && !blocked ? <DIYProgressCard completed={doneCount} total={steps.length} /> : null}
+      {/* Confirming a category only makes sense when there is a DIY plan to continue to. */}
+      {showConfirm && working && steps.length > 0 && !blocked ? (
         <section className={`rounded-[22px] bg-white p-4 ${cardShadow}`} aria-label="Category confirmation">
           <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-[#8a847b]">
             {mismatch ? "This photo appears to be a different issue" : userPick ? "Category confirmed" : "We think this is a match"}
@@ -650,13 +651,13 @@ export default function HomeownerDiyExperience(props: Props) {
           <h3 className="mt-2 text-[22px] font-semibold text-[#2c2926]">
             {mismatch ? detected?.title : working.title}
           </h3>
-          {detectedSub ? <p className="mt-1 text-[15px] text-[#5c574f]">{detectedSub}</p> : null}
+          {detectedSub ? <p className="mt-1 text-[15px] text-[#5c574f]">{humanizeSlug(detectedSub)}</p> : null}
           <p className="mt-2 text-[14px] leading-relaxed text-[#5c574f]">
             {mismatch
               ? `This photo appears to be related to ${detected?.title} rather than ${working.title}.`
               : photoUrl
-                ? `Based on your photo, this appears to be a ${working.title.toLowerCase()} issue${detectedSub ? ` involving ${detectedSub.toLowerCase()}` : ""}.`
-                : `We'll continue with ${working.title}${detectedSub ? ` — ${detectedSub}` : ""}.`}
+                ? `Based on your photo, this appears to be a ${working.title.toLowerCase()} issue${detectedSub ? ` involving ${humanizeSlug(detectedSub).toLowerCase()}` : ""}.`
+                : `We'll continue with ${working.title}${detectedSub ? ` — ${humanizeSlug(detectedSub)}` : ""}.`}
           </p>
           <div className="mt-4 space-y-2">
             <button
@@ -690,7 +691,7 @@ export default function HomeownerDiyExperience(props: Props) {
             </button>
           </div>
         </section>
-      ) : browseOpen || (!steps.length && !summary) ? (
+      ) : browseOpen || (!steps.length && !summary && !blocked) ? (
         <>
           <div className="flex items-center justify-between">
             <h3 className="text-[20px] font-semibold text-[#2c2926]">Browse by Category</h3>
@@ -1017,11 +1018,11 @@ export default function HomeownerDiyExperience(props: Props) {
 
   return (
     <div className="rounded-[24px] bg-[#F8F7F4] p-4 text-[#2c2926] sm:p-5">
-      <div className="mx-auto grid max-w-6xl gap-5 md:grid-cols-[minmax(0,0.9fr)_minmax(280px,0.7fr)] xl:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.85fr)]">
+      <div className="grid gap-5 md:grid-cols-[minmax(0,0.9fr)_minmax(280px,0.7fr)] xl:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.85fr)]">
         <div className={view === "chat" ? "hidden lg:block" : ""}>{main}</div>
         <div className={view === "chat" ? "block" : "hidden lg:block"}>{chatPanel}</div>
       </div>
-      <div className="mx-auto mt-4 flex max-w-6xl gap-2 lg:hidden">
+      <div className="mt-4 flex gap-2 lg:hidden">
         {(["home", "chat", "ideas"] as DiyView[]).map((id) => (
           <button
             key={id}
@@ -1035,4 +1036,10 @@ export default function HomeownerDiyExperience(props: Props) {
       </div>
     </div>
   );
+}
+
+/** "pipe_burst_repair" -> "Pipe burst repair". */
+function humanizeSlug(value: string) {
+  const text = String(value || "").replace(/[_-]+/g, " ").trim();
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
 }

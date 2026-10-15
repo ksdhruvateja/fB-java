@@ -233,6 +233,8 @@ Use this exact schema:
   "professional_required": true,
   "safe_diy_allowed": false,
   "diy_safety_rationale": "one sentence: why DIY is or is not reasonable here, naming the actual risk",
+  "recommended_fix": {"approach": "diy|professional|emergency|needs_more_info", "summary": "2-4 sentences: exactly what should be done about THIS problem, the specific part or area, and the method", "why": "one sentence: why this is the right fix for what is visible"},
+  "do_not_attempt": ["task-specific work on THIS repair the homeowner must leave to a professional"],
   "risk_factors": [{"code":"mains_electrical|gas|refrigerant_sealed_system|working_at_height|structural|water_near_electrical|open_flame|pressurized_hot_water|hazardous_material|chemical|sanitation|other","severity":"low|medium|high|critical","evidence":"what in the photos or description shows this"}],
   "photo_assessment": {"photos_received": 0, "usable_photo_count": 0, "evidence_sufficient": true, "issues": ["blurry|too_dark|too_far|wrong_area|obstructed|label_unreadable|no_photo"], "photo_requests": ["specific photo that would settle the diagnosis"]},
   "immediate_safety_steps": [],
@@ -364,6 +366,39 @@ Rules:
 17. Parts must identify only what the evidence supports. Never invent a brand, model, SKU, or exact part number. If the exact part is uncertain, set exact_part_confirmed=false and list the specific information or label photo needed.
 
 18. If evidence is insufficient for a safe repair plan, keep actionable DIY steps empty and ask targeted questions or request a specific photo.
+
+19. recommended_fix comes first for the homeowner. Name the specific component and the
+   method ("replace the 3/8-inch compression supply line under the sink", not "fix the
+   leak"). approach=emergency when an active hazard needs immediate action,
+   professional when the repair itself needs a professional, needs_more_info when you
+   cannot tell yet, otherwise diy.
+
+20. Relevance: mention only hazards, tools and precautions that apply to THIS repair as
+   seen. Do not mention electrical, gas, roofing or other trades unless the photos or
+   description actually involve them (for example, no electrical warnings on a faucet
+   or a yard pipe unless a powered device or wiring is part of the job). "structural"
+   means the building's framing, foundation or load-bearing parts; cracked paving,
+   soil or a meter box is not structural. Use risk code "other" only with evidence.
+
+21. Detail: when DIY is appropriate, diy_guide_steps must cover the whole job from
+   shut-off and preparation to testing, usually 6-12 steps. Every step needs a clear
+   title, an instruction of 2-4 sentences (where, what, how, with sizes, directions,
+   quantities or settings when they matter), the tools used in that step, the
+   expected_result, and if_not. tools_required lists every tool with its size or type
+   and what it is used for. No filler steps.
+
+22. Never guess. If you cannot identify the component, the cause, or a safe method
+   with confidence of at least 0.6, set recommended_fix.approach=needs_more_info,
+   leave diy steps empty, set photo_assessment.evidence_sufficient=false, and give
+   specific photo_requests (what, from where, how close) and questions_needed.
+
+23. questions_needed and needs_confirmation: short, specific questions the homeowner can
+   answer from where they stand, each one able to change the diagnosis or the plan
+   (for example "Does water still flow at the meter with every tap in the house closed?").
+   No generic questions.
+
+24. do_not_attempt: only work related to this repair (at most 6 items), written for this
+   job. Leave it empty rather than listing generic dangers.
 `.trim();
 
 export const SUMMARY_PROMPT =
@@ -898,6 +933,8 @@ export function evaluateAssessmentEvidence(assessment, { imageCount = 0 } = {}) 
   const reasons = [];
   if (imageCount > 0 && pa && pa.usable_photo_count === 0) reasons.push('photos_unusable');
   if (pa && pa.evidence_sufficient === false) reasons.push('more_evidence_needed');
+  // The model said it cannot tell yet: never let steps through on a guess.
+  if (assessment?.recommended_fix?.approach === 'needs_more_info' && !reasons.includes('more_evidence_needed')) reasons.push('more_evidence_needed');
   if (confidence < 0.4) reasons.push('low_confidence');
   if (assessment?.category_conflict === true) reasons.push('category_conflict');
   const issues = (pa?.issues || []).filter((i) => i !== 'no_photo' || imageCount === 0);
@@ -1134,6 +1171,18 @@ function normalizeGuideSteps(
 /* Structured assessment parser                                               */
 /* -------------------------------------------------------------------------- */
 
+function normalizeRecommendedFix(value) {
+  if (!value || typeof value !== 'object') {
+    const text = typeof value === 'string' ? value.trim() : '';
+    return text ? { approach: '', summary: text.slice(0, 600), why: '' } : null;
+  }
+  const approachRaw = String(value.approach || '').toLowerCase();
+  const approach = ['diy', 'professional', 'emergency', 'needs_more_info'].includes(approachRaw) ? approachRaw : '';
+  const summary = String(value.summary || '').trim().slice(0, 600);
+  if (!summary) return null;
+  return { approach, summary, why: String(value.why || '').trim().slice(0, 400) };
+}
+
 export function parseStructuredAssessment(
   text
 ) {
@@ -1252,6 +1301,12 @@ export function parseStructuredAssessment(
 
     diy_safety_rationale:
       asString(parsed.diy_safety_rationale).slice(0, 300),
+
+    // What Fixera recommends doing about this specific problem, shown first to the homeowner.
+    recommended_fix: normalizeRecommendedFix(parsed.recommended_fix),
+
+    // Task-specific work the homeowner should not attempt (shown instead of generic hazard lists).
+    do_not_attempt: asStringArray(parsed.do_not_attempt).slice(0, 6),
 
     risk_factors:
       Array.isArray(parsed.risk_factors) ? parsed.risk_factors.slice(0, 12) : [],
@@ -1434,19 +1489,16 @@ export function parseStructuredAssessment(
 
             instruction,
 
-            explanation:
-              'This check narrows the cause before parts are replaced.',
+            // Only what the model actually said: stock text here read as generic advice
+            // (and mentioned sparks on plumbing jobs).
+            explanation: '',
 
             tools:
               assessment.tools_required,
 
-            safety_note:
-              assessment
-                .stop_conditions[0] ||
-              'Stop if the condition looks unsafe or different from the expected result.',
+            safety_note: '',
 
-            expected_result:
-              'The step completes without a new leak, spark, odor, or unusual resistance.',
+            expected_result: '',
 
             if_not:
               'Stop this step and choose Hire a Professional rather than forcing the part.',

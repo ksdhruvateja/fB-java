@@ -327,6 +327,8 @@ const AI_FACTOR_ALIASES = {
   sewage: 'sanitation',
 };
 
+const BUILDING_STRUCTURE_RE = /\b(foundation|fram(e|ing)|joist|beam|load[- ]?bearing|stud|truss|rafter|ceiling|wall|floor|slab|sag\w*|sill|header|column|post|girder)\b/i;
+
 /** Normalizes the model's risk_factors list. Unknown codes are kept as their own factor. */
 export function normalizeAiRiskFactors(value) {
   if (!Array.isArray(value)) return [];
@@ -335,7 +337,11 @@ export function normalizeAiRiskFactors(value) {
       if (!item || typeof item !== 'object') return null;
       const raw = String(item.code || item.factor || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
       if (!raw) return null;
-      const code = AI_FACTOR_ALIASES[raw] || raw;
+      let code = AI_FACTOR_ALIASES[raw] || raw;
+      const evidenceText = String(item.evidence || item.reason || '');
+      // "Structural" means the building's structure. Cracked paving, soil or a meter box is not,
+      // and treating it as such shows framing and wall warnings that have nothing to do with the job.
+      if (code === 'structural' && evidenceText && !BUILDING_STRUCTURE_RE.test(evidenceText)) code = 'site_damage';
       const severityRaw = String(item.severity || 'low').toLowerCase();
       const severity = SEVERITY_RANK[severityRaw] != null && severityRaw !== 'none' ? severityRaw : 'low';
       if (item.present === false) return null;

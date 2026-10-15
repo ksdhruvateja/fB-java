@@ -9,8 +9,16 @@ const SEVERITY_LABEL: Record<string, string> = {
 };
 
 /** Why Fixera reached its DIY decision: the risk factors and the guardrails that apply. */
-export function DiySafetyRationaleCard({ safety }: { safety: DiySafetyResult | null | undefined }) {
+export function DiySafetyRationaleCard({
+  safety,
+  doNotAttempt,
+}: {
+  safety: DiySafetyResult | null | undefined;
+  /** Work on this specific repair to leave to a professional (from Fixera), shown instead of generic lists. */
+  doNotAttempt?: string[];
+}) {
   if (!safety || (!safety.factors?.length && !safety.reasons?.length)) return null;
+  const specific = (doNotAttempt || []).filter(Boolean);
   return (
     <div className="rounded-xl border border-border bg-card p-4 text-sm">
       <div className="flex items-center gap-2">
@@ -25,19 +33,28 @@ export function DiySafetyRationaleCard({ safety }: { safety: DiySafetyResult | n
               <span className="rounded-full border border-border px-2 py-0.5 text-[11px] font-semibold">
                 {SEVERITY_LABEL[factor.severity] || factor.severity}
               </span>
-              <span>{factor.label}</span>
+              {factor.label && factor.label.toLowerCase() !== "other" ? <span>{humanize(factor.label)}</span> : null}
               {factor.evidence ? <span className="text-xs text-muted-foreground">— {factor.evidence}</span> : null}
             </li>
           ))}
         </ul>
       ) : null}
-      {safety.prohibited_actions?.length ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          Not covered by DIY guidance: {safety.prohibited_actions.join("; ")}.
-        </p>
+      {specific.length ? (
+        <div className="mt-3">
+          <p className="text-xs font-semibold text-foreground">Leave these to a professional</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-muted-foreground">
+            {specific.map((item) => <li key={item}>{item}</li>)}
+          </ul>
+        </div>
       ) : null}
     </div>
   );
+}
+
+/** "pipe_burst_repair" -> "Pipe burst repair". */
+export function humanize(value: string) {
+  const text = String(value || "").replace(/[_-]+/g, " ").trim();
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
 }
 
 function usd(n: number) {

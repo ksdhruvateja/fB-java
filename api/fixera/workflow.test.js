@@ -191,3 +191,35 @@ test('a faucet hot line is not treated as a water heater; a real heater still is
   const heaterAlias = evaluateDiySafety(base({ summary: 'Tank is old.', risk_factors: [{ code: 'water_heater', severity: 'medium', evidence: 'Tank heater' }] }));
   assert.ok(heaterAlias.diy_safety.factors.some((f) => f.code === 'pressurized_hot_water'));
 });
+
+test('cracked paving is not treated as building structure; a sagging ceiling still is', () => {
+  const yard = evaluateDiySafety(base({
+    summary: 'Water surfacing next to the meter box in the front yard.',
+    risk_factors: [{ code: 'structural', severity: 'high', evidence: 'Severe cracking and erosion of concrete surrounding the water meter box.' }],
+  }));
+  assert.ok(!yard.diy_safety.factors.some((f) => f.code === 'structural'));
+  assert.ok(!(yard.diy_safety.prohibited_actions || []).some((a) => /framing|walls/i.test(a)));
+
+  const ceiling = evaluateDiySafety(base({
+    summary: 'Ceiling is sagging under a water stain.',
+    risk_factors: [{ code: 'structural', severity: 'high', evidence: 'The ceiling drywall is sagging between joists.' }],
+  }));
+  assert.ok(ceiling.diy_safety.factors.some((f) => f.code === 'structural'));
+});
+
+test('a recommended fix and job-specific do-not-attempt list are kept; "needs more info" withholds steps', () => {
+  const text = JSON.stringify({
+    category: 'plumbing', summary: 'Leak at the base of a faucet.', confidence: 0.5,
+    recommended_fix: { approach: 'needs_more_info', summary: 'Need a close-up of the faucet base and the supply lines.', why: 'The leak source is not visible.' },
+    do_not_attempt: ['Cutting into the countertop'],
+    safe_diy_allowed: true, professional_required: false,
+    photo_assessment: { photos_received: 1, usable_photo_count: 1, evidence_sufficient: true, issues: [], photo_requests: ['Close-up of the faucet base'] },
+    diy_steps: ['Replace the cartridge.'],
+  });
+  const parsed = parseStructuredAssessment(text);
+  assert.equal(parsed.recommended_fix.approach, 'needs_more_info');
+  assert.deepEqual(parsed.do_not_attempt, ['Cutting into the countertop']);
+  assert.equal(parsed.diy_guide_steps[0].expected_result, '', 'no stock filler text in steps');
+  const evidence = evaluateAssessmentEvidence(parsed, { imageCount: 1 });
+  assert.equal(evidence.sufficient, false);
+});
