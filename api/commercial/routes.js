@@ -84,8 +84,12 @@ const publicUser = (u) => ({
   invited: !u.password_hash, last_login_at: u.last_login_at,
 });
 
+/**
+ * Base URL for links in invites. APP_URL can point at the hosting provider's domain, so links use
+ * PUBLIC_SITE_URL when set, otherwise the address the admin or owner is actually using.
+ */
 function appBaseUrl(req) {
-  const configured = process.env.PUBLIC_SITE_URL || process.env.APP_URL;
+  const configured = process.env.PUBLIC_SITE_URL;
   return String(configured || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
 }
 

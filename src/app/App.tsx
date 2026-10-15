@@ -204,7 +204,7 @@ function Nav({
   const muted = overHero ? "text-white/65 hover:text-white" : "text-muted-foreground hover:text-foreground";
   const active = overHero ? "text-white" : "text-foreground";
   const border = overHero ? "border-white/30" : "border-border";
-  const navLogoTone = !overHero && !isDark ? "black" : "color";
+  const navLogoTone = !overHero && !isDark ? "onLight" : "color";
 
   const goToHome = () => {
     onNavigate("home");
@@ -447,7 +447,8 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
               className="mb-4 inline-flex rounded-md outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-primary/40"
               aria-label={`${brand.productName} home`}
             >
-              <BrandLogo variant="nav" />
+              <BrandLogo variant="nav" tone="onLight" className="dark:hidden" />
+              <BrandLogo variant="nav" tone="color" className="hidden dark:block" />
             </button>
             <p className="text-sm text-muted-foreground max-w-sm leading-relaxed mb-3">
               The middle layer between homeowners and licensed contractors nationwide — handling
@@ -469,7 +470,8 @@ function Footer({ onNavigate }: { onNavigate: (p: Page) => void }) {
               className="mb-4 inline-flex rounded-md outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-primary/40"
               aria-label={`${brand.productName} home`}
             >
-              <BrandLogo variant="nav" />
+              <BrandLogo variant="nav" tone="onLight" className="dark:hidden" />
+              <BrandLogo variant="nav" tone="color" className="hidden dark:block" />
             </button>
             <p className="text-sm text-muted-foreground max-w-xs leading-relaxed mb-4">
               The middle layer between homeowners and licensed contractors nationwide — handling

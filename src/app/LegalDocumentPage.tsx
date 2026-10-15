@@ -169,7 +169,8 @@ export default function LegalDocumentPage({ pathname, onNavigateHome }: Props) {
             className="rounded-md outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-primary/40"
             aria-label="FixBridge home"
           >
-            <BrandLogo variant="nav" tone="black" className="h-7" />
+            <BrandLogo variant="nav" tone="onLight" className="h-7 dark:hidden" />
+            <BrandLogo variant="nav" tone="color" className="hidden h-7 dark:block" />
           </button>
         </div>
       </header>

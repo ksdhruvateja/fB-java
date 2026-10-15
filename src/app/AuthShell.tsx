@@ -240,7 +240,7 @@ function MascotAside({
 function AuthHeaderLogo({ onHome }: { onHome?: () => void }) {
   const logo = (
     <>
-      <BrandLogo variant="auth" tone="black" className="dark:hidden" />
+      <BrandLogo variant="auth" tone="onLight" className="dark:hidden" />
       <BrandLogo variant="auth" tone="color" className="hidden dark:block" />
     </>
   );
