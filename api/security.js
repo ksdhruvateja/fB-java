@@ -57,7 +57,9 @@ export function securityHeaders(_req, res, next) {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('X-XSS-Protection', '0');
-  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  // Commercial field pages may record the technician's location at check-in (optional, asked first).
+  const commercialPage = /^\/commercial(?:\/|$)/.test(_req?.path || '');
+  res.setHeader('Permissions-Policy', `camera=(), microphone=(), geolocation=${commercialPage ? '(self)' : '()'}`);
   res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
   if (process.env.NODE_ENV === 'production') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');

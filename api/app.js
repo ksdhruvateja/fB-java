@@ -15,6 +15,7 @@ import { assessRepair, complete, reassessRepair, prepareProfessionalHandoff, get
 import { persistFixeraInteraction, recordFixeraFeedback, recordFixeraInteraction, trainingOverview, exportApprovedTraining, listRecentExperiences } from './fixera/experience/store.js';
 import { getPricingIntelligence } from './fixera/pricing/intelligence.js';
 import { initManagedSchema, ensureReferralCodeColumns } from './schema-managed.js';
+import { registerCommercialRoutes } from './commercial/routes.js';
 import { initSupportTicketSchema, registerSupportTicketRoutes, validateContactInquiry, createContactInquiry, CONTACT_INQUIRY_CATEGORIES } from './support-tickets.js';
 import { initInAppNotificationSchema, registerInAppNotificationRoutes } from './in-app-notifications.js';
 import { initMessagingSchema, registerMessagingRoutes } from './messaging.js';
@@ -3739,6 +3740,8 @@ registerHomeAssistantRoutes(app, { pool, requireAuth });
 registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
 registerContractorEmployeeRoutes(app, { pool, requireAuth, requireAdmin });
 registerSupportTicketRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
+// FixBridge Commercial: its own accounts, tokens, tables and admin (see api/commercial/).
+registerCommercialRoutes(app, { pool });
 
 // ── Public Contact page ─────────────────────────────────────────────────────────
 const contactLimiter = rateLimit({

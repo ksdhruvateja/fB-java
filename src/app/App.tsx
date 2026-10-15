@@ -243,6 +243,12 @@ function Nav({
                 <span className={`absolute bottom-0 left-4 right-4 h-0.5 ${overHero ? "bg-white" : "bg-primary"}`} />
               )}
             </button>
+            <a
+              href="/commercial"
+              className={`relative px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${muted}`}
+            >
+              Commercial
+            </a>
             <button
               onClick={() => onNavigate("about")}
               className={`relative px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
@@ -345,6 +351,9 @@ function Nav({
           >
             For Contractors
           </button>
+          <a href="/commercial" className="text-sm text-left font-medium py-3 text-muted-foreground">
+            Commercial
+          </a>
           <button
             onClick={() => { onNavigate("about"); setMenuOpen(false); }}
             className={`text-sm text-left font-medium py-3 ${page === "about" ? "text-primary" : "text-muted-foreground"}`}

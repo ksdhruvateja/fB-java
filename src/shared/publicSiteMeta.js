@@ -49,6 +49,14 @@ export const PUBLIC_CONTENT_PAGES = {
   },
 };
 
+/** FixBridge Commercial: its own site under /commercial (see src/commercial). */
+export const COMMERCIAL_PAGE = {
+  path: '/commercial',
+  title: 'Commercial — Work Order Management for Contractors',
+  description:
+    'Free to join the FixBridge contractor network. Optional commercial tools help you manage the jobs you already have: dispatch intake, site visits, approvals, completion packages, invoices and payment tracking.',
+};
+
 export const BLOG_CATEGORIES = [
   'Home Maintenance',
   'DIY Repair',
@@ -298,6 +306,7 @@ export function publicSitemapPaths() {
     '/',
     '/about',
     ...Object.values(PUBLIC_CONTENT_PAGES).map((p) => p.path),
+    COMMERCIAL_PAGE.path,
     ...BLOG_POSTS.map((post) => `/blog/${post.slug}`),
   ];
 }
@@ -310,6 +319,7 @@ export function publicMetaForPath(pathname) {
     const post = BLOG_POSTS.find((p) => p.slug === blogMatch[1]);
     return post ? { title: post.title, description: post.description, path, type: 'article' } : null;
   }
+  if (path === COMMERCIAL_PAGE.path) return { ...COMMERCIAL_PAGE, type: 'website' };
   const page = Object.values(PUBLIC_CONTENT_PAGES).find((p) => p.path === path);
   return page ? { title: page.title, description: page.description, path, type: 'website' } : null;
 }
