@@ -7,6 +7,7 @@ import { billingTimeline } from './service.js';
 
 const TEST_DB = process.env.FIXERA_TEST_DATABASE_URL;
 if (TEST_DB) process.env.NEON_DATABASE_URL = TEST_DB;
+process.env.COMMERCIAL_AUTH_RATE_LIMIT_MAX = '200';
 process.env.SESSION_SECRET = 'commercial-test-secret';
 process.env.DISABLE_OUTBOUND_EMAIL = 'true';
 const RUN = Date.now().toString(36);
@@ -128,8 +129,17 @@ t('full first workflow and the plan’s pass criteria', async () => {
   // Team: a technician without financial access.
   const invite = await call('POST', '/team', { email: `tech-${RUN}@example.test`, name: 'Terry Tech', role: 'technician' }, a.token);
   assert.equal(invite.status, 200, JSON.stringify(invite.body));
+  // Owner-invited staff wait for commercial-admin approval before they can sign in.
   const techSet = await call('POST', '/auth/set-password', { token: new URL(invite.body.invite_link).searchParams.get('token'), password: 'tech-password-1' });
-  const tech = { token: techSet.body.token, id: techSet.body.user.id };
+  assert.equal(techSet.body.pending, true);
+  assert.equal(techSet.body.token, undefined);
+  const techEmail = `tech-${RUN}@example.test`;
+  assert.equal((await call('POST', '/auth/login', { email: techEmail, password: 'tech-password-1' })).body.code, 'PENDING_APPROVAL');
+  const approveTech = await call('POST', `/admin/accounts/${invite.body.user.id}/approve`, {}, admin);
+  assert.equal(approveTech.status, 200, JSON.stringify(approveTech.body));
+  const techLogin = await call('POST', '/auth/login', { email: techEmail, password: 'tech-password-1', role: 'technician' });
+  assert.equal(techLogin.status, 200, JSON.stringify(techLogin.body));
+  const tech = { token: techLogin.body.token, id: techLogin.body.user.id };
 
   // Customer profile with an email submission method.
   const cust = await call('POST', '/customers', {
@@ -334,3 +344,68 @@ t('demo accounts sign in with the configured password and see only the demo comp
 function failingBlockingCodes(checks) {
   return checks.filter((c) => !c.ok && c.severity === 'blocking').map((c) => c.code);
 }
+
+t('self sign-up: owner and staff accounts wait for commercial-admin approval', async () => {
+  const admin = (await call('POST', '/admin/auth/login', { email: process.env.COMMERCIAL_ADMIN_EMAIL, password: process.env.COMMERCIAL_ADMIN_PASSWORD })).body.token;
+  const ownerEmail = `self-owner-${RUN}@example.test`;
+  const owner = await call('POST', '/auth/signup', { role: 'owner', name: 'Sam Owner', email: ownerEmail, password: 'owner-pass-12', company_name: `Self ${RUN} HVAC`, trades: ['HVAC'] });
+  assert.equal(owner.status, 200, JSON.stringify(owner.body));
+  assert.equal(owner.body.pending, true);
+  assert.equal((await call('POST', '/auth/login', { email: ownerEmail, password: 'owner-pass-12' })).body.code, 'PENDING_APPROVAL');
+  assert.equal((await call('POST', '/auth/signup', { role: 'owner', name: 'Dup', email: ownerEmail, password: 'owner-pass-12', company_name: 'Dup Co' })).status, 409);
+
+  const pending = await call('GET', '/admin/accounts?status=pending', undefined, admin);
+  const ownerRow = pending.body.accounts.find((a) => a.email === ownerEmail);
+  assert.ok(ownerRow && ownerRow.company_status === 'pending');
+  assert.equal((await call('GET', '/admin/summary', undefined, admin)).body.summary.pending_accounts >= 1, true);
+  assert.equal((await call('POST', `/admin/accounts/${ownerRow.id}/approve`, {}, admin)).status, 200);
+  const ownerLogin = await call('POST', '/auth/login', { email: ownerEmail, password: 'owner-pass-12', role: 'owner' });
+  assert.equal(ownerLogin.status, 200, JSON.stringify(ownerLogin.body));
+
+  const team = await call('GET', '/team', undefined, ownerLogin.body.token);
+  const code = team.body.join_code;
+  assert.match(code, /^[A-Z2-9]{8}$/);
+  assert.equal((await call('POST', '/auth/signup', { role: 'technician', name: 'Tia Tech', email: `x-${RUN}@example.test`, password: 'tech-pass-123', join_code: 'NOPE0000' })).status, 404);
+  const techEmail = `self-tech-${RUN}@example.test`;
+  const tech = await call('POST', '/auth/signup', { role: 'technician', name: 'Tia Tech', email: techEmail, password: 'tech-pass-123', join_code: code.toLowerCase() });
+  assert.equal(tech.status, 200, JSON.stringify(tech.body));
+  const officeEmail = `self-office-${RUN}@example.test`;
+  await call('POST', '/auth/signup', { role: 'office', name: 'Olly Office', email: officeEmail, password: 'office-pass-12', join_code: code });
+
+  const list = (await call('GET', '/admin/accounts?status=pending', undefined, admin)).body.accounts;
+  const techRow = list.find((a) => a.email === techEmail);
+  const officeRow = list.find((a) => a.email === officeEmail);
+  assert.equal((await call('POST', `/admin/accounts/${techRow.id}/approve`, {}, admin)).status, 200);
+  assert.equal((await call('POST', '/auth/login', { email: techEmail, password: 'tech-pass-123', role: 'technician' })).status, 200);
+  assert.equal((await call('POST', `/admin/accounts/${officeRow.id}/reject`, { note: 'Not on staff' }, admin)).status, 200);
+  assert.equal((await call('POST', '/auth/login', { email: officeEmail, password: 'office-pass-12' })).body.code, 'NOT_APPROVED');
+
+  // A new code replaces the old one.
+  const fresh = await call('POST', '/team/join-code', {}, ownerLogin.body.token);
+  assert.notEqual(fresh.body.join_code, code);
+});
+
+t('commercial admins can add, deactivate and reset other admins', async () => {
+  const admin = (await call('POST', '/admin/auth/login', { email: process.env.COMMERCIAL_ADMIN_EMAIL, password: process.env.COMMERCIAL_ADMIN_PASSWORD })).body.token;
+  const email = `second-admin-${RUN}@example.test`;
+  assert.equal((await call('POST', '/admin/admins', { name: 'Second Admin', email, password: 'short' }, admin)).status, 400);
+  const added = await call('POST', '/admin/admins', { name: 'Second Admin', email, password: 'second-admin-pass' }, admin);
+  assert.equal(added.status, 200, JSON.stringify(added.body));
+  assert.equal((await call('POST', '/admin/admins', { name: 'Again', email, password: 'second-admin-pass' }, admin)).status, 409);
+  const second = (await call('POST', '/admin/auth/login', { email, password: 'second-admin-pass' })).body.token;
+  assert.ok(second);
+  assert.equal((await call('GET', '/admin/accounts', undefined, second)).status, 200, 'second admin can approve accounts');
+
+  const list = (await call('GET', '/admin/admins', undefined, admin)).body.admins;
+  const me = list.find((a) => a.email === process.env.COMMERCIAL_ADMIN_EMAIL);
+  assert.equal((await call('PATCH', `/admin/admins/${me.id}`, { active: false }, admin)).status, 400, 'cannot deactivate yourself');
+
+  assert.equal((await call('PATCH', `/admin/admins/${added.body.admin.id}`, { password: 'reset-by-first-admin' }, admin)).status, 200);
+  assert.equal((await call('POST', '/admin/auth/login', { email, password: 'reset-by-first-admin' })).status, 200);
+  assert.equal((await call('POST', '/admin/auth/change-password', { current_password: 'reset-by-first-admin', new_password: 'changed-by-myself1' }, second)).status, 200);
+  assert.equal((await call('POST', '/admin/auth/login', { email, password: 'changed-by-myself1' })).status, 200);
+
+  assert.equal((await call('PATCH', `/admin/admins/${added.body.admin.id}`, { active: false }, admin)).status, 200);
+  assert.equal((await call('GET', '/admin/me', undefined, second)).status, 401, 'deactivated admin is signed out');
+  assert.equal((await call('POST', '/admin/auth/login', { email, password: 'changed-by-myself1' })).status, 401);
+});

@@ -293,6 +293,33 @@ async function bootstrapPrimaryAdmin() {
   console.log(`[FixBridge API] Created primary admin ${PRIMARY_ADMIN_EMAIL}.`);
 }
 
+// Temporary logins exist only on the commercial side (COMMERCIAL_TEMP_LOGIN_PASSWORD). These
+// marketplace addresses were created by an earlier version; keep them blocked if present.
+const RETIRED_TEMP_MARKETPLACE_EMAILS = ['temp.homeowner@fixbridge.us', 'temp.contractor@fixbridge.us', 'temp.admin@fixbridge.us'];
+
+async function blockRetiredTempMarketplaceAccounts() {
+  const { rowCount } = await pool.query(
+    `UPDATE users SET is_blocked=TRUE, password_changed_at=$2
+      WHERE LOWER(email) = ANY($1::text[]) AND is_blocked IS NOT TRUE`,
+    [RETIRED_TEMP_MARKETPLACE_EMAILS, new Date()]
+  );
+  if (rowCount) console.log(`[FixBridge API] Blocked ${rowCount} retired temporary marketplace login(s).`);
+}
+
+/**
+ * Accounts that come from environment variables. Runs on every start (also when the schema is
+ * already up to date), so changing the variables on the host takes effect after a redeploy.
+ */
+async function syncEnvironmentAccounts() {
+  try {
+    await ensureAuthColumns();
+    await bootstrapPrimaryAdmin();
+    await blockRetiredTempMarketplaceAccounts();
+  } catch (e) {
+    console.error('[FixBridge API] Could not sync accounts from environment variables:', e.message);
+  }
+}
+
 /** Columns added by the security fixes; run on both fresh and existing databases. */
 async function ensureAuthColumns() {
   // Sessions issued before this time are rejected (set on password reset).
@@ -517,6 +544,7 @@ export async function initDb() {
   // Cold Netlify isolates used to run hundreds of sequential DDL statements
   // before any save, upload, or navigation request could start.
   if ((await readSchemaReadyVersion()) >= SCHEMA_READY_VERSION) {
+    await syncEnvironmentAccounts();
     initDb._done = true;
     return;
   }
@@ -538,7 +566,7 @@ export async function initDb() {
       await initMarketingConsent(pool);
       await ensureAuthColumns();
       await migratePrimaryAdminEmail();
-      await bootstrapPrimaryAdmin();
+      await syncEnvironmentAccounts();
       await ensureDemoUsers();
       await writeSchemaReadyVersion();
       initDb._done = true;
@@ -753,7 +781,7 @@ export async function initDb() {
   await initMarketingConsent(pool);
   await ensureAuthColumns();
   await migratePrimaryAdminEmail();
-  await bootstrapPrimaryAdmin();
+  await syncEnvironmentAccounts();
 
   console.log('[FixBridge API] DB ready ✓');
   await writeSchemaReadyVersion();

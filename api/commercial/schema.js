@@ -372,6 +372,17 @@ const STATEMENTS = [
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (company_id, key)
   )`,
+  // Account approval: every new company account (self sign-up or owner invite) waits for a
+  // FixBridge commercial admin. Existing accounts default to approved.
+  `ALTER TABLE commercial_users ADD COLUMN IF NOT EXISTS approval_status TEXT NOT NULL DEFAULT 'approved'`,
+  `ALTER TABLE commercial_users ADD COLUMN IF NOT EXISTS approval_note TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE commercial_users ADD COLUMN IF NOT EXISTS approval_decided_at TIMESTAMPTZ`,
+  `ALTER TABLE commercial_users ADD COLUMN IF NOT EXISTS approval_decided_by INT`,
+  `ALTER TABLE commercial_users ADD COLUMN IF NOT EXISTS signup_source TEXT NOT NULL DEFAULT 'invite'`,
+  `CREATE INDEX IF NOT EXISTS commercial_users_approval_idx ON commercial_users(approval_status)`,
+  // Code staff enter when signing up, so their request goes to the right company.
+  `ALTER TABLE commercial_companies ADD COLUMN IF NOT EXISTS join_code TEXT`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS commercial_companies_join_code_uq ON commercial_companies(join_code) WHERE join_code IS NOT NULL`,
 ];
 
 let ready = null;
@@ -382,6 +393,7 @@ export function ensureCommercialSchema(pool) {
     ready = (async () => {
       for (const sql of STATEMENTS) await pool.query(sql);
       await bootstrapCommercialAdmin(pool);
+      await syncTempCommercialAdmin(pool);
       await syncDemoCompany(pool);
     })().catch((err) => {
       ready = null;
@@ -389,6 +401,38 @@ export function ensureCommercialSchema(pool) {
     });
   }
   return ready;
+}
+
+export const TEMP_COMMERCIAL_ADMIN_EMAIL = 'temp.commercial-admin@fixbridge.us';
+
+/**
+ * Password for the temporary commercial logins (commercial admin, owner, office staff, technician).
+ * COMMERCIAL_TEMP_LOGIN_PASSWORD is the variable to use; TEMP_LOGIN_PASSWORD is still accepted
+ * because an earlier version used that name. Needs 12+ characters.
+ */
+export function tempCommercialPassword() {
+  const value = String(process.env.COMMERCIAL_TEMP_LOGIN_PASSWORD || process.env.TEMP_LOGIN_PASSWORD || '');
+  if (value && value.length < 12) {
+    console.warn('[commercial] COMMERCIAL_TEMP_LOGIN_PASSWORD must be at least 12 characters; temporary logins are disabled.');
+    return '';
+  }
+  return value;
+}
+
+/** Temporary commercial admin while TEMP_LOGIN_PASSWORD (12+ characters) is set; deactivated when removed. */
+async function syncTempCommercialAdmin(pool) {
+  const password = tempCommercialPassword();
+  if (!password) {
+    await pool.query('UPDATE commercial_admins SET active=FALSE WHERE email=$1 AND active', [TEMP_COMMERCIAL_ADMIN_EMAIL]);
+    return;
+  }
+  const hash = await bcrypt.hash(password, 12);
+  await pool.query(
+    `INSERT INTO commercial_admins (email, name, password_hash, active) VALUES ($1, 'Temp Commercial Admin', $2, TRUE)
+     ON CONFLICT (email) DO UPDATE SET password_hash=EXCLUDED.password_hash, active=TRUE`,
+    [TEMP_COMMERCIAL_ADMIN_EMAIL, hash]
+  );
+  console.warn(`[commercial] TEMPORARY LOGINS ENABLED: ${TEMP_COMMERCIAL_ADMIN_EMAIL} (admin), demo.owner@fixbridge.us, demo.office@fixbridge.us, demo.tech@fixbridge.us. Remove COMMERCIAL_TEMP_LOGIN_PASSWORD when done.`);
 }
 
 /** Creates the first commercial admin from COMMERCIAL_ADMIN_EMAIL / COMMERCIAL_ADMIN_PASSWORD. */
@@ -431,7 +475,9 @@ export const DEMO_USERS = [
  * uses example.com addresses, so nothing is emailed to real people.
  */
 async function syncDemoCompany(pool) {
-  const password = String(process.env.COMMERCIAL_DEMO_PASSWORD || '');
+  // The temporary-login password also turns on the demo company (owner, office staff and
+  // technician logins); COMMERCIAL_DEMO_PASSWORD takes precedence when set.
+  const password = String(process.env.COMMERCIAL_DEMO_PASSWORD || tempCommercialPassword());
   const enabled = password.length >= 10;
   if (password && !enabled) {
     console.warn('[commercial] COMMERCIAL_DEMO_PASSWORD must be at least 10 characters; demo company is disabled.');

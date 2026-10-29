@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Building2, ClipboardList, Copy, LayoutDashboard, LogOut } from "lucide-react";
+import { Building2, ClipboardList, Copy, LayoutDashboard, LogOut, ShieldCheck, UserCheck } from "lucide-react";
 import { adminApi, tokens } from "../api";
 import { CommercialLogo } from "../CommercialLogo";
 import { Link, navigate } from "../router";
@@ -22,7 +22,9 @@ export default function AdminApp({ path }: { path: string }) {
   const nav = [
     { to: "/commercial/admin", label: "Overview", icon: LayoutDashboard },
     { to: "/commercial/admin/applications", label: "Pilot applications", icon: ClipboardList },
+    { to: "/commercial/admin/accounts", label: "Account approvals", icon: UserCheck },
     { to: "/commercial/admin/companies", label: "Companies", icon: Building2 },
+    { to: "/commercial/admin/admins", label: "Admins", icon: ShieldCheck },
   ];
   return (
     <div className="min-h-svh bg-background text-foreground">
@@ -44,7 +46,7 @@ export default function AdminApp({ path }: { path: string }) {
         </div>
       </header>
       <main className="mx-auto max-w-[1180px] px-5 py-10">
-        {path === "/commercial/admin/applications" ? <Applications /> : path === "/commercial/admin/companies" ? <Companies /> : <Overview />}
+        {path === "/commercial/admin/applications" ? <Applications /> : path === "/commercial/admin/accounts" ? <AccountApprovals /> : path === "/commercial/admin/admins" ? <Admins me={admin} /> : path === "/commercial/admin/companies" ? <Companies /> : <Overview />}
       </main>
     </div>
   );
@@ -57,6 +59,7 @@ function Overview() {
   const s = data.summary;
   const tiles = [
     ["New applications", s.new_applications, "/commercial/admin/applications"],
+    ["Accounts waiting for approval", s.pending_accounts ?? 0, "/commercial/admin/accounts"],
     ["Companies", s.companies, "/commercial/admin/companies"],
     ["Founding spots used", `${s.founding} / ${s.founding_limit}`, "/commercial/admin/companies"],
     ["Jobs (30 days)", s.jobs_30d, null],
@@ -275,5 +278,220 @@ function CompanyModal({ id, onClose, onSaved }: { id: number; onClose: () => voi
         </div>
       )}
     </Modal>
+  );
+}
+
+const SOURCE_LABEL: Record<string, string> = { self_signup: "Signed up", owner_invite: "Invited by owner", invite: "Invited" };
+
+/** Every new owner, office and technician account is approved or rejected here. */
+function AccountApprovals() {
+  const [status, setStatus] = useState("pending");
+  const { data, error, loading, reload } = useLoad(() => adminApi.get(`/accounts${status ? `?status=${status}` : ""}`), [status]);
+  const [rejecting, setRejecting] = useState<any>(null);
+  const [note, setNote] = useState("");
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [actionError, setActionError] = useState<unknown>(null);
+  const [notice, setNotice] = useState("");
+
+  async function approve(a: any) {
+    setBusyId(a.id);
+    setActionError(null);
+    try {
+      const r = await adminApi.post(`/accounts/${a.id}/approve`, {});
+      setNotice(`${a.name} approved.${r.emailed ? " We emailed them." : " Email is not configured; let them know they can sign in."}`);
+      reload();
+    } catch (e) {
+      setActionError(e);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function reject() {
+    if (!rejecting) return;
+    setBusyId(rejecting.id);
+    setActionError(null);
+    try {
+      await adminApi.post(`/accounts/${rejecting.id}/reject`, { note });
+      setNotice(`${rejecting.name}'s request was rejected.`);
+      setRejecting(null);
+      setNote("");
+      reload();
+    } catch (e) {
+      setActionError(e);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <>
+      <h1 className="mb-6 text-[40px] font-semibold leading-none tracking-[-0.03em]">Account approvals</h1>
+      <div className="mb-4 flex gap-1">
+        {["pending", "approved", "rejected", ""].map((s) => (
+          <button key={s} type="button" onClick={() => setStatus(s)} className={cx("rounded-full px-4 py-1.5 text-[13px] capitalize", status === s ? "bg-foreground text-background" : "bg-card text-muted-foreground hover:text-foreground")}>{s || "all"}</button>
+        ))}
+      </div>
+      {notice ? <p className="mb-4 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-900" role="status">{notice}</p> : null}
+      {actionError ? <div className="mb-4"><ErrorNote error={actionError} /></div> : null}
+      {loading && !data ? <Spinner /> : error ? <ErrorNote error={error} /> : !data.accounts.length ? <Empty>No accounts here.</Empty> : (
+        <ul className="space-y-3">
+          {data.accounts.map((a: any) => (
+            <li key={a.id} className="rounded-2xl bg-card p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-lg font-semibold">{a.name}</span>
+                <Badge>{a.role === "office" ? "office staff" : a.role}</Badge>
+                <Badge tone={a.approval_status === "pending" ? "amber" : a.approval_status === "approved" ? "green" : "red"}>{a.approval_status}</Badge>
+                <span className="ml-auto text-xs text-muted-foreground">{when(a.created_at)}</span>
+              </div>
+              <p className="mt-1 text-sm"><a className="text-primary underline" href={`mailto:${a.email}`}>{a.email}</a>{a.phone ? ` · ${a.phone}` : ""}</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {a.company_name}{a.company_status === "pending" ? " (new company — approving this owner activates it)" : ""} · {SOURCE_LABEL[a.signup_source] || a.signup_source}
+                {a.invited ? " · has not set a password yet" : ""}
+              </p>
+              {a.approval_note ? <p className="mt-1 text-xs text-muted-foreground">Note: {a.approval_note}</p> : null}
+              {a.approval_status === "pending" ? (
+                <div className="mt-3 flex gap-2">
+                  <Button tone="success" size="sm" busy={busyId === a.id} onClick={() => approve(a)}>Approve</Button>
+                  <Button tone="secondary" size="sm" onClick={() => { setRejecting(a); setNote(""); }}>Reject</Button>
+                </div>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+      <Modal open={!!rejecting} onClose={() => setRejecting(null)} title="Reject account request">
+        {rejecting ? (
+          <div className="space-y-3 text-sm">
+            <p>Reject {rejecting.name} ({rejecting.email})? They will not be able to sign in.{rejecting.role === "owner" && rejecting.company_status === "pending" ? " Their new company will be cancelled." : ""}</p>
+            <Field label="Note (optional)"><Textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} /></Field>
+            <div className="flex justify-end gap-2">
+              <Button tone="secondary" onClick={() => setRejecting(null)}>Cancel</Button>
+              <Button tone="danger" busy={busyId === rejecting.id} onClick={reject}>Reject</Button>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+    </>
+  );
+}
+
+/** Add commercial admins, deactivate them, reset their passwords, and change your own. */
+function Admins({ me }: { me: { email: string; name: string } }) {
+  const { data, error, loading, reload } = useLoad(() => adminApi.get("/admins"), []);
+  const [form, setForm] = useState({ name: "", email: "", password: "" });
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [actionError, setActionError] = useState<unknown>(null);
+  const [resetFor, setResetFor] = useState<any>(null);
+  const [resetPassword, setResetPassword] = useState("");
+  const [own, setOwn] = useState({ current: "", next: "" });
+
+  async function run(fn: () => Promise<void>) {
+    setActionError(null);
+    setNotice("");
+    try {
+      await fn();
+    } catch (e) {
+      setActionError(e);
+    }
+  }
+
+  async function add(e: { preventDefault: () => void }) {
+    e.preventDefault();
+    setBusy(true);
+    setErrors({});
+    await run(async () => {
+      try {
+        const r = await adminApi.post("/admins", form);
+        setNotice(`${r.admin.email} can now sign in at /commercial/admin/login.${r.emailed ? " We emailed them." : " Share the password with them securely."}`);
+        setForm({ name: "", email: "", password: "" });
+        reload();
+      } catch (err: any) {
+        setErrors(err?.body?.errors || {});
+        throw err;
+      }
+    });
+    setBusy(false);
+  }
+
+  return (
+    <>
+      <h1 className="mb-6 text-[40px] font-semibold leading-none tracking-[-0.03em]">Admins</h1>
+      {notice ? <p className="mb-4 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-900" role="status">{notice}</p> : null}
+      {actionError ? <div className="mb-4"><ErrorNote error={actionError} /></div> : null}
+      {loading && !data ? <Spinner /> : error ? <ErrorNote error={error} /> : (
+        <ul className="mb-8 space-y-2">
+          {data.admins.map((a: any) => (
+            <li key={a.id} className="flex flex-wrap items-center gap-2 rounded-2xl bg-card p-4 text-sm">
+              <span className="font-semibold">{a.name || a.email}</span>
+              <span className="text-muted-foreground">{a.email}</span>
+              {a.email === me.email ? <Badge>you</Badge> : null}
+              <Badge tone={a.active ? "green" : "slate"}>{a.active ? "active" : "deactivated"}</Badge>
+              <span className="ml-auto text-xs text-muted-foreground">{a.last_login_at ? `Last sign-in ${when(a.last_login_at)}` : "Never signed in"}</span>
+              {a.email !== me.email ? (
+                <span className="flex gap-2">
+                  <Button size="sm" tone="ghost" onClick={() => { setResetFor(a); setResetPassword(""); }}>Set password</Button>
+                  <Button size="sm" tone="ghost" onClick={() => run(async () => { await adminApi.patch(`/admins/${a.id}`, { active: !a.active }); reload(); })}>{a.active ? "Deactivate" : "Reactivate"}</Button>
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <form onSubmit={add} className="space-y-3 rounded-2xl bg-card p-5" noValidate>
+          <h2 className="text-lg font-semibold">Add a commercial admin</h2>
+          <Field label="Name" error={errors.name}><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></Field>
+          <Field label="Email" error={errors.email}><Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required /></Field>
+          <Field label="Temporary password" hint="At least 12 characters. They can change it after signing in." error={errors.password}>
+            <Input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="new-password" required />
+          </Field>
+          <Button type="submit" busy={busy}>Add admin</Button>
+        </form>
+
+        <form
+          className="space-y-3 rounded-2xl bg-card p-5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            run(async () => {
+              await adminApi.post("/auth/change-password", { current_password: own.current, new_password: own.next });
+              setOwn({ current: "", next: "" });
+              setNotice("Your password was changed.");
+            });
+          }}
+        >
+          <h2 className="text-lg font-semibold">Change your password</h2>
+          <Field label="Current password"><Input type="password" value={own.current} onChange={(e) => setOwn({ ...own, current: e.target.value })} autoComplete="current-password" required /></Field>
+          <Field label="New password" hint="At least 12 characters."><Input type="password" value={own.next} onChange={(e) => setOwn({ ...own, next: e.target.value })} autoComplete="new-password" minLength={12} required /></Field>
+          <Button type="submit" tone="secondary">Change password</Button>
+        </form>
+      </div>
+
+      <Modal open={!!resetFor} onClose={() => setResetFor(null)} title="Set a new password">
+        {resetFor ? (
+          <form
+            className="space-y-3 text-sm"
+            onSubmit={(e) => {
+              e.preventDefault();
+              run(async () => {
+                await adminApi.patch(`/admins/${resetFor.id}`, { password: resetPassword });
+                setNotice(`New password set for ${resetFor.email}. Share it with them securely.`);
+                setResetFor(null);
+              });
+            }}
+          >
+            <p>Set a new password for {resetFor.email}.</p>
+            <Field label="New password" hint="At least 12 characters."><Input type="password" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} autoComplete="new-password" minLength={12} required /></Field>
+            <div className="flex justify-end gap-2">
+              <Button type="button" tone="secondary" onClick={() => setResetFor(null)}>Cancel</Button>
+              <Button type="submit">Save</Button>
+            </div>
+          </form>
+        ) : null}
+      </Modal>
+    </>
   );
 }

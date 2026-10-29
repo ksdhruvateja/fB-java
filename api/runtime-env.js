@@ -12,7 +12,10 @@ export function isDeployedProduction() {
   return (
     process.env.NODE_ENV === 'production' ||
     process.env.CONTEXT === 'production' ||
-    process.env.FIXBRIDGE_HOSTING === 'netlify'
+    process.env.FIXBRIDGE_HOSTING === 'netlify' ||
+    // Railway: the environment named "production" in the Railway project.
+    process.env.RAILWAY_ENVIRONMENT_NAME === 'production' ||
+    process.env.RAILWAY_ENVIRONMENT === 'production'
   );
 }
 

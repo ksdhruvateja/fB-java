@@ -36,6 +36,20 @@ FIXERA_TEST_DATABASE_URL=postgres://user:pass@localhost/fixbridge_test npm test
 Use a fresh database for each run (some tests are not re-runnable on the same data). For a local
 Postgres with a self-signed certificate, also set `DB_SSL_REJECT_UNAUTHORIZED=false` (never in production).
 
+## Railway hosting
+
+`railway.json` builds with `npm run build` and starts `node server.js` (health check `/api/health`).
+Add variables in Railway → your service → **Variables** (use the **Raw Editor** to paste several),
+then let Railway redeploy. Account variables are applied on every start, and the deploy log prints a
+line `Login variables: …` showing which ones the server can see (values are never printed).
+
+Minimum for sign-in: `SESSION_SECRET`, `NEON_DATABASE_URL`, `PUBLIC_SITE_URL`, `GMAIL_USER`,
+`GMAIL_APP_PASSWORD`, then `PRIMARY_ADMIN_EMAIL` / `PRIMARY_ADMIN_PASSWORD` and
+`COMMERCIAL_ADMIN_EMAIL` / `COMMERCIAL_ADMIN_PASSWORD` (passwords 12+ characters). For testing,
+`COMMERCIAL_TEMP_LOGIN_PASSWORD` creates temporary FixBridge Commercial logins (admin, owner, office,
+technician; see `.env.example`). There are no temporary homeowner-side logins. In the Railway environment
+named `production`, the app runs in production mode (no demo seed, no on-screen MFA codes).
+
 ## Netlify hosting
 
 Config is in `netlify.toml`:

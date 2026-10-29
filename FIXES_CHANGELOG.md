@@ -105,3 +105,50 @@ ProfessionalServiceRequestBetaCard, geminiAssessment and AdminJobEvidencePanel.
   - Primary admin creation and sign-in.
   - Owner, office and technician sign-in, and the wrong-role message.
   - Commercial admin sign-in.
+
+## Round 5 — Commercial self sign-up and admin approvals
+- **Anyone can request an account** at `/commercial/signup/owner`, `/commercial/signup/office`
+  or `/commercial/signup/technician`, linked from each sign-in page.
+  - **Owners** register their company, which is created with status `pending`.
+  - **Office staff and technicians** join with their company's **join code**. The code is shown
+    on the owner's and office's Team page; owners can generate a new one.
+- **Commercial admins approve everything.**
+  - Every new account waits for approval: self sign-ups and staff invited by an owner.
+  - The new admin page **Account approvals** (`/commercial/admin/accounts`) lists them with
+    Approve / Reject, and the Overview has a count of waiting accounts.
+  - Approving an owner activates their company. Seat limits are checked when approving.
+  - Rejecting a self-signed-up owner cancels their pending company.
+  - The person is emailed when approved, and the admin (`COMMERCIAL_ADMIN_EMAIL`) is emailed
+    when a request arrives.
+- **Sign-in messages:** pending accounts see "waiting for FixBridge approval"; rejected accounts
+  see "not approved". Existing accounts are unaffected (they default to approved).
+- **New database columns** (created automatically):
+  - `commercial_users.approval_status`, `approval_note`, `approval_decided_at`,
+    `approval_decided_by`, `signup_source`
+  - `commercial_companies.join_code`
+- **Tests:** a new end-to-end test covers owner sign-up, approval, join code, technician
+  sign-up and approval, and office rejection.
+
+## Round 6 — Railway, temporary logins, multiple commercial admins
+- **Variables now take effect after every redeploy.** Before this, account variables were only
+  read the first time the database was set up, so variables added later were ignored. The
+  commercial setup now also runs at startup instead of on its first request.
+- **Clearer deploy logs.** Each start logs which sign-in variables are set (never their values).
+- **Railway's `production` environment is treated as production.**
+- **`TEMP_LOGIN_PASSWORD`** creates one temporary login per role: homeowner, contractor, admin,
+  commercial admin, company owner, office staff and technician. Removing it blocks them on the
+  next start.
+- **Multiple commercial admins.** The new **Admins** page (`/commercial/admin/admins`) lets an
+  admin add admins, deactivate or reactivate them, and set another admin's password. Every admin
+  can change their own password.
+  - You can't deactivate yourself.
+  - At least one admin always stays active.
+- **Tests:** 115/115, including new tests for temporary logins and admin management.
+
+## Round 7 — Temporary logins are commercial-only
+- **Renamed variable.** Temporary logins now come only from `COMMERCIAL_TEMP_LOGIN_PASSWORD`.
+  `TEMP_LOGIN_PASSWORD` is still accepted.
+- **Commercial accounts only.** They cover the commercial admin, owner, office staff and
+  technician. No homeowner, contractor or marketplace admin accounts are created.
+- **Old accounts blocked.** Marketplace temporary accounts created by the previous version
+  (`temp.homeowner@`, `temp.contractor@` and `temp.admin@fixbridge.us`) are blocked at startup.

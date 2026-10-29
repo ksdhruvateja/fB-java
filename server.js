@@ -9,6 +9,7 @@ import { processComplianceExpirationAlerts } from './api/contractor-compliance-a
 import { ensureAssessmentQueueSchema, startAssessmentQueueWorker } from './api/assessment-queue.js';
 import { attachAssessmentQueue, getAssessmentProcessor } from './api/assessment-worker.js';
 import { buildSitemapXml, renderPublicPageHtml } from './api/public-page-html.js';
+import { ensureCommercialSchema } from './api/commercial/schema.js';
 
 const PORT = process.env.PORT || process.env.API_PORT || 3001;
 const distDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'dist');
@@ -56,6 +57,22 @@ if (process.env.PORT) {
 
 initDb()
   .then(async () => {
+    // Set up FixBridge Commercial at boot (not on its first request) so the commercial admin,
+    // temporary logins and demo company from environment variables exist right after a deploy,
+    // and any problem shows in the deploy logs.
+    try {
+      await ensureCommercialSchema(pool);
+    } catch (e) {
+      console.error('[commercial] setup failed at startup:', e.message);
+    }
+    const set = (name) => (String(process.env[name] || '').trim() ? 'set' : 'not set');
+    console.log(
+      '[FixBridge API] Login variables: ' +
+        ['SESSION_SECRET', 'NEON_DATABASE_URL', 'PRIMARY_ADMIN_EMAIL', 'PRIMARY_ADMIN_PASSWORD', 'COMMERCIAL_ADMIN_EMAIL',
+          'COMMERCIAL_ADMIN_PASSWORD', 'COMMERCIAL_DEMO_PASSWORD', 'COMMERCIAL_TEMP_LOGIN_PASSWORD', 'GMAIL_USER', 'PUBLIC_SITE_URL']
+          .map((n) => `${n}=${set(n)}`)
+          .join(', ')
+    );
     // Durable AI-assessment queue. Set FIXERA_WORKER_ENABLED=false on API-only instances when a
     // separate worker service runs (with FIXERA_QUEUE_EXTERNAL_WORKER=true on the API side).
     let queueWorker = null;

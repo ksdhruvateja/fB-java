@@ -213,6 +213,7 @@ export function TeamPage() {
       <PageTitle title="Team" subtitle={`${data.seats_used} of ${data.seats} seats used. Additional users are $15/user/month.`}
         actions={owner ? <Button onClick={() => { setInviteOpen(true); setLink(null); }} disabled={data.seats_used >= data.seats}><UserPlus className="h-4 w-4" />Invite</Button> : null} />
       {data.seats_used >= data.seats && owner ? <p className="mb-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">All seats are in use. Contact FixBridge to add a seat, or deactivate someone who no longer needs access.</p> : null}
+      {data.join_code ? <JoinCodeCard code={data.join_code} canRegenerate={owner} onChanged={reload} /> : null}
       <div className="overflow-x-auto rounded-2xl bg-card">
         <table className="w-full min-w-[560px] text-sm">
           <thead className="whitespace-nowrap bg-muted text-left text-xs uppercase tracking-wide text-muted-foreground /50"><tr><th className="px-4 py-2">Person</th><th className="px-4 py-2">Role</th><th className="px-4 py-2">Sees prices & invoices</th><th className="px-4 py-2">Status</th>{owner ? <th /> : null}</tr></thead>
@@ -232,7 +233,7 @@ export function TeamPage() {
                     <input type="checkbox" aria-label="Can see prices and invoices" checked={u.can_view_financials} onChange={async (e) => { try { await api.patch(`/team/${u.id}`, { can_view_financials: e.target.checked }); reload(); } catch (x) { setErr(x); } }} />
                   ) : u.can_view_financials ? "Yes" : "No"}
                 </td>
-                <td className="px-4 py-3">{!u.active ? <Badge tone="slate">Deactivated</Badge> : u.invited ? <Badge tone="amber">Invite pending</Badge> : <Badge tone="green">Active</Badge>}</td>
+                <td className="px-4 py-3">{u.approval_status === "pending" ? <Badge tone="amber">Waiting for FixBridge approval</Badge> : u.approval_status === "rejected" ? <Badge tone="red">Not approved</Badge> : !u.active ? <Badge tone="slate">Deactivated</Badge> : u.invited ? <Badge tone="amber">Invite pending</Badge> : <Badge tone="green">Active</Badge>}</td>
                 {owner ? (
                   <td className="px-4 py-3 text-right">
                     {u.id !== user.id ? (
@@ -398,5 +399,24 @@ function ChangePassword() {
         <Button type="submit" busy={busy}>Change password</Button>
       </form>
     </Card>
+  );
+}
+
+/** Code office staff and technicians enter at /commercial/signup to join this company. */
+function JoinCodeCard({ code, canRegenerate, onChanged }: { code: string; canRegenerate: boolean; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const signupUrl = `${window.location.origin}/commercial/signup/technician`;
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-3 rounded-2xl bg-card p-4 text-sm">
+      <div className="min-w-0 flex-1">
+        <p className="font-medium">Company join code: <span className="font-mono text-base tracking-widest">{code}</span></p>
+        <p className="text-xs text-muted-foreground">Staff can create their own account at {signupUrl} (or the office staff sign-up) with this code. FixBridge approves each new account.</p>
+      </div>
+      <Button size="sm" tone="ghost" onClick={async () => { try { await navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* clipboard unavailable */ } }}>{copied ? "Copied" : "Copy code"}</Button>
+      {canRegenerate ? (
+        <Button size="sm" tone="ghost" busy={busy} onClick={async () => { setBusy(true); try { await api.post("/team/join-code", {}); onChanged(); } finally { setBusy(false); } }}>New code</Button>
+      ) : null}
+    </div>
   );
 }

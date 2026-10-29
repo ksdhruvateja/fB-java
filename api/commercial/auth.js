@@ -55,6 +55,15 @@ export function requireCommercialUser(pool) {
       if (!user || !user.active || !user.password_hash) {
         return res.status(401).json({ ok: false, message: 'This account is not active.' });
       }
+      if (user.approval_status && user.approval_status !== 'approved') {
+        return res.status(403).json({
+          ok: false,
+          code: user.approval_status === 'pending' ? 'PENDING_APPROVAL' : 'NOT_APPROVED',
+          message: user.approval_status === 'pending'
+            ? 'Your account is waiting for FixBridge approval.'
+            : 'This account request was not approved. Contact FixBridge.',
+        });
+      }
       if (user.company_status === 'suspended' || user.company_status === 'cancelled') {
         return res.status(403).json({ ok: false, message: 'This company account is not active. Contact FixBridge.' });
       }

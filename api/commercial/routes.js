@@ -2,6 +2,7 @@
  * FixBridge Commercial API, mounted at /api/commercial. Separate accounts, tokens, tables and
  * admin from the homeowner/contractor marketplace.
  */
+import crypto from 'node:crypto';
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
@@ -82,7 +83,44 @@ const publicUser = (u) => ({
   id: u.id, company_id: u.company_id, email: u.email, name: u.name, phone: u.phone, role: u.role,
   can_view_financials: isOffice(u) || u.can_view_financials, active: u.active,
   invited: !u.password_hash, last_login_at: u.last_login_at,
+  approval_status: u.approval_status || 'approved',
 });
+
+// Join codes avoid look-alike characters (0/O, 1/I/L).
+const JOIN_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+function newJoinCode() {
+  const bytes = crypto.randomBytes(8);
+  return Array.from(bytes, (b) => JOIN_CODE_ALPHABET[b % JOIN_CODE_ALPHABET.length]).join('');
+}
+
+/** Ensures the company has a join code (creating one on first use) and returns it. */
+async function companyJoinCode(db, companyId, regenerate = false) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const { rows } = await db.query(
+      `UPDATE commercial_companies SET join_code=$2 WHERE id=$1 ${regenerate ? '' : 'AND join_code IS NULL'} RETURNING join_code`,
+      [companyId, newJoinCode()]
+    ).catch((e) => {
+      if (e.code === '23505') return { rows: null }; // code collision: try another
+      throw e;
+    });
+    if (rows === null) continue;
+    if (rows[0]) return rows[0].join_code;
+    const existing = await db.query('SELECT join_code FROM commercial_companies WHERE id=$1', [companyId]);
+    return existing.rows[0]?.join_code || null;
+  }
+  throw new HttpError(500, 'Could not create a join code. Please try again.');
+}
+
+/** Tells the commercial admin (COMMERCIAL_ADMIN_EMAIL) that an account is waiting. Never throws. */
+async function notifyAdminOfPendingAccount(user, companyName) {
+  const to = String(process.env.COMMERCIAL_ADMIN_EMAIL || '').trim();
+  if (!to) return;
+  await sendMail({
+    to,
+    subject: `FixBridge Commercial: ${user.role} account waiting for approval`,
+    text: `${user.name} (${user.email}) requested a ${user.role} account for ${companyName}.\n\nReview it in the commercial admin under Account approvals.\n`,
+  }).catch(() => {});
+}
 
 /**
  * Base URL for links in invites. APP_URL can point at the hosting provider's domain, so links use
@@ -102,7 +140,8 @@ export function registerCommercialRoutes(app, { pool }) {
   const userAuth = requireCommercialUser(pool);
   const adminAuth = requireCommercialAdmin(pool);
   const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false,
+    // Override only for automated tests (they sign in many times from one address).
+    windowMs: 15 * 60 * 1000, max: Number(process.env.COMMERCIAL_AUTH_RATE_LIMIT_MAX || 20), standardHeaders: true, legacyHeaders: false,
     handler: (_q, res) => res.status(429).json({ ok: false, message: 'Too many attempts. Please wait a few minutes.' }),
   });
   const applyLimiter = rateLimit({
@@ -161,7 +200,7 @@ export function registerCommercialRoutes(app, { pool }) {
       [email]
     );
     const user = rows[0];
-    const ok = user?.password_hash && user.active && (await bcrypt.compare(password, user.password_hash));
+    const ok = user?.password_hash && (await bcrypt.compare(password, user.password_hash));
     if (!ok) return res.status(401).json({ ok: false, message: 'Email or password is incorrect.' });
     // Each role has its own sign-in page; point people to the right one.
     const wanted = String(req.body?.role || '');
@@ -169,6 +208,15 @@ export function registerCommercialRoutes(app, { pool }) {
       const names = { owner: 'company owner', office: 'office staff', technician: 'technician' };
       return res.status(403).json({ ok: false, code: 'WRONG_ROLE', role: user.role, message: `This is a ${names[user.role]} account. Use the ${names[user.role]} sign-in.` });
     }
+    if (user.approval_status === 'pending') {
+      return res.status(403).json({ ok: false, code: 'PENDING_APPROVAL', message: 'Your account is waiting for FixBridge approval. We will email you when it is ready.' });
+    }
+    if (user.approval_status === 'rejected') {
+      return res.status(403).json({ ok: false, code: 'NOT_APPROVED', message: 'This account request was not approved. Contact FixBridge.' });
+    }
+    // Approval state is reported first (rejection deactivates the account); other inactive
+    // accounts keep the generic message.
+    if (!user.active) return res.status(401).json({ ok: false, message: 'Email or password is incorrect.' });
     if (['suspended', 'cancelled'].includes(user.company_status)) {
       return res.status(403).json({ ok: false, message: 'This company account is not active. Contact FixBridge.' });
     }
@@ -186,6 +234,63 @@ export function registerCommercialRoutes(app, { pool }) {
     res.json({ ok: true, ...rows[0] });
   }));
 
+  // ── Self sign-up: owners register a company; office staff and technicians join one with the
+  // company's join code. Every account waits for a FixBridge commercial admin to approve it.
+  r.post('/auth/signup', authLimiter, wrap(async (req, res) => {
+    const b = req.body || {};
+    const role = ROLES.includes(b.role) ? b.role : null;
+    const email = clean(b.email, 254).toLowerCase();
+    const name = clean(b.name, 200);
+    const phone = clean(b.phone, 40);
+    const password = String(b.password || '');
+    const errors = {};
+    if (!role) errors.role = 'Choose an account type.';
+    if (name.length < 2) errors.name = 'Enter your name.';
+    if (!EMAIL_RE.test(email)) errors.email = 'Enter a valid email.';
+    if (phone && phone.replace(/\D/g, '').length < 10) errors.phone = 'Enter a valid phone number.';
+    if (password.length < 10) errors.password = 'Use at least 10 characters.';
+    const companyName = clean(b.company_name, 200);
+    const joinCode = clean(b.join_code, 20).toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (role === 'owner' && companyName.length < 2) errors.company_name = 'Enter your company name.';
+    if (role && role !== 'owner' && !joinCode) errors.join_code = 'Enter the join code from your company owner.';
+    if (Object.keys(errors).length) return res.status(400).json({ ok: false, message: 'Please fix the highlighted fields.', errors });
+
+    const hash = await bcrypt.hash(password, 12);
+    const { user, company } = await tx(pool, async (db) => {
+      const taken = await db.query('SELECT 1 FROM commercial_users WHERE email=$1', [email]);
+      if (taken.rows.length) throw new HttpError(409, 'That email already has a FixBridge Commercial account. Sign in instead.');
+      let companyRow;
+      if (role === 'owner') {
+        const trades = (Array.isArray(b.trades) ? b.trades : []).map((t) => clean(t, 60)).filter(Boolean).slice(0, 12);
+        const { rows } = await db.query(
+          `INSERT INTO commercial_companies (name, email, phone, trades, service_area, plan, status)
+           VALUES ($1,$2,$3,$4,$5,'essentials','pending') RETURNING *`,
+          [companyName, email, phone, trades, clean(b.service_area, 300)]
+        );
+        companyRow = rows[0];
+      } else {
+        const { rows } = await db.query('SELECT * FROM commercial_companies WHERE join_code=$1', [joinCode]);
+        companyRow = rows[0];
+        if (!companyRow) throw new HttpError(404, 'That join code was not found. Check it with your company owner.');
+        if (['pending', 'suspended', 'cancelled'].includes(companyRow.status)) {
+          throw new HttpError(403, 'This company is not active on FixBridge Commercial yet.');
+        }
+      }
+      const { rows } = await db.query(
+        `INSERT INTO commercial_users (company_id, email, name, phone, role, can_view_financials, password_hash, approval_status, signup_source)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'pending','self_signup') RETURNING *`,
+        [companyRow.id, email, name, phone, role, role !== 'technician', hash]
+      );
+      return { user: rows[0], company: companyRow };
+    });
+    await notifyAdminOfPendingAccount(user, company.name);
+    res.json({
+      ok: true,
+      pending: true,
+      message: 'Thanks! Your account is waiting for FixBridge approval. We will email you when you can sign in.',
+    });
+  }));
+
   r.post('/auth/set-password', authLimiter, wrap(async (req, res) => {
     const password = String(req.body?.password || '');
     if (password.length < 10) return res.status(400).json({ ok: false, message: 'Use at least 10 characters.' });
@@ -195,6 +300,9 @@ export function registerCommercialRoutes(app, { pool }) {
       [hashToken(req.body?.token), await bcrypt.hash(password, 12)]
     );
     if (!rows[0]) return res.status(404).json({ ok: false, message: 'This link has expired or was already used. Ask your company owner for a new one.' });
+    if (rows[0].approval_status && rows[0].approval_status !== 'approved') {
+      return res.json({ ok: true, pending: true, message: 'Your password is set. Your account is waiting for FixBridge approval; we will email you when you can sign in.' });
+    }
     res.json({ ok: true, token: makeCommercialUserToken(rows[0]), user: publicUser(rows[0]) });
   }));
 
@@ -1056,7 +1164,8 @@ export function registerCommercialRoutes(app, { pool }) {
     const { rows } = await pool.query('SELECT * FROM commercial_users WHERE company_id=$1 ORDER BY active DESC, role, name', [req.cuser.company_id]);
     const company = await loadCompany(pool, req.cuser.company_id);
     const seats = (PLAN_SEATS[company.plan] || 1) + Number(company.extra_seats || 0);
-    res.json({ ok: true, users: rows.map(publicUser), seats, seats_used: rows.filter((u) => u.active).length });
+    const joinCode = isOffice(req.cuser) ? await companyJoinCode(pool, company.id) : undefined;
+    res.json({ ok: true, users: rows.map(publicUser), seats, seats_used: rows.filter((u) => u.active).length, join_code: joinCode });
   }));
 
   r.post('/team', userAuth, wrap(async (req, res) => {
@@ -1075,8 +1184,8 @@ export function registerCommercialRoutes(app, { pool }) {
       const taken = await db.query('SELECT 1 FROM commercial_users WHERE email=$1', [email]);
       if (taken.rows.length) throw new HttpError(409, 'That email already has a FixBridge Commercial account.');
       const { rows } = await db.query(
-        `INSERT INTO commercial_users (company_id, email, name, phone, role, can_view_financials, invite_token_hash, invite_expires_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        `INSERT INTO commercial_users (company_id, email, name, phone, role, can_view_financials, invite_token_hash, invite_expires_at, approval_status, signup_source)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending','owner_invite') RETURNING *`,
         [company.id, email, name, clean(req.body?.phone, 40), role, role === 'office' ? true : Boolean(req.body?.can_view_financials), invite.hash, invite.expiresAt]
       );
       return rows[0];
@@ -1088,7 +1197,13 @@ export function registerCommercialRoutes(app, { pool }) {
       subject: `${company.name} invited you to FixBridge Commercial`,
       text: `${req.cuser.name || 'Your company'} added you to ${company.name} on FixBridge Commercial.\n\nSet your password here (link expires in 7 days):\n${link}\n`,
     }).catch((e) => ({ ok: false, message: e.message }));
+    await notifyAdminOfPendingAccount(user, company.name);
     res.json({ ok: true, user: publicUser(user), invite_link: link, emailed: Boolean(mail.ok && !mail.simulated) });
+  }));
+
+  r.post('/team/join-code', userAuth, wrap(async (req, res) => {
+    requireOwner(req);
+    res.json({ ok: true, join_code: await companyJoinCode(pool, req.cuser.company_id, true) });
   }));
 
   r.patch('/team/:id', userAuth, wrap(async (req, res) => {
@@ -1147,6 +1262,70 @@ export function registerCommercialRoutes(app, { pool }) {
 
   r.get('/admin/me', adminAuth, wrap(async (req, res) => res.json({ ok: true, admin: req.cadmin })));
 
+  // ── Commercial admins (any active admin can add and manage admins) ─────────
+  const presentAdmin = (a) => ({ id: a.id, email: a.email, name: a.name, active: a.active, last_login_at: a.last_login_at, created_at: a.created_at });
+
+  r.get('/admin/admins', adminAuth, wrap(async (_req, res) => {
+    const { rows } = await pool.query('SELECT * FROM commercial_admins ORDER BY active DESC, created_at ASC');
+    res.json({ ok: true, admins: rows.map(presentAdmin) });
+  }));
+
+  r.post('/admin/admins', adminAuth, wrap(async (req, res) => {
+    const email = clean(req.body?.email, 254).toLowerCase();
+    const name = clean(req.body?.name, 200);
+    const password = String(req.body?.password || '');
+    const errors = {};
+    if (!EMAIL_RE.test(email)) errors.email = 'Enter a valid email.';
+    if (name.length < 2) errors.name = 'Enter their name.';
+    if (password.length < 12) errors.password = 'Use at least 12 characters.';
+    if (Object.keys(errors).length) return res.status(400).json({ ok: false, message: 'Please fix the highlighted fields.', errors });
+    const { rows } = await pool.query(
+      `INSERT INTO commercial_admins (email, name, password_hash) VALUES ($1,$2,$3)
+       ON CONFLICT (email) DO NOTHING RETURNING *`,
+      [email, name, await bcrypt.hash(password, 12)]
+    );
+    if (!rows[0]) throw new HttpError(409, 'That email is already a commercial admin.');
+    const mail = await sendMail({
+      to: email,
+      subject: 'You are a FixBridge Commercial admin',
+      text: `Hi ${name},\n\n${req.cadmin.name || req.cadmin.email} added you as a FixBridge Commercial admin.\n\nSign in at ${appBaseUrl(req)}/commercial/admin/login with the password they gave you, then change it under Admins.\n`,
+    }).catch(() => ({ ok: false }));
+    res.json({ ok: true, admin: presentAdmin(rows[0]), emailed: Boolean(mail.ok && !mail.simulated) });
+  }));
+
+  r.patch('/admin/admins/:id', adminAuth, wrap(async (req, res) => {
+    const id = intId(req.params.id);
+    const b = req.body || {};
+    const admin = await tx(pool, async (db) => {
+      const { rows } = await db.query('SELECT * FROM commercial_admins WHERE id=$1 FOR UPDATE', [id]);
+      const target = rows[0];
+      if (!target) throw new HttpError(404, 'Admin not found.');
+      if (b.active === false && target.active) {
+        if (target.id === req.cadmin.id) throw new HttpError(400, 'You cannot deactivate your own admin account.');
+        const others = (await db.query('SELECT COUNT(*)::int AS n FROM commercial_admins WHERE active AND id<>$1', [id])).rows[0].n;
+        if (others < 1) throw new HttpError(400, 'At least one commercial admin must stay active.');
+      }
+      if (b.password !== undefined && String(b.password).length < 12) throw new HttpError(400, 'Use at least 12 characters for the password.');
+      const hash = b.password !== undefined ? await bcrypt.hash(String(b.password), 12) : null;
+      const { rows: updated } = await db.query(
+        `UPDATE commercial_admins SET name=$2, active=$3, password_hash=COALESCE($4, password_hash) WHERE id=$1 RETURNING *`,
+        [id, 'name' in b ? clean(b.name, 200) || target.name : target.name, typeof b.active === 'boolean' ? b.active : target.active, hash]
+      );
+      return updated[0];
+    });
+    res.json({ ok: true, admin: presentAdmin(admin) });
+  }));
+
+  r.post('/admin/auth/change-password', authLimiter, adminAuth, wrap(async (req, res) => {
+    const current = String(req.body?.current_password || '');
+    const next = String(req.body?.new_password || '');
+    if (next.length < 12) throw new HttpError(400, 'Use at least 12 characters for the new password.');
+    const { rows } = await pool.query('SELECT password_hash FROM commercial_admins WHERE id=$1', [req.cadmin.id]);
+    if (!(await bcrypt.compare(current, rows[0]?.password_hash || ''))) throw new HttpError(400, 'Your current password is incorrect.');
+    await pool.query('UPDATE commercial_admins SET password_hash=$2 WHERE id=$1', [req.cadmin.id, await bcrypt.hash(next, 12)]);
+    res.json({ ok: true });
+  }));
+
   r.get('/admin/summary', adminAuth, wrap(async (_req, res) => {
     const { rows } = await pool.query(`SELECT
       (SELECT COUNT(*)::int FROM commercial_pilot_applications WHERE status='new') AS new_applications,
@@ -1154,8 +1333,94 @@ export function registerCommercialRoutes(app, { pool }) {
       (SELECT COUNT(*)::int FROM commercial_companies WHERE founding_member) AS founding,
       (SELECT COUNT(*)::int FROM commercial_jobs) AS jobs,
       (SELECT COUNT(*)::int FROM commercial_jobs WHERE created_at > NOW() - INTERVAL '30 days') AS jobs_30d,
-      (SELECT COUNT(*)::int FROM commercial_exceptions WHERE status='open') AS open_exceptions`);
+      (SELECT COUNT(*)::int FROM commercial_exceptions WHERE status='open') AS open_exceptions,
+      (SELECT COUNT(*)::int FROM commercial_users WHERE approval_status='pending') AS pending_accounts`);
     res.json({ ok: true, summary: { ...rows[0], founding_limit: FOUNDING_LIMIT } });
+  }));
+
+  // ── Account approvals ─────────────────────────────────────────────────────
+  r.get('/admin/accounts', adminAuth, wrap(async (req, res) => {
+    const status = ['pending', 'approved', 'rejected'].includes(req.query.status) ? req.query.status : null;
+    const { rows } = await pool.query(
+      `SELECT u.*, c.name AS company_name, c.status AS company_status
+         FROM commercial_users u JOIN commercial_companies c ON c.id=u.company_id
+        WHERE ($1::text IS NULL OR u.approval_status=$1)
+        ORDER BY (u.approval_status='pending') DESC, u.created_at DESC
+        LIMIT 500`,
+      [status]
+    );
+    res.json({
+      ok: true,
+      accounts: rows.map((u) => ({
+        ...publicUser(u),
+        company_name: u.company_name,
+        company_status: u.company_status,
+        signup_source: u.signup_source,
+        approval_note: u.approval_note,
+        approval_decided_at: u.approval_decided_at,
+        created_at: u.created_at,
+      })),
+    });
+  }));
+
+  r.post('/admin/accounts/:id/approve', adminAuth, wrap(async (req, res) => {
+    const id = intId(req.params.id);
+    const user = await tx(pool, async (db) => {
+      const { rows } = await db.query('SELECT * FROM commercial_users WHERE id=$1 FOR UPDATE', [id]);
+      const u = rows[0];
+      if (!u) throw new HttpError(404, 'Account not found.');
+      if (u.approval_status === 'approved') throw new HttpError(409, 'This account is already approved.');
+      const company = await loadCompany(db, u.company_id, true);
+      if (u.role === 'owner' && company.status === 'pending') {
+        await db.query(`UPDATE commercial_companies SET status='pilot', trial_started_at=COALESCE(trial_started_at, NOW()) WHERE id=$1`, [company.id]);
+      } else if (['pending', 'suspended', 'cancelled'].includes(company.status)) {
+        throw new HttpError(409, `Approve the company owner first (company status: ${company.status}).`);
+      }
+      const seats = (PLAN_SEATS[company.plan] || 1) + Number(company.extra_seats || 0);
+      const used = (await db.query(
+        `SELECT COUNT(*)::int AS n FROM commercial_users WHERE company_id=$1 AND active AND approval_status='approved'`,
+        [company.id]
+      )).rows[0].n;
+      if (used >= seats) {
+        throw new HttpError(402, `${company.name} has no free seats (${used}/${seats}). Add a seat on the company page first.`);
+      }
+      const upd = await db.query(
+        `UPDATE commercial_users SET approval_status='approved', active=TRUE, approval_note=$2,
+           approval_decided_at=NOW(), approval_decided_by=$3 WHERE id=$1 RETURNING *`,
+        [id, clean(req.body?.note, 500), req.cadmin.id]
+      );
+      return { ...upd.rows[0], company_name: company.name };
+    });
+    const mail = await sendMail({
+      to: user.email,
+      subject: 'Your FixBridge Commercial account is approved',
+      text: `Hi ${user.name},\n\nYour ${user.role} account for ${user.company_name} is approved.\n\n${
+        user.password_hash ? `Sign in at ${appBaseUrl(req)}/commercial/login/${user.role}` : 'Use the invite link you received to set your password, then sign in.'
+      }\n`,
+    }).catch(() => ({ ok: false }));
+    res.json({ ok: true, account: publicUser(user), emailed: Boolean(mail.ok && !mail.simulated) });
+  }));
+
+  r.post('/admin/accounts/:id/reject', adminAuth, wrap(async (req, res) => {
+    const id = intId(req.params.id);
+    const note = clean(req.body?.note, 500);
+    const user = await tx(pool, async (db) => {
+      const { rows } = await db.query('SELECT * FROM commercial_users WHERE id=$1 FOR UPDATE', [id]);
+      const u = rows[0];
+      if (!u) throw new HttpError(404, 'Account not found.');
+      if (u.approval_status !== 'pending') throw new HttpError(409, 'Only accounts waiting for approval can be rejected. Deactivate approved accounts from the company page.');
+      const upd = await db.query(
+        `UPDATE commercial_users SET approval_status='rejected', active=FALSE, approval_note=$2,
+           approval_decided_at=NOW(), approval_decided_by=$3 WHERE id=$1 RETURNING *`,
+        [id, note, req.cadmin.id]
+      );
+      // A rejected owner sign-up leaves no usable company behind.
+      if (u.role === 'owner' && u.signup_source === 'self_signup') {
+        await db.query(`UPDATE commercial_companies SET status='cancelled' WHERE id=$1 AND status='pending'`, [u.company_id]);
+      }
+      return upd.rows[0];
+    });
+    res.json({ ok: true, account: publicUser(user) });
   }));
 
   r.get('/admin/applications', adminAuth, wrap(async (req, res) => {

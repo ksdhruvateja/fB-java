@@ -99,7 +99,7 @@ export function CompanyLogin({ role }: { role: CompanyRole }) {
         .
       </p>
       <p className="mt-3 text-center text-[13px] text-muted-foreground">
-        Team members get an invite link from their company owner. New company? <Link to="/commercial#apply" className="text-primary hover:underline" onClick={() => setTimeout(() => document.getElementById("apply")?.scrollIntoView(), 50)}>Apply for the pilot</Link>.
+        No account yet? <Link to={`/commercial/signup/${role}`} className="text-primary hover:underline">Create a {role === "owner" ? "company owner" : role === "office" ? "office staff" : "technician"} account</Link>. New accounts are approved by FixBridge.
       </p>
     </AuthFrame>
   );
@@ -113,6 +113,7 @@ export function SetPassword() {
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [done, setDone] = useState("");
   useEffect(() => {
     if (!token) {
       setLoadError("This link is missing its code. Open the link from your email again.");
@@ -126,7 +127,11 @@ export function SetPassword() {
     setBusy(true);
     setError("");
     try {
-      const res = await api.public<{ token: string }>("POST", "/auth/set-password", { token, password });
+      const res = await api.public<{ token?: string; pending?: boolean; message?: string }>("POST", "/auth/set-password", { token, password });
+      if (res.pending || !res.token) {
+        setDone(res.message || "Your password is set. Your account is waiting for FixBridge approval.");
+        return;
+      }
       tokens.setUser(res.token);
       navigate("/commercial/app", { replace: true });
     } catch (err: any) {
@@ -137,7 +142,9 @@ export function SetPassword() {
   }
   return (
     <AuthFrame title="Set your password" subtitle={invite ? `${invite.name || invite.email} · ${invite.company_name}` : "Finish setting up your FixBridge Commercial account."}>
-      {loadError ? (
+      {done ? (
+        <p className="rounded-xl bg-muted p-4 text-sm" role="status">{done}</p>
+      ) : loadError ? (
         <p className="text-sm font-medium text-red-600" role="alert">{loadError}</p>
       ) : (
         <form onSubmit={submit} className="space-y-4">
@@ -179,6 +186,91 @@ export function AdminLogin() {
         {error ? <p className="text-sm font-medium text-red-600" role="alert">{error}</p> : null}
         <Button type="submit" size="lg" className="w-full" busy={busy}>Sign in</Button>
       </form>
+    </AuthFrame>
+  );
+}
+
+const SIGNUP_COPY: Record<CompanyRole, { title: string; subtitle: string }> = {
+  owner: { title: "Create a company account", subtitle: "Register your company. FixBridge reviews new companies before they go live." },
+  office: { title: "Create an office staff account", subtitle: "Join your company with the join code from your company owner." },
+  technician: { title: "Create a technician account", subtitle: "Join your company with the join code from your company owner." },
+};
+
+/** /commercial/signup/:role — self sign-up; every account waits for commercial-admin approval. */
+export function CompanySignup({ role }: { role: CompanyRole }) {
+  const copy = SIGNUP_COPY[role];
+  const [form, setForm] = useState({ name: "", email: "", phone: "", password: "", confirm: "", company_name: "", service_area: "", trades: "", join_code: "" });
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState("");
+  const set = (key: keyof typeof form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [key]: e.target.value }));
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setError("");
+    setErrors({});
+    if (form.password !== form.confirm) {
+      setErrors({ confirm: "The passwords do not match." });
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await api.public<{ message?: string }>("POST", "/auth/signup", {
+        role,
+        name: form.name,
+        email: form.email,
+        phone: form.phone,
+        password: form.password,
+        ...(role === "owner"
+          ? { company_name: form.company_name, service_area: form.service_area, trades: form.trades.split(",").map((t) => t.trim()).filter(Boolean) }
+          : { join_code: form.join_code }),
+      });
+      setDone(res.message || "Thanks! Your account is waiting for FixBridge approval.");
+    } catch (err: any) {
+      setErrors(err?.body?.errors || {});
+      setError(err?.message || "Could not create your account.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (done) {
+    return (
+      <AuthFrame title="Request received" subtitle={copy.title}>
+        <p className="rounded-xl bg-muted p-4 text-sm" role="status">{done}</p>
+        <p className="mt-6 text-center text-[14px]">
+          <Link to={`/commercial/login/${role}`} className="text-primary hover:underline">Back to sign in</Link>
+        </p>
+      </AuthFrame>
+    );
+  }
+
+  return (
+    <AuthFrame title={copy.title} subtitle={copy.subtitle}>
+      <form onSubmit={submit} className="space-y-4" noValidate>
+        {role === "owner" ? (
+          <>
+            <Field label="Company name" error={errors.company_name}><Input value={form.company_name} onChange={set("company_name")} required /></Field>
+            <Field label="Trades" hint="Comma separated, e.g. Plumbing, HVAC."><Input value={form.trades} onChange={set("trades")} /></Field>
+            <Field label="Service area"><Input value={form.service_area} onChange={set("service_area")} /></Field>
+          </>
+        ) : (
+          <Field label="Company join code" hint="Ask your company owner; it is on their Team page." error={errors.join_code}>
+            <Input value={form.join_code} onChange={set("join_code")} autoCapitalize="characters" autoComplete="off" required />
+          </Field>
+        )}
+        <Field label="Your name" error={errors.name}><Input value={form.name} onChange={set("name")} autoComplete="name" required /></Field>
+        <Field label="Email" error={errors.email}><Input type="email" value={form.email} onChange={set("email")} autoComplete="email" required /></Field>
+        <Field label="Phone" error={errors.phone}><Input type="tel" value={form.phone} onChange={set("phone")} autoComplete="tel" /></Field>
+        <Field label="Password" hint="At least 10 characters." error={errors.password}><Input type="password" value={form.password} onChange={set("password")} autoComplete="new-password" minLength={10} required /></Field>
+        <Field label="Confirm password" error={errors.confirm}><Input type="password" value={form.confirm} onChange={set("confirm")} autoComplete="new-password" required /></Field>
+        {error ? <p className="text-sm font-medium text-red-600" role="alert">{error}</p> : null}
+        <Button type="submit" size="lg" className="w-full" busy={busy}>Create account</Button>
+      </form>
+      <p className="mt-8 text-center text-[14px] text-muted-foreground">
+        Already have an account? <Link to={`/commercial/login/${role}`} className="text-primary hover:underline">Sign in</Link>
+      </p>
     </AuthFrame>
   );
 }

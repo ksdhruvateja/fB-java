@@ -82,6 +82,8 @@ export interface CUser {
   can_view_financials: boolean;
   active: boolean;
   invited: boolean;
+  /** New accounts wait for a FixBridge commercial admin. */
+  approval_status?: "pending" | "approved" | "rejected";
 }
 export interface Company {
   id: number;
