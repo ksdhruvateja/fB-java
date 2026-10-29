@@ -56,3 +56,12 @@ export function getDerivedSecret(envName) {
   const own = String(process.env[envName] || '').trim();
   return own || getSessionSecret();
 }
+
+/** Environment value with surrounding whitespace and one pair of matching quotes removed. */
+export function envValue(name) {
+  let v = String(process.env[name] ?? '').trim();
+  if (v.length >= 2 && ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")))) {
+    v = v.slice(1, -1).trim();
+  }
+  return v;
+}

@@ -4,6 +4,7 @@
  * first use, independent of the main schema version gate.
  */
 import bcrypt from 'bcryptjs';
+import { envValue } from '../runtime-env.js';
 
 const STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS commercial_admins (
@@ -411,7 +412,7 @@ export const TEMP_COMMERCIAL_ADMIN_EMAIL = 'temp.commercial-admin@fixbridge.us';
  * because an earlier version used that name. Needs 12+ characters.
  */
 export function tempCommercialPassword() {
-  const value = String(process.env.COMMERCIAL_TEMP_LOGIN_PASSWORD || process.env.TEMP_LOGIN_PASSWORD || '');
+  const value = envValue('COMMERCIAL_TEMP_LOGIN_PASSWORD') || envValue('TEMP_LOGIN_PASSWORD');
   if (value && value.length < 12) {
     console.warn('[commercial] COMMERCIAL_TEMP_LOGIN_PASSWORD must be at least 12 characters; temporary logins are disabled.');
     return '';
@@ -437,8 +438,8 @@ async function syncTempCommercialAdmin(pool) {
 
 /** Creates the first commercial admin from COMMERCIAL_ADMIN_EMAIL / COMMERCIAL_ADMIN_PASSWORD. */
 async function bootstrapCommercialAdmin(pool) {
-  const email = String(process.env.COMMERCIAL_ADMIN_EMAIL || '').trim().toLowerCase();
-  const password = String(process.env.COMMERCIAL_ADMIN_PASSWORD || '');
+  const email = envValue('COMMERCIAL_ADMIN_EMAIL').toLowerCase();
+  const password = envValue('COMMERCIAL_ADMIN_PASSWORD');
   if (!email && !password) return;
   if (!email || password.length < 12) {
     // Previously skipped silently, which looked like "the admin login doesn't work".
@@ -477,13 +478,14 @@ export const DEMO_USERS = [
 async function syncDemoCompany(pool) {
   // The temporary-login password also turns on the demo company (owner, office staff and
   // technician logins); COMMERCIAL_DEMO_PASSWORD takes precedence when set.
-  const password = String(process.env.COMMERCIAL_DEMO_PASSWORD || tempCommercialPassword());
+  const password = envValue('COMMERCIAL_DEMO_PASSWORD') || tempCommercialPassword();
   const enabled = password.length >= 10;
   if (password && !enabled) {
     console.warn('[commercial] COMMERCIAL_DEMO_PASSWORD must be at least 10 characters; demo company is disabled.');
   }
   const existing = await pool.query('SELECT id FROM commercial_companies WHERE name=$1 AND application_id IS NULL ORDER BY id LIMIT 1', [DEMO_COMPANY_NAME]);
   if (!enabled) {
+    console.log('[commercial] Demo company logins are OFF (set COMMERCIAL_TEMP_LOGIN_PASSWORD, 12+ characters, to turn them on).');
     if (existing.rows[0]) {
       await pool.query('UPDATE commercial_users SET active=FALSE WHERE company_id=$1', [existing.rows[0].id]);
     }
@@ -527,5 +529,5 @@ async function syncDemoCompany(pool) {
   }
   const owner = await pool.query(`SELECT id FROM commercial_users WHERE company_id=$1 AND role='owner' ORDER BY id LIMIT 1`, [companyId]);
   await pool.query('UPDATE commercial_companies SET default_assignee_user_id=COALESCE(default_assignee_user_id, $2) WHERE id=$1', [companyId, owner.rows[0]?.id || null]);
-  console.log(`[commercial] Demo company enabled (${DEMO_USERS.map((u) => u.email).join(', ')})`);
+  console.log(`[commercial] Demo company enabled (${DEMO_USERS.map((u) => u.email).join(', ')}); password source: ${envValue('COMMERCIAL_DEMO_PASSWORD') ? 'COMMERCIAL_DEMO_PASSWORD' : 'COMMERCIAL_TEMP_LOGIN_PASSWORD'} (${password.length} characters)`);
 }
