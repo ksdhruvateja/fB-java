@@ -20,6 +20,10 @@ import {
   presentJob, presentProposal, proposalEmailBody, proposalTotal, resolveExceptions, round2, tx,
 } from './service.js';
 import { sendMail } from '../mail.js';
+import { verifyGoogleIdToken } from '../google-auth-routes.js';
+
+/** The only Google account allowed to sign in to the commercial admin with Google. */
+export const COMMERCIAL_GOOGLE_ADMIN_EMAIL = 'admin@fixbridge.us';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ROLES = ['owner', 'office', 'technician'];
@@ -82,7 +86,8 @@ function decodeUpload(dataUrl) {
 const publicUser = (u) => ({
   id: u.id, company_id: u.company_id, email: u.email, name: u.name, phone: u.phone, role: u.role,
   can_view_financials: isOffice(u) || u.can_view_financials, active: u.active,
-  invited: !u.password_hash, last_login_at: u.last_login_at,
+  invited: !u.password_hash && !u.google_sub, last_login_at: u.last_login_at,
+  google_linked: Boolean(u.google_sub),
   approval_status: u.approval_status || 'approved',
 });
 
@@ -202,6 +207,11 @@ export function registerCommercialRoutes(app, { pool }) {
     const user = rows[0];
     const ok = user?.password_hash && (await bcrypt.compare(password, user.password_hash));
     if (!ok) return res.status(401).json({ ok: false, message: 'Email or password is incorrect.' });
+    return finishCompanyLogin(req, res, user);
+  }));
+
+  /** Checks shared by password and Google sign-in, then issues the session. */
+  async function finishCompanyLogin(req, res, user) {
     // Each role has its own sign-in page; point people to the right one.
     const wanted = String(req.body?.role || '');
     if (ROLES.includes(wanted) && wanted !== user.role) {
@@ -221,7 +231,53 @@ export function registerCommercialRoutes(app, { pool }) {
       return res.status(403).json({ ok: false, message: 'This company account is not active. Contact FixBridge.' });
     }
     await pool.query('UPDATE commercial_users SET last_login_at=NOW() WHERE id=$1', [user.id]);
-    res.json({ ok: true, token: makeCommercialUserToken(user), user: publicUser(user) });
+    return res.json({ ok: true, token: makeCommercialUserToken(user), user: publicUser(user) });
+  }
+
+  // ── Google sign-in / sign-up for owners, office staff and technicians ──────
+  r.post('/auth/google', authLimiter, wrap(async (req, res) => {
+    const verified = await verifyGoogleIdToken(String(req.body?.credential || ''));
+    if (!verified.ok) {
+      const msg = verified.reason === 'missing'
+        ? 'Google sign-in is not set up on this site yet.'
+        : verified.reason === 'email_unverified'
+          ? 'Your Google email is not verified.'
+          : 'Google sign-in failed. Please try again.';
+      return res.status(401).json({ ok: false, code: 'GOOGLE_FAILED', message: msg });
+    }
+    const g = verified.user;
+    const { rows } = await pool.query(
+      `SELECT u.*, c.status AS company_status FROM commercial_users u JOIN commercial_companies c ON c.id=u.company_id
+        WHERE u.google_sub=$1 OR u.email=$2 ORDER BY (u.google_sub=$1) DESC NULLS LAST LIMIT 1`,
+      [g.sub, g.email]
+    );
+    let user = rows[0];
+    if (user) {
+      if (user.google_sub && user.google_sub !== g.sub) {
+        return res.status(403).json({ ok: false, code: 'GOOGLE_MISMATCH', message: 'This account is linked to a different Google account.' });
+      }
+      if (!user.google_sub) {
+        // Save the Google link; an outstanding invite is accepted by signing in with Google.
+        const { rows: linked } = await pool.query(
+          `UPDATE commercial_users SET google_sub=$2, invite_token_hash=NULL, invite_expires_at=NULL WHERE id=$1 RETURNING *`,
+          [user.id, g.sub]
+        );
+        user = { ...linked[0], company_status: user.company_status };
+      }
+      return finishCompanyLogin(req, res, user);
+    }
+    if (req.body?.intent !== 'signup') {
+      return res.status(404).json({
+        ok: false,
+        code: 'NO_ACCOUNT',
+        message: `No FixBridge Commercial account uses ${g.email}. Create an account first, or ask your company owner to invite you.`,
+      });
+    }
+    const input = readSignupInput({ ...req.body, email: g.email, name: clean(req.body?.name, 200) || g.name }, { needPassword: false });
+    if (input.errors) return res.status(400).json({ ok: false, message: 'Please fix the highlighted fields.', errors: input.errors });
+    const { user: created, company } = await createPendingAccount({ ...input, passwordHash: null, googleSub: g.sub });
+    await notifyAdminOfPendingAccount(created, company.name);
+    res.json({ ok: true, pending: true, message: 'Thanks! Your account is waiting for FixBridge approval. We will email you when you can sign in with Google.' });
   }));
 
   r.get('/auth/invite', authLimiter, wrap(async (req, res) => {
@@ -236,36 +292,39 @@ export function registerCommercialRoutes(app, { pool }) {
 
   // ── Self sign-up: owners register a company; office staff and technicians join one with the
   // company's join code. Every account waits for a FixBridge commercial admin to approve it.
-  r.post('/auth/signup', authLimiter, wrap(async (req, res) => {
-    const b = req.body || {};
+  /** Validates sign-up fields (password optional for Google sign-up). */
+  function readSignupInput(b, { needPassword }) {
     const role = ROLES.includes(b.role) ? b.role : null;
     const email = clean(b.email, 254).toLowerCase();
     const name = clean(b.name, 200);
     const phone = clean(b.phone, 40);
     const password = String(b.password || '');
+    const companyName = clean(b.company_name, 200);
+    const joinCode = clean(b.join_code, 20).toUpperCase().replace(/[^A-Z0-9]/g, '');
     const errors = {};
     if (!role) errors.role = 'Choose an account type.';
     if (name.length < 2) errors.name = 'Enter your name.';
     if (!EMAIL_RE.test(email)) errors.email = 'Enter a valid email.';
     if (phone && phone.replace(/\D/g, '').length < 10) errors.phone = 'Enter a valid phone number.';
-    if (password.length < 10) errors.password = 'Use at least 10 characters.';
-    const companyName = clean(b.company_name, 200);
-    const joinCode = clean(b.join_code, 20).toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (needPassword && password.length < 10) errors.password = 'Use at least 10 characters.';
     if (role === 'owner' && companyName.length < 2) errors.company_name = 'Enter your company name.';
     if (role && role !== 'owner' && !joinCode) errors.join_code = 'Enter the join code from your company owner.';
-    if (Object.keys(errors).length) return res.status(400).json({ ok: false, message: 'Please fix the highlighted fields.', errors });
+    if (Object.keys(errors).length) return { errors };
+    const trades = (Array.isArray(b.trades) ? b.trades : []).map((t) => clean(t, 60)).filter(Boolean).slice(0, 12);
+    return { role, email, name, phone, password, companyName, joinCode, trades, serviceArea: clean(b.service_area, 300) };
+  }
 
-    const hash = await bcrypt.hash(password, 12);
-    const { user, company } = await tx(pool, async (db) => {
+  /** Creates an account that waits for commercial-admin approval (and, for owners, its company). */
+  async function createPendingAccount({ role, email, name, phone, companyName, joinCode, trades, serviceArea, passwordHash, googleSub }) {
+    return tx(pool, async (db) => {
       const taken = await db.query('SELECT 1 FROM commercial_users WHERE email=$1', [email]);
       if (taken.rows.length) throw new HttpError(409, 'That email already has a FixBridge Commercial account. Sign in instead.');
       let companyRow;
       if (role === 'owner') {
-        const trades = (Array.isArray(b.trades) ? b.trades : []).map((t) => clean(t, 60)).filter(Boolean).slice(0, 12);
         const { rows } = await db.query(
           `INSERT INTO commercial_companies (name, email, phone, trades, service_area, plan, status)
            VALUES ($1,$2,$3,$4,$5,'essentials','pending') RETURNING *`,
-          [companyName, email, phone, trades, clean(b.service_area, 300)]
+          [companyName, email, phone, trades, serviceArea]
         );
         companyRow = rows[0];
       } else {
@@ -277,12 +336,21 @@ export function registerCommercialRoutes(app, { pool }) {
         }
       }
       const { rows } = await db.query(
-        `INSERT INTO commercial_users (company_id, email, name, phone, role, can_view_financials, password_hash, approval_status, signup_source)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'pending','self_signup') RETURNING *`,
-        [companyRow.id, email, name, phone, role, role !== 'technician', hash]
+        `INSERT INTO commercial_users (company_id, email, name, phone, role, can_view_financials, password_hash, google_sub, approval_status, signup_source)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending','self_signup') RETURNING *`,
+        [companyRow.id, email, name, phone, role, role !== 'technician', passwordHash, googleSub || null]
       );
       return { user: rows[0], company: companyRow };
     });
+  }
+
+  // ── Self sign-up: owners register a company; office staff and technicians join one with the
+  // company's join code. Every account waits for a FixBridge commercial admin to approve it.
+  r.post('/auth/signup', authLimiter, wrap(async (req, res) => {
+    const input = readSignupInput(req.body || {}, { needPassword: true });
+    if (input.errors) return res.status(400).json({ ok: false, message: 'Please fix the highlighted fields.', errors: input.errors });
+    const passwordHash = await bcrypt.hash(input.password, 12);
+    const { user, company } = await createPendingAccount({ ...input, passwordHash, googleSub: null });
     await notifyAdminOfPendingAccount(user, company.name);
     res.json({
       ok: true,
@@ -1256,6 +1324,37 @@ export function registerCommercialRoutes(app, { pool }) {
     const admin = rows[0];
     const ok = admin?.active && (await bcrypt.compare(String(req.body?.password || ''), admin.password_hash));
     if (!ok) return res.status(401).json({ ok: false, message: 'Email or password is incorrect.' });
+    await pool.query('UPDATE commercial_admins SET last_login_at=NOW() WHERE id=$1', [admin.id]);
+    res.json({ ok: true, token: makeCommercialAdminToken(admin), admin: { id: admin.id, email: admin.email, name: admin.name } });
+  }));
+
+  r.post('/admin/auth/google', authLimiter, wrap(async (req, res) => {
+    const verified = await verifyGoogleIdToken(String(req.body?.credential || ''));
+    if (!verified.ok) {
+      return res.status(401).json({ ok: false, code: 'GOOGLE_FAILED', message: verified.reason === 'missing' ? 'Google sign-in is not set up on this site yet.' : 'Google sign-in failed. Please try again.' });
+    }
+    const g = verified.user;
+    if (g.email !== COMMERCIAL_GOOGLE_ADMIN_EMAIL) {
+      return res.status(403).json({ ok: false, code: 'GOOGLE_NOT_ALLOWED', message: `Google sign-in for the commercial admin is only available for ${COMMERCIAL_GOOGLE_ADMIN_EMAIL}. Other admins sign in with email and password.` });
+    }
+    let { rows } = await pool.query('SELECT * FROM commercial_admins WHERE email=$1', [g.email]);
+    let admin = rows[0];
+    if (admin && !admin.active) return res.status(403).json({ ok: false, message: 'This admin account is deactivated.' });
+    if (admin?.google_sub && admin.google_sub !== g.sub) {
+      return res.status(403).json({ ok: false, code: 'GOOGLE_MISMATCH', message: 'This admin is linked to a different Google account.' });
+    }
+    if (!admin) {
+      // First Google sign-in creates the admin. Its password is random and unknown, so this
+      // account signs in with Google until another admin sets a password for it.
+      ({ rows } = await pool.query(
+        `INSERT INTO commercial_admins (email, name, password_hash, google_sub) VALUES ($1,$2,$3,$4) RETURNING *`,
+        [g.email, clean(g.name, 200) || 'FixBridge admin', await bcrypt.hash(crypto.randomBytes(32).toString('base64url'), 12), g.sub]
+      ));
+      admin = rows[0];
+    } else if (!admin.google_sub) {
+      ({ rows } = await pool.query('UPDATE commercial_admins SET google_sub=$2 WHERE id=$1 RETURNING *', [admin.id, g.sub]));
+      admin = rows[0];
+    }
     await pool.query('UPDATE commercial_admins SET last_login_at=NOW() WHERE id=$1', [admin.id]);
     res.json({ ok: true, token: makeCommercialAdminToken(admin), admin: { id: admin.id, email: admin.email, name: admin.name } });
   }));

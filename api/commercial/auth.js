@@ -52,7 +52,7 @@ export function requireCommercialUser(pool) {
         [payload.uid, payload.cid]
       );
       const user = rows[0];
-      if (!user || !user.active || !user.password_hash) {
+      if (!user || !user.active || (!user.password_hash && !user.google_sub)) {
         return res.status(401).json({ ok: false, message: 'This account is not active.' });
       }
       if (user.approval_status && user.approval_status !== 'approved') {

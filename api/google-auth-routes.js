@@ -78,7 +78,7 @@ export function getPublicGoogleOAuthStatus() {
  * Server-side Google ID token verification via Google's tokeninfo endpoint.
  * Validates audience, issuer, expiration, and email_verified before trusting identity.
  */
-async function verifyGoogleIdToken(idToken, { requestId } = {}) {
+export async function verifyGoogleIdToken(idToken, { requestId } = {}) {
   const clientId = googleClientId();
   if (!clientId || !idToken) return { ok: false, reason: 'missing' };
 

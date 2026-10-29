@@ -384,6 +384,11 @@ const STATEMENTS = [
   // Code staff enter when signing up, so their request goes to the right company.
   `ALTER TABLE commercial_companies ADD COLUMN IF NOT EXISTS join_code TEXT`,
   `CREATE UNIQUE INDEX IF NOT EXISTS commercial_companies_join_code_uq ON commercial_companies(join_code) WHERE join_code IS NOT NULL`,
+  // Google sign-in: the Google account ("sub") linked to each commercial user / admin.
+  `ALTER TABLE commercial_users ADD COLUMN IF NOT EXISTS google_sub TEXT`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS commercial_users_google_sub_uq ON commercial_users(google_sub) WHERE google_sub IS NOT NULL`,
+  `ALTER TABLE commercial_admins ADD COLUMN IF NOT EXISTS google_sub TEXT`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS commercial_admins_google_sub_uq ON commercial_admins(google_sub) WHERE google_sub IS NOT NULL`,
 ];
 
 let ready = null;

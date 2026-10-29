@@ -152,3 +152,23 @@ ProfessionalServiceRequestBetaCard, geminiAssessment and AdminJobEvidencePanel.
   technician. No homeowner, contractor or marketplace admin accounts are created.
 - **Old accounts blocked.** Marketplace temporary accounts created by the previous version
   (`temp.homeowner@`, `temp.contractor@` and `temp.admin@fixbridge.us`) are blocked at startup.
+
+## Round 8 — Password visibility and Google sign-in on Commercial
+- **Show/hide password button** on every password field: all commercial pages, plus the main
+  app's HomeCare Pro pop-up and the admin "add staff" form.
+- **Login variables tolerate stray spaces and quotes** typed in the host, and the deploy log
+  says whether the temporary/demo logins are on.
+- **Google sign-in for company accounts.**
+  - Owners, office staff and technicians can sign in, or create an account, with Google.
+  - Sign-up uses the company details or join code entered on the form, and the account still
+    waits for commercial-admin approval.
+  - The Google account is saved on the user (`commercial_users.google_sub`). After that, only
+    that Google account can sign in with Google for that email.
+  - An invited team member can accept the invite by signing in with Google instead of setting
+    a password.
+- **Google sign-in for the commercial admin is restricted to `admin@fixbridge.us`.** Any other
+  Google account is refused.
+  - The first Google sign-in creates or links that admin (`commercial_admins.google_sub`).
+  - Other admins keep using email and password.
+- Uses the existing `GOOGLE_CLIENT_ID`. The button hides itself when that isn't set.
+- **Tests:** the new `api/commercial/commercial-google.test.js` passes.

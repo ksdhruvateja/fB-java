@@ -4,6 +4,28 @@ import { api, tokens } from "./api";
 import { CommercialLogo } from "./CommercialLogo";
 import { Link, navigate } from "./router";
 import { Button, Field, Input } from "./ui";
+import GoogleSignInButton from "../app/GoogleSignInButton";
+
+/** "or" divider plus the Google button (hidden automatically when Google sign-in isn't configured). */
+function GoogleOption({ text, disabled, onCredential, onError, note }: {
+  text: "signin_with" | "signup_with" | "continue_with";
+  disabled?: boolean;
+  onCredential: (credential: string) => void;
+  onError: (message: string) => void;
+  note?: ReactNode;
+}) {
+  return (
+    <div className="mt-6">
+      <div className="mb-4 flex items-center gap-3 text-xs text-muted-foreground">
+        <span className="h-px flex-1 bg-border" />or<span className="h-px flex-1 bg-border" />
+      </div>
+      <div className="flex justify-center">
+        <GoogleSignInButton text={text} disabled={disabled} onCredential={onCredential} onError={onError} />
+      </div>
+      {note ? <p className="mt-2 text-center text-xs text-muted-foreground">{note}</p> : null}
+    </div>
+  );
+}
 
 function AuthFrame({ title, subtitle, children, admin }: { title: string; subtitle: ReactNode; children: ReactNode; admin?: boolean }) {
   useEffect(() => {
@@ -88,6 +110,25 @@ export function CompanyLogin({ role }: { role: CompanyRole }) {
         {error ? <p className="text-sm font-medium text-red-600" role="alert">{error}</p> : null}
         <Button type="submit" size="lg" className="w-full" busy={busy}>Sign in</Button>
       </form>
+      <GoogleOption
+        text="signin_with"
+        disabled={busy}
+        onError={setError}
+        onCredential={async (credential) => {
+          setBusy(true);
+          setError("");
+          try {
+            const res = await api.public<{ token: string }>("POST", "/auth/google", { credential, role, intent: "signin" });
+            tokens.setUser(res.token);
+            try { localStorage.setItem("fixbridge-commercial-role", role); } catch { /* ignore */ }
+            navigate("/commercial/app", { replace: true });
+          } catch (err: any) {
+            setError(err?.message || "Could not sign in with Google.");
+          } finally {
+            setBusy(false);
+          }
+        }}
+      />
       <p className="mt-8 text-center text-[14px] text-muted-foreground">
         Not {role === "office" ? "office staff" : `a ${role === "owner" ? "company owner" : "technician"}`}? Sign in as{" "}
         {others.map((r, i) => (
@@ -186,6 +227,25 @@ export function AdminLogin() {
         {error ? <p className="text-sm font-medium text-red-600" role="alert">{error}</p> : null}
         <Button type="submit" size="lg" className="w-full" busy={busy}>Sign in</Button>
       </form>
+      <GoogleOption
+        text="signin_with"
+        disabled={busy}
+        onError={setError}
+        note="Google sign-in is only for admin@fixbridge.us."
+        onCredential={async (credential) => {
+          setBusy(true);
+          setError("");
+          try {
+            const res = await api.public<{ token: string }>("POST", "/admin/auth/google", { credential });
+            tokens.setAdmin(res.token);
+            navigate("/commercial/admin", { replace: true });
+          } catch (err: any) {
+            setError(err?.message || "Could not sign in with Google.");
+          } finally {
+            setBusy(false);
+          }
+        }}
+      />
     </AuthFrame>
   );
 }
@@ -268,6 +328,39 @@ export function CompanySignup({ role }: { role: CompanyRole }) {
         {error ? <p className="text-sm font-medium text-red-600" role="alert">{error}</p> : null}
         <Button type="submit" size="lg" className="w-full" busy={busy}>Create account</Button>
       </form>
+      <GoogleOption
+        text="signup_with"
+        disabled={busy}
+        onError={setError}
+        note={role === "owner" ? "Fill in your company details above first. Google provides your name and email; no password needed." : "Enter your company join code above first. Google provides your name and email; no password needed."}
+        onCredential={async (credential) => {
+          setError("");
+          setErrors({});
+          if (role === "owner" ? form.company_name.trim().length < 2 : !form.join_code.trim()) {
+            setErrors(role === "owner" ? { company_name: "Enter your company name." } : { join_code: "Enter the join code from your company owner." });
+            setError("Fill in the highlighted field, then continue with Google.");
+            return;
+          }
+          setBusy(true);
+          try {
+            const res = await api.public<{ message?: string }>("POST", "/auth/google", {
+              credential,
+              intent: "signup",
+              role,
+              phone: form.phone,
+              ...(role === "owner"
+                ? { company_name: form.company_name, service_area: form.service_area, trades: form.trades.split(",").map((t) => t.trim()).filter(Boolean) }
+                : { join_code: form.join_code }),
+            });
+            setDone(res.message || "Thanks! Your account is waiting for FixBridge approval.");
+          } catch (err: any) {
+            setErrors(err?.body?.errors || {});
+            setError(err?.message || "Could not create your account with Google.");
+          } finally {
+            setBusy(false);
+          }
+        }}
+      />
       <p className="mt-8 text-center text-[14px] text-muted-foreground">
         Already have an account? <Link to={`/commercial/login/${role}`} className="text-primary hover:underline">Sign in</Link>
       </p>
