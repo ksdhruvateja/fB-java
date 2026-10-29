@@ -1,0 +1,4298 @@
+import { listKnowledgeEntries, retrieveGlobalKnowledge, writeKnowledgeEntry } from './fixa/knowledge/knowledgeWriter.js';
+import { getUserProfile, personalizationContext } from './fixera/user-profile.js';
+import { attachCasePayload, confirmedCasesContext, listReviewQueue, recordCaseOutcome, recordChatForLearning, retrieveConfirmedCases, reviewCandidate } from './fixera/learning-loop.js';
+import { storeFixeraCasePhotos, readCasePhotoList, listFixeraCaseImages, MAX_CASE_PHOTOS } from './fixera/case-media.js';
+import { appendAssessmentRevision } from './fixera/assessment-history.js';
+import express from 'express';
+import cors from 'cors';
+import pg from 'pg';
+import { newDb } from 'pg-mem';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import crypto from 'crypto';
+import { assessRepair, complete, reassessRepair, prepareProfessionalHandoff, getFixeraPublicStatus, getFixeraHealth, getFixeraAdminProviders } from './fixera/index.js';
+import { persistFixeraInteraction, recordFixeraFeedback, recordFixeraInteraction, trainingOverview, exportApprovedTraining, listRecentExperiences } from './fixera/experience/store.js';
+import { getPricingIntelligence } from './fixera/pricing/intelligence.js';
+import { initManagedSchema, ensureReferralCodeColumns } from './schema-managed.js';
+import { registerCommercialRoutes } from './commercial/routes.js';
+import { initSupportTicketSchema, registerSupportTicketRoutes, validateContactInquiry, createContactInquiry, CONTACT_INQUIRY_CATEGORIES } from './support-tickets.js';
+import { initInAppNotificationSchema, registerInAppNotificationRoutes } from './in-app-notifications.js';
+import { initMessagingSchema, registerMessagingRoutes } from './messaging.js';
+import { registerAttachmentAdminRoutes } from './attachment-storage.js';
+import { initDisputeSchema } from './disputes.js';
+import { initAvailabilitySchema, registerAvailabilityRoutes } from './availability-routes.js';
+import { registerAdminSearchRoutes } from './admin-search.js';
+import { initHomeownerAdminSchema, registerHomeownerAdminRoutes } from './homeowner-admin-routes.js';
+import { registerFinanceRoutes } from './finance-routes.js';
+import {
+  initSubscriptionPlansSchema,
+  registerSubscriptionPlanRoutes,
+  getSubscriptionPlanByCode,
+} from './subscription-plans.js';
+import { registerManagedRoutes, processManagedJobAssessmentTask, convertPendingServiceRequest } from './managed-routes.js';
+import { requireFixeraAiAccess } from './fixera/entitlement.js';
+import { registerAssessmentProcessor } from './assessment-worker.js';
+import { registerHomeCareProRoutes } from './homecare-pro-routes.js';
+import { registerHomeCareAdminRoutes, initHomeCareSettingsSchema } from './homecare-admin-routes.js';
+import { registerHomeAssistantRoutes, initPropertyMemorySchema } from './home-assistant-routes.js';
+import { initServiceReminderSchema, getReminderSchedulerStatus } from './service-reminders.js';
+import { registerPlatformRoutes } from './platform-routes.js';
+import { registerPayoutRoutes } from './payout-routes.js';
+import { registerReferralRoutes } from './referral-routes.js';
+import { applyReferralCode, ensureReferralCode } from './referrals.js';
+import { registerQuoteWorkspaceRoutes } from './quote-workspace-routes.js';
+import { registerContractorEmployeeRoutes } from './contractor-employees-routes.js';
+import { registerAddressRoutes } from './address-routes.js';
+import { registerServiceAreaRoutes } from './service-area.js';
+import { ensureComplianceDocuments, recalculateDispatchEligible } from './contractor-compliance.js';
+import {
+  checkActionConsentsFromBody,
+  validateAndRecordActionConsents,
+  requireDiySafetyAcknowledgment,
+} from './homeowner-consent.js';
+import { recordSignupMarketingConsents } from './marketing-consent-service.js';
+import { registerMarketingRoutes, initMarketingConsent } from './marketing-routes.js';
+import { registerGoogleAuthRoutes } from './google-auth-routes.js';
+import { writeAudit } from './audit.js';
+import { getStripe, stripeConfigured } from './stripe.js';
+import {
+  RESET_ROLES,
+  findResetAccount,
+  issuePasswordReset,
+  completePasswordReset,
+} from './password-reset.js';
+import { mailStatus } from './mail.js';
+import { EMAIL_FROM_ADDRESS, EMAIL_REPLY_TO } from './email/email-config.js';
+import {
+  loadJobForReview,
+  insertJobReview,
+  parseCategoryRatings,
+  serializeSiteReview,
+  deriveVerifiedFixBridgeJob,
+} from './job-reviews.js';
+import {
+  syncUserHomeCareEntitlement,
+  invalidateHomeCareEntitlementCache,
+  activateSubscriptionFromCheckout,
+  toPublicHomeCareSubscriptionDto,
+} from './subscription-state.js';
+import {
+  corsOriginDelegate,
+  securityHeaders,
+  publicErrorMessage,
+  clampString,
+  isPositiveInt,
+} from './security.js';
+import { postgresSslOptions } from './db-ssl.js';
+import { buildPropertyAIContext } from './property-ai-context.js';
+import { installJobDebugLogger } from './job-debug-log.js';
+import { BoundedCache } from './bounded-cache.js';
+import { resolveMediaDataUrl } from './media-store.js';
+import { aiFairnessGuard } from './ai-fairness.js';
+import {
+  requirePermission,
+  resolveAdminPreset,
+  canAssignPreset,
+  presetToAccessLevel,
+  VALID_ROLE_PRESETS,
+  permissionsForUser,
+  userHasPermission,
+} from './rbac.js';
+import { randomUUID } from 'crypto';
+import { getSessionSecret, isDeployedProduction } from './runtime-env.js';
+import { dollarsToCents } from './financial-calculations.js';
+
+// NODE_ENV alone is unreliable on Netlify (often unset at function runtime), so production
+// is detected from hosting signals too. See api/runtime-env.js.
+const isProduction = isDeployedProduction();
+const useInMemoryDb = !process.env.NEON_DATABASE_URL;
+
+// ── Require SESSION_SECRET at startup ─────────────────────────────────────────
+// getSessionSecret() throws on any hosted environment when SESSION_SECRET is missing
+// (throw, not process.exit, so Netlify Functions can report the error cleanly).
+const JWT_SECRET = getSessionSecret();
+
+if (!process.env.SESSION_SECRET) {
+  console.warn('[FixBridge API] SESSION_SECRET not set; using local development default.');
+}
+
+if (isProduction && useInMemoryDb) {
+  throw new Error(
+    '[FATAL] NEON_DATABASE_URL is required in production. In-memory database is not allowed.'
+  );
+}
+
+if (isProduction && !stripeConfigured()) {
+  throw new Error(
+    '[FATAL] STRIPE_SECRET_KEY is required in production. Refusing to start without payment secrets.'
+  );
+}
+if (isProduction && !String(process.env.STRIPE_WEBHOOK_SECRET || '').trim()) {
+  throw new Error(
+    '[FATAL] STRIPE_WEBHOOK_SECRET is required in production. Refusing to start without webhook secrets.'
+  );
+}
+
+const { Pool } = pg;
+
+function createPool() {
+  if (!useInMemoryDb) {
+    let host = 'neon';
+    try {
+      host = new URL(process.env.NEON_DATABASE_URL.replace(/^postgresql:/i, 'postgres:')).hostname;
+    } catch {
+      // Keep generic label if URL parsing fails.
+    }
+    console.log(`[FixBridge API] Using Neon Postgres (${host}).`);
+    const connectionString = process.env.NEON_DATABASE_URL.includes('uselibpqcompat=')
+      ? process.env.NEON_DATABASE_URL
+      : `${process.env.NEON_DATABASE_URL}${process.env.NEON_DATABASE_URL.includes('?') ? '&' : '?'}uselibpqcompat=true`;
+    return new Pool({
+      connectionString,
+      ssl: postgresSslOptions(),
+      // Per instance. Use Neon's pooled (-pooler) connection string so many instances share
+      // a bounded number of server connections.
+      max: Number(process.env.DB_POOL_MAX || (process.env.NETLIFY || process.env.NETLIFY_DEV ? 3 : 20)),
+      idleTimeoutMillis: Number(process.env.DB_POOL_IDLE_MS || 30_000),
+      connectionTimeoutMillis: Number(process.env.DB_CONNECT_TIMEOUT_MS || 10_000),
+      // A runaway query cannot hold a connection that other users are waiting for.
+      statement_timeout: Number(process.env.DB_STATEMENT_TIMEOUT_MS || 60_000),
+    });
+  }
+
+  const db = newDb({ autoCreateForeignKeyIndices: true });
+  const { Pool: MemoryPool } = db.adapters.createPg();
+  console.warn('[FixBridge API] NEON_DATABASE_URL not set; using in-memory local database.');
+  return new MemoryPool();
+}
+
+/** Demo accounts only outside production, and only when explicitly enabled. */
+function allowDemoSeed() {
+  if (isProduction) return false;
+  // ENABLE_DEMO_USERS or ENABLE_DEMO_SEED; default OFF (explicit opt-in).
+  const flag = String(
+    process.env.ENABLE_DEMO_USERS ?? process.env.ENABLE_DEMO_SEED ?? 'false'
+  ).toLowerCase();
+  return flag === 'true' || flag === '1' || flag === 'yes';
+}
+
+export const pool = createPool();
+
+function formatBookingId(id, createdAt = new Date()) {
+  const date = createdAt instanceof Date ? createdAt : new Date(createdAt);
+  const stamp = Number.isNaN(date.getTime())
+    ? new Date().toISOString().slice(0, 10).replace(/-/g, '')
+    : date.toISOString().slice(0, 10).replace(/-/g, '');
+  const suffix = String(id).slice(-6).padStart(6, '0');
+  return `FB-${stamp}-${suffix}`;
+}
+
+const REQUIREMENTS_MAP = {
+  Plumbing: ['Licensed plumber', 'Leak diagnosis tools', 'Pipe repair experience'],
+  Electrical: ['Licensed electrician', 'Panel/circuit safety knowledge', 'Code-compliant wiring'],
+  HVAC: ['HVAC certification', 'Troubleshooting equipment', 'Heating/cooling repair experience'],
+  Painting: ['Surface prep experience', 'Interior/exterior painting tools', 'Finish quality references'],
+  Roofing: ['Roof safety gear', 'Shingle/flashings expertise', 'Weatherproofing experience'],
+  Flooring: ['Floor leveling skills', 'Cutting/installation tools', 'Material-specific installation knowledge'],
+  Carpentry: ['Framing/finish carpentry skills', 'Measurement/cutting precision', 'Structural repair experience'],
+  Others: ['General contractor capability', 'Problem diagnosis ability', 'Willingness to scope unfamiliar jobs'],
+};
+
+const TRADE_MATCH_TERMS = {
+  Plumbing: ['plumbing', 'plumber', 'pipe', 'drain'],
+  Electrical: ['electrical', 'electrician', 'wiring', 'panel'],
+  HVAC: ['hvac', 'heating', 'cooling', 'air conditioning', 'ventilation'],
+  'HVAC & Heating/Cooling': ['hvac', 'heating', 'cooling', 'air conditioning', 'ventilation'],
+  Painting: ['painting', 'painter', 'paint'],
+  Roofing: ['roofing', 'roofer', 'roof', 'gutter'],
+  'Roofing & Gutters': ['roofing', 'roofer', 'roof', 'gutter'],
+  Flooring: ['flooring', 'floor', 'tile', 'hardwood', 'laminate'],
+  Carpentry: ['carpentry', 'carpenter', 'framing', 'woodwork'],
+  Appliances: ['appliance', 'appliances'],
+  'Concrete & Driveways': ['concrete', 'asphalt', 'driveway'],
+  'Doors & Hardware': ['door', 'hardware'],
+  'Fences & Gates': ['fence', 'gate'],
+  'Garage & Garage Doors': ['garage', 'door'],
+  Handyman: ['handyman', 'general', 'maintenance'],
+  'Landscaping & Yard': ['landscape', 'landscaping', 'lawn', 'yard', 'mulch', 'hedge', 'garden', 'leaf', 'mowing', 'trimming'],
+  Landscaping: ['landscape', 'landscaping', 'lawn', 'yard', 'mulch', 'hedge', 'garden', 'leaf', 'mowing', 'trimming'],
+  'Snow Removal': ['snow', 'snow removal', 'plow', 'plowing', 'shovel', 'de-ice', 'deice', 'salting', 'ice management'],
+  Snow: ['snow', 'snow removal', 'plow', 'plowing', 'shovel', 'de-ice', 'salting'],
+  Lighting: ['lighting', 'light', 'electrical'],
+  'Locks & Security': ['lock', 'security'],
+  'Pest Control': ['pest', 'exterminat'],
+  Siding: ['siding'],
+  'Windows & Glass': ['window', 'glass'],
+  Bathroom: ['bathroom', 'plumbing', 'bath'],
+  Kitchen: ['kitchen', 'appliance', 'plumbing'],
+  'Water Damage': ['water damage', 'flood', 'restoration', 'mold'],
+  'Drywall & Wall Repair': ['drywall', 'wall', 'plaster'],
+  Cleaning: ['cleaning', 'clean', 'janitorial', 'maid', 'housekeeping', 'deep clean', 'move-out', 'move-in'],
+  Janitorial: ['cleaning', 'clean', 'janitorial', 'maid', 'housekeeping'],
+  'Smart Home & Technology': ['smart home', 'technology', 'tech', 'low voltage'],
+  Other: ['contractor', 'handyman', 'general'],
+  Others: ['contractor', 'handyman', 'general'],
+};
+
+function contractorTradeMatchesCategory(contractorTrade, category) {
+  if (category === 'Others' || category === 'Other') return true;
+  if (!contractorTrade) return false;
+  const terms = TRADE_MATCH_TERMS[category];
+  const normalizedTrade = String(contractorTrade).toLowerCase();
+  if (terms?.some((term) => normalizedTrade.includes(term))) return true;
+  // Fallback: match any significant word from the category label
+  const words = String(category || '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length > 3 && !['with', 'and', 'from', 'type'].includes(w));
+  return words.some((w) => normalizedTrade.includes(w));
+}
+
+const PRIMARY_ADMIN_EMAIL = process.env.PRIMARY_ADMIN_EMAIL?.trim() || 'admin@fixbridge.us';
+const LEGACY_ADMIN_EMAILS = ['admin@fixbridge.local', 'admin@fixbridge.com', 'ksdt2702@gmail.com'];
+
+const DEMO_USERS = [
+  { role: 'homeowner', name: 'Maria Santos', email: 'maria@example.com', plainPassword: 'demo123', is_admin: false, trade: null, license_number: null },
+  { role: 'contractor', name: 'James Park', email: 'james@yourcompany.com', plainPassword: 'demo123', is_admin: false, trade: 'Master Plumber', license_number: 'NY-00231847' },
+  { role: 'admin', name: 'Ops Admin', email: PRIMARY_ADMIN_EMAIL, plainPassword: 'admin123', is_admin: true, trade: null, license_number: null },
+];
+
+/**
+ * Create the primary FixBridge admin from PRIMARY_ADMIN_EMAIL + PRIMARY_ADMIN_PASSWORD when it does
+ * not exist yet (works in production, unlike the demo seed). An existing admin's password is only
+ * replaced when PRIMARY_ADMIN_RESET_PASSWORD=true.
+ */
+async function bootstrapPrimaryAdmin() {
+  const password = String(process.env.PRIMARY_ADMIN_PASSWORD || '');
+  if (!password) return;
+  if (password.length < 12 || !process.env.PRIMARY_ADMIN_EMAIL) {
+    console.warn('[FixBridge API] Primary admin NOT created: set PRIMARY_ADMIN_EMAIL and a PRIMARY_ADMIN_PASSWORD of at least 12 characters.');
+    return;
+  }
+  const { rows } = await pool.query(
+    `SELECT id FROM users WHERE role='admin' AND LOWER(email)=LOWER($1)`,
+    [PRIMARY_ADMIN_EMAIL]
+  );
+  if (rows[0]) {
+    if (String(process.env.PRIMARY_ADMIN_RESET_PASSWORD || '').toLowerCase() === 'true') {
+      await pool.query(`UPDATE users SET password=$2, password_login_enabled=TRUE, password_changed_at=$3, is_blocked=FALSE WHERE id=$1`, [
+        rows[0].id,
+        await bcrypt.hash(password, 10),
+        new Date(),
+      ]);
+      console.log(`[FixBridge API] Reset password for primary admin ${PRIMARY_ADMIN_EMAIL} (remove PRIMARY_ADMIN_RESET_PASSWORD now).`);
+    }
+    return;
+  }
+  await pool.query(
+    `INSERT INTO users (role, name, email, password, is_admin, admin_access_level, admin_role_preset, is_protected, compliance_status)
+     VALUES ('admin', $1, $2, $3, TRUE, 'read-write', 'super_admin', TRUE, 'approved')`,
+    [String(process.env.PRIMARY_ADMIN_NAME || 'FixBridge Admin'), PRIMARY_ADMIN_EMAIL, await bcrypt.hash(password, 10)]
+  );
+  console.log(`[FixBridge API] Created primary admin ${PRIMARY_ADMIN_EMAIL}.`);
+}
+
+/** Columns added by the security fixes; run on both fresh and existing databases. */
+async function ensureAuthColumns() {
+  // Sessions issued before this time are rejected (set on password reset).
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ`);
+  // Protected staff accounts (the primary admin) cannot have their access changed from the UI.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_protected BOOLEAN NOT NULL DEFAULT FALSE`);
+}
+
+/** Move legacy demo admin email to PRIMARY_ADMIN_EMAIL and ensure super_admin access. */
+async function migratePrimaryAdminEmail() {
+  // Runs early in initDb, before the main users ALTERs, so make sure its column exists.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_protected BOOLEAN NOT NULL DEFAULT FALSE`);
+  for (const legacy of LEGACY_ADMIN_EMAILS) {
+    if (legacy.toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase()) continue;
+    const { rows: legacyRows } = await pool.query(
+      `SELECT id FROM users WHERE role='admin' AND LOWER(email)=LOWER($1)`,
+      [legacy]
+    );
+    const { rows: targetRows } = await pool.query(
+      `SELECT id FROM users WHERE role='admin' AND LOWER(email)=LOWER($1)`,
+      [PRIMARY_ADMIN_EMAIL]
+    );
+    if (legacyRows[0] && !targetRows[0]) {
+      await pool.query(
+        `UPDATE users SET email=$1, is_admin=true, admin_access_level='read-write', admin_role_preset='super_admin'
+         WHERE id=$2`,
+        [PRIMARY_ADMIN_EMAIL, legacyRows[0].id]
+      );
+      console.log(`[FixBridge API] Migrated admin ${legacy} → ${PRIMARY_ADMIN_EMAIL}`);
+    } else if (legacyRows[0] && targetRows[0]) {
+      await pool.query(`DELETE FROM users WHERE id=$1`, [legacyRows[0].id]);
+      console.log(`[FixBridge API] Removed duplicate legacy admin ${legacy}`);
+    }
+  }
+  const { rows: primary } = await pool.query(
+    `SELECT id FROM users WHERE role='admin' AND LOWER(email)=LOWER($1)`,
+    [PRIMARY_ADMIN_EMAIL]
+  );
+  if (primary[0]) {
+    await pool.query(
+      `UPDATE users SET is_admin=true, admin_access_level='read-write', admin_role_preset='super_admin', is_protected=true
+       WHERE id=$1`,
+      [primary[0].id]
+    );
+  }
+}
+
+// ── Schema init ───────────────────────────────────────────────────────────────
+
+async function ensureDemoUsers() {
+  // Seed / repair demo users — NEVER in production; non-prod requires ENABLE_DEMO_SEED (default true).
+  if (!allowDemoSeed()) {
+    if (isProduction) {
+      console.log('[FixBridge API] Demo seed disabled (production).');
+    } else {
+      console.log('[FixBridge API] Demo seed disabled (ENABLE_DEMO_SEED=false).');
+    }
+    return;
+  }
+
+  for (const u of DEMO_USERS) {
+    const hashed = await bcrypt.hash(u.plainPassword, 10);
+    const existing = await pool.query(
+      'SELECT id, password, is_admin FROM users WHERE role=$1 AND LOWER(email)=LOWER($2)',
+      [u.role, u.email]
+    );
+    const DEMO_DOC =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+    if (existing.rows.length === 0) {
+      if (u.role === 'contractor') {
+        await pool.query(
+          `INSERT INTO users (
+             role,name,email,password,trade,license_number,is_admin,compliance_status,
+             license_document_name,license_document_data,insurance_document_name,insurance_document_data,
+             company_name,phone
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT DO NOTHING`,
+          [
+            u.role,
+            u.name,
+            u.email,
+            hashed,
+            u.trade,
+            u.license_number,
+            u.is_admin,
+            'approved',
+            'demo-license.png',
+            DEMO_DOC,
+            'demo-insurance.png',
+            DEMO_DOC,
+            'ABC Heating & Air',
+            '(555) 204-8800',
+          ]
+        );
+      } else if (u.role === 'admin') {
+        await pool.query(
+          `INSERT INTO users (role,name,email,password,trade,license_number,is_admin,compliance_status,admin_access_level,admin_role_preset)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING`,
+          [
+            u.role,
+            u.name,
+            u.email,
+            hashed,
+            u.trade,
+            u.license_number,
+            u.is_admin,
+            'draft',
+            'read-write',
+            'super_admin',
+          ]
+        );
+      } else {
+        await pool.query(
+          `INSERT INTO users (role,name,email,password,trade,license_number,is_admin,compliance_status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`,
+          [
+            u.role,
+            u.name,
+            u.email,
+            hashed,
+            u.trade,
+            u.license_number,
+            u.is_admin,
+            'draft',
+          ]
+        );
+      }
+      console.log(`[FixBridge API] Seeded demo ${u.role}: ${u.email}`);
+      continue;
+    }
+
+    const row = existing.rows[0];
+    const pw = row.password;
+    let passwordOk = false;
+    if (pw && pw.startsWith('$2')) {
+      try {
+        passwordOk = await bcrypt.compare(u.plainPassword, pw);
+      } catch {
+        passwordOk = false;
+      }
+    }
+
+    // Restore known demo password when missing, plaintext, or out of sync.
+    if (!passwordOk && pw !== 'GOOGLE_OAUTH' && pw !== 'APPLE_OAUTH' && pw !== 'AUTH0_OAUTH') {
+      await pool.query(
+        'UPDATE users SET password=$1, name=$2, trade=$3, license_number=$4 WHERE role=$5 AND LOWER(email)=LOWER($6)',
+        [hashed, u.name, u.trade, u.license_number, u.role, u.email]
+      );
+      console.log(`[FixBridge API] Reset demo password for ${u.email}`);
+    }
+
+    if (u.is_admin && row.is_admin !== true) {
+      await pool.query(
+        `UPDATE users SET is_admin=true, admin_access_level='read-write', admin_role_preset='super_admin'
+         WHERE role=$1 AND LOWER(email)=LOWER($2)`,
+        [u.role, u.email]
+      );
+    }
+    // Ensure contractor demo is never treated as admin
+    if (u.role === 'contractor' && u.is_admin === false && row.is_admin === true) {
+      await pool.query(
+        'UPDATE users SET is_admin=false WHERE role=$1 AND LOWER(email)=LOWER($2)',
+        [u.role, u.email]
+      );
+    }
+    // Demo contractor must be invite-ready (include placeholder docs so compliance gates pass)
+    if (u.role === 'contractor') {
+      await pool.query(
+        `UPDATE users SET compliance_status='approved',
+           trade=COALESCE(NULLIF(trade,''), $1),
+           license_number=COALESCE(NULLIF(license_number,''), $2),
+           license_document_name=COALESCE(license_document_name, 'demo-license.png'),
+           license_document_data=COALESCE(license_document_data, $3),
+           insurance_document_name=COALESCE(insurance_document_name, 'demo-insurance.png'),
+           insurance_document_data=COALESCE(insurance_document_data, $3),
+           company_name=COALESCE(NULLIF(company_name,''), 'ABC Heating & Air'),
+           phone=COALESCE(NULLIF(phone,''), '(555) 204-8800')
+         WHERE role=$4 AND LOWER(email)=LOWER($5)`,
+        [u.trade, u.license_number, DEMO_DOC, u.role, u.email]
+      );
+    }
+  }
+}
+
+// Raise this whenever schema setup changes, or databases set up earlier skip the new columns and tables.
+// Bump whenever initDb gains schema changes, so databases that already ran an older initDb
+// run the checks once more (otherwise the early exit below skips new columns).
+const SCHEMA_READY_VERSION = 20261029;
+
+async function readSchemaReadyVersion() {
+  try {
+    const { rows } = await pool.query(`SELECT version FROM app_schema_meta WHERE id = 1`);
+    return Number(rows[0]?.version || 0);
+  } catch {
+    return 0;
+  }
+}
+
+async function writeSchemaReadyVersion() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_schema_meta (
+      id INT PRIMARY KEY,
+      version INT NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(
+    `INSERT INTO app_schema_meta (id, version, updated_at)
+     VALUES (1, $1, NOW())
+     ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version, updated_at = NOW()`,
+    [SCHEMA_READY_VERSION]
+  );
+}
+
+export async function initDb() {
+  if (initDb._done) return;
+  try {
+    await ensureReferralCodeColumns(pool);
+  } catch (e) {
+    console.warn('[schema] referral code columns:', e.message);
+  }
+  // Cold Netlify isolates used to run hundreds of sequential DDL statements
+  // before any save, upload, or navigation request could start.
+  if ((await readSchemaReadyVersion()) >= SCHEMA_READY_VERSION) {
+    initDb._done = true;
+    return;
+  }
+  try {
+    const check = await pool.query("SELECT id FROM users LIMIT 1");
+    if (check.rows.length > 0) {
+      console.log('[FixBridge API] DB already initialized, running managed schema checks...');
+      await initManagedSchema(pool);
+      await initHomeCareSettingsSchema(pool);
+      await initPropertyMemorySchema(pool);
+      await initServiceReminderSchema(pool);
+      await initSupportTicketSchema(pool);
+      await initInAppNotificationSchema(pool);
+      await initMessagingSchema(pool);
+      await initDisputeSchema(pool);
+      await initAvailabilitySchema(pool);
+      await initHomeownerAdminSchema(pool);
+      await initSubscriptionPlansSchema(pool);
+      await initMarketingConsent(pool);
+      await ensureAuthColumns();
+      await migratePrimaryAdminEmail();
+      await bootstrapPrimaryAdmin();
+      await ensureDemoUsers();
+      await writeSchemaReadyVersion();
+      initDb._done = true;
+      return;
+    }
+  } catch (e) {
+    // Proceed with migrations if users table doesn't exist
+  }
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id                      SERIAL PRIMARY KEY,
+      role                    TEXT NOT NULL,
+      name                    TEXT NOT NULL,
+      email                   TEXT NOT NULL,
+      password                TEXT NOT NULL,
+      trade                   TEXT,
+      license_number          TEXT,
+      license_document_name   TEXT,
+      insurance_document_name TEXT,
+      id_document_name        TEXT,
+      is_admin                BOOLEAN NOT NULL DEFAULT FALSE,
+      is_blocked              BOOLEAN NOT NULL DEFAULT FALSE,
+      compliance_status       TEXT DEFAULT 'draft',
+      created_at              TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(role, email)
+    )
+  `);
+  // Add is_admin column to existing tables that predate this migration
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE
+  `);
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN NOT NULL DEFAULT FALSE
+  `);
+  // Profile fields (additive — used by homeowner + contractor My Profile)
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_data_url TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS address TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_email TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS company_name TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS company_details TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS insurance_details TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_emails JSONB`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_phones JSONB`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_addresses JSONB`);
+  // Contractor verification documents (name + file bytes as data URL) — persisted in Neon
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS license_document_data TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS insurance_document_data TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS id_document_data TEXT`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS jobs (
+      id             BIGINT PRIMARY KEY,
+      booking_id     TEXT,
+      category       TEXT NOT NULL,
+      tag            TEXT NOT NULL,
+      title          TEXT NOT NULL,
+      description    TEXT,
+      media_data_url TEXT,
+      media_type     TEXT,
+      ai_assessment  JSONB,
+      city_state_zip TEXT NOT NULL,
+      full_address   TEXT NOT NULL,
+      contact_name   TEXT NOT NULL,
+      contact_phone  TEXT NOT NULL,
+      homeowner_email TEXT,
+      scheduled_date TEXT,
+      time_slot      TEXT,
+      service_timing TEXT,
+      dist           TEXT,
+      posted         TEXT,
+      est            TEXT,
+      bids           INT DEFAULT 0,
+      urgent         BOOLEAN DEFAULT FALSE,
+      ai             BOOLEAN DEFAULT FALSE,
+      requirements   JSONB,
+      created_at     TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_lifecycle (
+      job_id            BIGINT PRIMARY KEY,
+      status            TEXT NOT NULL DEFAULT 'open',
+      contractor_name   TEXT,
+      contractor_email  TEXT,
+      invoice_amount    NUMERIC,
+      invoice_file_name TEXT,
+      rating            INT,
+      review            TEXT,
+      accepted_at       TIMESTAMPTZ,
+      completed_at      TIMESTAMPTZ,
+      updated_at        TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`ALTER TABLE job_lifecycle ADD COLUMN IF NOT EXISTS invoice_file_data TEXT`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS support_messages (
+      id           BIGSERIAL PRIMARY KEY,
+      user_id      TEXT,
+      user_role    TEXT,
+      user_name    TEXT,
+      user_email   TEXT,
+      subject      TEXT NOT NULL,
+      related_job  TEXT,
+      message      TEXT NOT NULL,
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS homeowner_email TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS booking_id TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS scheduled_date TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS time_slot TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS service_timing TEXT
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_chat_messages (
+      id             BIGINT PRIMARY KEY,
+      job_id         BIGINT NOT NULL,
+      sender_role    TEXT NOT NULL,
+      sender_name    TEXT NOT NULL,
+      text           TEXT NOT NULL,
+      image_data_url TEXT,
+      created_at     TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id         SERIAL PRIMARY KEY,
+      email      TEXT NOT NULL,
+      role       TEXT NOT NULL,
+      token      TEXT UNIQUE NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used       BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id         SERIAL PRIMARY KEY,
+      user_id    INT NOT NULL,
+      job_id     BIGINT,
+      type       TEXT NOT NULL,
+      title      TEXT NOT NULL,
+      message    TEXT NOT NULL,
+      read       BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await migratePrimaryAdminEmail();
+  await ensureDemoUsers();
+
+  // Migrate any remaining plaintext passwords for other users
+  const { rows: allUsers } = await pool.query(
+    `SELECT role, email, password FROM users WHERE password NOT LIKE '$2%' AND password NOT IN ('GOOGLE_OAUTH', 'APPLE_OAUTH', 'AUTH0_OAUTH')`
+  );
+  for (const u of allUsers) {
+    const hashed = await bcrypt.hash(u.password, 10);
+    await pool.query('UPDATE users SET password=$1 WHERE role=$2 AND LOWER(email)=LOWER($3)', [hashed, u.role, u.email]);
+  }
+
+  // Remove old seeded demo jobs from databases created before live job posting.
+  await pool.query('DELETE FROM job_chat_messages WHERE job_id IN (1, 2)');
+  await pool.query('DELETE FROM job_lifecycle WHERE job_id IN (1, 2)');
+  await pool.query('DELETE FROM jobs WHERE id IN (1, 2)');
+
+  const { rows: jobsMissingBookingId } = await pool.query(
+    'SELECT id, created_at FROM jobs WHERE booking_id IS NULL OR booking_id = \'\''
+  );
+  for (const job of jobsMissingBookingId) {
+    await pool.query('UPDATE jobs SET booking_id=$1 WHERE id=$2', [formatBookingId(job.id, job.created_at), job.id]);
+  }
+
+  // Unique job numbers (booking_id) across homeowner / contractor / admin views.
+  try {
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS jobs_booking_id_uidx
+      ON jobs (booking_id)
+      WHERE booking_id IS NOT NULL AND booking_id <> ''
+    `);
+  } catch (e) {
+    console.warn('[FixBridge API] booking_id unique index skipped:', e.message);
+  }
+
+  await initManagedSchema(pool);
+  await initHomeCareSettingsSchema(pool);
+  await initPropertyMemorySchema(pool);
+  await initServiceReminderSchema(pool);
+  await initSupportTicketSchema(pool);
+  await initInAppNotificationSchema(pool);
+  await initMessagingSchema(pool);
+  await initDisputeSchema(pool);
+  await initAvailabilitySchema(pool);
+  await initHomeownerAdminSchema(pool);
+  await initSubscriptionPlansSchema(pool);
+  await initMarketingConsent(pool);
+  await ensureAuthColumns();
+  await migratePrimaryAdminEmail();
+  await bootstrapPrimaryAdmin();
+
+  console.log('[FixBridge API] DB ready ✓');
+  await writeSchemaReadyVersion();
+  initDb._done = true;
+}
+
+// ── Row mappers ───────────────────────────────────────────────────────────────
+
+// ── JWT helpers ───────────────────────────────────────────────────────────────
+
+function makeToken(user, { authStage = 'complete', expiresIn = '7d' } = {}) {
+  return jwt.sign(
+    {
+      id: user.id,
+      role: user.role,
+      email: user.email,
+      isAdmin: user.isAdmin === true,
+      authStage,
+    },
+    JWT_SECRET,
+    { expiresIn, algorithm: 'HS256' }
+  );
+}
+
+// Capped so memory stays flat with any number of users; holds only what requireAuth needs.
+// The cache is per process (per function instance on serverless). Routes that block a user,
+// change a role/admin level or change a password call invalidateAuthUser(id) so the change
+// applies immediately on this instance; other instances pick it up within AUTH_USER_TTL_MS.
+const AUTH_USER_TTL_MS = 15_000;
+const authUserCache = new BoundedCache({ max: Number(process.env.AUTH_CACHE_MAX || 50_000), ttlMs: AUTH_USER_TTL_MS });
+
+export function invalidateAuthUser(userId) {
+  const id = Number(userId);
+  if (Number.isFinite(id)) authUserCache.delete(id);
+}
+
+// The only routes an MFA-pending token (password verified, MFA not yet completed) may call.
+const MFA_PENDING_ALLOWED_PATHS = /\/api\/auth\/mfa\/(start|verify)\/?$/;
+
+/** A token issued before the user's last password change is no longer valid. */
+function tokenPredatesPasswordChange(decoded, passwordChangedAt) {
+  if (!passwordChangedAt) return false;
+  const changedAtSec = Math.floor(new Date(passwordChangedAt).getTime() / 1000);
+  return Number.isFinite(changedAtSec) && Number(decoded.iat || 0) < changedAtSec;
+}
+
+/** Reject requests that don't carry a valid JWT. */
+async function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ ok: false, message: 'Authentication required.' });
+  }
+  let decoded;
+  try {
+    decoded = jwt.verify(authHeader.slice(7), JWT_SECRET, { algorithms: ['HS256'] });
+  } catch {
+    return res.status(401).json({ ok: false, message: 'Invalid or expired token.' });
+  }
+  // Partner-portal tokens share the signing secret but are not user sessions.
+  const userId = Number(decoded?.id);
+  if (decoded?.typ || !Number.isFinite(userId) || userId <= 0) {
+    return res.status(401).json({ ok: false, message: 'Invalid or expired token.' });
+  }
+  const authStage = decoded.authStage || 'complete';
+  // MFA-pending tokens may only finish MFA. Every other API (including inline
+  // role === 'admin' checks inside route handlers) needs a completed sign-in.
+  if (authStage === 'mfa_pending' && !MFA_PENDING_ALLOWED_PATHS.test(req.path || '')) {
+    return res.status(403).json({
+      ok: false,
+      code: 'mfa_required',
+      message: 'Multi-factor authentication required. Please sign in again.',
+    });
+  }
+  try {
+    const cached = authUserCache.get(userId);
+    if (cached) {
+      if (cached.isBlocked === true) {
+        return res.status(403).json({ ok: false, message: 'This account has been blocked. Please contact support.' });
+      }
+      if (tokenPredatesPasswordChange(decoded, cached.passwordChangedAt)) {
+        return res.status(401).json({ ok: false, code: 'session_expired', message: 'Your session has ended. Please sign in again.' });
+      }
+      req.authUser = { ...cached.authUser, authStage };
+      return next();
+    }
+    const { rows } = await pool.query('SELECT * FROM users WHERE id=$1', [userId]);
+    if (!rows.length) {
+      return res.status(401).json({ ok: false, message: 'User not found.' });
+    }
+    if (rows[0].is_blocked === true) {
+      return res.status(403).json({ ok: false, message: 'This account has been blocked. Please contact support.' });
+    }
+    if (tokenPredatesPasswordChange(decoded, rows[0].password_changed_at)) {
+      return res.status(401).json({ ok: false, code: 'session_expired', message: 'Your session has ended. Please sign in again.' });
+    }
+
+    let planCode = rows[0].plan_code;
+    let homeCareSubscription = null;
+    if (rows[0].role === 'homeowner') {
+      const subState = await syncUserHomeCareEntitlement(pool, rows[0].id);
+      planCode = subState.isPro ? subState.effectivePlanCode : null;
+      homeCareSubscription = toPublicHomeCareSubscriptionDto(subState);
+    }
+
+    // Built only from the database row, never from token claims, so the cached object is the
+    // same no matter which of the user's tokens populated it.
+    const authUser = {
+      id: Number(rows[0].id),
+      email: rows[0].email,
+      name: rows[0].name,
+      role: rows[0].role,
+      planCode: planCode || null,
+      homeCareSubscription,
+      // P0-10: is_admin boolean alone must never grant admin / cross-user access
+      isAdmin: rows[0].role === 'admin',
+      isBlocked: rows[0].is_blocked === true,
+      adminAccessLevel: rows[0].admin_access_level || 'read-write',
+      adminRolePreset: rows[0].admin_role_preset || null,
+    };
+    authUserCache.set(userId, {
+      isBlocked: rows[0].is_blocked === true,
+      passwordChangedAt: rows[0].password_changed_at || null,
+      authUser,
+    });
+    req.authUser = { ...authUser, authStage };
+    next();
+  } catch (e) {
+    console.error('[requireAuth]', e?.message || e);
+    return res.status(500).json({ ok: false, message: 'Server error. Please try again.' });
+  }
+}
+
+/** Reject requests from non-admin accounts (dedicated admin role only). */
+function requireAdmin(req, res, next) {
+  if (req.authUser?.role !== 'admin') {
+    return res.status(403).json({ ok: false, message: 'Admin access required. Use the staff admin login.' });
+  }
+  // P0-8: MFA-pending tokens cannot access admin APIs
+  if (req.authUser?.authStage === 'mfa_pending') {
+    return res.status(403).json({
+      ok: false,
+      code: 'mfa_required',
+      message: 'Multi-factor authentication required before accessing admin APIs.',
+    });
+  }
+  next();
+}
+
+function requireAdminWrite(req, res, next) {
+  if (req.authUser?.authStage === 'mfa_pending') {
+    return res.status(403).json({ ok: false, code: 'mfa_required', message: 'Multi-factor authentication required before accessing admin APIs.' });
+  }
+  if (req.authUser?.role !== 'admin') {
+    return res.status(403).json({ ok: false, message: 'Admin access required.' });
+  }
+  const level = String(req.authUser?.adminAccessLevel || 'read-write').toLowerCase();
+  if (level === 'read') {
+    return res.status(403).json({ ok: false, message: 'Write access required. Your account has Read-Only permissions.' });
+  }
+  next();
+}
+
+function requireAdminRead(req, res, next) {
+  if (req.authUser?.authStage === 'mfa_pending') {
+    return res.status(403).json({ ok: false, code: 'mfa_required', message: 'Multi-factor authentication required before accessing admin APIs.' });
+  }
+  if (req.authUser?.role !== 'admin') {
+    return res.status(403).json({ ok: false, message: 'Admin access required.' });
+  }
+  const level = String(req.authUser?.adminAccessLevel || 'read-write').toLowerCase();
+  if (level === 'write') {
+    return res.status(403).json({ ok: false, message: 'Read access required. Your account is Write-Only.' });
+  }
+  next();
+}
+
+/** Legacy board jobs: can this user read/mutate this jobId? */
+async function getLegacyJobAccess(jobId, authUser) {
+  if (!authUser) return { allowed: false, job: null, mutate: false };
+  if (authUser.role === 'admin') {
+    const { rows } = await pool.query('SELECT * FROM jobs WHERE id=$1', [jobId]);
+    return { allowed: true, job: rows[0] || null, mutate: true };
+  }
+  const { rows } = await pool.query('SELECT * FROM jobs WHERE id=$1', [jobId]);
+  const job = rows[0] || null;
+  if (!job) return { allowed: false, job: null, mutate: false };
+
+  const email = String(authUser.email || '').toLowerCase();
+  if (authUser.role === 'homeowner' && String(job.homeowner_email || '').toLowerCase() === email) {
+    return { allowed: true, job, mutate: true };
+  }
+  if (authUser.role === 'contractor') {
+    const { rows: lc } = await pool.query('SELECT * FROM job_lifecycle WHERE job_id=$1', [jobId]);
+    const assigned =
+      lc[0] &&
+      String(lc[0].contractor_email || '').toLowerCase() === email &&
+      ['accepted', 'on-the-way', 'arrived', 'work-started', 'completed'].includes(lc[0].status);
+    // Contractors may read board jobs (masked); mutate only if assigned
+    return { allowed: true, job, mutate: Boolean(assigned), lifecycle: lc[0] || null };
+  }
+  return { allowed: false, job, mutate: false };
+}
+
+function rowToJobBoard(r) {
+  const job = rowToJob(r);
+  // Hide customer PII on open board until contractor is assigned
+  return {
+    ...job,
+    fullAddress: null,
+    contactName: null,
+    contactPhone: null,
+  };
+}
+
+// ── Row serializers ───────────────────────────────────────────────────────────
+
+function asStringArray(val) {
+  if (Array.isArray(val)) return val.map((v) => String(v ?? '').trim()).filter(Boolean);
+  if (typeof val === 'string') {
+    try {
+      const parsed = JSON.parse(val);
+      if (Array.isArray(parsed)) return parsed.map((v) => String(v ?? '').trim()).filter(Boolean);
+    } catch {
+      // ignore
+    }
+  }
+  return [];
+}
+
+const MAX_DOCUMENT_DATA_URL_LENGTH = 5_000_000;
+
+function isAllowedDocumentDataUrl(value) {
+  return (
+    typeof value === 'string' &&
+    (value.startsWith('data:image/') || value.startsWith('data:application/pdf'))
+  );
+}
+
+function parseDocumentField(body, nameKey, dataKey) {
+  const name = typeof body[nameKey] === 'string' ? body[nameKey].trim() : '';
+  const data = typeof body[dataKey] === 'string' ? body[dataKey] : null;
+  const provided = Object.prototype.hasOwnProperty.call(body, dataKey) || Object.prototype.hasOwnProperty.call(body, nameKey);
+  if (!provided) return { provided: false };
+  if (data) {
+    if (!isAllowedDocumentDataUrl(data)) {
+      return { error: 'Documents must be PDF or image files.' };
+    }
+    if (data.length > MAX_DOCUMENT_DATA_URL_LENGTH) {
+      return { error: 'Document is too large. Please upload a file under ~3.5 MB.' };
+    }
+  }
+  return {
+    provided: true,
+    name: name || null,
+    data: data || null,
+    // Clear only when client explicitly sends null data with empty/null name
+    clear: body[dataKey] === null && (body[nameKey] === null || body[nameKey] === ''),
+    set: typeof data === 'string' && data.length > 0,
+  };
+}
+
+function rowToUser(r, { includeDocumentData = true, homeCareSubscription = null } = {}) {
+  return {
+    id: r.id != null ? Number(r.id) : undefined,
+    role: r.role, name: r.name, email: r.email,
+    // Never send the password hash to the client
+    ...(r.is_protected === true && { isProtected: true }),
+    ...(r.created_at && { createdAt: new Date(r.created_at).toISOString() }),
+    ...(r.trade && { trade: r.trade }),
+    ...(r.license_number && { licenseNumber: r.license_number }),
+    ...(r.license_expires_at && {
+      licenseExpiresAt:
+        r.license_expires_at instanceof Date
+          ? r.license_expires_at.toISOString().slice(0, 10)
+          : String(r.license_expires_at).slice(0, 10),
+    }),
+    ...(r.insurance_expires_at && {
+      insuranceExpiresAt:
+        r.insurance_expires_at instanceof Date
+          ? r.insurance_expires_at.toISOString().slice(0, 10)
+          : String(r.insurance_expires_at).slice(0, 10),
+    }),
+    ...(r.license_document_name && { licenseDocumentName: r.license_document_name }),
+    ...(r.insurance_document_name && { insuranceDocumentName: r.insurance_document_name }),
+    ...(r.id_document_name && { idDocumentName: r.id_document_name }),
+    ...(includeDocumentData && r.license_document_data && { licenseDocumentData: r.license_document_data }),
+    ...(includeDocumentData && r.insurance_document_data && { insuranceDocumentData: r.insurance_document_data }),
+    ...(includeDocumentData && r.id_document_data && { idDocumentData: r.id_document_data }),
+    ...(r.photo_data_url && { photoDataUrl: r.photo_data_url }),
+    ...(r.phone && { phone: r.phone }),
+    ...(r.address && { address: r.address }),
+    addressVerified: r.address_verified === true,
+    ...(r.address_verified_at && { addressVerifiedAt: r.address_verified_at }),
+    ...(r.address_verification_provider && { addressVerificationProvider: r.address_verification_provider }),
+    ...(r.postal_code_plus4 && { postalCodePlus4: r.postal_code_plus4 }),
+    ...(r.contact_email && { contactEmail: r.contact_email }),
+    ...(r.company_name && { companyName: r.company_name }),
+    ...(r.company_details && { companyDetails: r.company_details }),
+    ...(r.insurance_details && { insuranceDetails: r.insurance_details }),
+    ...(r.compliance_status && { complianceStatus: r.compliance_status }),
+    dispatchEligible: r.dispatch_eligible === true,
+    level1Eligible: r.level1_eligible === true,
+    level2Eligible: r.level2_eligible === true,
+    ...(r.overall_compliance_status && { overallComplianceStatus: r.overall_compliance_status }),
+    ...(r.w9_document_name && { w9DocumentName: r.w9_document_name }),
+    ...(includeDocumentData && r.w9_document_data && { w9DocumentData: r.w9_document_data }),
+    ...(r.business_registration_name && { businessRegistrationName: r.business_registration_name }),
+    ...(includeDocumentData && r.business_registration_data && { businessRegistrationData: r.business_registration_data }),
+    ...(r.business_license_name && { businessLicenseName: r.business_license_name }),
+    ...(includeDocumentData && r.business_license_data && { businessLicenseData: r.business_license_data }),
+    ...(r.diversity_document_name && { diversityDocumentName: r.diversity_document_name }),
+    ...(includeDocumentData && r.diversity_document_data && { diversityDocumentData: r.diversity_document_data }),
+    ...(r.contractor_application != null && {
+      contractorApplication:
+        typeof r.contractor_application === 'string'
+          ? JSON.parse(r.contractor_application)
+          : r.contractor_application,
+    }),
+    emails: asStringArray(r.profile_emails),
+    phones: asStringArray(r.profile_phones),
+    addresses: asStringArray(r.profile_addresses),
+    isAdmin: r.role === 'admin',
+    isBlocked: r.is_blocked === true,
+    isGoogleAccount: Boolean(r.oauth_google_sub) || r.signup_method === 'google',
+    isAppleAccount: r.password === 'APPLE_OAUTH',
+    isAuth0Account: r.password === 'AUTH0_OAUTH',
+    planCode: r.plan_code || null,
+    ...(homeCareSubscription ? { homeCareSubscription } : {}),
+    visitFee: r.visit_fee != null ? Number(r.visit_fee) : null,
+    emergencyVisitFee: r.emergency_visit_fee != null ? Number(r.emergency_visit_fee) : null,
+    afterHoursFee: r.after_hours_fee != null ? Number(r.after_hours_fee) : null,
+    weekendFee: r.weekend_fee != null ? Number(r.weekend_fee) : null,
+    cancellationFee: r.cancellation_fee != null ? Number(r.cancellation_fee) : null,
+    minimumLaborFee: r.minimum_labor_fee != null ? Number(r.minimum_labor_fee) : null,
+    freeEstimate: r.free_estimate === true,
+    visitAppliesToRepair: r.visit_applies_to_repair === true,
+    serviceZips: r.service_zips ? (typeof r.service_zips === 'string' ? JSON.parse(r.service_zips) : r.service_zips) : null,
+    travelRadiusMiles: r.travel_radius_miles != null ? Number(r.travel_radius_miles) : null,
+    referralCode: r.referral_code || null,
+    referredByCode: r.referred_by_code || null,
+    gender: r.gender || null,
+    dob: r.dob || null,
+    adminAccessLevel: r.admin_access_level || 'read-write',
+    adminRolePreset: r.admin_role_preset || resolveAdminPreset({
+      role: r.role,
+      adminAccessLevel: r.admin_access_level,
+      adminRolePreset: r.admin_role_preset,
+    }),
+    permissions: r.role === 'admin'
+      ? [...permissionsForUser({
+        role: 'admin',
+        adminAccessLevel: r.admin_access_level,
+        adminRolePreset: r.admin_role_preset,
+      })]
+      : undefined,
+  };
+}
+
+function rowToJob(r) {
+  return {
+    id: Number(r.id), bookingId: r.booking_id, category: r.category, tag: r.tag, title: r.title,
+    ...(r.description && { description: r.description }),
+    ...(r.media_data_url && { mediaDataUrl: r.media_data_url }),
+    ...(r.media_type && { mediaType: r.media_type }),
+    ...(r.ai_assessment && { aiAssessment: r.ai_assessment }),
+    cityStateZip: r.city_state_zip, fullAddress: r.full_address,
+    contactName: r.contact_name, contactPhone: r.contact_phone,
+    ...(r.scheduled_date && { scheduledDate: r.scheduled_date }),
+    ...(r.time_slot && { timeSlot: r.time_slot }),
+    ...(r.service_timing && { serviceTiming: r.service_timing }),
+    dist: r.dist, posted: r.posted, est: r.est,
+    bids: r.bids, urgent: r.urgent, ai: r.ai,
+    requirements: r.requirements ?? [],
+  };
+}
+
+function rowToNotification(r) {
+  return {
+    id: Number(r.id),
+    userId: Number(r.user_id),
+    jobId: r.job_id != null ? Number(r.job_id) : undefined,
+    type: r.type,
+    title: r.title,
+    message: r.message,
+    read: r.read === true,
+    createdAt: r.created_at,
+  };
+}
+
+async function notifyMatchingContractors(job) {
+  const { rows: contractors } = await pool.query(
+    `SELECT id, trade FROM users WHERE role='contractor' AND is_blocked=false`
+  );
+  const matching = contractors.filter((c) => contractorTradeMatchesCategory(c.trade, job.category));
+  const jobLabel = job.booking_id || job.bookingId || `JOB-${job.id}`;
+  const title = job.urgent ? 'Urgent job in your trade' : 'New job in your trade';
+  const message = `${jobLabel} · ${job.category}: ${job.title}`;
+  for (const contractor of matching) {
+    await pool.query(
+      `INSERT INTO notifications (user_id, job_id, type, title, message)
+       VALUES ($1, $2, 'new_job', $3, $4)`,
+      [contractor.id, job.id, title, message]
+    );
+  }
+  return matching.length;
+}
+
+/** Notify every admin when a contractor uploads or replaces verification documents. */
+async function notifyAdminsOfDocumentChange({ contractorName, contractorEmail, changedLabels }) {
+  if (!changedLabels?.length) return 0;
+  const { rows: admins } = await pool.query(
+    `SELECT id FROM users WHERE role='admin' AND COALESCE(is_blocked,false)=false`
+  );
+  const title = 'Contractor document updated';
+  const message = `${contractorName} (${contractorEmail}) updated: ${changedLabels.join(', ')}`;
+  for (const admin of admins) {
+    await pool.query(
+      `INSERT INTO notifications (user_id, type, title, message)
+       VALUES ($1, 'document_update', $2, $3)`,
+      [admin.id, title, message]
+    );
+  }
+  return admins.length;
+}
+
+function rowToLifecycle(r) {
+  return {
+    jobId: Number(r.job_id), status: r.status,
+    ...(r.contractor_name && { contractorName: r.contractor_name }),
+    ...(r.contractor_email && { contractorEmail: r.contractor_email }),
+    ...(r.invoice_amount != null && { invoiceAmount: Number(r.invoice_amount) }),
+    ...(r.invoice_file_name && { invoiceFileName: r.invoice_file_name }),
+    ...(r.invoice_file_data && { invoiceFileData: r.invoice_file_data }),
+    ...(r.rating != null && { rating: Number(r.rating) }),
+    ...(r.review && { review: r.review }),
+    ...(r.accepted_at && { acceptedAt: r.accepted_at instanceof Date ? r.accepted_at.toISOString() : r.accepted_at }),
+    ...(r.completed_at && { completedAt: r.completed_at instanceof Date ? r.completed_at.toISOString() : r.completed_at }),
+  };
+}
+
+function rowToMessage(r) {
+  return {
+    id: Number(r.id), senderRole: r.sender_role, senderName: r.sender_name, text: r.text,
+    ...(r.image_data_url && { imageDataUrl: r.image_data_url }),
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
+  };
+}
+
+// ── Express app ───────────────────────────────────────────────────────────────
+const app = express();
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+app.use(securityHeaders);
+
+// Request ID + one structured log line per API request.
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')) return next();
+  
+  // Node lowercases incoming header names, so only lowercase lookups can match.
+  req.id = req.headers['x-nf-request-id'] || req.headers['x-request-id'] || randomUUID();
+  
+  // Also pass it back to the client response headers for tracking consistency
+  res.setHeader('X-Request-Id', req.id);
+  
+  const started = Date.now();
+  res.on('finish', () => {
+    const route = `${req.method} ${req.path}`;
+    console.log(JSON.stringify({
+      requestId: req.id,
+      route,
+      status: res.statusCode,
+      durationMs: Date.now() - started,
+    }));
+  });
+  next();
+});
+
+app.use(
+  cors({
+    origin: corsOriginDelegate,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Stripe-Signature'],
+    maxAge: 86400,
+  })
+);
+// Keep JSON body reasonably bounded; media uploads are still data-URLs in managed job create.
+app.use(
+  express.json({
+    limit: process.env.JSON_BODY_LIMIT || '20mb',
+    verify: (req, _res, buf) => {
+      // Needed for Stripe webhook signature verification.
+      if (req.originalUrl?.includes('/api/stripe/webhook')) {
+        req.rawBody = buf;
+      }
+    },
+  })
+);
+
+// Debug-only tracing: keeps the baseline business logic unchanged while recording
+// job-scoped requests and database snapshots in one JSON store.
+// It rewrites one shared file on every API request and stores request and response bodies from
+// all users together, so it is a bottleneck and mixes users' data. Off unless explicitly enabled
+// outside production.
+if (process.env.JOB_DEBUG_LOG === 'true' && !isDeployedProduction()) {
+  installJobDebugLogger(app, { pool, requireAdmin });
+}
+
+// ── Rate limiters ─────────────────────────────────────────────────────────────
+// Netlify/serverless sometimes has no req.ip. express-rate-limit v8 then throws
+// ValidationError, and Express's default handler returns HTML. The Google
+// signup form treats that as "unexpected response".
+function rateLimitKey(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  const fromHeader = Array.isArray(forwarded)
+    ? forwarded[0]
+    : String(forwarded || '').split(',')[0].trim();
+  const nfIp = String(req.headers['x-nf-client-connection-ip'] || '').trim();
+  const clientIp = req.ip || fromHeader || nfIp || 'unknown';
+
+  // FixBridge is commonly tested with Admin + Homeowner + Contractor sessions
+  // from the same browser/IP. An IP-only limiter made those independent roles
+  // consume one shared 400-request bucket and eventually produced 429s. Keep
+  // the IP in the key, but also isolate authenticated sessions by token hash.
+  const auth = String(req.headers.authorization || '');
+  if (auth.startsWith('Bearer ')) {
+    const tokenHash = crypto.createHash('sha256').update(auth.slice(7)).digest('hex').slice(0, 20);
+    return `${clientIp}:${tokenHash}`;
+  }
+
+  return clientIp === 'unknown' ? 'unknown' : ipKeyGenerator(clientIp);
+}
+
+const rateLimitBase = {
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { ip: false, xForwardedForHeader: false },
+  keyGenerator: rateLimitKey,
+};
+
+const apiLimiter = rateLimit({
+  ...rateLimitBase,
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.API_RATE_LIMIT_MAX || 800),
+  message: { ok: false, message: 'Too many requests. Please slow down and try again.' },
+});
+
+const signInLimiter = rateLimit({
+  ...rateLimitBase,
+  windowMs: 15 * 60 * 1000, // 15 min
+  max: Number(process.env.SIGNIN_RATE_LIMIT_MAX || (process.env.NODE_ENV === 'production' ? 15 : 200)),
+  handler: (_req, res) =>
+    res.status(429).json({ ok: false, message: 'Too many sign-in attempts. Please wait 15 minutes and try again.' }),
+});
+
+const forgotLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: Number(process.env.FORGOT_RATE_LIMIT_MAX || 5),
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) =>
+    res.status(429).json({ ok: false, message: 'Too many reset requests. Please wait before trying again.' }),
+});
+
+const resetLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: Number(process.env.RESET_RATE_LIMIT_MAX || 20),
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) =>
+    res.status(429).json({ ok: false, message: 'Too many reset attempts. Please wait before trying again.' }),
+});
+
+const reviewLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 12,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) =>
+    res.status(429).json({ ok: false, message: 'Too many reviews submitted. Please try again later.' }),
+});
+
+const signupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) =>
+    res.status(429).json({ ok: false, message: 'Too many sign-up attempts. Please wait and try again.' }),
+});
+
+const aiGuard = aiFairnessGuard();
+const aiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) =>
+    res.status(429).json({ ok: false, message: 'AI rate limit reached. Please wait a few minutes.' }),
+});
+
+app.use('/api/', apiLimiter);
+
+async function ensureUserReferralCode(pool, r) {
+  if (r.referral_code) return r.referral_code;
+  const nameClean = String(r.name || 'user').toUpperCase().replace(/[^A-Z]/g, '');
+  const prefix = nameClean.slice(0, 4) || 'USER';
+  let referralCode = '';
+  let attempts = 0;
+  while (attempts < 10) {
+    const random = Math.floor(1000 + Math.random() * 9000);
+    referralCode = `REF-${prefix}-${random}`;
+    try {
+      await pool.query('UPDATE users SET referral_code=$1 WHERE id=$2', [referralCode, r.id]);
+      r.referral_code = referralCode;
+      break;
+    } catch {
+      attempts++;
+    }
+  }
+  return referralCode;
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+app.post('/api/auth/signin', signInLimiter, async (req, res) => {
+  try {
+    const { role, email, password } = req.body;
+    if (!role || !email || !password) return res.status(400).json({ ok: false, message: 'All fields are required.' });
+    if (!['homeowner', 'contractor', 'admin'].includes(role)) {
+      return res.status(400).json({ ok: false, message: 'Invalid account type.' });
+    }
+
+    const { rows } = await pool.query(
+      `SELECT * FROM users WHERE role=$1 AND LOWER(email)=LOWER($2)`,
+      [role, email.trim()]
+    );
+
+    if (!rows.length) {
+      return res.status(401).json({ ok: false, message: 'Incorrect email or password. Use the demo login or sign up first.' });
+    }
+
+    if (rows[0].is_blocked === true) {
+      return res.status(403).json({ ok: false, message: 'This account has been blocked. Please contact support.' });
+    }
+
+    // Accounts created with Google have no usable password until the owner sets one with
+    // Forgot password. Older Google accounts were given a password derived from the Google
+    // account ID, which is not secret: those are detected here and refused too.
+    const googleOnlyMessage =
+      'This account uses Google sign-in. Continue with Google, or use Forgot password to add a password.';
+    if (['GOOGLE_OAUTH', 'APPLE_OAUTH', 'AUTH0_OAUTH'].includes(String(rows[0].password))) {
+      return res.status(401).json({ ok: false, code: 'PASSWORD_NOT_SET', message: googleOnlyMessage });
+    }
+    if (rows[0].password_login_enabled === false) {
+      return res.status(401).json({ ok: false, code: 'PASSWORD_NOT_SET', message: googleOnlyMessage });
+    }
+    if (rows[0].password_login_enabled == null && rows[0].oauth_google_sub) {
+      const legacyGooglePassword = await bcrypt.compare(`GOOGLE_OAUTH_${rows[0].oauth_google_sub}`, rows[0].password);
+      if (legacyGooglePassword) {
+        await pool.query(`UPDATE users SET password_login_enabled=FALSE WHERE id=$1`, [rows[0].id]);
+        return res.status(401).json({ ok: false, code: 'PASSWORD_NOT_SET', message: googleOnlyMessage });
+      }
+    }
+
+    const valid = await bcrypt.compare(password, rows[0].password);
+    if (!valid) {
+      return res.status(401).json({ ok: false, message: 'Incorrect email or password.' });
+    }
+
+    await ensureUserReferralCode(pool, rows[0]);
+    let homeCareSubscription = null;
+    if (role === 'homeowner') {
+      const subState = await syncUserHomeCareEntitlement(pool, rows[0].id);
+      homeCareSubscription = toPublicHomeCareSubscriptionDto(subState);
+    }
+    const user = rowToUser(rows[0], { homeCareSubscription });
+    if (homeCareSubscription) {
+      user.planCode = homeCareSubscription.isPro ? homeCareSubscription.planCode : null;
+    }
+    // P0-8: admin credentials only yield an MFA-pending token until MFA succeeds
+    if (role === 'admin') {
+      return res.json({
+        ok: true,
+        mfaRequired: true,
+        token: makeToken(user, { authStage: 'mfa_pending', expiresIn: '15m' }),
+        user,
+        message: 'Credentials verified. Complete MFA to finish sign-in.',
+      });
+    }
+    return res.json({ ok: true, token: makeToken(user, { authStage: 'complete' }), user });
+  } catch (e) {
+    console.error('signin:', e);
+    return res.status(500).json({ ok: false, message: 'Server error. Please try again.' });
+  }
+});
+
+app.post('/api/auth/signup', signupLimiter, async (req, res) => {
+  try {
+    const {
+      role, name, email, password, trade, licenseNumber,
+      licenseDocumentName, insuranceDocumentName, idDocumentName,
+      licenseDocumentData, insuranceDocumentData, idDocumentData,
+      w9DocumentName, w9DocumentData,
+      businessRegistrationName, businessRegistrationData,
+      businessLicenseName, businessLicenseData,
+      diversityDocumentName, diversityDocumentData,
+      contractorApplication,
+      phone, address, contactEmail, companyName, companyDetails, insuranceDetails,
+      serviceZips, travelRadiusMiles, visitFee, emergencyVisitFee, minimumLaborFee,
+      afterHoursFee, weekendFee, cancellationFee, freeEstimate, visitAppliesToRepair,
+      referredByCode,
+    } = req.body;
+    if (!role || !name || !email || !password) return res.status(400).json({ ok: false, message: 'All required fields must be filled.' });
+    if (role !== 'homeowner' && role !== 'contractor') {
+      return res.status(400).json({ ok: false, message: 'Public signup is only available for homeowners and contractors.' });
+    }
+    if (password.length < 6) return res.status(400).json({ ok: false, message: 'Password must be at least 6 characters.' });
+
+    if (role === 'homeowner') {
+      const accountConsent = checkActionConsentsFromBody(req.body, 'ACCOUNT_SIGNUP');
+      if (!accountConsent.ok) {
+        return res.status(400).json({
+          ok: false,
+          code: accountConsent.code,
+          message: 'You must agree to the FixBridge Terms of Service and Privacy Policy.',
+          missingAcceptanceTypes: accountConsent.missing,
+        });
+      }
+    }
+
+    const docs = [
+      { label: 'License', name: licenseDocumentName, data: licenseDocumentData },
+      { label: 'Insurance', name: insuranceDocumentName, data: insuranceDocumentData },
+      { label: 'ID Document', name: idDocumentName, data: idDocumentData },
+      { label: 'W-9', name: w9DocumentName, data: w9DocumentData },
+      { label: 'Business Registration', name: businessRegistrationName, data: businessRegistrationData },
+      { label: 'Business License', name: businessLicenseName, data: businessLicenseData },
+      { label: 'Diversity Certification', name: diversityDocumentName, data: diversityDocumentData },
+    ];
+    for (const doc of docs) {
+      if (doc.data) {
+        if (!isAllowedDocumentDataUrl(doc.data)) {
+          return res.status(400).json({ ok: false, message: `${doc.label} must be a PDF or image file.` });
+        }
+        if (doc.data.length > MAX_DOCUMENT_DATA_URL_LENGTH) {
+          return res.status(400).json({ ok: false, message: `${doc.label} is too large. Please use a file under ~3.5 MB.` });
+        }
+      }
+    }
+
+    if (role === 'contractor') {
+      const app = contractorApplication && typeof contractorApplication === 'object' ? contractorApplication : null;
+      if (!app) {
+        return res.status(400).json({ ok: false, message: 'Contractor application details are required.' });
+      }
+      if (!String(app.legalBusinessName || '').trim() || !String(app.ein || '').trim()) {
+        return res.status(400).json({ ok: false, message: 'Legal business name and EIN are required.' });
+      }
+      if (!app.agreeAccurate) {
+        return res.status(400).json({ ok: false, message: 'You must confirm the application information is accurate.' });
+      }
+      if (!app.agreeContractorAgreementV4) {
+        return res.status(400).json({
+          ok: false,
+          message: 'You must review and accept the FixBridge Contractor Agreement Package v4.',
+        });
+      }
+    }
+
+    const existing = await pool.query(`SELECT id FROM users WHERE role=$1 AND LOWER(email)=LOWER($2)`, [role, email.trim()]);
+    if (existing.rows.length) return res.status(409).json({ ok: false, message: 'An account with that email already exists.' });
+
+    const hashed = await bcrypt.hash(password, 10);
+    const appJson = role === 'contractor' && contractorApplication
+      ? JSON.stringify(contractorApplication)
+      : null;
+    const zipsJson = Array.isArray(serviceZips) ? JSON.stringify(serviceZips) : null;
+
+    const licenseExpiresAt =
+      role === 'contractor' && contractorApplication?.licenseExpiration
+        ? String(contractorApplication.licenseExpiration).slice(0, 10)
+        : null;
+    const insuranceExpiresAt =
+      role === 'contractor' && contractorApplication?.insuranceExpiration
+        ? String(contractorApplication.insuranceExpiration).slice(0, 10)
+        : null;
+
+    const { rows } = await pool.query(
+      `INSERT INTO users (
+         role,name,email,password,trade,license_number,
+         license_document_name,insurance_document_name,id_document_name,
+         license_document_data,insurance_document_data,id_document_data,
+         w9_document_name,w9_document_data,
+         business_registration_name,business_registration_data,
+         business_license_name,business_license_data,
+         diversity_document_name,diversity_document_data,
+         contractor_application,
+         phone,address,contact_email,company_name,company_details,insurance_details,
+         service_zips,travel_radius_miles,visit_fee,emergency_visit_fee,minimum_labor_fee,
+         after_hours_fee,weekend_fee,cancellation_fee,free_estimate,visit_applies_to_repair,
+         compliance_status,license_expires_at,insurance_expires_at,referred_by_code
+       )
+       VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+         $21::jsonb,$22,$23,$24,$25,$26,$27,$28::jsonb,$29,$30,$31,$32,$33,$34,$35,$36,$37,
+         $38,$39,$40,$41
+       ) RETURNING *`,
+      [
+        role, name.trim(), email.trim().toLowerCase(), hashed,
+        trade?.trim() || null, licenseNumber?.trim() || null,
+        licenseDocumentName || null, insuranceDocumentName || null, idDocumentName || null,
+        licenseDocumentData || null, insuranceDocumentData || null, idDocumentData || null,
+        w9DocumentName || null, w9DocumentData || null,
+        businessRegistrationName || null, businessRegistrationData || null,
+        businessLicenseName || null, businessLicenseData || null,
+        diversityDocumentName || null, diversityDocumentData || null,
+        appJson,
+        phone?.trim() || null, address?.trim() || null, contactEmail?.trim() || null,
+        companyName?.trim() || null, companyDetails?.trim() || null, insuranceDetails?.trim() || null,
+        zipsJson,
+        travelRadiusMiles != null && travelRadiusMiles !== '' ? Number(travelRadiusMiles) : null,
+        visitFee != null && visitFee !== '' ? Number(visitFee) : null,
+        emergencyVisitFee != null && emergencyVisitFee !== '' ? Number(emergencyVisitFee) : null,
+        minimumLaborFee != null && minimumLaborFee !== '' ? Number(minimumLaborFee) : null,
+        afterHoursFee != null && afterHoursFee !== '' ? Number(afterHoursFee) : null,
+        weekendFee != null && weekendFee !== '' ? Number(weekendFee) : null,
+        cancellationFee != null && cancellationFee !== '' ? Number(cancellationFee) : null,
+        freeEstimate === true,
+        visitAppliesToRepair === true,
+        role === 'contractor' ? 'under_review' : null,
+        licenseExpiresAt && /^\d{4}-\d{2}-\d{2}$/.test(licenseExpiresAt) ? licenseExpiresAt : null,
+        insuranceExpiresAt && /^\d{4}-\d{2}-\d{2}$/.test(insuranceExpiresAt) ? insuranceExpiresAt : null,
+        typeof referredByCode === 'string' && referredByCode.trim() ? referredByCode.trim().toUpperCase() : null,
+      ]
+    );
+    await ensureUserReferralCode(pool, rows[0]);
+    if (role === 'contractor') {
+      try {
+        const { recordContractorAgreementAcceptance } = await import('./contractor-agreement.js');
+        const { AGREEMENT_V4_TITLE, AGREEMENT_V4_VERSION } = await import('./contractor-agreement-content.js');
+        await recordContractorAgreementAcceptance(pool, {
+          contractorUserId: rows[0].id,
+          documentVersion: AGREEMENT_V4_VERSION,
+          documentTitle: AGREEMENT_V4_TITLE,
+          req,
+          sourceRoute: req.originalUrl || '/api/auth/signup',
+        });
+      } catch (agrErr) {
+        console.error('contractor agreement acceptance:', agrErr);
+      }
+    }
+    try {
+      const refCode =
+        typeof referredByCode === 'string' && referredByCode.trim()
+          ? referredByCode.trim()
+          : rows[0].referred_by_code;
+      if (refCode) {
+        await applyReferralCode(pool, rows[0].id, refCode, { actorId: rows[0].id });
+      }
+      await ensureReferralCode(pool, rows[0]);
+    } catch (refErr) {
+      console.error('referral on signup:', refErr);
+    }
+    const user = rowToUser(rows[0]);
+    if (role === 'homeowner') {
+      try {
+        await validateAndRecordActionConsents(pool, req, {
+          actionKey: 'ACCOUNT_SIGNUP',
+          userId: rows[0].id,
+          idempotencyPrefix: `signup:${rows[0].id}`,
+        });
+        const emailOptIn =
+          req.body?.marketingEmailOptIn === true || req.body?.marketingConsent === true;
+        const smsOptIn =
+          req.body?.marketingSmsOptIn === true || req.body?.marketingConsent === true;
+        await recordSignupMarketingConsents(pool, {
+          userId: rows[0].id,
+          emailOptIn,
+          smsOptIn,
+          source: 'signup',
+          req,
+        });
+      } catch (consentErr) {
+        console.error('homeowner consent on signup:', consentErr);
+      }
+    }
+    if (role === 'contractor') {
+      try {
+        await ensureComplianceDocuments(pool, rows[0].id);
+        await recalculateDispatchEligible(pool, rows[0].id);
+      } catch (complianceErr) {
+        console.error('contractor compliance seed on signup:', complianceErr);
+      }
+      const uploaded = docs.filter((d) => d.data || d.name).map((d) => d.label);
+      if (uploaded.length) {
+        try {
+          await notifyAdminsOfDocumentChange({
+            contractorName: user.name,
+            contractorEmail: user.email,
+            changedLabels: uploaded,
+          });
+        } catch (notifyErr) {
+          console.error('notify admins on signup docs:', notifyErr);
+        }
+      }
+    }
+    return res.json({ ok: true, token: makeToken(user), user });
+  } catch (e) {
+    console.error('signup:', e);
+    return res.status(500).json({ ok: false, message: 'Server error. Please try again.' });
+  }
+});
+
+// ── GET /api/auth/me ──────────────────────────────────────────────────────────
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  try {
+    // Stripe checkout sync is only for the post-payment poll. Doing it on every
+    // session restore made the whole dashboard wait on an external API.
+    const syncCheckout = req.query.sync === 'checkout';
+    const { rows: pendingPayments } = syncCheckout
+      ? await pool.query(
+        `SELECT *
+           FROM payments
+          WHERE user_id=$1
+            AND stripe_session_id IS NOT NULL
+            AND (
+              status='pending'
+              OR (
+                status='succeeded'
+                AND payment_type IN ('subscription','pending_professional_fee')
+                AND job_id IS NULL
+                AND meta->>'pendingServiceRequestId' IS NOT NULL
+              )
+            )`,
+        [req.authUser.id]
+      )
+      : { rows: [] };
+    for (const payment of pendingPayments) {
+      try {
+        const stripe = await getStripe();
+        if (stripe) {
+          const session = await stripe.checkout.sessions.retrieve(payment.stripe_session_id);
+          if (session.payment_status === 'paid' || session.status === 'complete') {
+            await pool.query(
+              `UPDATE payments SET status='succeeded' WHERE id=$1`,
+              [payment.id]
+            );
+            const planCode = session.metadata?.planCode;
+            const pendingServiceRequestId = Number(session.metadata?.pendingServiceRequestId);
+
+            if (payment.payment_type === 'subscription' && planCode) {
+              let periodEnd = null;
+              if (session.subscription && stripe) {
+                try {
+                  const sub = await stripe.subscriptions.retrieve(String(session.subscription));
+                  if (sub?.current_period_end) {
+                    periodEnd = new Date(sub.current_period_end * 1000).toISOString();
+                  }
+                } catch {
+                  /* use default in activateSubscriptionFromCheckout */
+                }
+              }
+              await activateSubscriptionFromCheckout(pool, {
+                userId: req.authUser.id,
+                planCode,
+                stripeSubscriptionId: session.subscription || null,
+                stripeCustomerId: session.customer || null,
+                currentPeriodEnd: periodEnd,
+                checkoutSessionId: session.id,
+                meta: { activatedByAuthMeSync: true },
+              });
+            }
+
+            // The browser may return from Stripe before the webhook reaches
+            // FixBridge. Reconcile the pending request from the verified
+            // checkout session itself. This covers both HomeCare PLAN and
+            // professional HIRE payments.
+            if (
+              Number.isFinite(pendingServiceRequestId) &&
+              pendingServiceRequestId > 0 &&
+              (
+                payment.payment_type === 'subscription' ||
+                payment.payment_type === 'pending_professional_fee'
+              )
+            ) {
+              try {
+                const pendingAmountCents =
+                  session.amount_total != null
+                    ? Number(session.amount_total)
+                    : dollarsToCents(payment.amount || 0);
+
+                const converted = await convertPendingServiceRequest(
+                  pool,
+                  pendingServiceRequestId,
+                  {
+                    amountCents: pendingAmountCents,
+                    stripeSessionId: session.id,
+                    stripePaymentIntentId: session.payment_intent || null,
+                    homeownerUserId: req.authUser.id,
+                    paymentType: payment.payment_type,
+                  }
+                );
+
+                console.log('[PENDING SERVICE REQUEST] auth/me conversion:', {
+                  pendingServiceRequestId,
+                  paymentType: payment.payment_type,
+                  managedJobId: converted?.job?.id || null,
+                  alreadyConverted: converted?.alreadyConverted || false,
+                });
+              } catch (conversionError) {
+                // Keep auth/me successful; the signed Stripe webhook can
+                // retry the same conversion. Surface the error in server logs.
+                console.error(
+                  '[PENDING SERVICE REQUEST] auth/me conversion failed:',
+                  conversionError?.message || conversionError
+                );
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[Stripe sync error]', err.message);
+      }
+    }
+
+    const { rows } = await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id]);
+    if (!rows.length) return res.status(401).json({ ok: false, message: 'User not found.' });
+    if (!rows[0].referral_code) await ensureUserReferralCode(pool, rows[0]);
+    let homeCareSubscription = req.authUser.homeCareSubscription || null;
+    if (syncCheckout && rows[0].role === 'homeowner') {
+      invalidateHomeCareEntitlementCache(rows[0].id);
+      const subState = await syncUserHomeCareEntitlement(pool, rows[0].id, { force: true });
+      homeCareSubscription = toPublicHomeCareSubscriptionDto(subState);
+    }
+    const user = rowToUser(rows[0], { homeCareSubscription });
+    if (homeCareSubscription) {
+      user.planCode = homeCareSubscription.isPro ? homeCareSubscription.planCode : null;
+    }
+    return res.json({ ok: true, user });
+  } catch (e) {
+    console.error('me:', e);
+    return res.status(500).json({ ok: false, message: 'Server error.' });
+  }
+});
+
+// ── PUT /api/auth/profile — update signed-in user's My Profile fields ─────────
+app.put('/api/auth/profile', requireAuth, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    if (!name) {
+      return res.status(400).json({ ok: false, message: 'Name is required.' });
+    }
+
+    const gender = typeof body.gender === 'string' ? body.gender.trim() : null;
+    const dob = typeof body.dob === 'string' ? body.dob.trim() : null;
+
+    const photoDataUrl = typeof body.photoDataUrl === 'string' ? body.photoDataUrl : null;
+    if (photoDataUrl && photoDataUrl.length > 2_500_000) {
+      return res.status(400).json({ ok: false, message: 'Photo is too large. Please use a smaller image.' });
+    }
+    if (photoDataUrl && !photoDataUrl.startsWith('data:image/')) {
+      return res.status(400).json({ ok: false, message: 'Photo must be an image data URL.' });
+    }
+
+    const phone = typeof body.phone === 'string' ? body.phone.trim() : '';
+    const address = typeof body.address === 'string' ? body.address.trim() : '';
+    const contactEmail = typeof body.contactEmail === 'string' ? body.contactEmail.trim() : '';
+    const companyName = typeof body.companyName === 'string' ? body.companyName.trim() : '';
+    const companyDetails = typeof body.companyDetails === 'string' ? body.companyDetails.trim() : '';
+    const insuranceDetails = typeof body.insuranceDetails === 'string' ? body.insuranceDetails.trim() : '';
+    const licenseNumber = typeof body.licenseNumber === 'string' ? body.licenseNumber.trim() : undefined;
+    const trade = typeof body.trade === 'string' ? body.trade.trim() : undefined;
+    const emails = asStringArray(body.emails);
+    const phones = asStringArray(body.phones);
+    const addresses = asStringArray(body.addresses);
+
+    const licenseDoc = parseDocumentField(body, 'licenseDocumentName', 'licenseDocumentData');
+    const insuranceDoc = parseDocumentField(body, 'insuranceDocumentName', 'insuranceDocumentData');
+    const idDoc = parseDocumentField(body, 'idDocumentName', 'idDocumentData');
+    const w9Doc = parseDocumentField(body, 'w9DocumentName', 'w9DocumentData');
+    const bizRegDoc = parseDocumentField(body, 'businessRegistrationName', 'businessRegistrationData');
+    const bizLicDoc = parseDocumentField(body, 'businessLicenseName', 'businessLicenseData');
+    const diversityDoc = parseDocumentField(body, 'diversityDocumentName', 'diversityDocumentData');
+    for (const doc of [licenseDoc, insuranceDoc, idDoc, w9Doc, bizRegDoc, bizLicDoc, diversityDoc]) {
+      if (doc.error) return res.status(400).json({ ok: false, message: doc.error });
+    }
+
+    // Clear photo when client explicitly sends null; omit field leaves existing value
+    const clearPhoto = body.photoDataUrl === null;
+    const setPhoto = typeof body.photoDataUrl === 'string';
+    const setLicenseNumber = typeof licenseNumber === 'string';
+    const setTrade = typeof trade === 'string';
+    const setGender = typeof body.gender === 'string';
+    const setDob = typeof body.dob === 'string';
+
+    const { rows: beforeRows } = await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id]);
+    if (!beforeRows.length) {
+      return res.status(404).json({ ok: false, message: 'User not found.' });
+    }
+    const before = beforeRows[0];
+
+    // Allow homeowner/contractor to update login email when provided and unique for their role.
+    const nextEmailRaw = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    if (nextEmailRaw && nextEmailRaw !== String(before.email || '').toLowerCase()) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmailRaw)) {
+        return res.status(400).json({ ok: false, message: 'Enter a valid email address.' });
+      }
+      const { rows: emailTaken } = await pool.query(
+        `SELECT id FROM users WHERE role=$1 AND LOWER(email)=LOWER($2) AND id<>$3`,
+        [before.role, nextEmailRaw, req.authUser.id]
+      );
+      if (emailTaken.length) {
+        return res.status(409).json({ ok: false, message: 'An account with that email already exists.' });
+      }
+      await pool.query(`UPDATE users SET email=$1 WHERE id=$2`, [nextEmailRaw, req.authUser.id]);
+      invalidateAuthUser(req.authUser.id);
+      before.email = nextEmailRaw;
+    }
+
+    const { rows } = await pool.query(
+      `UPDATE users SET
+         name = $1,
+         phone = $2,
+         address = $3,
+         contact_email = $4,
+         company_name = $5,
+         company_details = $6,
+         insurance_details = $7,
+         profile_emails = $8::jsonb,
+         profile_phones = $9::jsonb,
+         profile_addresses = $10::jsonb,
+         photo_data_url = CASE
+           WHEN $11::boolean THEN NULL
+           WHEN $12::boolean THEN $13
+           ELSE photo_data_url
+         END,
+         license_number = CASE WHEN $14::boolean THEN $15 ELSE license_number END,
+         trade = CASE WHEN $32::boolean THEN $33 ELSE trade END,
+         license_document_name = CASE
+           WHEN $16::boolean AND $17::boolean THEN NULL
+           WHEN $16::boolean AND $18::boolean THEN $19
+           WHEN $16::boolean AND $19::text IS NOT NULL AND NOT $18::boolean THEN $19
+           ELSE license_document_name
+         END,
+         license_document_data = CASE
+           WHEN $16::boolean AND $17::boolean THEN NULL
+           WHEN $16::boolean AND $18::boolean THEN $20
+           ELSE license_document_data
+         END,
+         insurance_document_name = CASE
+           WHEN $21::boolean AND $22::boolean THEN NULL
+           WHEN $21::boolean AND $23::boolean THEN $24
+           WHEN $21::boolean AND $24::text IS NOT NULL AND NOT $23::boolean THEN $24
+           ELSE insurance_document_name
+         END,
+         insurance_document_data = CASE
+           WHEN $21::boolean AND $22::boolean THEN NULL
+           WHEN $21::boolean AND $23::boolean THEN $25
+           ELSE insurance_document_data
+         END,
+         id_document_name = CASE
+           WHEN $26::boolean AND $27::boolean THEN NULL
+           WHEN $26::boolean AND $28::boolean THEN $29
+           WHEN $26::boolean AND $29::text IS NOT NULL AND NOT $28::boolean THEN $29
+           ELSE id_document_name
+         END,
+         id_document_data = CASE
+           WHEN $26::boolean AND $27::boolean THEN NULL
+           WHEN $26::boolean AND $28::boolean THEN $30
+           ELSE id_document_data
+         END,
+         gender = CASE WHEN $34::boolean THEN $35 ELSE gender END,
+         dob = CASE WHEN $36::boolean THEN $37 ELSE dob END
+       WHERE id = $31
+       RETURNING *`,
+      [
+        name,
+        phone || null,
+        address || null,
+        contactEmail || null,
+        companyName || null,
+        companyDetails || null,
+        insuranceDetails || null,
+        JSON.stringify(emails),
+        JSON.stringify(phones),
+        JSON.stringify(addresses),
+        clearPhoto,
+        setPhoto,
+        setPhoto ? photoDataUrl : null,
+        setLicenseNumber,
+        setLicenseNumber ? (licenseNumber || null) : null,
+        // license doc: provided, clear, set, name, data
+        Boolean(licenseDoc.provided),
+        Boolean(licenseDoc.clear),
+        Boolean(licenseDoc.set),
+        licenseDoc.provided ? licenseDoc.name : null,
+        licenseDoc.provided ? licenseDoc.data : null,
+        // insurance doc
+        Boolean(insuranceDoc.provided),
+        Boolean(insuranceDoc.clear),
+        Boolean(insuranceDoc.set),
+        insuranceDoc.provided ? insuranceDoc.name : null,
+        insuranceDoc.provided ? insuranceDoc.data : null,
+        // id doc
+        Boolean(idDoc.provided),
+        Boolean(idDoc.clear),
+        Boolean(idDoc.set),
+        idDoc.provided ? idDoc.name : null,
+        idDoc.provided ? idDoc.data : null,
+        req.authUser.id,
+        setTrade,
+        setTrade ? (trade || null) : null,
+        setGender,
+        setGender ? gender : null,
+        setDob,
+        setDob ? dob : null,
+      ]
+    );
+
+    let updated = rows[0];
+
+    if (req.authUser.role === 'contractor') {
+      await pool.query(
+        `UPDATE users SET
+           visit_fee = $1,
+           emergency_visit_fee = $2,
+           after_hours_fee = $3,
+           weekend_fee = $4,
+           cancellation_fee = $5,
+           minimum_labor_fee = $6,
+           free_estimate = $7,
+           visit_applies_to_repair = $8,
+           service_zips = $9,
+           travel_radius_miles = $10,
+           contractor_application = CASE WHEN $12::boolean THEN $13::jsonb ELSE contractor_application END,
+           w9_document_name = CASE
+             WHEN $14::boolean AND $15::boolean THEN NULL
+             WHEN $14::boolean AND $16::boolean THEN $17
+             WHEN $14::boolean AND $17::text IS NOT NULL AND NOT $16::boolean THEN $17
+             ELSE w9_document_name
+           END,
+           w9_document_data = CASE
+             WHEN $14::boolean AND $15::boolean THEN NULL
+             WHEN $14::boolean AND $16::boolean THEN $18
+             ELSE w9_document_data
+           END,
+           business_registration_name = CASE
+             WHEN $19::boolean AND $20::boolean THEN NULL
+             WHEN $19::boolean AND $21::boolean THEN $22
+             WHEN $19::boolean AND $22::text IS NOT NULL AND NOT $21::boolean THEN $22
+             ELSE business_registration_name
+           END,
+           business_registration_data = CASE
+             WHEN $19::boolean AND $20::boolean THEN NULL
+             WHEN $19::boolean AND $21::boolean THEN $23
+             ELSE business_registration_data
+           END,
+           business_license_name = CASE
+             WHEN $24::boolean AND $25::boolean THEN NULL
+             WHEN $24::boolean AND $26::boolean THEN $27
+             WHEN $24::boolean AND $27::text IS NOT NULL AND NOT $26::boolean THEN $27
+             ELSE business_license_name
+           END,
+           business_license_data = CASE
+             WHEN $24::boolean AND $25::boolean THEN NULL
+             WHEN $24::boolean AND $26::boolean THEN $28
+             ELSE business_license_data
+           END,
+           license_expires_at = CASE
+             WHEN $12::boolean AND $29::text IS NOT NULL AND $29::text <> '' THEN $29::date
+             WHEN $12::boolean THEN license_expires_at
+             ELSE license_expires_at
+           END,
+           insurance_expires_at = CASE
+             WHEN $12::boolean AND $30::text IS NOT NULL AND $30::text <> '' THEN $30::date
+             WHEN $12::boolean THEN insurance_expires_at
+             ELSE insurance_expires_at
+           END
+         WHERE id = $11`,
+        [
+          body.visitFee !== undefined ? (body.visitFee === null ? null : Number(body.visitFee)) : before.visit_fee,
+          body.emergencyVisitFee !== undefined ? (body.emergencyVisitFee === null ? null : Number(body.emergencyVisitFee)) : before.emergency_visit_fee,
+          body.afterHoursFee !== undefined ? (body.afterHoursFee === null ? null : Number(body.afterHoursFee)) : before.after_hours_fee,
+          body.weekendFee !== undefined ? (body.weekendFee === null ? null : Number(body.weekendFee)) : before.weekend_fee,
+          body.cancellationFee !== undefined ? (body.cancellationFee === null ? null : Number(body.cancellationFee)) : before.cancellation_fee,
+          body.minimumLaborFee !== undefined ? (body.minimumLaborFee === null ? null : Number(body.minimumLaborFee)) : before.minimum_labor_fee,
+          body.freeEstimate !== undefined ? Boolean(body.freeEstimate) : before.free_estimate,
+          body.visitAppliesToRepair !== undefined ? Boolean(body.visitAppliesToRepair) : before.visit_applies_to_repair,
+          body.serviceZips !== undefined ? JSON.stringify(body.serviceZips) : JSON.stringify(before.service_zips || []),
+          body.travelRadiusMiles !== undefined ? (body.travelRadiusMiles === null ? null : Number(body.travelRadiusMiles)) : before.travel_radius_miles,
+          req.authUser.id,
+          body.contractorApplication !== undefined,
+          body.contractorApplication !== undefined
+            ? JSON.stringify((() => {
+              const existing =
+                before.contractor_application == null
+                  ? {}
+                  : typeof before.contractor_application === 'string'
+                    ? (() => {
+                      try {
+                        return JSON.parse(before.contractor_application) || {};
+                      } catch {
+                        return {};
+                      }
+                    })()
+                    : before.contractor_application;
+              const incoming =
+                body.contractorApplication && typeof body.contractorApplication === 'object'
+                  ? body.contractorApplication
+                  : {};
+              return {
+                ...existing,
+                ...incoming,
+                primaryServices: Array.isArray(incoming.primaryServices)
+                  ? incoming.primaryServices
+                  : existing.primaryServices || [],
+                serviceStates: Array.isArray(incoming.serviceStates)
+                  ? incoming.serviceStates
+                  : existing.serviceStates || [],
+              };
+            })())
+            : null,
+          Boolean(w9Doc.provided),
+          Boolean(w9Doc.clear),
+          Boolean(w9Doc.set),
+          w9Doc.provided ? w9Doc.name : null,
+          w9Doc.provided ? w9Doc.data : null,
+          Boolean(bizRegDoc.provided),
+          Boolean(bizRegDoc.clear),
+          Boolean(bizRegDoc.set),
+          bizRegDoc.provided ? bizRegDoc.name : null,
+          bizRegDoc.provided ? bizRegDoc.data : null,
+          Boolean(bizLicDoc.provided),
+          Boolean(bizLicDoc.clear),
+          Boolean(bizLicDoc.set),
+          bizLicDoc.provided ? bizLicDoc.name : null,
+          bizLicDoc.provided ? bizLicDoc.data : null,
+          body.contractorApplication?.licenseExpiration || body.licenseExpiresAt || null,
+          body.contractorApplication?.insuranceExpiration || body.insuranceExpiresAt || null,
+        ]
+      );
+      if (diversityDoc.provided) {
+        await pool.query(
+          `UPDATE users SET
+             diversity_document_name = CASE
+               WHEN $2::boolean THEN NULL
+               WHEN $3::boolean THEN $4
+               WHEN $4::text IS NOT NULL AND NOT $3::boolean THEN $4
+               ELSE diversity_document_name
+             END,
+             diversity_document_data = CASE
+               WHEN $2::boolean THEN NULL
+               WHEN $3::boolean THEN $5
+               ELSE diversity_document_data
+             END
+           WHERE id = $1`,
+          [
+            req.authUser.id,
+            Boolean(diversityDoc.clear),
+            Boolean(diversityDoc.set),
+            diversityDoc.provided ? diversityDoc.name : null,
+            diversityDoc.provided ? diversityDoc.data : null,
+          ]
+        );
+      }
+      // Google (or incomplete) contractors who submit a full application move into review.
+      if (
+        body.contractorApplication &&
+        typeof body.contractorApplication === 'object' &&
+        (!before.compliance_status || before.compliance_status === 'draft')
+      ) {
+        await pool.query(
+          `UPDATE users SET compliance_status='under_review'
+           WHERE id=$1 AND (compliance_status IS NULL OR compliance_status='draft')`,
+          [req.authUser.id]
+        );
+      }
+      const { rows: freshUser } = await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id]);
+      if (freshUser[0]) {
+        updated = freshUser[0];
+      }
+      if (body.postalCodePlus4 !== undefined) {
+        await pool.query(
+          `UPDATE users SET postal_code_plus4 = COALESCE($1, postal_code_plus4) WHERE id = $2`,
+          [body.postalCodePlus4 || null, req.authUser.id]
+        );
+        const { rows: refreshed } = await pool.query('SELECT * FROM users WHERE id=$1', [req.authUser.id]);
+        if (refreshed[0]) updated = refreshed[0];
+      }
+    }
+    const changedLabels = [];
+    if (licenseDoc.set && licenseDoc.data !== before.license_document_data) changedLabels.push('License');
+    if (insuranceDoc.set && insuranceDoc.data !== before.insurance_document_data) changedLabels.push('Insurance');
+    if (idDoc.set && idDoc.data !== before.id_document_data) changedLabels.push('ID Document');
+    if (w9Doc.set && w9Doc.data !== before.w9_document_data) changedLabels.push('W-9');
+    if (bizRegDoc.set && bizRegDoc.data !== before.business_registration_data) changedLabels.push('Business Registration');
+    if (bizLicDoc.set && bizLicDoc.data !== before.business_license_data) changedLabels.push('Business License');
+    if (diversityDoc.set && diversityDoc.data !== before.diversity_document_data) changedLabels.push('Diversity Certification');
+    if (before.role === 'contractor' && changedLabels.length) {
+      try {
+        await notifyAdminsOfDocumentChange({
+          contractorName: updated.name,
+          contractorEmail: updated.email,
+          changedLabels,
+        });
+      } catch (notifyErr) {
+        console.error('notify admins on profile docs:', notifyErr);
+      }
+    }
+
+    const user = rowToUser(updated);
+    return res.json({ ok: true, user, token: makeToken(user) });
+  } catch (e) {
+    console.error('profile update:', e);
+    return res.status(500).json({ ok: false, message: 'Server error.' });
+  }
+});
+
+/** Forgot password — generates hashed reset token and emails the link (enumeration-safe). */
+app.post('/api/auth/forgot-password', forgotLimiter, async (req, res) => {
+  try {
+    const email = String(req.body?.email || '').trim();
+    const role = String(req.body?.role || '').toLowerCase();
+    if (!email || !RESET_ROLES.includes(role)) {
+      // Still generic — do not reveal validation details that help attackers
+      return res.json({ ok: true });
+    }
+
+    const account = await findResetAccount(pool, role, email);
+    if (account) {
+      await issuePasswordReset(pool, account);
+    }
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('forgot-password:', e);
+    // Enumeration-safe even on error
+    return res.json({ ok: true });
+  }
+});
+
+/** Reset password — validates hashed token and sets new bcrypt password only (no role/data changes). */
+app.post('/api/auth/reset-password', resetLimiter, async (req, res) => {
+  try {
+    const token = String(req.body?.token || '');
+    const role = String(req.body?.role || '').toLowerCase();
+    const password = String(req.body?.password || '');
+    const result = await completePasswordReset(pool, { rawToken: token, role, password });
+    if (!result.ok) {
+      return res.status(400).json({
+        ok: false,
+        message: result.message || 'This reset link has expired or is no longer valid.',
+        code: result.code || 'invalid',
+      });
+    }
+    if (result.userId) invalidateAuthUser(result.userId);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('reset-password:', e);
+    return res.status(500).json({ ok: false, message: 'Server error. Please try again.' });
+  }
+});
+
+/**
+ * Admin triggers the same secure reset email for a user.
+ * Does not reveal or set passwords. Permission depends on target role.
+ */
+app.post(
+  '/api/admin/users/:userId/send-password-reset',
+  requireAuth,
+  requireAdmin,
+  requireAdminWrite,
+  async (req, res) => {
+    try {
+      const userId = Number(req.params.userId);
+      if (!Number.isFinite(userId) || userId <= 0) {
+        return res.status(400).json({ ok: false, message: 'Invalid user id.' });
+      }
+
+      const { rows } = await pool.query(`SELECT * FROM users WHERE id=$1`, [userId]);
+      if (!rows.length) {
+        return res.status(404).json({ ok: false, message: 'User not found.' });
+      }
+
+      const target = rows[0];
+      const role = String(target.role || '').toLowerCase();
+      const needed =
+        role === 'admin'
+          ? 'staff.edit'
+          : role === 'contractor'
+            ? 'contractors.edit'
+            : role === 'homeowner'
+              ? 'homeowners.edit'
+              : null;
+
+      if (!needed || !userHasPermission(req.authUser, needed)) {
+        return res.status(403).json({
+          ok: false,
+          code: 'FORBIDDEN_PERMISSION',
+          message: 'You do not have permission to send a password reset for this account.',
+        });
+      }
+
+      const account = await findResetAccount(pool, role, target.email);
+      if (!account) {
+        return res.status(400).json({ ok: false, message: 'Unable to send password reset for this account.' });
+      }
+
+      await issuePasswordReset(pool, account, { triggeredByUserId: req.authUser.id });
+      return res.json({ ok: true, message: 'Password reset email sent if the account can receive one.' });
+    } catch (e) {
+      console.error('admin send-password-reset:', e);
+      return res.status(500).json({ ok: false, message: 'Could not send password reset email.' });
+    }
+  }
+);
+
+// Requires a valid token. Returns only contractor public info (no passwords, no document file bytes).
+app.get('/api/users', requireAuth, async (req, res) => {
+  try {
+    if (!['admin', 'contractor'].includes(req.authUser.role)) {
+      return res.status(403).json({ ok: false, message: 'Not allowed.' });
+    }
+    const { rows } = await pool.query(`SELECT * FROM users WHERE role='contractor' AND is_blocked=false ORDER BY created_at DESC`);
+    return res.json({ ok: true, users: rows.map((r) => rowToUser(r, { includeDocumentData: false })) });
+  } catch (e) {
+    console.error('users:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+// ── GET /api/admin/verify ──────────────────────────────────────────────────────
+// Confirms the token holder has admin privileges — called by AdminPanel on mount.
+app.get('/api/admin/verify', requireAuth, requireAdmin, (_req, res) => {
+  return res.json({ ok: true });
+});
+
+app.get('/api/admin/users', requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`SELECT * FROM users ORDER BY created_at DESC, role ASC, name ASC`);
+    // Contractor rating = average of published reviews on jobs assigned to them
+    // (same rule as aggregateContractorRatings in job-reviews.js), in one query for the list.
+    const ratings = new Map();
+    try {
+      const { rows: ratingRows } = await pool.query(
+        `SELECT mj.assigned_contractor_user_id AS contractor_id,
+                ROUND(AVG(sr.rating)::numeric, 1) AS average_rating,
+                COUNT(*)::int AS review_count
+         FROM site_reviews sr
+         INNER JOIN managed_jobs mj ON mj.id = sr.job_id
+         WHERE sr.published = TRUE AND mj.assigned_contractor_user_id IS NOT NULL
+         GROUP BY mj.assigned_contractor_user_id`
+      );
+      for (const r of ratingRows) {
+        ratings.set(Number(r.contractor_id), { rating: Number(r.average_rating), reviewCount: Number(r.review_count) });
+      }
+    } catch (e) {
+      console.warn('admin users: ratings unavailable', e.message);
+    }
+    // P0-12: metadata only — never return document bytes in list responses
+    return res.json({
+      ok: true,
+      users: rows.map((r) => {
+        const user = rowToUser(r, { includeDocumentData: false });
+        const rating = r.role === 'contractor' ? ratings.get(Number(r.id)) : null;
+        return rating ? { ...user, ...rating } : user;
+      }),
+    });
+  } catch (e) {
+    console.error('admin users:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/admin/users/:userId', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`SELECT * FROM users WHERE id=$1`, [req.params.userId]);
+    if (!rows.length) return res.status(404).json({ ok: false, message: 'User not found.' });
+    return res.json({ ok: true, user: rowToUser(rows[0], { includeDocumentData: false }) });
+  } catch (e) {
+    console.error('admin user detail:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+app.get(
+  '/api/admin/users/:userId/documents',
+  requireAuth,
+  requireAdmin,
+  requirePermission('contractors.view'),
+  async (req, res) => {
+    try {
+      const { rows } = await pool.query(`SELECT * FROM users WHERE id=$1`, [req.params.userId]);
+      if (!rows.length) return res.status(404).json({ ok: false, message: 'User not found.' });
+      const u = rows[0];
+      const documents = [];
+      const push = (documentType, fileName, uploadedAt, data) => {
+        if (!fileName && !data) return;
+        documents.push({
+          documentType,
+          fileName: fileName || null,
+          uploadedAt: uploadedAt || null,
+          verificationStatus: u.compliance_status || null,
+          hasData: Boolean(data),
+          dataUrl: data || null,
+        });
+      };
+      push('license', u.license_document_name, u.license_expires_at, u.license_document_data);
+      push('insurance', u.insurance_document_name, u.insurance_expires_at, u.insurance_document_data);
+      push('government_id', u.id_document_name, null, u.id_document_data);
+      push('w9', u.w9_document_name, null, u.w9_document_data);
+      push('business_registration', u.business_registration_name, null, u.business_registration_data);
+      push('business_license', u.business_license_name, null, u.business_license_data);
+      push('diversity', u.diversity_document_name, null, u.diversity_document_data);
+      await writeAudit(pool, req.authUser.id, 'admin_view_user_documents', 'user', Number(req.params.userId), {
+        documentCount: documents.length,
+      });
+      return res.json({ ok: true, documents });
+    } catch (e) {
+      console.error('admin user documents:', e);
+      return res.status(500).json({ ok: false, message: 'Server error' });
+    }
+  }
+);
+
+app.put('/api/admin/users/:userId/block', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { blocked } = req.body;
+    const normalizedBlocked = blocked === true;
+    const { rows } = await pool.query(
+      'UPDATE users SET is_blocked=$1 WHERE id=$2 RETURNING *',
+      [normalizedBlocked, userId]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ ok: false, message: 'User not found.' });
+    }
+    invalidateAuthUser(rows[0].id);
+    await writeAudit(pool, req.authUser.id, normalizedBlocked ? 'user_blocked' : 'user_unblocked', 'user', userId, {
+      email: rows[0].email,
+      role: rows[0].role,
+    });
+    return res.json({ ok: true, user: rowToUser(rows[0]) });
+  } catch (e) {
+    console.error('block user:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/admin/staff', requireAuth, requireAdmin, requirePermission('staff.view'), async (_req, res) => {
+  try {
+    const { rows } = await pool.query("SELECT * FROM users WHERE role='admin' ORDER BY name ASC");
+    return res.json({ ok: true, staff: rows.map(rowToUser) });
+  } catch (e) {
+    console.error('admin staff list:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+app.post('/api/admin/staff/access', requireAuth, requireAdmin, requirePermission('staff.edit'), async (req, res) => {
+  try {
+    const { userId } = req.body;
+    let accessLevel = String(req.body?.accessLevel || '').toLowerCase();
+    let rolePreset = String(req.body?.rolePreset || req.body?.adminRolePreset || '').toLowerCase();
+
+    if (!userId) {
+      return res.status(400).json({ ok: false, message: 'userId is required.' });
+    }
+
+    // Prefer explicit preset; map legacy access levels.
+    if (!rolePreset || !VALID_ROLE_PRESETS.includes(rolePreset)) {
+      if (['read', 'write', 'read-write'].includes(accessLevel)) {
+        rolePreset = accessLevel === 'read' ? 'read_only' : accessLevel === 'write' ? 'operations_admin' : 'super_admin';
+      } else {
+        return res.status(400).json({ ok: false, message: 'Invalid rolePreset or accessLevel.' });
+      }
+    }
+    accessLevel = presetToAccessLevel(rolePreset);
+
+    if (!canAssignPreset(req.authUser, rolePreset)) {
+      return res.status(403).json({
+        ok: false,
+        code: 'CANNOT_ASSIGN_ROLE',
+        message: 'You cannot assign that role or elevate privileges.',
+      });
+    }
+
+    const { rows: targetRows } = await pool.query(`SELECT is_protected FROM users WHERE id=$1`, [userId]);
+    if (targetRows[0]?.is_protected === true) {
+      return res.status(403).json({
+        ok: false,
+        code: 'PROTECTED_ACCOUNT',
+        message: 'This is the protected primary admin account; its access cannot be changed here.',
+      });
+    }
+
+    // Prevent self-elevation
+    if (Number(userId) === Number(req.authUser.id)) {
+      const current = resolveAdminPreset(req.authUser);
+      const rank = (p) => (p === 'super_admin' ? 3 : p === 'read_only' ? 0 : 1);
+      if (rank(rolePreset) > rank(current)) {
+        return res.status(403).json({
+          ok: false,
+          code: 'SELF_ELEVATION',
+          message: 'You cannot increase your own privileges.',
+        });
+      }
+    }
+
+    const { rows: prevRows } = await pool.query(`SELECT * FROM users WHERE id=$1 AND role='admin'`, [userId]);
+    if (!prevRows.length) {
+      return res.status(404).json({ ok: false, message: 'Staff member not found.' });
+    }
+
+    const prevPreset = resolveAdminPreset({
+      role: 'admin',
+      adminAccessLevel: prevRows[0].admin_access_level,
+      adminRolePreset: prevRows[0].admin_role_preset,
+    });
+
+    // Do not demote the last super admin
+    if (prevPreset === 'super_admin' && rolePreset !== 'super_admin') {
+      const { rows: supers } = await pool.query(
+        `SELECT COUNT(*)::int AS c FROM users
+         WHERE role='admin' AND COALESCE(is_blocked,false)=false
+           AND (
+             LOWER(COALESCE(admin_role_preset,''))='super_admin'
+             OR (admin_role_preset IS NULL AND COALESCE(admin_access_level,'read-write')='read-write')
+           )`
+      );
+      if ((supers[0]?.c || 0) <= 1) {
+        return res.status(400).json({
+          ok: false,
+          code: 'LAST_SUPER_ADMIN',
+          message: 'Cannot demote the last Super Admin account.',
+        });
+      }
+    }
+
+    const { rows } = await pool.query(
+      `UPDATE users SET admin_access_level=$1, admin_role_preset=$2
+       WHERE id=$3 AND role='admin' RETURNING *`,
+      [accessLevel, rolePreset, userId]
+    );
+    if (rows[0]) invalidateAuthUser(rows[0].id);
+    await writeAudit(pool, req.authUser.id, 'staff_access_updated', 'user', userId, {
+      email: rows[0].email,
+      previousLevel: prevRows[0].admin_access_level || 'read-write',
+      previousPreset: prevPreset,
+      accessLevel,
+      rolePreset,
+    });
+    return res.json({ ok: true, user: rowToUser(rows[0]) });
+  } catch (e) {
+    console.error('admin staff access update:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+app.post('/api/admin/staff/create', requireAuth, requireAdmin, requirePermission('staff.create'), async (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    let rolePreset = String(req.body?.rolePreset || req.body?.adminRolePreset || '').toLowerCase();
+    let accessLevel = String(req.body?.accessLevel || '').toLowerCase();
+
+    if (!name || !email || !password) {
+      return res.status(400).json({ ok: false, message: 'Name, email, and password are required.' });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ ok: false, message: 'Password must be at least 8 characters.' });
+    }
+
+    if (!rolePreset || !VALID_ROLE_PRESETS.includes(rolePreset)) {
+      if (['read', 'write', 'read-write'].includes(accessLevel)) {
+        rolePreset = accessLevel === 'read' ? 'read_only' : accessLevel === 'write' ? 'operations_admin' : 'operations_admin';
+      } else {
+        rolePreset = 'operations_admin';
+      }
+    }
+    // Never allow creating super_admin unless actor is super_admin
+    if (rolePreset === 'super_admin' && resolveAdminPreset(req.authUser) !== 'super_admin') {
+      return res.status(403).json({
+        ok: false,
+        code: 'CANNOT_ASSIGN_ROLE',
+        message: 'Only a Super Admin can create another Super Admin.',
+      });
+    }
+    if (!canAssignPreset(req.authUser, rolePreset)) {
+      return res.status(403).json({
+        ok: false,
+        code: 'CANNOT_ASSIGN_ROLE',
+        message: 'You cannot assign that role.',
+      });
+    }
+    accessLevel = presetToAccessLevel(rolePreset);
+
+    const { rows: existing } = await pool.query(
+      `SELECT id FROM users WHERE role='admin' AND LOWER(email)=LOWER($1)`,
+      [email]
+    );
+    if (existing.length) {
+      return res.status(409).json({ ok: false, message: 'A staff account with this email already exists.' });
+    }
+
+    const hashed = await bcrypt.hash(password, 10);
+    const { rows } = await pool.query(
+      `INSERT INTO users (role, name, email, password, is_admin, admin_access_level, admin_role_preset, compliance_status)
+       VALUES ('admin', $1, $2, $3, true, $4, $5, 'approved')
+       RETURNING *`,
+      [name, email, hashed, accessLevel, rolePreset]
+    );
+
+    await writeAudit(pool, req.authUser.id, 'staff_created', 'user', rows[0].id, {
+      email,
+      name,
+      accessLevel,
+      rolePreset,
+    });
+
+    return res.json({ ok: true, user: rowToUser(rows[0]) });
+  } catch (e) {
+    console.error('admin staff create:', e);
+    if (e.code === '23505') {
+      return res.status(409).json({ ok: false, message: 'Email already in use.' });
+    }
+    return res.status(500).json({ ok: false, message: 'Could not create staff account.' });
+  }
+});
+
+// ── Admin: all jobs / conversations / messages ────────────────────────────────
+
+app.get('/api/admin/jobs', requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM jobs ORDER BY created_at DESC');
+    return res.json({ ok: true, jobs: rows.map(rowToJob) });
+  } catch (e) {
+    console.error('admin jobs:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/admin/lifecycle', requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM job_lifecycle');
+    return res.json({ ok: true, lifecycles: rows.map(rowToLifecycle) });
+  } catch (e) {
+    console.error('admin lifecycle:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/admin/conversations', requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM job_chat_messages ORDER BY created_at ASC');
+    const byJob = {};
+    for (const r of rows) {
+      const k = String(r.job_id);
+      if (!byJob[k]) byJob[k] = [];
+      byJob[k].push(rowToMessage(r));
+    }
+    return res.json({ ok: true, conversations: byJob });
+  } catch (e) {
+    console.error('admin conversations:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/admin/messages', requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT m.*, j.title AS job_title, j.booking_id, j.category AS job_category
+       FROM job_chat_messages m
+       LEFT JOIN jobs j ON j.id = m.job_id
+       ORDER BY m.created_at DESC`
+    );
+    return res.json({
+      ok: true,
+      messages: rows.map((r) => ({
+        ...rowToMessage(r),
+        jobId: Number(r.job_id),
+        jobTitle: r.job_title || null,
+        bookingId: r.booking_id || null,
+        jobCategory: r.job_category || null,
+      })),
+    });
+  } catch (e) {
+    console.error('admin messages:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/admin/chat/:jobId', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT * FROM job_chat_messages WHERE job_id=$1 ORDER BY created_at ASC',
+      [req.params.jobId]
+    );
+    return res.json({ ok: true, messages: rows.map(rowToMessage) });
+  } catch (e) {
+    console.error('admin chat:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+// ── Jobs ──────────────────────────────────────────────────────────────────────
+
+app.get('/api/jobs', requireAuth, async (req, res) => {
+  try {
+    // Contractors see open board jobs (PII masked); admins see all; homeowners use /api/jobs/my.
+    if (req.authUser.role === 'homeowner') {
+      return res.status(403).json({ error: 'Use /api/jobs/my for your jobs.' });
+    }
+    const { rows } = await pool.query('SELECT * FROM jobs ORDER BY created_at DESC');
+    if (req.authUser.role === 'admin') {
+      return res.json(rows.map(rowToJob));
+    }
+    return res.json(rows.map(rowToJobBoard));
+  } catch (e) {
+    console.error('jobs list:', e);
+    return res.status(500).json({ error: publicErrorMessage(e) });
+  }
+});
+
+app.get('/api/jobs/my', requireAuth, async (req, res) => {
+  try {
+    if (req.authUser.role !== 'homeowner') {
+      return res.status(403).json({ error: 'Homeowner access required' });
+    }
+    const { rows } = await pool.query(
+      'SELECT * FROM jobs WHERE LOWER(homeowner_email)=LOWER($1) ORDER BY created_at DESC',
+      [req.authUser.email]
+    );
+    return res.json(rows.map(rowToJob));
+  } catch (e) {
+    console.error('my jobs:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/jobs', requireAuth, async (req, res) => {
+  try {
+    if (req.authUser.role !== 'homeowner') {
+      return res.status(403).json({ error: 'Homeowner access required' });
+    }
+    const { category, tag, title, description, mediaDataUrl, mediaType, aiAssessment,
+      cityStateZip, fullAddress, contactName, contactPhone, dist, est, bids, urgent, ai, requirements,
+      scheduledDate, timeSlot, serviceTiming } = req.body;
+    const id = Date.now();
+    const bookingId = formatBookingId(id);
+    await pool.query(
+      `INSERT INTO jobs (id,booking_id,category,tag,title,description,media_data_url,media_type,ai_assessment,city_state_zip,full_address,contact_name,contact_phone,homeowner_email,scheduled_date,time_slot,service_timing,dist,posted,est,bids,urgent,ai,requirements)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
+      [id, bookingId, category, tag, title, description || null, mediaDataUrl || null, mediaType || null,
+        aiAssessment ? JSON.stringify(aiAssessment) : null,
+        cityStateZip, fullAddress, contactName, contactPhone, req.authUser.email,
+        scheduledDate || null, timeSlot || null, serviceTiming || null, dist || null,
+        'Just now', est || '', bids || 0, urgent || false, ai || false, JSON.stringify(requirements || [])]
+    );
+    const { rows } = await pool.query('SELECT * FROM jobs WHERE id=$1', [id]);
+    const job = rows[0];
+    try {
+      await notifyMatchingContractors(job);
+    } catch (notifyErr) {
+      console.error('notify contractors:', notifyErr);
+    }
+    return res.json(rowToJob(job));
+  } catch (e) {
+    console.error('add job:', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Notifications (in-app) ───────────────────────────────────────────────────
+registerInAppNotificationRoutes(app, { pool, requireAuth });
+registerMessagingRoutes(app, { pool, requireAuth, requireAdmin });
+registerAttachmentAdminRoutes(app, { pool, requireAuth, requireAdmin });
+registerAvailabilityRoutes(app, { pool, requireAuth, requireAdmin });
+registerAdminSearchRoutes(app, { pool, requireAuth, requireAdmin });
+
+// ── Lifecycle ─────────────────────────────────────────────────────────────────
+
+app.get('/api/lifecycle', requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM job_lifecycle');
+    return res.json(rows.map(rowToLifecycle));
+  } catch (e) {
+    return res.status(500).json({ error: publicErrorMessage(e) });
+  }
+});
+
+app.get('/api/lifecycle/:jobId', requireAuth, async (req, res) => {
+  try {
+    if (!isPositiveInt(req.params.jobId)) {
+      return res.status(400).json({ error: 'Invalid job id.' });
+    }
+    const access = await getLegacyJobAccess(req.params.jobId, req.authUser);
+    if (!access.allowed) {
+      return res.status(403).json({ error: 'Not allowed.' });
+    }
+    const { rows } = await pool.query('SELECT * FROM job_lifecycle WHERE job_id=$1', [req.params.jobId]);
+    return res.json(rows.length ? rowToLifecycle(rows[0]) : { jobId: Number(req.params.jobId), status: 'open' });
+  } catch (e) {
+    return res.status(500).json({ error: publicErrorMessage(e) });
+  }
+});
+
+app.put('/api/lifecycle/:jobId/status', requireAuth, async (req, res) => {
+  try {
+    if (!isPositiveInt(req.params.jobId)) {
+      return res.status(400).json({ error: 'Invalid job id.' });
+    }
+    const { jobId } = req.params;
+    const access = await getLegacyJobAccess(jobId, req.authUser);
+    if (!access.job && req.authUser.role !== 'admin') {
+      return res.status(404).json({ error: 'Job not found.' });
+    }
+    const status = clampString(req.body?.status, 40);
+    const allowed = ['open', 'accepted', 'on-the-way', 'arrived', 'work-started', 'completed'];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ error: 'Invalid status.' });
+    }
+
+    // Homeowners cannot set contractor progress; contractors may accept open jobs or update assigned ones
+    let contractorName = null;
+    let contractorEmail = null;
+    if (req.authUser.role === 'admin') {
+      contractorName = clampString(req.body?.contractorName, 120) || null;
+      contractorEmail = clampString(req.body?.contractorEmail, 200) || null;
+    } else if (req.authUser.role === 'contractor') {
+      if (status === 'accepted') {
+        contractorName = req.authUser.name || null;
+        contractorEmail = req.authUser.email;
+      } else if (!access.mutate) {
+        return res.status(403).json({ error: 'Accept this job before updating status.' });
+      } else {
+        contractorName = req.authUser.name || null;
+        contractorEmail = req.authUser.email;
+      }
+    } else if (req.authUser.role === 'homeowner') {
+      return res.status(403).json({ error: 'Homeowners cannot update contractor job status.' });
+    } else {
+      return res.status(403).json({ error: 'Not allowed.' });
+    }
+
+    const now = new Date().toISOString();
+    await pool.query(
+      `INSERT INTO job_lifecycle (job_id,status,contractor_name,contractor_email,accepted_at,completed_at,updated_at)
+       VALUES ($1,$2,$3,$4,
+         CASE WHEN $2='accepted'  THEN $5::timestamptz ELSE NULL END,
+         CASE WHEN $2='completed' THEN $5::timestamptz ELSE NULL END,
+         $5::timestamptz)
+       ON CONFLICT (job_id) DO UPDATE SET
+         status           = EXCLUDED.status,
+         contractor_name  = COALESCE($3, job_lifecycle.contractor_name),
+         contractor_email = COALESCE($4, job_lifecycle.contractor_email),
+         accepted_at  = CASE WHEN $2='accepted'  AND job_lifecycle.accepted_at  IS NULL THEN $5::timestamptz ELSE job_lifecycle.accepted_at  END,
+         completed_at = CASE WHEN $2='completed' AND job_lifecycle.completed_at IS NULL THEN $5::timestamptz ELSE job_lifecycle.completed_at END,
+         updated_at   = $5::timestamptz`,
+      [jobId, status, contractorName, contractorEmail, now]
+    );
+    const { rows } = await pool.query('SELECT * FROM job_lifecycle WHERE job_id=$1', [jobId]);
+    return res.json(rowToLifecycle(rows[0]));
+  } catch (e) {
+    console.error('update status:', e);
+    return res.status(500).json({ error: publicErrorMessage(e) });
+  }
+});
+
+app.put('/api/lifecycle/:jobId/invoice', requireAuth, async (req, res) => {
+  try {
+    if (!isPositiveInt(req.params.jobId)) {
+      return res.status(400).json({ error: 'Invalid job id.' });
+    }
+    const { jobId } = req.params;
+    const access = await getLegacyJobAccess(jobId, req.authUser);
+    if (!access.mutate && req.authUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Not allowed.' });
+    }
+    const amount = Number(req.body?.amount);
+    const fileName = clampString(req.body?.fileName, 200) || null;
+    const fileData = req.body?.fileData;
+    if (!Number.isFinite(amount) || amount < 0 || amount > 1_000_000) {
+      return res.status(400).json({ error: 'Invalid invoice amount.' });
+    }
+    if (fileData && typeof fileData === 'string' && fileData.length > 5_000_000) {
+      return res.status(400).json({ error: 'Invoice file is too large.' });
+    }
+    await pool.query(
+      `INSERT INTO job_lifecycle (job_id,status,invoice_amount,invoice_file_name,invoice_file_data,updated_at)
+       VALUES ($1,'completed',$2,$3,$4,NOW())
+       ON CONFLICT (job_id) DO UPDATE SET
+         invoice_amount=$2,
+         invoice_file_name=$3,
+         invoice_file_data=COALESCE($4, job_lifecycle.invoice_file_data),
+         updated_at=NOW()`,
+      [jobId, amount, fileName, typeof fileData === 'string' ? fileData : null]
+    );
+    const { rows } = await pool.query('SELECT * FROM job_lifecycle WHERE job_id=$1', [jobId]);
+    return res.json(rowToLifecycle(rows[0]));
+  } catch (e) {
+    console.error('update invoice:', e);
+    return res.status(500).json({ error: publicErrorMessage(e) });
+  }
+});
+
+
+app.put('/api/lifecycle/:jobId/rating', requireAuth, async (req, res) => {
+  try {
+    if (!isPositiveInt(req.params.jobId)) {
+      return res.status(400).json({ error: 'Invalid job id.' });
+    }
+    const { jobId } = req.params;
+    const access = await getLegacyJobAccess(jobId, req.authUser);
+    // Only the homeowner (or admin) may rate
+    if (req.authUser.role !== 'admin' && !(req.authUser.role === 'homeowner' && access.mutate)) {
+      return res.status(403).json({ error: 'Not allowed.' });
+    }
+    const rating = Math.round(Number(req.body?.rating));
+    const review = clampString(req.body?.review, 2000);
+    let images = [];
+    try {
+      images = normalizeReviewImages(req.body?.images);
+    } catch (imgErr) {
+      return res.status(imgErr.status || 400).json({ error: imgErr.message || 'Invalid images.' });
+    }
+    if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
+      return res.status(400).json({ error: 'Rating must be 1–5.' });
+    }
+    await pool.query(
+      `INSERT INTO job_lifecycle (job_id,status,rating,review,updated_at)
+       VALUES ($1,'completed',$2,$3,NOW())
+       ON CONFLICT (job_id) DO UPDATE SET rating=$2, review=$3, updated_at=NOW()`,
+      [jobId, rating, review]
+    );
+
+    // Auto-publish public site review when homeowner leaves text feedback
+    if (review && review.trim().length >= 12) {
+      try {
+        let verified = false;
+        const { rows: mjRows } = await pool.query(`SELECT * FROM managed_jobs WHERE id=$1 LIMIT 1`, [jobId]);
+        if (mjRows[0]) {
+          verified = deriveVerifiedFixBridgeJob(mjRows[0]);
+        }
+        await pool.query(
+          `INSERT INTO site_reviews
+             (author_name, location, service_type, rating, body, verified, published, user_id, job_id, images)
+           VALUES ($1,$2,$3,$4,$5,$6,TRUE,$7,$8,$9)
+           ON CONFLICT DO NOTHING`,
+          [
+            clampString(req.authUser.name || 'Homeowner', 80),
+            clampString(req.body?.location || 'United States', 80),
+            clampString(req.body?.serviceType || 'Home repair', 60),
+            rating,
+            review.trim(),
+            verified,
+            req.authUser.id || null,
+            Number(jobId),
+            images.length ? JSON.stringify(images) : null,
+          ]
+        );
+      } catch (pubErr) {
+        console.warn('site review publish skipped:', pubErr.message);
+      }
+    }
+
+    const { rows } = await pool.query('SELECT * FROM job_lifecycle WHERE job_id=$1', [jobId]);
+    return res.json(rowToLifecycle(rows[0]));
+  } catch (e) {
+    return res.status(500).json({ error: publicErrorMessage(e) });
+  }
+});
+
+// ── Public site reviews (Customer Trust) ──────────────────────────────────────
+
+function parseReviewImages(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((u) => typeof u === 'string' && u.startsWith('data:image/'))
+      .slice(0, 4);
+  } catch {
+    return [];
+  }
+}
+
+function normalizeReviewImages(input) {
+  if (!Array.isArray(input)) return [];
+  const out = [];
+  for (const item of input) {
+    if (typeof item !== 'string' || !item.startsWith('data:image/')) continue;
+    if (item.length > 1_800_000) {
+      throw Object.assign(new Error('One of the images is too large. Please use smaller photos.'), { status: 400 });
+    }
+    out.push(item);
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+
+function rowToSiteReview(r) {
+  const base = serializeSiteReview(r);
+  return {
+    ...base,
+    images: parseReviewImages(r.images),
+    verifiedFixBridgeJob: base.verified === true && r.job_id != null,
+  };
+}
+
+app.get('/api/reviews', async (req, res) => {
+  try {
+    const jobId = Number(req.query?.jobId);
+    const filterJob = Number.isFinite(jobId) && jobId > 0;
+
+    const { rows } = await pool.query(
+      filterJob
+        ? `SELECT id, author_name, location, service_type, rating, body, verified, published, images, created_at, job_id,
+                  rating_quality, rating_communication, rating_punctuality, rating_cleanliness, rating_value, contractor_user_id
+           FROM site_reviews
+           WHERE published = TRUE AND job_id = $1
+           ORDER BY created_at DESC
+           LIMIT 10`
+        : `SELECT id, author_name, location, service_type, rating, body, verified, published, images, created_at, job_id,
+                  rating_quality, rating_communication, rating_punctuality, rating_cleanliness, rating_value, contractor_user_id
+           FROM site_reviews
+           WHERE published = TRUE
+           ORDER BY created_at DESC
+           LIMIT 60`,
+      filterJob ? [jobId] : []
+    );
+    const reviews = rows.map(rowToSiteReview);
+    const count = reviews.length;
+    const avg =
+      count === 0
+        ? 0
+        : Math.round((reviews.reduce((sum, r) => sum + r.rating, 0) / count) * 10) / 10;
+    return res.json({ ok: true, reviews, stats: { count, average: avg } });
+  } catch (e) {
+    console.error('reviews list:', e);
+    return res.status(500).json({ ok: false, message: 'Could not load reviews.' });
+  }
+});
+
+/** Verified job reviews only — identity from JWT; job must be owned + completed. */
+app.post('/api/reviews', requireAuth, reviewLimiter, async (req, res) => {
+  try {
+    if (req.authUser.role !== 'homeowner') {
+      return res.status(403).json({
+        ok: false,
+        code: 'HOMEOWNER_ONLY',
+        message: 'Only homeowners can submit job reviews.',
+      });
+    }
+
+    const jobId = Number(req.body?.jobId);
+    if (!Number.isFinite(jobId) || jobId <= 0) {
+      return res.status(400).json({
+        ok: false,
+        code: 'JOB_REQUIRED',
+        message: 'A completed job is required to leave a review.',
+      });
+    }
+
+    const location = clampString(req.body?.location, 80) || 'Local area';
+    const body = clampString(req.body?.text || req.body?.body || req.body?.review, 2000);
+    const rating = Math.round(Number(req.body?.rating));
+    let images = [];
+    try {
+      images = normalizeReviewImages(req.body?.images);
+    } catch (imgErr) {
+      return res.status(imgErr.status || 400).json({ ok: false, message: imgErr.message || 'Invalid images.' });
+    }
+
+    if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
+      return res.status(400).json({ ok: false, message: 'Rating must be 1–5 stars.' });
+    }
+
+    const access = await loadJobForReview(pool, jobId, req.authUser.id);
+    if (!access.ok) {
+      return res.status(access.status).json({
+        ok: false,
+        code: access.code,
+        message: access.message,
+      });
+    }
+
+    const { rows: existing } = await pool.query(
+      `SELECT id FROM site_reviews WHERE user_id=$1 AND job_id=$2 LIMIT 1`,
+      [req.authUser.id, jobId]
+    );
+    if (existing.length) {
+      return res.status(409).json({
+        ok: false,
+        code: 'DUPLICATE_REVIEW',
+        message: 'You already submitted a review for this job.',
+      });
+    }
+
+    const categories = parseCategoryRatings(req.body);
+    const imagesJson = images.length ? JSON.stringify(images) : null;
+    const serviceType = clampString(req.body?.serviceType || access.job.category || 'Home repair', 60);
+
+    const row = await insertJobReview(pool, {
+      job: access.job,
+      homeownerUser: req.authUser,
+      rating,
+      body: body?.trim() || '',
+      location,
+      serviceType,
+      imagesJson,
+      categories,
+    });
+
+    await writeAudit(pool, req.authUser.id, 'job_review_created', 'managed_job', jobId, { rating, categories });
+
+    return res.status(201).json({
+      ok: true,
+      review: rowToSiteReview(row),
+      message: 'Thanks for your feedback.',
+    });
+  } catch (e) {
+    if (e?.code === '23505') {
+      return res.status(409).json({
+        ok: false,
+        code: 'DUPLICATE_REVIEW',
+        message: 'You already submitted a review for this job.',
+      });
+    }
+    console.error('reviews create:', e);
+    return res.status(500).json({ ok: false, message: 'Could not publish review. Please try again.' });
+  }
+});
+
+// ── Chat ──────────────────────────────────────────────────────────────────────
+
+app.get('/api/chat', requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM job_chat_messages ORDER BY created_at ASC');
+    const byJob = {};
+    for (const r of rows) {
+      const k = String(r.job_id);
+      if (!byJob[k]) byJob[k] = [];
+      byJob[k].push(rowToMessage(r));
+    }
+    return res.json(byJob);
+  } catch (e) {
+    return res.status(500).json({ error: publicErrorMessage(e) });
+  }
+});
+
+app.get('/api/chat/:jobId', requireAuth, async (req, res) => {
+  try {
+    if (!isPositiveInt(req.params.jobId)) {
+      return res.status(400).json({ error: 'Invalid job id.' });
+    }
+    const access = await getLegacyJobAccess(req.params.jobId, req.authUser);
+    if (!access.allowed) {
+      return res.status(403).json({ error: 'Not allowed.' });
+    }
+    // Homeowners always; contractors only when assigned (or admin)
+    if (
+      req.authUser.role === 'contractor' &&
+      !access.mutate &&
+      req.authUser.role !== 'admin'
+    ) {
+      return res.status(403).json({ error: 'Accept the job before opening chat.' });
+    }
+    const { rows } = await pool.query(
+      'SELECT * FROM job_chat_messages WHERE job_id=$1 ORDER BY created_at ASC',
+      [req.params.jobId]
+    );
+    return res.json(rows.map(rowToMessage));
+  } catch (e) {
+    return res.status(500).json({ error: publicErrorMessage(e) });
+  }
+});
+
+app.post('/api/chat/:jobId', requireAuth, async (req, res) => {
+  try {
+    if (!isPositiveInt(req.params.jobId)) {
+      return res.status(400).json({ error: 'Invalid job id.' });
+    }
+    const { jobId } = req.params;
+    const access = await getLegacyJobAccess(jobId, req.authUser);
+    if (!access.allowed) {
+      return res.status(403).json({ error: 'Not allowed.' });
+    }
+    if (req.authUser.role === 'contractor' && !access.mutate) {
+      return res.status(403).json({ error: 'Accept the job before chatting.' });
+    }
+    // Never trust client-supplied identity
+    const senderRole = req.authUser.role;
+    const senderName = clampString(req.authUser.name || req.authUser.email || 'User', 120);
+    const text = clampString(req.body?.text, 4000);
+    const imageDataUrl = req.body?.imageDataUrl;
+    if (!text && !(typeof imageDataUrl === 'string' && imageDataUrl.startsWith('data:'))) {
+      return res.status(400).json({ error: 'Message text or image is required.' });
+    }
+    if (typeof imageDataUrl === 'string' && imageDataUrl.length > 5_000_000) {
+      return res.status(400).json({ error: 'Image is too large.' });
+    }
+    const id = Date.now() + Math.floor(Math.random() * 1000);
+    const { rows } = await pool.query(
+      `INSERT INTO job_chat_messages (id,job_id,sender_role,sender_name,text,image_data_url)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [id, jobId, senderRole, senderName, text, typeof imageDataUrl === 'string' ? imageDataUrl : null]
+    );
+    return res.json(rowToMessage(rows[0]));
+  } catch (e) {
+    console.error('add message:', e);
+    return res.status(500).json({ error: publicErrorMessage(e) });
+  }
+});
+
+// ── Fixera — central assistant. Features never call a vendor SDK directly. ──
+function sendFixeraStatus(_req, res) {
+  return res.json(getFixeraPublicStatus());
+}
+
+app.get('/api/ai/status', requireAuth, sendFixeraStatus);
+app.get('/api/fixera/status', requireAuth, sendFixeraStatus);
+app.get('/api/fixa/status', requireAuth, sendFixeraStatus);
+
+async function sendFixeraHealth(_req, res) {
+  try {
+    return res.json(await getFixeraHealth());
+  } catch (e) {
+    console.error('fixera health:', e);
+    return res.status(500).json({
+      assistant: 'Fixera',
+      provider: null,
+      model: null,
+      configured: false,
+      authenticated: false,
+      modelReachable: false,
+      healthy: false,
+      code: 'health_check_failed',
+    });
+  }
+}
+
+app.get('/api/fixera/health', requireAuth, aiLimiter, sendFixeraHealth);
+app.get('/api/fixa/health', requireAuth, aiLimiter, sendFixeraHealth);
+
+async function sendFixeraAdminProviders(_req, res) {
+  try {
+    return res.json(await getFixeraAdminProviders());
+  } catch (e) {
+    console.error('fixera admin providers:', e);
+    return res.status(500).json({ ok: false, message: 'Fixera provider status is unavailable.' });
+  }
+}
+
+app.get('/api/admin/fixera/providers', requireAuth, requireAdmin, requirePermission('settings.view'), sendFixeraAdminProviders);
+app.get('/api/admin/fixa/providers', requireAuth, requireAdmin, requirePermission('settings.view'), sendFixeraAdminProviders);
+
+app.get('/api/admin/fixera/knowledge', requireAuth, requireAdmin, requirePermission('settings.view'), async (_req, res) => {
+  try {
+    return res.json({ entries: await listKnowledgeEntries(pool) });
+  } catch (error) {
+    console.error('fixera knowledge list:', error?.message || error);
+    return res.status(500).json({ ok: false, message: 'Fixera knowledge is unavailable.' });
+  }
+});
+
+app.post('/api/admin/fixera/knowledge', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+  try {
+    const entry = await writeKnowledgeEntry(pool, req.body || {}, req.authUser.id);
+    return res.json({ ok: true, entry });
+  } catch (error) {
+    const status = error?.code === 'KNOWLEDGE_CONTENT_REQUIRED' ? 400 : error?.code === 'KNOWLEDGE_ENTRY_NOT_FOUND' ? 404 : 500;
+    if (status === 500) console.error('fixera knowledge save:', error?.message || error);
+    return res.status(status).json({ ok: false, code: error?.code || 'KNOWLEDGE_SAVE_FAILED', message: error?.message || 'Fixera knowledge could not be saved.' });
+  }
+});
+
+app.get('/api/admin/fixera/pricing', requireAuth, requireAdmin, requirePermission('settings.view'), async (req, res) => {
+  try {
+    const intelligence = await getPricingIntelligence(pool, {
+      zip: req.query.zip,
+      category: req.query.category,
+      subcategory: req.query.subcategory,
+      currentQuote: req.query.quote,
+    });
+    return res.json(intelligence);
+  } catch (e) {
+    console.error('fixera pricing:', e);
+    return res.status(500).json({ ok: false, message: 'Fixera pricing intelligence is unavailable.' });
+  }
+});
+
+app.get('/api/admin/fixera/training', requireAuth, requireAdmin, requirePermission('settings.view'), async (_req, res) => {
+  try {
+    const overview = await trainingOverview(pool);
+    return res.json({
+      assistant: 'Fixera',
+      productName: 'Fixera Super Training',
+      experiences: listRecentExperiences(12),
+      ...overview,
+    });
+  } catch (e) {
+    console.error('fixera training:', e);
+    return res.status(500).json({ ok: false, message: 'Fixera training overview is unavailable.' });
+  }
+});
+
+// Learning loop review queue: de-identified cases with their outcomes.
+app.get('/api/admin/fixera/review', requireAuth, requireAdmin, requirePermission('settings.view'), async (req, res) => {
+  try {
+    const result = await listReviewQueue(pool, {
+      filter: String(req.query.filter || 'with_outcome'),
+      task: String(req.query.task || 'assessment'),
+      limit: req.query.limit,
+      offset: req.query.offset,
+    });
+    return res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('fixera review queue:', e);
+    return res.status(500).json({ ok: false, message: 'The Fixera review queue is unavailable.' });
+  }
+});
+
+app.post('/api/admin/fixera/review/:id', requireAuth, requireAdmin, requireAdminWrite, async (req, res) => {
+  try {
+    const updated = await reviewCandidate(pool, String(req.params.id).slice(0, 120), {
+      action: String(req.body?.action || ''),
+      correctedDiagnosis: req.body?.correctedDiagnosis,
+      correctedFix: req.body?.correctedFix,
+      notes: req.body?.notes,
+      gold: req.body?.gold === true,
+      reviewerId: req.authUser.id,
+    });
+    return res.json({ ok: true, candidate: updated });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ ok: false, code: e.code, message: e.message });
+    console.error('fixera review:', e);
+    return res.status(500).json({ ok: false, message: 'Could not save the review.' });
+  }
+});
+
+app.get('/api/admin/fixera/training/export', requireAuth, requireAdmin, requirePermission('settings.view'), async (_req, res) => {
+  try {
+    const rows = await exportApprovedTraining(pool);
+    return res.json({
+      assistant: 'Fixera',
+      datasetVersion: 'fixera-training-v1',
+      count: rows.length,
+      jsonl: rows.map((row) => JSON.stringify(row)).join('\n'),
+    });
+  } catch (e) {
+    console.error('fixera training export:', e);
+    return res.status(500).json({ ok: false, message: 'Fixera training export is unavailable.' });
+  }
+});
+
+async function handleFixaAssessment(req, res) {
+  try {
+    if (!(await requireFixeraAiAccess(pool, req, res))) return;
+    const invocationId = String(req.body?.assessmentInvocationId || req.body?.invocationId || '').trim();
+    if (!invocationId) {
+      return res.status(400).json({
+        ok: false,
+        code: 'AI_ASSESSMENT_ACK_REQUIRED',
+        message: 'AI assessment acknowledgment is required before continuing.',
+      });
+    }
+    const consentCheck = checkActionConsentsFromBody(req.body, 'AI_ASSESSMENT');
+    if (!consentCheck.ok) {
+      return res.status(400).json({
+        ok: false,
+        code: consentCheck.code,
+        message: 'You must acknowledge the AI assessment disclaimer before continuing.',
+        missingAcceptanceTypes: consentCheck.missing,
+      });
+    }
+    const consentResult = await validateAndRecordActionConsents(pool, req, {
+      actionKey: 'AI_ASSESSMENT',
+      userId: req.authUser.id,
+      jobId: req.body?.jobId || null,
+      idempotencyPrefix: `AI_ASSESSMENT:${req.authUser.id}:${req.body?.jobId || 'direct'}:${invocationId}`,
+    });
+    if (!consentResult.ok) {
+      return res.status(400).json({
+        ok: false,
+        code: consentResult.code,
+        message: consentResult.message || 'You must acknowledge the AI assessment disclaimer before continuing.',
+        missingAcceptanceTypes: consentResult.missingAcceptanceTypes || consentResult.missing,
+      });
+    }
+
+    const body = req.body || {};
+    const directJobId = body.jobId == null ? null : Number(body.jobId);
+    let authorizedCase = null;
+    let caseType = null;
+    let propertyId = null;
+
+    if (directJobId != null) {
+      if (!Number.isInteger(directJobId) || directJobId <= 0) {
+        return res.status(400).json({ ok: false, code: 'INVALID_CASE_ID', message: 'A valid repair case is required.' });
+      }
+      const managed = await pool.query(
+        `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_type, ai_assessment, ai_assessment_history
+         FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2`,
+        [directJobId, req.authUser.id]
+      );
+      if (managed.rows[0]) {
+        authorizedCase = managed.rows[0];
+        caseType = 'managed_job';
+      } else {
+        const pending = await pool.query(
+          `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_type, ai_assessment, ai_assessment_history
+           FROM pending_service_requests WHERE id=$1 AND homeowner_user_id=$2`,
+          [directJobId, req.authUser.id]
+        );
+        if (pending.rows[0]) {
+          authorizedCase = pending.rows[0];
+          caseType = 'pending_service_request';
+        }
+      }
+      if (!authorizedCase) {
+        return res.status(404).json({ ok: false, code: 'CASE_NOT_FOUND', message: 'The repair case could not be found.' });
+      }
+      propertyId = authorizedCase.property_id == null ? null : Number(authorizedCase.property_id);
+      if (body.propertyId != null && Number(body.propertyId) !== propertyId) {
+        return res.status(403).json({ ok: false, code: 'PROPERTY_CASE_MISMATCH', message: 'The selected property does not match this repair case.' });
+      }
+    } else if (body.propertyId != null) {
+      propertyId = Number(body.propertyId);
+      if (!Number.isInteger(propertyId) || propertyId <= 0) {
+        return res.status(400).json({ ok: false, code: 'INVALID_PROPERTY_ID', message: 'A valid property is required.' });
+      }
+    }
+
+    const passportContext = propertyId
+      ? await buildPropertyAIContext(pool, propertyId, req.authUser.id, {
+        includeAddress: false,
+        includeProDetails: false,
+        equipmentKey: authorizedCase?.equipment_key || null,
+      })
+      : null;
+    if (propertyId && !passportContext) {
+      return res.status(403).json({ ok: false, code: 'PROPERTY_ACCESS_DENIED', message: 'You do not have access to this property.' });
+    }
+
+    const globalKnowledge = await retrieveGlobalKnowledge(pool, {
+      category: authorizedCase?.category || body.category,
+      query: [authorizedCase?.title, body.description || authorizedCase?.description].filter(Boolean).join(' '),
+    });
+    const pastCases = await retrieveConfirmedCases(pool, {
+      category: authorizedCase?.category || body.category,
+      query: [authorizedCase?.title, body.description || authorizedCase?.description].filter(Boolean).join(' '),
+      excludeJobId: caseType === 'managed_job' ? authorizedCase?.id : null,
+    });
+
+    const desc = clampString(body.description || authorizedCase?.description, 4000);
+    const cat = clampString(body.category || authorizedCase?.category, 80);
+    let requestImages;
+    try {
+      requestImages = readCasePhotoList(body, { arrayKey: 'imageDataUrls', singleKey: 'imageDataUrl' });
+    } catch (photoError) {
+      return res.status(400).json({ ok: false, code: photoError.code || 'INVALID_PHOTOS', message: photoError.message });
+    }
+    const caseImages = requestImages.length
+      ? requestImages
+      : authorizedCase
+        ? await listFixeraCaseImages(pool, { caseType, caseId: authorizedCase.id, coverDataUrl: authorizedCase.media_data_url })
+        : [];
+    const imageDataUrl = caseImages[0] || null;
+    const hasImage = typeof imageDataUrl === 'string' && imageDataUrl.startsWith('data:');
+    if (hasImage && imageDataUrl.length > 6_000_000) {
+      return res.status(400).json({ ok: false, message: 'Image is too large.' });
+    }
+    if (!cat || (!desc && !hasImage)) {
+      return res.status(400).json({
+        ok: false,
+        message: 'category and either a description or a photo are required.',
+      });
+    }
+    // Prefer structured assessment (no invented prices). Legacy UI still receives mapped fields.
+    const structured = await assessRepair({
+      category: cat,
+      description: desc || 'No written description provided. Analyze the attached photo and infer the repair issue.',
+      imageDataUrl: hasImage ? imageDataUrl : null,
+      imageDataUrls: caseImages.filter((url) => typeof url === 'string' && url.startsWith('data:image/')),
+      task: 'repair_assessment',
+      jobId: authorizedCase?.id || null,
+      homeownerId: req.authUser.id,
+      propertyId: passportContext?.propertyId || null,
+      property: passportContext?.memory || null,
+      job: authorizedCase ? {
+        id: authorizedCase.id,
+        homeownerUserId: authorizedCase.homeowner_user_id,
+        propertyId: authorizedCase.property_id,
+        equipmentKey: authorizedCase.equipment_key || null,
+        category: authorizedCase.category,
+        title: authorizedCase.title,
+        description: authorizedCase.description,
+        aiAssessment: authorizedCase.ai_assessment,
+        mediaType: authorizedCase.media_type,
+      } : null,
+      locationContext: [
+        passportContext?.text || '',
+        globalKnowledge.items.length
+          ? `Approved general FixBridge repair knowledge (global, not property-specific):\n${globalKnowledge.items.map((item) => `- ${item}`).join('\n')}`
+          : '',
+        confirmedCasesContext(pastCases),
+        personalizationContext(await getUserProfile(pool, req.authUser.id), cat),
+      ].filter(Boolean).join('\n\n'),
+    });
+    const a = structured.assessment;
+    const providerStatus = getFixeraPublicStatus();
+    try {
+      const interaction = recordFixeraInteraction({
+        requestId: invocationId,
+        userId: req.authUser.id,
+        userRole: req.authUser?.role || 'homeowner',
+        jobId: authorizedCase?.id || null,
+        caseId: authorizedCase?.id || null,
+        caseType,
+        propertyId: passportContext?.propertyId || null,
+        task: 'repair_assessment',
+        inputSummary: `${cat}: ${String(desc || 'photo assessment').slice(0, 120)}`,
+        provider: structured.provider || structured.source || providerStatus.provider,
+        model: structured.model || providerStatus.model,
+        providerRequestId: structured.requestId,
+        promptVersion: structured.promptVersion,
+        latencyMs: structured.latencyMs,
+        success: Boolean(a),
+        failureCode: structured.providerCode || null,
+        providerAttempts: structured.providerAttempts,
+          knowledgeRefs: [...globalKnowledge.references, ...pastCases.references],
+        outputSummary: a?.summary || structured.error || null,
+        safety: a?.diy_risk_level || null,
+        evaluator: a ? 'recorded' : 'fail',
+        schemaQuality: a ? 'present' : 'missing',
+        professionalEscalation: Boolean(a?.professional_required),
+      });
+      attachCasePayload(interaction, { assessment: a, category: cat, description: desc });
+      await persistFixeraInteraction(pool, interaction);
+    } catch (captureError) {
+      console.warn('fixera experience capture:', captureError?.message || captureError);
+    }
+    if (a && authorizedCase) {
+      const serialized = JSON.stringify(a);
+      const assessmentHistory = appendAssessmentRevision(authorizedCase.ai_assessment_history, authorizedCase.ai_assessment);
+      if (caseType === 'managed_job') {
+        await pool.query(
+          `UPDATE managed_jobs
+           SET ai_assessment=$1::jsonb, ai_assessment_history=$2::jsonb,
+               assessment_status='ready', assessment_error_code=NULL,
+               assessment_completed_at=NOW(), updated_at=NOW()
+           WHERE id=$3 AND homeowner_user_id=$4`,
+          [serialized, JSON.stringify(assessmentHistory), authorizedCase.id, req.authUser.id]
+        );
+      } else {
+        await pool.query(
+          `UPDATE pending_service_requests
+           SET ai_assessment=$1::jsonb, ai_assessment_history=$2::jsonb,
+               assessment_result=$1::jsonb, assessment_status='ready',
+               assessment_error_code=NULL, assessment_completed_at=NOW(), updated_at=NOW()
+           WHERE id=$3 AND homeowner_user_id=$4`,
+          [serialized, JSON.stringify(assessmentHistory), authorizedCase.id, req.authUser.id]
+        );
+      }
+    }
+    // Homeowner view of a case: DIY steps stay withheld until a detected safety concern is confirmed.
+    const shown = a && authorizedCase ? await homeownerAssessmentView(caseType, authorizedCase.id, a) : a;
+    return res.json({
+      assessment: shown
+        ? {
+          overview: shown.summary,
+          imageObservations: shown.visual_findings,
+          diagnosis: shown.summary,
+          likelyRootCause: '',
+          professionalSteps: [],
+          partsNeeded: shown.materials_needed || [],
+          workScope: [],
+          toolsRequired: shown.tools_required || [],
+          diySteps: shown.diy_steps || [],
+          diyGuideImages: [],
+          suggestions: shown.immediate_safety_steps || [],
+          estimatedCost: '',
+          estimatedDuration: `${shown.estimated_labor_hours_min}-${shown.estimated_labor_hours_max} hours`,
+          urgency: shown.urgency,
+          safetyNotes: (shown.immediate_safety_steps || []).join(' '),
+          professionalRecommended: shown.professional_required,
+          ...shown,
+        }
+        : null,
+      source: structured.source || 'fixera',
+      assistant: 'Fixera',
+      error: structured.error,
+      mode: body.mode === 'detail' ? 'detail' : 'summary',
+    });
+  } catch (e) {
+    console.error('ai assess:', e);
+    // Persist AI failures to error_logs for admin review (spec §7)
+    try {
+      await pool.query(
+        `INSERT INTO error_logs (source, job_id, user_id, error_code, message) VALUES ($1,$2,$3,$4,$5)`,
+        ['ai_assess', req.body?.jobId || null, req.authUser?.id || null, e.code || 'UNKNOWN', String(e.message).slice(0, 500)]
+      );
+    } catch (_) { /* don't mask original error */ }
+    return res.status(500).json({
+      assessment: null,
+      source: 'error',
+      assistant: 'Fixera',
+      error: "We couldn't complete the assessment right now. Please try again.",
+    });
+  }
+}
+
+app.post('/api/ai/assess', requireAuth, aiLimiter, aiGuard, handleFixaAssessment);
+app.post('/api/fixera/assessment', requireAuth, aiLimiter, aiGuard, handleFixaAssessment);
+app.post('/api/fixa/assessment', requireAuth, aiLimiter, aiGuard, handleFixaAssessment);
+
+async function handleFixeraReassess(req, res) {
+  try {
+    if (!(await requireFixeraAiAccess(pool, req, res))) return;
+    const observation = clampString(req.body?.observation, 2000);
+    if (!observation) {
+      return res.status(400).json({ ok: false, message: 'A new observation is required.' });
+    }
+    const caseId = Number(req.body?.jobId);
+    if (!Number.isInteger(caseId) || caseId <= 0) {
+      return res.status(400).json({ ok: false, code: 'INVALID_CASE_ID', message: 'A valid repair case is required.' });
+    }
+    let authorizedCase = null;
+    let caseType = null;
+    const { rows: managedRows } = await pool.query(
+      `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_type, ai_assessment, ai_assessment_history
+         FROM managed_jobs WHERE id=$1 AND homeowner_user_id=$2`,
+      [caseId, req.authUser.id]
+    );
+    if (managedRows[0]) {
+      authorizedCase = managedRows[0];
+      caseType = 'managed_job';
+    } else {
+      const { rows: pendingRows } = await pool.query(
+        `SELECT id, homeowner_user_id, property_id, equipment_key, category, title, description, media_data_url, media_type, ai_assessment, ai_assessment_history
+           FROM pending_service_requests WHERE id=$1 AND homeowner_user_id=$2`,
+        [caseId, req.authUser.id]
+      );
+      if (pendingRows[0]) {
+        authorizedCase = pendingRows[0];
+        caseType = 'pending_service_request';
+      }
+    }
+    if (!authorizedCase) {
+      return res.status(404).json({ ok: false, code: 'CASE_NOT_FOUND', message: 'Repair case not found.' });
+    }
+
+    let imageDataUrl = await resolveMediaDataUrl(pool, authorizedCase.media_data_url || null);
+    let newImages = [];
+    try {
+      newImages = readCasePhotoList(req.body || {}, { arrayKey: 'imageDataUrls', singleKey: 'imageDataUrl' });
+      if (newImages.some((url) => !url.startsWith('data:image/') || url.length > 6_000_000)) throw new Error('bad');
+    } catch (photoError) {
+      return res.status(400).json({
+        ok: false,
+        code: photoError.code === 'TOO_MANY_PHOTOS' ? 'TOO_MANY_PHOTOS' : 'INVALID_REASSESSMENT_IMAGE',
+        message: photoError.code === 'TOO_MANY_PHOTOS' ? photoError.message : `Choose up to ${MAX_CASE_PHOTOS} supported photos under 6 MB each.`,
+      });
+    }
+    if (newImages.length) {
+      let storedPhotos = [];
+      try {
+        storedPhotos = await storeFixeraCasePhotos(pool, {
+          userId: req.authUser.id,
+          caseType,
+          caseId,
+          propertyId: authorizedCase.property_id,
+          equipmentKey: authorizedCase.equipment_key || null,
+          dataUrls: newImages,
+        });
+      } catch (mediaError) {
+        return res.status(400).json({ ok: false, code: 'REASSESSMENT_IMAGE_SAVE_FAILED', message: mediaError?.message || 'The new photo could not be attached to this case.' });
+      }
+      imageDataUrl = newImages[0];
+      await pool.query(
+        caseType === 'managed_job'
+          ? `UPDATE managed_jobs SET media_data_url=$1, media_type='image', updated_at=NOW() WHERE id=$2 AND homeowner_user_id=$3`
+          : `UPDATE pending_service_requests SET media_data_url=$1, media_type='image', updated_at=NOW() WHERE id=$2 AND homeowner_user_id=$3`,
+        // The stored reference (Neon or bucket), so the case row stays small.
+        [storedPhotos[0]?.ref || imageDataUrl, caseId, req.authUser.id]
+      );
+    }
+
+    const propertyContext = authorizedCase.property_id
+      ? await buildPropertyAIContext(pool, authorizedCase.property_id, req.authUser.id, {
+        includeAddress: false,
+        includeProDetails: false,
+        equipmentKey: authorizedCase.equipment_key || null,
+      })
+      : null;
+    if (authorizedCase.property_id && !propertyContext) {
+      return res.status(403).json({ ok: false, code: 'PROPERTY_ACCESS_DENIED', message: 'Property access could not be verified.' });
+    }
+    const globalKnowledge = await retrieveGlobalKnowledge(pool, {
+      category: authorizedCase.category,
+      query: [authorizedCase.title, authorizedCase.description, observation, authorizedCase.equipment_key].filter(Boolean).join(' '),
+    });
+    const pastCases = await retrieveConfirmedCases(pool, {
+      category: authorizedCase.category,
+      query: [authorizedCase.title, authorizedCase.description, observation].filter(Boolean).join(' '),
+      excludeJobId: caseType === 'managed_job' ? caseId : null,
+    });
+    const result = await reassessRepair({
+      category: authorizedCase.category,
+      description: authorizedCase.description,
+      observation,
+      currentStep: req.body?.currentStep ?? null,
+      imageDataUrl,
+      // The new photos first, then the case's earlier photos, at most MAX_CASE_PHOTOS in total.
+      imageDataUrls: [
+        ...newImages,
+        ...(await listFixeraCaseImages(pool, { caseType, caseId, coverDataUrl: authorizedCase.media_data_url })),
+      ].filter((url, i, all) => all.indexOf(url) === i).slice(0, MAX_CASE_PHOTOS),
+      propertyId: propertyContext?.propertyId || null,
+      property: propertyContext?.memory || null,
+      jobId: caseId,
+      actor: 'homeowner',
+      homeownerId: req.authUser.id,
+      task: 'reassessment',
+      job: {
+        id: caseId,
+        homeownerUserId: authorizedCase.homeowner_user_id,
+        propertyId: authorizedCase.property_id,
+        equipmentKey: authorizedCase.equipment_key || null,
+        category: authorizedCase.category,
+        title: authorizedCase.title,
+        description: authorizedCase.description,
+        aiAssessment: authorizedCase.ai_assessment,
+        mediaType: newImages.length ? 'image' : authorizedCase.media_type,
+      },
+      locationContext: [
+        propertyContext?.text || '',
+        globalKnowledge.items.length
+          ? `Approved general FixBridge repair knowledge (global, not property-specific):\n${globalKnowledge.items.map((item) => `- ${item}`).join('\n')}`
+          : '',
+        confirmedCasesContext(pastCases),
+        personalizationContext(await getUserProfile(pool, authorizedCase.homeowner_user_id), authorizedCase.category),
+      ].filter(Boolean).join('\n\n'),
+    });
+    const interaction = recordFixeraInteraction({
+      requestId: randomUUID(),
+      userId: req.authUser.id,
+      userRole: req.authUser.role || 'homeowner',
+      jobId: caseType === 'managed_job' ? caseId : null,
+      caseId,
+      caseType,
+      propertyId: propertyContext?.propertyId || null,
+      task: 'reassessment',
+      inputSummary: `${authorizedCase.category || 'repair'}: ${observation.slice(0, 120)}`,
+      provider: result?.provider || null,
+      model: result?.model || null,
+      providerRequestId: result?.requestId || null,
+      promptVersion: result?.promptVersion || null,
+      latencyMs: result?.latencyMs ?? null,
+      success: Boolean(result?.assessment),
+      failureCode: result?.providerCode || result?.code || null,
+      providerAttempts: result?.providerAttempts || [],
+      knowledgeRefs: [...globalKnowledge.references, ...pastCases.references],
+      outputSummary: result?.assessment?.summary || result?.error || null,
+      safety: result?.assessment?.diy_risk_level || null,
+      evaluator: result?.assessment ? 'recorded' : 'fail',
+      schemaQuality: result?.assessment ? 'present' : 'missing',
+      professionalEscalation: Boolean(result?.assessment?.professional_required),
+    });
+    attachCasePayload(interaction, {
+      assessment: result?.assessment,
+      category: authorizedCase.category,
+      description: `${authorizedCase.description || ''} Follow-up: ${observation}`,
+    });
+    await persistFixeraInteraction(pool, interaction).catch((error) => {
+      console.warn('[fixera] reassessment audit persistence failed', error?.message || error);
+    });
+    if (result.assessment) {
+      const assessmentHistory = appendAssessmentRevision(authorizedCase.ai_assessment_history, authorizedCase.ai_assessment);
+      await pool.query(
+        caseType === 'managed_job'
+          ? `UPDATE managed_jobs SET ai_assessment=$1::jsonb, ai_assessment_history=$2::jsonb, assessment_status='ready', assessment_error_code=NULL, assessment_completed_at=NOW(), updated_at=NOW() WHERE id=$3 AND homeowner_user_id=$4`
+          : `UPDATE pending_service_requests SET ai_assessment=$1::jsonb, ai_assessment_history=$2::jsonb, assessment_result=$1::jsonb, assessment_status='ready', assessment_error_code=NULL, assessment_completed_at=NOW(), updated_at=NOW() WHERE id=$3 AND homeowner_user_id=$4`,
+        [JSON.stringify(result.assessment), JSON.stringify(assessmentHistory), caseId, req.authUser.id]
+      );
+    }
+    return res.json({
+      ok: Boolean(result.assessment),
+      assessment: result.assessment ? await homeownerAssessmentView(caseType, caseId, result.assessment) : result.assessment,
+      assistant: 'Fixera',
+      error: result.assessment ? undefined : result.error,
+    });
+  } catch (e) {
+    console.error('fixera reassess:', e);
+    return res.status(500).json({
+      ok: false,
+      assessment: null,
+      error: "We couldn't complete the assessment right now. Please try again.",
+    });
+  }
+}
+
+async function homeownerAssessmentView(caseType, caseId, assessment) {
+  const { withholdUnconfirmedGuidance } = await import('./fixera/safety-confirmation.js');
+  let report = null;
+  if (caseType === 'managed_job') {
+    const { rows } = await pool.query(`SELECT completion_report FROM managed_jobs WHERE id=$1`, [caseId]);
+    report = rows[0]?.completion_report || null;
+  }
+  return withholdUnconfirmedGuidance(assessment, report);
+}
+
+app.post('/api/fixera/reassess', requireAuth, aiLimiter, aiGuard, handleFixeraReassess);
+app.post('/api/fixa/reassess', requireAuth, aiLimiter, aiGuard, handleFixeraReassess);
+
+/**
+ * Loads a repair case the caller may act on. Homeowners see only their own cases; admins
+ * any. `caseType` selects the table explicitly; without it, managed jobs are checked first
+ * (existing behaviour). Returns { row, caseType } or null.
+ */
+async function loadOwnedFixeraCase(req, rawId, rawCaseType) {
+  const id = Number(rawId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const isAdmin = req.authUser?.role === 'admin';
+  const types = rawCaseType === 'managed_job' || rawCaseType === 'pending_service_request'
+    ? [rawCaseType]
+    : ['managed_job', 'pending_service_request'];
+  for (const caseType of types) {
+    const table = caseType === 'managed_job' ? 'managed_jobs' : 'pending_service_requests';
+    const { rows } = await pool.query(
+      `SELECT id, homeowner_user_id, property_id, category, description, ai_assessment FROM ${table}
+        WHERE id=$1 AND ($2::boolean OR homeowner_user_id=$3)`,
+      [id, isAdmin, req.authUser.id]
+    );
+    if (rows[0]) return { row: rows[0], caseType };
+  }
+  return null;
+}
+
+async function handleFixeraProfessionalHandoff(req, res) {
+  try {
+    const base = {
+      completedSteps: Array.isArray(req.body?.completedSteps) ? req.body.completedSteps.slice(0, 20) : [],
+      failedStep: clampString(req.body?.failedStep, 200),
+      concern: clampString(req.body?.concern, 1000),
+      reason: clampString(req.body?.reason, 300) || 'Homeowner requested a professional',
+      subcategory: clampString(req.body?.subcategory, 80),
+    };
+    if (req.body?.jobId != null) {
+      // A case-linked handoff uses the stored case, never client-supplied case data.
+      const owned = await loadOwnedFixeraCase(req, req.body.jobId, req.body?.caseType);
+      if (!owned) return res.status(404).json({ ok: false, code: 'CASE_NOT_FOUND', message: 'The repair case could not be found.' });
+      const stored = typeof owned.row.ai_assessment === 'string' ? JSON.parse(owned.row.ai_assessment || 'null') : owned.row.ai_assessment;
+      return res.json(prepareProfessionalHandoff({
+        ...base,
+        jobId: owned.row.id,
+        caseType: owned.caseType,
+        propertyId: owned.row.property_id,
+        description: clampString(owned.row.description, 4000),
+        category: clampString(owned.row.category, 80),
+        risk: clampString(stored?.diy_risk_level, 20),
+        assessment: stored || null,
+      }));
+    }
+    return res.json(prepareProfessionalHandoff({
+      ...base,
+      jobId: null,
+      description: clampString(req.body?.description, 4000),
+      category: clampString(req.body?.category, 80),
+      risk: clampString(req.body?.risk, 20),
+      assessment: null,
+    }));
+  } catch (e) {
+    console.error('fixera handoff:', e);
+    return res.status(500).json({ ok: false, message: 'The handoff summary could not be prepared.' });
+  }
+}
+
+app.post('/api/fixera/professional-handoff', requireAuth, handleFixeraProfessionalHandoff);
+app.post('/api/fixa/professional-handoff', requireAuth, handleFixeraProfessionalHandoff);
+
+registerManagedRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission, makeToken, rowToUser });
+registerMarketingRoutes(app, { pool, requireAuth, requireAdmin, requirePermission });
+registerGoogleAuthRoutes(app, { pool, makeToken, rowToUser, bcrypt, signupLimiter: signInLimiter, requireAuth });
+registerAssessmentProcessor(processManagedJobAssessmentTask);
+registerHomeCareProRoutes(app, { pool, requireAuth, requireAdmin });
+registerHomeCareAdminRoutes(app, { pool, requireAuth, requireAdmin });
+registerHomeAssistantRoutes(app, { pool, requireAuth });
+registerQuoteWorkspaceRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
+registerContractorEmployeeRoutes(app, { pool, requireAuth, requireAdmin });
+registerSupportTicketRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
+// FixBridge Commercial: its own accounts, tokens, tables and admin (see api/commercial/).
+registerCommercialRoutes(app, { pool });
+
+// ── Public Contact page ─────────────────────────────────────────────────────────
+const contactLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) =>
+    res.status(429).json({ ok: false, message: 'Too many messages from this connection. Please try again later.' }),
+});
+
+app.get('/api/contact/categories', (_req, res) => res.json({ ok: true, categories: CONTACT_INQUIRY_CATEGORIES }));
+
+/** Contact page inquiries become support tickets in the admin Support queue. Sign-in is optional. */
+app.post('/api/contact', contactLimiter, async (req, res) => {
+  try {
+    const body = req.body || {};
+    // Hidden "website" field: people never fill it, simple bots do. Pretend success, store nothing.
+    if (typeof body.website === 'string' && body.website.trim()) {
+      return res.json({ ok: true, ticketNumber: null });
+    }
+    const checked = validateContactInquiry(body);
+    if (!checked.ok) {
+      return res.status(400).json({ ok: false, code: 'VALIDATION_FAILED', message: 'Please check the highlighted fields.', errors: checked.errors });
+    }
+    let authUser = null;
+    const header = req.headers.authorization;
+    if (header && header.startsWith('Bearer ')) {
+      try {
+        const decoded = jwt.verify(header.slice(7), JWT_SECRET, { algorithms: ['HS256'] });
+        const { rows } = await pool.query('SELECT id, role FROM users WHERE id=$1 AND COALESCE(is_blocked,false)=false', [decoded.id]);
+        if (rows[0]) authUser = { id: rows[0].id, role: rows[0].role };
+      } catch {
+        /* an expired or invalid token just means the inquiry is stored as a visitor's */
+      }
+    }
+    const ticket = await createContactInquiry(pool, checked.value, authUser);
+    return res.json({ ok: true, ticketNumber: ticket.ticketNumber });
+  } catch (e) {
+    console.error('contact inquiry:', e?.message || e);
+    return res.status(500).json({ ok: false, message: 'We could not send your message. Please try again or email us.' });
+  }
+});
+registerHomeownerAdminRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
+registerFinanceRoutes(app, { pool, requireAuth, requireAdmin });
+registerSubscriptionPlanRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
+registerPlatformRoutes(app, {
+  pool,
+  requireAuth,
+  requireAdmin,
+  requireAdminWrite,
+  requirePermission,
+  getSubscriptionPlanByCode,
+  makeToken,
+  rowToUser,
+});
+registerPayoutRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite, requirePermission });
+registerReferralRoutes(app, { pool, requireAuth, requireAdmin, requireAdminWrite });
+registerAddressRoutes(app, { requireAuth });
+registerServiceAreaRoutes(app);
+
+async function handleFixaChat(req, res) {
+  try {
+    if (!(await requireFixeraAiAccess(pool, req, res))) return;
+    const { messages, jobId } = req.body || {};
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ ok: false, message: 'messages array is required.' });
+    }
+    if (messages.length > 40) {
+      return res.status(400).json({ ok: false, message: 'Too many messages in request.' });
+    }
+    const normalized = messages
+      .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+      .map((m) => ({ role: m.role, content: clampString(m.content, 4000) }))
+      .filter((m) => m.content.length > 0)
+      .slice(-20);
+    if (!normalized.some((m) => m.role === 'user')) {
+      return res.status(400).json({ ok: false, message: 'At least one user message is required.' });
+    }
+
+    let riskLevel = 'green';
+    let assessment = null;
+    let jobIdNum = null;
+    let jobCategory = null;
+    // Every reply, including safety-policy refusals, is recorded (de-identified) for review.
+    const lastUserText = normalized.filter((m) => m.role === 'user').pop()?.content || '';
+    const send = (payload) => {
+      recordChatForLearning(pool, {
+        userId: req.authUser.id,
+        userRole: req.authUser.role,
+        jobId: jobIdNum,
+        task: jobIdNum ? 'diy_chat' : 'general_chat',
+        userMessage: lastUserText,
+        reply: payload?.reply || null,
+        riskLevel: payload?.riskLevel || null,
+        provider: payload?.source || null,
+        blockedBy: payload?.source === 'safety_policy'
+          ? payload.promptInjectionBlocked ? 'prompt_injection' : payload.userStopRequested ? 'user_stop' : 'safety_hazard'
+          : null,
+        guardrailRemovals: payload?.guardrailRemovals || 0,
+      }).catch(() => {});
+      return res.json(payload);
+    };
+    if (jobId != null && req.authUser.role === 'homeowner') {
+      jobIdNum = Number(jobId);
+      const { rows } = await pool.query(
+        `SELECT ai_assessment, diy_risk_level, description, homeowner_user_id, completion_report, category FROM managed_jobs WHERE id=$1`,
+        [jobIdNum]
+      );
+      const job = rows[0];
+      if (!job || Number(job.homeowner_user_id) !== Number(req.authUser.id)) {
+        return res.status(404).json({ ok: false, message: 'Job not found.' });
+      }
+
+      const ackOk = await requireDiySafetyAcknowledgment(pool, req, res, { jobId: jobIdNum });
+      if (!ackOk) return;
+
+      assessment = typeof job.ai_assessment === 'string' ? JSON.parse(job.ai_assessment) : job.ai_assessment;
+      jobCategory = job.category || null;
+      const { diyGuidanceUnlocked, SAFETY_CONFIRMATION_REQUIRED } = await import('./fixera/safety-confirmation.js');
+      if (!diyGuidanceUnlocked(assessment, job.completion_report)) {
+        return res.status(409).json({
+          ok: false,
+          code: SAFETY_CONFIRMATION_REQUIRED,
+          message: 'A safety concern was found. Review it and confirm before getting DIY help for this repair.',
+        });
+      }
+      const lastUser = normalized.filter((m) => m.role === 'user').pop()?.content || '';
+      const {
+        classifyDiyRiskLevel,
+        detectUserDiyStopRequest,
+        detectPromptInjection,
+        redSafetyReply,
+        yellowStopReply,
+        isEmergencyHazard,
+      } = await import('./diy-safety.js');
+      const { recordDiySafetyEvent } = await import('./diy-safety-events.js');
+
+      if (detectPromptInjection(lastUser)) {
+        await recordDiySafetyEvent(pool, {
+          userId: req.authUser.id,
+          jobId: jobIdNum,
+          eventType: 'prompt_injection_blocked',
+          riskLevel: 'red',
+          previousRiskLevel: job.diy_risk_level,
+          riskReasonCodes: ['PROMPT_INJECTION'],
+          metadata: { excerpt: lastUser.slice(0, 200) },
+          req,
+        });
+        await pool.query(`UPDATE managed_jobs SET diy_risk_level='red', updated_at=NOW() WHERE id=$1`, [jobIdNum]);
+        return send({
+          ok: true,
+          reply: redSafetyReply(),
+          source: 'safety_policy',
+          riskLevel: 'red',
+          promptInjectionBlocked: true,
+          emergencyRecommended: true,
+        });
+      }
+
+      const classified = classifyDiyRiskLevel(`${lastUser} ${job.description || ''}`, assessment);
+      riskLevel = classified.level;
+
+      if (detectUserDiyStopRequest(lastUser) || classified.userStopRequested) {
+        await recordDiySafetyEvent(pool, {
+          userId: req.authUser.id,
+          jobId: jobIdNum,
+          eventType: 'user_stop',
+          riskLevel: 'yellow',
+          previousRiskLevel: job.diy_risk_level,
+          riskReasonCodes: classified.reasonCodes,
+          req,
+        });
+        return send({
+          ok: true,
+          reply: yellowStopReply(),
+          source: 'safety_policy',
+          riskLevel: 'yellow',
+          userStopRequested: true,
+        });
+      }
+
+      if (riskLevel === 'red') {
+        const escalated = job.diy_risk_level !== 'red';
+        await pool.query(`UPDATE managed_jobs SET diy_risk_level='red', updated_at=NOW() WHERE id=$1`, [jobIdNum]);
+        if (escalated) {
+          await recordDiySafetyEvent(pool, {
+            userId: req.authUser.id,
+            jobId: jobIdNum,
+            eventType: 'risk_escalation',
+            riskLevel: 'red',
+            previousRiskLevel: job.diy_risk_level,
+            riskReasonCodes: classified.reasonCodes,
+            metadata: { emergencyRecommended: isEmergencyHazard(classified) },
+            req,
+          });
+        }
+        return send({
+          ok: true,
+          reply: redSafetyReply(),
+          source: 'safety_policy',
+          riskLevel,
+          escalated,
+          emergencyRecommended: isEmergencyHazard(classified),
+          reasonCodes: classified.reasonCodes,
+        });
+      }
+
+      if (classified.level !== job.diy_risk_level) {
+        await pool.query(`UPDATE managed_jobs SET diy_risk_level=$2, updated_at=NOW() WHERE id=$1`, [
+          jobIdNum,
+          classified.level,
+        ]);
+        if (classified.level === 'yellow' && job.diy_risk_level === 'green') {
+          await recordDiySafetyEvent(pool, {
+            userId: req.authUser.id,
+            jobId: jobIdNum,
+            eventType: 'risk_escalation',
+            riskLevel: 'yellow',
+            previousRiskLevel: job.diy_risk_level,
+            riskReasonCodes: classified.reasonCodes,
+            req,
+          });
+        }
+      }
+    }
+
+    if (jobIdNum == null) {
+      // No case attached: still screen before inference so general chat cannot be used to
+      // get hazardous instructions or to override Fixera's rules.
+      const lastUser = normalized.filter((m) => m.role === 'user').pop()?.content || '';
+      const { classifyDiyRiskLevel, detectPromptInjection, redSafetyReply, isEmergencyHazard } = await import('./diy-safety.js');
+      if (detectPromptInjection(lastUser)) {
+        return send({ ok: true, reply: redSafetyReply(), source: 'safety_policy', riskLevel: 'red', promptInjectionBlocked: true, emergencyRecommended: true });
+      }
+      const classified = classifyDiyRiskLevel(lastUser, null);
+      riskLevel = classified.level;
+      if (riskLevel === 'red') {
+        return send({
+          ok: true,
+          reply: redSafetyReply(),
+          source: 'safety_policy',
+          riskLevel,
+          emergencyRecommended: isEmergencyHazard(classified),
+          reasonCodes: classified.reasonCodes,
+        });
+      }
+    }
+
+    // DIY chat on a case is adapted to this homeowner's own history (never to safety rules).
+    const personal = jobIdNum ? personalizationContext(await getUserProfile(pool, req.authUser.id), jobCategory) : '';
+    const result = await complete({
+      messages: personal ? [{ role: 'system', content: personal }, ...normalized] : normalized,
+      riskLevel,
+      assessment,
+      task: 'diy_guidance',
+    });
+    return send({ ...result, model: undefined, riskLevel });
+  } catch (e) {
+    console.error('ai chat:', e);
+    return res.status(500).json({
+      reply: null,
+      source: 'error',
+      assistant: 'Fixera',
+      error: "We couldn't complete that reply right now. Please try again.",
+    });
+  }
+}
+
+app.post('/api/ai/chat', requireAuth, aiLimiter, aiGuard, handleFixaChat);
+app.post('/api/fixera/chat', requireAuth, aiLimiter, aiGuard, handleFixaChat);
+app.post('/api/fixa/chat', requireAuth, aiLimiter, aiGuard, handleFixaChat);
+
+async function handleFixeraFeedback(req, res) {
+  let jobId = null;
+  if (req.body?.jobId != null) {
+    const owned = await loadOwnedFixeraCase(req, req.body.jobId, req.body?.caseType).catch(() => null);
+    if (!owned) return res.status(404).json({ ok: false, code: 'CASE_NOT_FOUND', message: 'The repair case could not be found.' });
+    jobId = owned.row.id;
+  }
+  const helpful = String(req.body?.helpful || '').toLowerCase();
+  const diyResult = String(req.body?.diyResult || '').toLowerCase();
+  const allowedHelpful = helpful === 'yes' || helpful === 'no' ? helpful : null;
+  const allowedDiy = ['solved', 'partially', 'not_solved'].includes(diyResult) ? diyResult : null;
+  const row = recordFixeraFeedback({
+    interactionId: req.body?.interactionId || null,
+    jobId,
+    // Feedback may only update the caller's own interactions.
+    userId: req.authUser.role === 'admin' ? null : req.authUser.id,
+    helpful: allowedHelpful,
+    diyResult: allowedDiy,
+    note: req.body?.note,
+  });
+  if (jobId && (allowedHelpful || allowedDiy)) {
+    await recordCaseOutcome(pool, {
+      jobId,
+      outcome: 'USER_FEEDBACK',
+      source: req.authUser.role === 'admin' ? 'admin' : 'homeowner',
+      details: { helpful: allowedHelpful || allowedDiy, note: req.body?.note },
+      actorUserId: req.authUser.id,
+    }).catch((e) => console.warn('[fixera] feedback outcome not recorded', e?.message));
+  }
+  return res.json({ ok: true, assistant: 'Fixera', feedback: { helpful: row.helpful, diy_result: row.diy_result } });
+}
+
+// A homeowner can see the DIY profile Fixera keeps about them (their own only).
+app.get('/api/fixera/my-profile', requireAuth, async (req, res) => {
+  const profile = await getUserProfile(pool, req.authUser.id);
+  return res.json({ ok: true, profile: profile || null });
+});
+
+app.post('/api/fixera/feedback', requireAuth, handleFixeraFeedback);
+app.post('/api/fixa/feedback', requireAuth, handleFixeraFeedback);
+
+app.get('/api/health', async (_req, res) => {
+  const production = isDeployedProduction();
+  let dbOk = true;
+  const databaseEvidence = [];
+  if (!useInMemoryDb) {
+    try {
+      const { rows } = await pool.query(`SELECT current_setting('neon.timeline_id', true) AS neon_timeline`);
+      if (rows[0]?.neon_timeline) databaseEvidence.push('server_exposes_neon_settings');
+    } catch {
+      dbOk = false;
+    }
+    try {
+      if (/\.neon\.tech$/i.test(new URL(process.env.NEON_DATABASE_URL).hostname)) databaseEvidence.push('hostname_neon_tech');
+    } catch { /* unparsable URL: no evidence */ }
+  }
+  let reminders = null;
+  try {
+    reminders = await getReminderSchedulerStatus(pool);
+  } catch {
+    reminders = { deliveryConfigured: false };
+  }
+  res.json({
+    ok: dbOk,
+    service: 'fixbridge-api',
+    version: process.env.npm_package_version || '0.0.2',
+    build: process.env.COMMIT_REF || process.env.DEPLOY_ID || process.env.FIXBRIDGE_HOSTING || null,
+    env: production ? 'production' : 'development',
+    // `database` keeps its historical values for existing smoke checks. It is a configuration
+    // label; `databaseVendorEvidence` lists what was actually observed.
+    database: useInMemoryDb ? 'memory' : dbOk ? 'neon' : 'neon_unreachable',
+    databaseVendorEvidence: databaseEvidence,
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.COMMIT_REF || null,
+    stripeConfigured: stripeConfigured(),
+    gmail: mailStatus(),
+    paymentsSimulateAllowed: !production && !stripeConfigured(),
+    demoSeedAllowed: allowDemoSeed(),
+    reminders,
+  });
+});
+
+app.get('/api/admin/production-config', requireAuth, requireAdmin, requirePermission('settings.view'), (_req, res) => {
+  const production = isProduction;
+  const appUrl = (process.env.APP_URL || process.env.URL || '').trim();
+  const fromEmail = EMAIL_FROM_ADDRESS;
+  const replyTo = EMAIL_REPLY_TO;
+  const classify = (ok, invalid = false) => {
+    if (invalid) return 'INVALID_FORMAT';
+    if (!ok) return 'MISSING';
+    return 'PRESENT';
+  };
+  const appUrlInvalid = Boolean(appUrl) && /localhost|127\.0\.0\.1|\.example\.com/i.test(appUrl);
+  const emailInvalid = Boolean(fromEmail) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fromEmail);
+  const replyInvalid = Boolean(replyTo) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(replyTo);
+  const stripeKey = (process.env.STRIPE_SECRET_KEY || '').trim();
+  const stripeInvalid = Boolean(stripeKey) && !/^sk_(test|live)_/.test(stripeKey);
+  const googleRaw = (process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '').trim();
+  const googleId = googleRaw && /^[\w-]+\.apps\.googleusercontent\.com$/i.test(googleRaw) && !/^GOCSPX-/i.test(googleRaw)
+    ? googleRaw
+    : '';
+  const googleIdInvalid = Boolean(googleRaw) && !googleId;
+  const checks = [
+    { key: 'SESSION_SECRET', status: classify(Boolean(process.env.SESSION_SECRET)), required: production },
+    { key: 'NEON_DATABASE_URL', status: classify(Boolean(process.env.NEON_DATABASE_URL)), required: production },
+    { key: 'STRIPE_SECRET_KEY', status: classify(stripeConfigured(), stripeInvalid), required: production },
+    { key: 'STRIPE_WEBHOOK_SECRET', status: classify(Boolean(process.env.STRIPE_WEBHOOK_SECRET?.trim())), required: production },
+    { key: 'APP_URL', status: classify(Boolean(appUrl), production && appUrlInvalid), required: production, localhost: appUrlInvalid },
+    { key: 'FIXBRIDGE_FROM_EMAIL', status: classify(Boolean(fromEmail), emailInvalid), required: false },
+    { key: 'FIXBRIDGE_REPLY_TO_EMAIL', status: classify(Boolean(replyTo), replyInvalid), required: false },
+    { key: 'EMAIL_CREDENTIALS', status: classify(mailStatus().configured), required: false },
+    { key: 'GOOGLE_CLIENT_ID', status: classify(Boolean(googleId), googleIdInvalid), required: false },
+    { key: 'ATTACHMENT_STORAGE_PROVIDER', status: classify(true), required: false },
+    { key: 'demo_seed_disabled_in_prod', status: classify(production ? !allowDemoSeed() : true), required: true },
+    { key: 'ssl_reject_unauthorized', status: classify(postgresSslOptions().rejectUnauthorized === true || !production), required: production },
+  ].map((c) => ({ ...c, ok: c.status === 'PRESENT' }));
+  const missingRequired = checks.filter((c) => c.required && c.status !== 'PRESENT').map((c) => c.key);
+  res.json({
+    ok: missingRequired.length === 0,
+    production,
+    checks,
+    missingRequired,
+    note: 'Secret values are never returned — only presence flags.',
+  });
+});
+
+// Always JSON. Auth clients treat HTML (Express default / Netlify error pages)
+// as "Server returned an unexpected response." Messages are generic for every route;
+// route-specific wording belongs in the route's own error handling.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  const isParse = err?.type === 'entity.parse.failed' || err instanceof SyntaxError;
+  const isTooLarge = err?.type === 'entity.too.large';
+  const isRateLimit = err?.code === 'ERR_ERL_UNDEFINED_IP_ADDRESS';
+  const rawStatus = Number(err?.status || err?.statusCode);
+  const status = isParse
+    ? 400
+    : isTooLarge
+      ? 413
+      : Number.isInteger(rawStatus) && rawStatus >= 400 && rawStatus <= 599
+        ? rawStatus
+        : 500;
+  const code = isParse
+    ? 'INVALID_REQUEST'
+    : isTooLarge
+      ? 'PAYLOAD_TOO_LARGE'
+      : isRateLimit
+        ? 'RATE_LIMIT'
+        : status >= 500
+          ? 'SERVER_ERROR'
+          : 'REQUEST_FAILED';
+  const message = isParse
+    ? 'The request could not be read. Please try again.'
+    : isTooLarge
+      ? 'The request is too large. Try smaller files.'
+      : status >= 500
+        ? 'Something went wrong on our side. Please try again.'
+        : 'The request could not be completed.';
+  if (status >= 500) {
+    console.error(JSON.stringify({
+      scope: 'api_error',
+      requestId: req.id || null,
+      route: req.originalUrl || req.url,
+      status,
+      code: err?.code || err?.name || 'Error',
+      message: err?.message || String(err),
+    }));
+  }
+  res.status(status).json({ ok: false, code, message });
+});
+
+export default app;

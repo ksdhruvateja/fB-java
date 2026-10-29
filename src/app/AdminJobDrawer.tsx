@@ -1,0 +1,1010 @@
+import { useEffect, useMemo, useState } from "react";
+import {
+  Check,
+  Circle,
+  Send,
+  Search,
+  UserPlus,
+  X,
+} from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import AdminQuoteBuilderPanel from "./AdminQuoteBuilderPanel";
+import { AdminQuoteDocumentPanel } from "./AdminQuotesWorkspace";
+import AdminHomeownerInvoicePanel from "./AdminHomeownerInvoicePanel";
+import ChangeOrderPanel from "./ChangeOrderPanel";
+import AdminHomeownerAcceptancesPanel from "./AdminHomeownerAcceptancesPanel";
+import AdminJobEvidencePanel from "./AdminJobEvidencePanel";
+import JobTimelinePanel from "./JobTimelinePanel";
+import {
+  STATUS_LABELS,
+  formatMoney,
+  getProposal,
+  adminAssignContractor,
+  adminMarkJobDispatched,
+  adminGetJobInvoice,
+  retailRangeLabel,
+  type Bid,
+  type ManagedJob,
+} from "./managedJobs";
+import {
+  jobBookingLabel,
+  jobQueueHeadline,
+  lifecycleForJob,
+  relativeTime,
+} from "./adminOpsHelpers";
+import type { AuthUser } from "./auth";
+import DeleteServiceRequestMenu from "./DeleteServiceRequestMenu";
+import QuoteNegotiationPanel from "./QuoteNegotiationPanel";
+import ContractorBidNegotiationPanel from "./ContractorBidNegotiationPanel";
+
+type DrawerTab = "overview" | "quotes" | "dispatch" | "invoice" | "contractor" | "evidence";
+type QuoteSubMode = "document" | "build";
+
+export default function AdminJobDrawer({
+  job,
+  bids,
+  contractors,
+  open,
+  onClose,
+  busy,
+  inviteContractorId,
+  inviteContractorIds,
+  inviteRequestType,
+  onInviteContractorId,
+  onInviteContractorIds,
+  onInviteRequestType,
+  onInviteAndAssign,
+  onMatch,
+  onOpenContractor,
+  onOpenHomeowner,
+  onOpenPayments,
+  onOpenPayouts,
+  onOpenAiEstimate,
+  onMessage,
+  onOpenComms,
+  onRefresh,
+  dispatchCouponCode = "",
+  onDispatchCouponCodeChange,
+  onApplyCoupon,
+  readOnly = false,
+}: {
+  job: ManagedJob | null;
+  bids: Bid[];
+  contractors: AuthUser[];
+  open: boolean;
+  onClose: () => void;
+  busy?: boolean;
+  inviteContractorId: number | "";
+  inviteContractorIds: number[];
+  inviteRequestType: "remote_quote" | "site_visit";
+  onInviteContractorId: (id: number | "") => void;
+  onInviteContractorIds: (ids: number[]) => void;
+  onInviteRequestType: (t: "remote_quote" | "site_visit") => void;
+  onInviteAndAssign: () => void | Promise<void>;
+  onMatch: () => void | Promise<void>;
+  onOpenContractor?: (contractorId: number) => void;
+  onOpenHomeowner?: () => void;
+  onOpenPayments?: () => void;
+  onOpenPayouts?: (amount?: number) => void;
+  onOpenAiEstimate?: () => void;
+  onMessage: (msg: string) => void;
+  onOpenComms?: (opts: {
+    homeownerUserId?: number;
+    contractorUserId?: number;
+    jobId?: number;
+    subject?: string;
+  }) => void;
+  onRefresh: () => void | Promise<void>;
+  dispatchCouponCode?: string;
+  onDispatchCouponCodeChange?: (code: string) => void;
+  onApplyCoupon?: () => void | Promise<void>;
+  readOnly?: boolean;
+}) {
+  const [tab, setTab] = useState<DrawerTab>("overview");
+  const [selectedBidId, setSelectedBidId] = useState<number | null>(null);
+  const [proposalId, setProposalId] = useState<number | null>(null);
+  const [currentProposal, setCurrentProposal] = useState<import("./managedJobs").Proposal | null>(null);
+  const [quoteMode, setQuoteMode] = useState<QuoteSubMode>("build");
+  const [proposalLoading, setProposalLoading] = useState(false);
+  const [inviteSearch, setInviteSearch] = useState("");
+  const [assigningContractor, setAssigningContractor] = useState(false);
+  const [dispatchInvoice, setDispatchInvoice] = useState<import("./managedJobs").HomeownerInvoicePreview | null>(null);
+
+  const lifecycle = useMemo(() => (job ? lifecycleForJob(job) : []), [job]);
+  const latestBid = bids[0] || null;
+  const activeBid = bids.find((b) => b.id === selectedBidId) || latestBid;
+  const filteredInviteContractors = useMemo(() => {
+    const q = inviteSearch.trim().toLowerCase();
+    const selected = new Set(inviteContractorIds.map(Number));
+    const list = contractors.slice().sort((leftContractor, rightContractor) => (leftContractor.name || "").localeCompare(rightContractor.name || ""));
+    if (!q) return list;
+    return list.filter((c) =>
+      selected.has(Number(c.id)) ||
+      `${c.name || ""} ${c.trade || ""} ${c.email || ""}`.toLowerCase().includes(q),
+    );
+  }, [contractors, inviteSearch, inviteContractorIds]);
+  const assignedContractorUserId = job?.assignedContractorUserId ?? null;
+  const assignedContractor = assignedContractorUserId
+    ? contractors.find((c) => Number(c.id) === Number(assignedContractorUserId))
+    : null;
+  // The managed-job status is the authoritative homeowner-approval gate.
+  // A proposal/bid status alone must never expose contractor assignment before
+  // the homeowner has actually approved the final quote.
+  const proposalStatus = String(currentProposal?.status || "").toLowerCase();
+  const proposalApprovalConfirmed = ["accepted", "approved", "paid", "converted"].includes(proposalStatus);
+  const homeownerApprovedProposal =
+    ["approved", "scheduled", "contractor_en_route", "work_started", "work_completed", "customer_review_pending", "admin_review_pending", "payout_pending", "paid_out", "closed"].includes(
+      String(job?.status || "")
+    ) ||
+    // After the successful initial payment the backend advances the job to
+    // paid_for_dispatch. Keep the approved-workflow gate open here so the
+    // contractor invitation UI cannot reappear after homeowner approval.
+    (String(job?.status || "") === "paid_for_dispatch" && proposalApprovalConfirmed);
+  const approvedContractorUserId =
+    currentProposal?.contractorUserId ??
+    (currentProposal?.bidId != null
+      ? bids.find((b) => Number(b.id) === Number(currentProposal.bidId))?.contractorUserId ?? null
+      : null);
+  const approvedContractor = approvedContractorUserId
+    ? contractors.find((c) => Number(c.id) === Number(approvedContractorUserId))
+    : null;
+  const initialPaymentCompleted =
+    dispatchInvoice?.initialPaymentCompleted === true ||
+    job?.invoiceInitialPaymentCompleted === true;
+  const approvedEstimateAmount =
+    currentProposal?.retailAmount != null
+      ? Number(currentProposal.retailAmount)
+      : approvedContractorUserId != null
+        ? bids.find((b) => Number(b.contractorUserId) === Number(approvedContractorUserId))?.netTotal ?? null
+        : null;
+  // Contractor payout is always based on the final agreed contractor bid.
+  // Contractor negotiation acceptance updates bids.net_total, so this remains
+  // correct whether Admin or Contractor accepted the final negotiation round.
+  const finalContractorBid =
+    (assignedContractorUserId != null
+      ? bids.find((b) => Number(b.contractorUserId) === Number(assignedContractorUserId))
+      : null) ||
+    (approvedContractorUserId != null
+      ? bids.find((b) => Number(b.contractorUserId) === Number(approvedContractorUserId))
+      : null) ||
+    latestBid;
+  const finalContractorBidAmount = finalContractorBid?.netTotal != null ? Number(finalContractorBid.netTotal) : null;
+  const finalPaymentReceived =
+    (job?.status === "payout_pending" || job?.status === "paid_out" || job?.status === "closed") ||
+    (job?.status === "work_completed" && Number(job?.invoiceAmountDue || 0) <= 0.009);
+
+  useEffect(() => {
+    if (!open || !job) return;
+
+    const requestJobId = Number(job.id);
+    let cancelled = false;
+
+    // Reset every request-scoped quote value immediately. This prevents a
+    // previous request's proposal from remaining visible while the new job is
+    // loading.
+    setProposalId(null);
+    setCurrentProposal(null);
+    setQuoteMode("build");
+    setSelectedBidId(null);
+    setProposalLoading(true);
+
+    void getProposal(requestJobId)
+      .then((r) => {
+        if (cancelled) return;
+
+        const returnedProposal = r.proposal || null;
+        if (returnedProposal && Number(returnedProposal.jobId) !== requestJobId) {
+          console.error('[ADMIN JOB SCOPE] Refusing proposal from another job', {
+            selectedJobId: requestJobId,
+            returnedProposalId: returnedProposal.id,
+            returnedProposalJobId: returnedProposal.jobId,
+          });
+          setProposalId(null);
+          setCurrentProposal(null);
+          setQuoteMode("build");
+          onMessage('The quote returned for this request belongs to another request. It was blocked.');
+          return;
+        }
+
+        // Do not fall back to job.activeProposalId here. The API response is
+        // already scoped to this exact job; a stale activeProposalId can point
+        // at a different request in legacy data.
+        const id = returnedProposal?.id ?? null;
+        setProposalId(id != null ? Number(id) : null);
+        setCurrentProposal(returnedProposal);
+        setQuoteMode(id != null ? "document" : "build");
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProposalId(null);
+          setCurrentProposal(null);
+          setQuoteMode("build");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setProposalLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, job?.id, job?.updatedAt]);
+
+  useEffect(() => {
+    if (!open || !job || tab !== "dispatch") return;
+    let cancelled = false;
+    void adminGetJobInvoice(job.id).then((r) => {
+      if (!cancelled) setDispatchInvoice(r.ok ? r.invoice || null : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, job?.id, tab]);
+
+  useEffect(() => {
+  if (!open || !job) return;
+
+  setInviteSearch("");
+  setTab("overview");
+  setSelectedBidId(null);
+}, [open, job?.id]);
+
+if (!open || !job) return null;
+  if (!open || !job) return null;
+
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        // className="fixed inset-0 z-[60] flex justify-end"
+        className="fixed inset-0 z-[60] flex items-center justify-center p-6"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+      >
+        {/* <button type="button" className="absolute inset-0 bg-black/40" aria-label="Close drawer" onClick={onClose} /> */}
+        <button type="button" className="absolute inset-0 bg-black/50" aria-label="Close popup" onClick={onClose} />
+        {/* <motion.aside
+          initial={{ x: 40, opacity: 0 }}
+          animate={{ x: 0, opacity: 1 }}
+          exit={{ x: 40, opacity: 0 }}
+          transition={{ type: "spring", stiffness: 320, damping: 32 }}
+          className={`relative flex h-full w-full flex-col border-l border-border bg-background shadow-2xl ${
+            wide ? "max-w-4xl" : "max-w-xl"
+          }`} */}
+        <motion.aside
+      initial={{ opacity: 0, scale: 0.96 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.96 }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
+      className=" relative z-10 flex h-[90vh] w-[90vw] max-w-[1200px] min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-background shadow-2xl">
+          <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
+            <div className="min-w-0">
+              <p className="font-mono text-xs font-semibold tracking-wide text-primary">{jobBookingLabel(job)}</p>
+              <h2 className="mt-0.5 truncate text-lg font-semibold">{job.title || "Service request"}</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {(job.category || "Service").toString()} · {STATUS_LABELS[job.status] || job.status}
+              </p>
+              {job.status === "canceled" && job.cancellationReason ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Cancelled by customer · {job.cancellationReason}
+                </p>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              {!readOnly ? (
+                <DeleteServiceRequestMenu
+                  job={job}
+                  busy={busy}
+                  onBusy={() => undefined}
+                  onDeleted={() => {
+                    void onRefresh();
+                    onClose();
+                  }}
+                />
+              ) : null}
+              <button type="button" onClick={onClose} className="rounded-lg p-2 hover:bg-muted" aria-label="Close">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto border-b border-border bg-muted/30 px-4 py-3">
+            <div className="flex min-w-max items-center gap-1">
+              {lifecycle.map((step, i) => (
+                <div key={step.id} className="flex items-center gap-1">
+                  <div
+                    className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${step.state === "done"
+                        ? "bg-emerald-500/15 text-emerald-800 dark:text-emerald-300"
+                        : step.state === "current"
+                          ? "bg-primary/15 text-primary"
+                          : "bg-muted text-muted-foreground"
+                      }`}
+                  >
+                    {step.state === "done" ? (
+                      <Check className="h-3 w-3" />
+                    ) : (
+                      <Circle className={`h-2.5 w-2.5 ${step.state === "current" ? "fill-current" : ""}`} />
+                    )}
+                    {step.label}
+                  </div>
+                  {i < lifecycle.length - 1 && <span className="mx-0.5 text-muted-foreground/40">→</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex gap-1 border-b border-border px-3 pt-2">
+            {(
+              [
+                ["overview", "Overview"],
+                ["quotes", "Quotes"],
+                ["dispatch", "Dispatch"],
+                ["invoice", "Invoice"],
+                ["contractor", "Contractor"],
+                ["evidence", "Legal / Evidence"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setTab(id)}
+                className={`rounded-t-lg px-3 py-2 text-sm font-medium transition ${tab === id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            {tab === "overview" && (
+              <div className="space-y-4">
+                <p className="rounded-xl bg-muted/50 px-3 py-2 text-sm">{jobQueueHeadline(job)}</p>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-xl border border-border/70 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">AI estimate</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums">
+                      {job.customerRetailEstimateLow != null && job.customerRetailEstimateHigh != null
+                        ? retailRangeLabel(job)
+                        : "—"}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-border/70 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Contractor quote</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums">
+                      {finalContractorBidAmount != null ? formatMoney(finalContractorBidAmount) : "Waiting"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground">Customer</span>
+                    <span className="font-medium">{job.contactName || "—"}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground">Location</span>
+                    <span className="max-w-[60%] text-right font-medium">{job.cityStateZip || job.fullAddress || "—"}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground">Updated</span>
+                    <span className="font-medium">{relativeTime(job.updatedAt || job.createdAt)}</span>
+                  </div>
+                  {assignedContractor && (
+                    <div className="flex justify-between gap-2">
+                      <span className="text-muted-foreground">Contractor</span>
+                      <span className="font-medium">{assignedContractor.name}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Jump to</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {[
+                      { label: "Homeowner", show: true, onClick: onOpenHomeowner },
+                      {
+                        label: assignedContractor?.name || "Contractor",
+                        show: Boolean(job.assignedContractorUserId),
+                        onClick: () =>
+                          job.assignedContractorUserId && onOpenContractor?.(Number(job.assignedContractorUserId)),
+                      },
+                      { label: "AI Estimate", show: true, onClick: onOpenAiEstimate },
+                      { label: "Quotes", show: true, onClick: () => setTab("quotes") },
+                      { label: "Payment", show: true, onClick: onOpenPayments },
+                      { label: "Payout", show: true, onClick: onOpenPayouts },
+                    ]
+                      .filter((x) => x.show)
+                      .map((x) => (
+                        <button
+                          key={x.label}
+                          type="button"
+                          disabled={!x.onClick}
+                          onClick={() => x.onClick?.()}
+                          className="rounded-full border border-border bg-background px-2.5 py-1 text-xs font-medium hover:border-primary/40 hover:text-primary disabled:opacity-40"
+                        >
+                          {x.label}
+                        </button>
+                      ))}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {job.homeownerUserId ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onOpenComms?.({
+                            homeownerUserId: Number(job.homeownerUserId),
+                            jobId: job.id,
+                            subject: `Job ${job.bookingId || `FB-${job.id}`}`,
+                          })
+                        }
+                        className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white"
+                      >
+                        Message homeowner
+                      </button>
+                    ) : null}
+                    {job.assignedContractorUserId ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onOpenComms?.({
+                            contractorUserId: Number(job.assignedContractorUserId),
+                            jobId: job.id,
+                            subject: `Job ${job.bookingId || `FB-${job.id}`}`,
+                          })
+                        }
+                        className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted/40"
+                      >
+                        Message contractor
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+
+                {job.description && (
+                  <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Request</p>
+                    <p className="mt-1 text-sm leading-relaxed">{job.description}</p>
+                  </div>
+                )}
+
+                <div className="rounded-xl border border-border/70 bg-muted/20 p-3 space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Homeowner consent history
+                  </p>
+                  <AdminHomeownerAcceptancesPanel jobId={job.id} userId={job.homeownerUserId} />
+                </div>
+
+                <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Job timeline</p>
+                  <div className="mt-3">
+                    <JobTimelinePanel jobId={job.id} />
+                  </div>
+                </div>
+
+                <div className="grid gap-2 pt-2">
+                  {(job.status === "bid_received" || !!latestBid) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (latestBid) setSelectedBidId(latestBid.id);
+                        setQuoteMode(proposalId ? "document" : "build");
+                        setTab("quotes");
+                      }}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white"
+                    >
+                      <Send className="h-4 w-4" /> {proposalId ? "Edit quote" : "Build quote"}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setTab("dispatch")}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-border px-4 py-2.5 text-sm font-medium hover:bg-muted"
+                  >
+                    <UserPlus className="h-4 w-4" /> Request quote / site visit
+                  </button>
+                </div>
+
+                {["work_started", "change_order_pending", "contractor_en_route", "work_completed"].includes(job.status) ? (
+                  <ChangeOrderPanel jobId={job.id} role="admin" onChanged={onRefresh} />
+                ) : null}
+              </div>
+            )}
+
+            {tab === "quotes" && (
+              <div className="space-y-4">
+                {(proposalId || bids.length > 0) && (
+                  <div className="flex gap-1 rounded-xl border border-border bg-muted/30 p-1">
+                    <button
+                      type="button"
+                      disabled={!proposalId}
+                      onClick={() => setQuoteMode("document")}
+                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition disabled:opacity-40 ${quoteMode === "document"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                      Edit quote
+                    </button>
+                    <button
+                      type="button"
+                      disabled={bids.length === 0}
+                      onClick={() => setQuoteMode("build")}
+                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition disabled:opacity-40 ${quoteMode === "build"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                      {proposalId ? "Build new from bid" : "Build from bid"}
+                    </button>
+                  </div>
+                )}
+
+                {proposalId ? (
+                  <QuoteNegotiationPanel
+                    jobId={job.id}
+                    proposal={currentProposal || { id: proposalId, jobId: job.id, status: "sent", retailAmount: 0 }}
+                    role="admin"
+                    onChanged={async () => {
+                      await onRefresh();
+                      const r = await getProposal(job.id);
+                      if (r.proposal && Number(r.proposal.jobId) === Number(job.id)) {
+                        setProposalId(Number(r.proposal.id));
+                        setCurrentProposal(r.proposal);
+                      } else {
+                        setProposalId(null);
+                        setCurrentProposal(null);
+                        setQuoteMode("build");
+                      }
+                    }}
+                    onMessage={onMessage}
+                  />
+                ) : null}
+
+                {proposalLoading ? (
+                  <p className="py-10 text-center text-sm text-muted-foreground">Loading quote…</p>
+                ) : quoteMode === "document" && proposalId ? (
+                  <AdminQuoteDocumentPanel
+                    quoteId={proposalId}
+                    jobId={job.id}
+                    embedded
+                    onMessage={onMessage}
+                    onChanged={async () => {
+                      await onRefresh();
+                      const r = await getProposal(job.id);
+                      if (r.proposal && Number(r.proposal.jobId) === Number(job.id)) {
+                        setProposalId(Number(r.proposal.id));
+                        setCurrentProposal(r.proposal);
+                      } else {
+                        setProposalId(null);
+                        setCurrentProposal(null);
+                        setQuoteMode("build");
+                      }
+                    }}
+                  />
+                ) : bids.length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+                    No contractor bids yet. Invite contractors from Dispatch, then build a professional FixBridge quote here.
+                  </p>
+                ) : (
+                  <>
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        Select contractor quote
+                      </p>
+                      {bids.map((b) => (
+                        <button
+                          key={b.id}
+                          type="button"
+                          onClick={() => setSelectedBidId(b.id)}
+                          className={`flex w-full items-center justify-between rounded-xl border px-3 py-2.5 text-left text-sm transition ${activeBid?.id === b.id
+                              ? "border-primary/40 bg-primary/5"
+                              : "border-border hover:bg-muted/40"
+                            }`}
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate font-medium">
+                              {b.contractorName || `Contractor #${b.contractorUserId}`}
+                            </div>
+                            {/* <div className="text-xs text-muted-foreground">Bid #{b.id}</div> */}
+                          </div>
+                          <span className="font-semibold tabular-nums">{formatMoney(b.netTotal)}</span>
+                        </button>
+                      ))}
+                    </div>
+                    {activeBid && (!proposalId || ["draft", "negotiation_pending"].includes(proposalStatus)) ? (
+                      <ContractorBidNegotiationPanel
+                        key={`contractor-negotiation-${job.id}-${activeBid.id}`}
+                        jobId={job.id}
+                        bid={activeBid}
+                        role="admin"
+                        onChanged={onRefresh}
+                        onMessage={onMessage}
+                      />
+                    ) : null}
+
+                    {activeBid && (
+                      <AdminQuoteBuilderPanel
+                        key={`${job.id}-${activeBid.id}`}
+                        job={job}
+                        bid={activeBid}
+                        busy={busy}
+                        onMessage={onMessage}
+                        onPublished={async () => {
+                          await onRefresh();
+                          const r = await getProposal(job.id);
+                          if (r.proposal && Number(r.proposal.jobId) === Number(job.id)) {
+                            setProposalId(Number(r.proposal.id));
+                            setCurrentProposal(r.proposal);
+                            setQuoteMode("document");
+                          } else {
+                            setProposalId(null);
+                            setCurrentProposal(null);
+                            setQuoteMode("build");
+                          }
+                        }}
+                      />
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {tab === "contractor" && (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
+                  <p className="text-xs font-bold uppercase tracking-wider text-primary">Contractor</p>
+                  <div className="mt-2 flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-lg font-semibold">{assignedContractor?.name || "Not assigned yet"}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {assignedContractor?.trade || "Contractor"}{assignedContractor?.email ? ` · ${assignedContractor.email}` : ""}
+                      </p>
+                    </div>
+                    {assignedContractor && onOpenContractor ? (
+                      <button
+                        type="button"
+                        onClick={() => onOpenContractor(Number(assignedContractor.id))}
+                        className="rounded-xl border border-border px-3 py-2 text-xs font-semibold"
+                      >
+                        Open contractor
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-xl border border-border p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Assignment</p>
+                    <p className="mt-1 text-sm font-semibold">{assignedContractor ? "Assigned ✓" : "Not assigned"}</p>
+                  </div>
+                  <div className="rounded-xl border border-border p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Work status</p>
+                    <p className="mt-1 text-sm font-semibold">
+                      {job.status === "work_completed" || ["payout_pending", "paid_out", "closed"].includes(job.status)
+                        ? "Completed ✓"
+                        : job.status === "work_started" || job.status === "change_order_pending"
+                          ? "In progress"
+                          : job.status === "contractor_arrived"
+                            ? "Arrived · Start Work"
+                            : job.status === "contractor_en_route"
+                              ? "On the way"
+                              : assignedContractor
+                                ? "Assigned · waiting for dispatch"
+                                : "Not assigned"}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-border p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Payment</p>
+                    <p className="mt-1 text-sm font-semibold">
+                      {job.status === "work_completed" && Number(job.invoiceAmountDue || 0) > 0
+                        ? `Final payment due ${formatMoney(Number(job.invoiceAmountDue || 0))}`
+                        : job.status === "payout_pending"
+                          ? "Payment received · payout ready"
+                          : job.status === "paid_out" || job.status === "closed"
+                            ? "Payment received · payout complete"
+                            : finalPaymentReceived
+                              ? "Payment received · payout ready"
+                              : "Waiting for completion"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Contractor payout</p>
+                      <p className="mt-1 text-sm font-semibold text-foreground">
+                        {finalContractorBidAmount != null
+                          ? `Final contractor bid · ${formatMoney(finalContractorBidAmount)}`
+                          : "Final contractor bid not available"}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {finalPaymentReceived
+                          ? "Payment received · payout ready"
+                          : job.status === "work_completed"
+                            ? "Work completed · waiting for homeowner final payment"
+                            : "Payout opens after work is completed and payment is received."}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-semibold text-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={!assignedContractor || finalContractorBidAmount == null || !finalPaymentReceived}
+                      onClick={() => onOpenPayouts?.(finalContractorBidAmount ?? undefined)}
+                    >
+                      Open contractor payout
+                    </button>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-border p-4">
+                  <p className="text-sm font-semibold">Contractor work lifecycle</p>
+                  <div className="mt-3 space-y-2 text-sm">
+                    {([
+                      ["Assigned", Boolean(assignedContractor)],
+                      ["Dispatched", ["contractor_en_route", "contractor_arrived", "work_started", "change_order_pending", "work_completed", "payout_pending", "paid_out", "closed"].includes(job.status)],
+                      ["Work started", ["work_started", "change_order_pending", "work_completed", "payout_pending", "paid_out", "closed"].includes(job.status)],
+                      ["Work completed", ["work_completed", "payout_pending", "paid_out", "closed"].includes(job.status)],
+                      ["Final payment", ["payout_pending", "paid_out", "closed"].includes(job.status) || (job.status === "work_completed" && Number(job.invoiceAmountDue || 0) <= 0.009)],
+                      ["Payout", ["paid_out", "closed"].includes(job.status)],
+                    ] as const).map(([label, done]) => (
+                      <div key={label} className="flex items-center gap-2">
+                        <span className={`h-2.5 w-2.5 rounded-full ${done ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                        <span className={done ? "font-medium" : "text-muted-foreground"}>{label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {tab === "dispatch" && (
+              <div className="space-y-4">
+                {!homeownerApprovedProposal ? (
+                  <>
+                    <div className="rounded-xl border border-dashed border-border bg-muted/20 p-3 space-y-2">
+                      <p className="text-sm font-medium">Coupon</p>
+                      {job.discountCode ? (
+                        <p className="text-xs text-teal-700 dark:text-teal-400">
+                          Active: <span className="font-semibold">{job.discountCode}</span>
+                        </p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">No coupon applied.</p>
+                      )}
+                      {onApplyCoupon && (
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm uppercase"
+                            placeholder="CODE"
+                            value={dispatchCouponCode}
+                            onChange={(e) => onDispatchCouponCodeChange?.(e.target.value.toUpperCase())}
+                            disabled={readOnly}
+                          />
+                          <button
+                            type="button"
+                            disabled={busy || readOnly || !dispatchCouponCode.trim()}
+                            onClick={() => void onApplyCoupon()}
+                            className="rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
+                          >
+                            Apply
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <p className="text-sm text-muted-foreground">How should contractors evaluate this request?</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {(
+                        [
+                          ["remote_quote", "Remote quote", "Send photos & details for an off-site estimate."],
+                          ["site_visit", "Site visit", "Schedule an on-site inspection before quoting."],
+                        ] as const
+                      ).map(([id, title, hint]) => (
+                        <button
+                          key={id}
+                          type="button"
+                          onClick={() => onInviteRequestType(id)}
+                          className={`rounded-xl border p-3 text-left text-sm transition ${inviteRequestType === id
+                              ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                              : "border-border hover:bg-muted/40"
+                            }`}
+                        >
+                          <p className="font-semibold">{title}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
+                        </button>
+                      ))}
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Select contractor(s)</label>
+                      <div className="relative mt-1">
+                        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <input
+                          type="search"
+                          value={inviteSearch}
+                          onChange={(e) => setInviteSearch(e.target.value)}
+                          className="w-full rounded-xl border border-border bg-background py-2.5 pl-9 pr-3 text-sm"
+                          placeholder="Search by name, trade, or email"
+                          aria-label="Search contractors"
+                        />
+                      </div>
+                      <select
+                        multiple
+                        size={Math.min(8, Math.max(4, filteredInviteContractors.length || 4))}
+                        className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
+                        value={inviteContractorIds.map(String)}
+                        onChange={(e) => {
+                          const ids = Array.from(e.target.selectedOptions).map((option) => Number(option.value));
+                          onInviteContractorIds(ids);
+                          onInviteContractorId(ids.length === 1 ? ids[0] : "");
+                        }}
+                      >
+                        {filteredInviteContractors.map((c) => (
+                          <option key={String(c.id)} value={Number(c.id)}>
+                            {c.name} · {c.trade || "trade?"} · {c.email}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-1 text-xs text-muted-foreground">Search, then select one or more contractors. Selected contractors remain selected while filtering.</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={busy || !inviteContractorIds.length}
+                        onClick={() => void onInviteAndAssign()}
+                        className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+                      >
+                        <UserPlus className="h-4 w-4" />
+                        {inviteContractorIds.length > 1
+                          ? `Invite ${inviteContractorIds.length} contractors`
+                          : inviteRequestType === "site_visit" ? "Request site visit" : "Request quote"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void onMatch()}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-border px-4 py-2.5 text-sm font-medium hover:bg-muted disabled:opacity-50"
+                      >
+                        Auto-match
+                      </button>
+                    </div>
+                  </>
+                ) : !initialPaymentCompleted ? (
+                  <div className="rounded-xl border border-amber-300/60 bg-amber-50 p-5 dark:border-amber-900/40 dark:bg-amber-950/20">
+                    <p className="text-sm font-bold text-amber-900 dark:text-amber-200">Initial payment required</p>
+                    <p className="mt-1 text-xs text-amber-800/80 dark:text-amber-300/80">
+                      The homeowner approved the final quote. Contractor assignment will appear here after the selected 50% / 75% / 100% initial payment is successfully confirmed.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold uppercase tracking-wider text-primary">Approved contractor</p>
+                          <p className="mt-1 truncate text-base font-semibold">
+                            {approvedContractor?.name || currentProposal?.contractorName || "Approved contractor"}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {approvedContractor?.trade || "Contractor"}{approvedContractor?.email ? ` · ${approvedContractor.email}` : ""}
+                          </p>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <p className="text-xs text-muted-foreground">Approved estimate</p>
+                          <p className="text-xl font-bold tabular-nums">
+                            {approvedEstimateAmount != null ? formatMoney(approvedEstimateAmount) : "—"}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-teal-200 bg-teal-50 p-4 dark:border-teal-900/40 dark:bg-teal-950/20">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-teal-900 dark:text-teal-200">Initial payment confirmed</p>
+                          <p className="mt-1 text-xs text-teal-800/80 dark:text-teal-300/80">
+                            {formatMoney(dispatchInvoice?.initialPaymentAmount ?? job.invoiceInitialPaymentAmount ?? 0)} paid — contractor assignment is now available.
+                          </p>
+                        </div>
+                        <span className="rounded-full bg-teal-100 px-2 py-1 text-xs font-bold text-teal-700 dark:bg-teal-900/40 dark:text-teal-300">PAID</span>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-border p-4">
+                      <p className="text-sm font-semibold">Contractor assignment</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Only the contractor connected to the homeowner-approved estimate can be assigned to this job.
+                      </p>
+                      {assignedContractor ? (
+                        <div className="mt-3 space-y-3">
+                          <div className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-800">
+                            Assigned: <span className="font-semibold">{assignedContractor.name}</span>
+                          </div>
+                          {job.status === "paid_for_dispatch" || job.status === "approved" || job.status === "scheduled" ? (
+                            <div className="rounded-lg border border-border bg-muted/20 px-3 py-3">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Dispatch status</p>
+                              <p className="mt-1 text-sm font-medium">{job.status === "scheduled" ? "Dispatch requested" : "Waiting for dispatch"}</p>
+                              <button
+                                type="button"
+                                disabled={readOnly || busy || assigningContractor}
+                                onClick={async () => {
+                                  setAssigningContractor(true);
+                                  try {
+                                    const r = await adminMarkJobDispatched(job.id, job.assignedEmployeeId || undefined);
+                                    onMessage(r.ok ? "Contractor dispatched." : r.message || "Could not dispatch contractor.");
+                                    if (r.ok) await onRefresh();
+                                  } finally {
+                                    setAssigningContractor(false);
+                                  }
+                                }}
+                                className="mt-2 inline-flex items-center justify-center rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                              >
+                                {assigningContractor ? "Dispatching…" : "Dispatch Contractor"}
+                              </button>
+                            </div>
+                          ) : null}
+                          {job.status === "contractor_en_route" ? (
+                            <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+                              Contractor dispatched · on the way
+                            </div>
+                          ) : null}
+                          {job.status === "contractor_arrived" ? (
+                            <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+                              Contractor arrived · waiting for Start Work
+                            </div>
+                          ) : null}
+                          {job.status === "work_started" || job.status === "change_order_pending" ? (
+                            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                              Work started · in progress
+                            </div>
+                          ) : null}
+                          {job.status === "customer_review_pending" ? (
+                            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                              Completion submitted · waiting for confirmation
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={readOnly || busy || assigningContractor || !approvedContractorUserId}
+                          onClick={async () => {
+                            if (!approvedContractorUserId) return;
+                            setAssigningContractor(true);
+                            try {
+                              const r = await adminAssignContractor(job.id, Number(approvedContractorUserId));
+                              onMessage(r.ok ? "Approved contractor assigned." : r.message || "Could not assign contractor.");
+                              if (r.ok) await onRefresh();
+                            } finally {
+                              setAssigningContractor(false);
+                            }
+                          }}
+                          className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+                        >
+                          <UserPlus className="h-4 w-4" />
+                          {assigningContractor ? "Assigning…" : "Assign Contractor"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {tab === "invoice" && (
+              <AdminHomeownerInvoicePanel
+                jobId={job.id}
+                readOnly={readOnly}
+                onMessage={onMessage}
+              />
+            )}
+
+            {tab === "evidence" && <AdminJobEvidencePanel jobId={job.id} />}
+          </div>
+        </motion.aside>
+      </motion.div>
+    </AnimatePresence>
+  );
+}

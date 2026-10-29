@@ -1,0 +1,2 @@
+- [DB & API architecture](db-api-architecture.md) — Express API on :3001 + Vite proxy; same app reused as Netlify Function via serverless-http.
+- [Async store migration](async-store-migration.md) — all four store files are now async fetch calls; pure/sync helpers kept synchronous.
