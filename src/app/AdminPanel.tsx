@@ -78,6 +78,7 @@ import {
   createStaffAdmin,
   adminSendPasswordReset,
 } from "./platformApi";
+import PasswordInput from "./PasswordInput";
 import {
   listAdminSubscriptionPlans,
   updateAdminSubscriptionPlan,
@@ -3376,9 +3377,8 @@ export default function AdminPanel({
                       </label>
                       <label className="grid gap-1 text-sm">
                         <span className="text-xs font-medium text-muted-foreground">Password</span>
-                        <input
+                        <PasswordInput
                           required
-                          type="password"
                           minLength={8}
                           className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
                           value={newStaffPassword}

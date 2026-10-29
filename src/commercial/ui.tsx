@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
-import { Loader2, X } from "lucide-react";
+import { Eye, EyeOff, Loader2, X } from "lucide-react";
 import { twMerge } from "tailwind-merge";
 import { ApiError } from "./api";
 
@@ -71,7 +71,28 @@ const inputClass =
   "w-full rounded-xl border border-[color:var(--input)] bg-card px-3.5 py-3 text-[15px] text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-4 focus:ring-primary/15";
 
 export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
+  if (props.type === "password") return <PasswordInput {...props} />;
   return <input {...props} className={cx(inputClass, props.className)} />;
+}
+
+/** Password field with a show/hide button, so people can check what they typed. */
+function PasswordInput(props: InputHTMLAttributes<HTMLInputElement>) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <div className="relative">
+      <input {...props} type={visible ? "text" : "password"} className={cx(inputClass, "pr-11", props.className)} />
+      <button
+        type="button"
+        onClick={() => setVisible((v) => !v)}
+        aria-label={visible ? "Hide password" : "Show password"}
+        aria-pressed={visible}
+        title={visible ? "Hide password" : "Show password"}
+        className="absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-r-xl text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+      >
+        {visible ? <EyeOff className="h-4 w-4" aria-hidden /> : <Eye className="h-4 w-4" aria-hidden />}
+      </button>
+    </div>
+  );
 }
 export function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return <textarea {...props} className={cx(inputClass, "min-h-[90px]", props.className)} />;

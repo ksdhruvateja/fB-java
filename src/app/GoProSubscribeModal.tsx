@@ -3,6 +3,7 @@ import { Loader2, X, CreditCard } from "lucide-react";
 import { guestSubscriptionCheckout } from "./platformApi";
 import { saveSession, type AuthUser } from "./auth";
 import type { GoProPlanCard } from "./HomeownerGoProPlans";
+import PasswordInput from "./PasswordInput";
 
 export default function GoProSubscribeModal({
   plan,
@@ -138,8 +139,7 @@ export default function GoProSubscribeModal({
               </label>
               <label className="grid gap-1 text-sm">
                 <span className="font-medium">Password</span>
-                <input
-                  type="password"
+                <PasswordInput
                   className="rounded-md border border-border bg-background px-3 py-2"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
